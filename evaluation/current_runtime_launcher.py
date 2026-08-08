@@ -1083,10 +1083,11 @@ def stage_launchable_unit(
         Path(os.path.abspath(source)),
         label="runtime source unit",
     )
-    if any(_is_link_or_reparse(path) for path in source.rglob("*")):
+    source_io = Path(_extended_path_within(source, source))
+    if any(_is_link_or_reparse(path) for path in source_io.rglob("*")):
         raise RuntimeError("runtime source unit contains unsafe paths")
     trust_root = _load_trust_root(root)
-    release, _contract = verify_launchable_unit(source, trust_root)
+    release, _contract = verify_launchable_unit(source_io, trust_root)
     unit_id = str(release["release_unit_id"])
     with root_lock(
         root,
@@ -1146,7 +1147,7 @@ def stage_launchable_unit(
         temporary = staging_operation / unit_id
         try:
             _copytree_within_roots(
-                source,
+                source_io,
                 temporary,
                 source_root=source,
                 target_root=root,
