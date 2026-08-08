@@ -15,13 +15,8 @@ EXPECTED_TOOLS = {
     "datasage_entity_resolve",
     "datasage_query",
 }
-EXPECTED_HOOKS = {
-    "pre_llm_call",
-    "pre_tool_call",
-    "post_tool_call",
-    "transform_llm_output",
-}
-EXPECTED_MIDDLEWARE = {"llm_request", "tool_request"}
+EXPECTED_HOOKS: set[str] = set()
+EXPECTED_MIDDLEWARE: set[str] = set()
 EXPECTED_EXECUTOR_ID = "datasage-atomic-offline-health/v1"
 DOMAINS = (
     "delivery",

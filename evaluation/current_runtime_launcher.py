@@ -1434,12 +1434,20 @@ def materialize_hermes_checkout(
                     raise RuntimeError("Hermes archive contains unsafe paths")
                 seen.add(relative_text)
                 destination = temporary / relative
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                if _lexists(destination) or _is_link_or_reparse(destination.parent):
+                destination_io = Path(
+                    _extended_path_within(destination, temporary)
+                )
+                destination_parent_io = Path(
+                    _extended_path_within(destination.parent, temporary)
+                )
+                destination_parent_io.mkdir(parents=True, exist_ok=True)
+                if _lexists(destination_io) or _is_link_or_reparse(
+                    destination_parent_io
+                ):
                     raise RuntimeError("Hermes archive extraction path is unsafe")
-                destination.write_bytes(package.read(info))
+                destination_io.write_bytes(package.read(info))
                 unix_mode = (info.external_attr >> 16) & 0xFFFF
-                destination.chmod(0o755 if unix_mode & 0o111 else 0o644)
+                destination_io.chmod(0o755 if unix_mode & 0o111 else 0o644)
         temporary_io = Path(_extended_path_within(temporary, parent))
         _verify_materialized_checkout(temporary_io, hermes, archive)
         _make_checkout_read_only(temporary_io)
