@@ -1151,17 +1151,18 @@ def stage_launchable_unit(
                 source_root=source,
                 target_root=root,
             )
+            temporary_io = Path(_extended_path_within(temporary, root))
             _require_plain_directory(
-                temporary,
+                temporary_io,
                 parent=staging_operation,
                 label="staged runtime unit",
             )
             if any(
                 _is_link_or_reparse(path)
-                for path in temporary.rglob("*")
+                for path in temporary_io.rglob("*")
             ):
                 raise RuntimeError("staged runtime unit contains unsafe paths")
-            verify_launchable_unit(temporary, trust_root)
+            verify_launchable_unit(temporary_io, trust_root)
             if _lexists(target):
                 raise RuntimeError("runtime deployment target raced")
             os.replace(
