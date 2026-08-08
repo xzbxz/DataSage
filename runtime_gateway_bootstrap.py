@@ -84,6 +84,7 @@ SHA256 = re.compile(r"[0-9a-f]{64}")
 MUTABLE_TOP_LEVEL = frozenset(
     {
         ".env",
+        ".clean_shutdown",
         ".hermes_history",
         ".update_check",
         "audio_cache",

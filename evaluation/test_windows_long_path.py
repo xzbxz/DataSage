@@ -114,6 +114,7 @@ class WindowsLeaseLivenessTests(unittest.TestCase):
 class RuntimeViewClassificationTests(unittest.TestCase):
     def test_operational_runtime_state_is_explicitly_allowlisted(self) -> None:
         expected = {
+            ".clean_shutdown",
             ".hermes_history",
             "channel_directory.json",
             "gateway-starts.log",
