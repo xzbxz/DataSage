@@ -78,55 +78,14 @@ _verify_control_package_before_import()
 sys.path.insert(0, str(CONTROL_ROOT))
 
 from evaluation import current_runtime_launcher as launcher  # noqa: E402
+from runtime_profile_ownership import (  # noqa: E402
+    CONTROL_OWNED_TOP_LEVEL,
+    FORBIDDEN_TOP_LEVEL,
+    MUTABLE_TOP_LEVEL,
+)
 
 
 SHA256 = re.compile(r"[0-9a-f]{64}")
-MUTABLE_TOP_LEVEL = frozenset(
-    {
-        ".env",
-        ".clean_shutdown",
-        ".hermes_history",
-        ".update_check",
-        "audio_cache",
-        "auth.json",
-        "auth.lock",
-        "cache",
-        "channel_directory.json",
-        "cron",
-        "gateway-service",
-        "gateway-starts.log",
-        "gateway.lock",
-        "gateway.pid",
-        "gateway_state.json",
-        "home",
-        "hooks",
-        "image_cache",
-        "lsp",
-        "logs",
-        "memories",
-        "models_dev_cache.json",
-        "ollama_cloud_models_cache.json",
-        "pairing",
-        "pastes",
-        "pending_messages",
-        "plans",
-        "platforms",
-        "processes.json",
-        "provider_models_cache.json",
-        "sandboxes",
-        "sessions",
-        "skins",
-        "state",
-        "state.db",
-        "state.db-shm",
-        "state.db-wal",
-        "verification_evidence.db",
-        "verification_evidence.db-shm",
-        "verification_evidence.db-wal",
-        "workspace",
-    }
-)
-CONTROL_OWNED_TOP_LEVEL = frozenset({".release", ".runtime"})
 
 
 def _utc_now() -> str:
@@ -237,6 +196,10 @@ def _existing_mutable_items(home: Path) -> list[Path]:
     for item in home.iterdir():
         if item.name in owned_roots or item.name in CONTROL_OWNED_TOP_LEVEL:
             continue
+        if item.name in FORBIDDEN_TOP_LEVEL:
+            raise RuntimeError(
+                f"forbidden top-level runtime contamination blocks hydration: {item.name}"
+            )
         if item.name not in MUTABLE_TOP_LEVEL:
             raise RuntimeError(
                 f"unclassified top-level runtime item blocks hydration: {item.name}"
@@ -346,7 +309,12 @@ def hydrate_runtime_home(
     backup_root.mkdir(parents=True, exist_ok=True)
     if _is_reparse(runtime_home.parent) or _is_reparse(backup_root):
         raise RuntimeError("runtime home or backup root is unsafe")
+    mutable: list[Path] = []
     if runtime_home.exists():
+        # Classification must still run on an already-current runtime view.
+        # Otherwise a foreign artifact added after the first hydration would
+        # bypass fail-closed ownership validation through this fast path.
+        mutable = _existing_mutable_items(runtime_home)
         marker = runtime_home / ".runtime" / "RUNTIME_VIEW.json"
         try:
             marker_value = json.loads(marker.read_text(encoding="utf-8"))
@@ -367,7 +335,6 @@ def hydrate_runtime_home(
     )
     if stage.exists() or backup.exists() or local_backup.exists():
         raise RuntimeError("runtime hydration path collision")
-    mutable = _existing_mutable_items(runtime_home)
     old_home_moved = False
     final_backup: Path | None = None
     try:

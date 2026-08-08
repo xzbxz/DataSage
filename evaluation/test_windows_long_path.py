@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import hashlib
 from pathlib import Path
 import shutil
 import tempfile
@@ -10,6 +11,14 @@ from unittest import mock
 from evaluation import current_runtime_launcher as launcher
 from evaluation import build_atomic_runtime_release as builder
 import runtime_gateway_bootstrap as bootstrap
+from runtime_profile_ownership import (
+    CONTROL_OWNED_TOP_LEVEL,
+    FORBIDDEN_TOP_LEVEL,
+    MUTABLE_TOP_LEVEL,
+    RUNTIME_ROOTS,
+    classify_top_level,
+    roots_for_lifecycle,
+)
 
 
 @unittest.skipUnless(os.name == "nt", "Windows extended paths only")
@@ -112,39 +121,142 @@ class WindowsLeaseLivenessTests(unittest.TestCase):
 
 
 class RuntimeViewClassificationTests(unittest.TestCase):
-    def test_operational_runtime_state_is_explicitly_allowlisted(self) -> None:
-        expected = {
-            ".clean_shutdown",
-            ".hermes_history",
-            "channel_directory.json",
-            "gateway-starts.log",
-            "gateway.lock",
-            "gateway.pid",
-            "home",
-            "lsp",
-            "ollama_cloud_models_cache.json",
-            "pastes",
-            "pending_messages",
-            "plans",
-            "platforms",
-            "processes.json",
-            "provider_models_cache.json",
-            "skins",
-            "state",
-            "verification_evidence.db",
-            "verification_evidence.db-shm",
-            "verification_evidence.db-wal",
-            "workspace",
-        }
-        self.assertTrue(expected.issubset(bootstrap.MUTABLE_TOP_LEVEL))
+    LIVE_PROFILE = Path(
+        r"C:\Users\10192\AppData\Local\hermes\profiles\datasage-canary-next"
+    )
+    LIFECYCLE = (
+        "bootstrap",
+        "gateway_start",
+        "agent_smoke",
+        "session",
+        "session_reset",
+        "planned_shutdown",
+        "restart",
+    )
 
-    def test_test_and_backup_pollution_remains_fail_closed(self) -> None:
-        forbidden = {
-            ".pytest_cache",
-            "pytest.ini",
-            "config.yaml.bak-20260807",
-        }
-        self.assertTrue(forbidden.isdisjoint(bootstrap.MUTABLE_TOP_LEVEL))
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="dsrt-runtime-view-"))
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def _write_immutable_profile(self, root: Path) -> None:
+        release = root / ".release"
+        release.mkdir(parents=True)
+        payload = root / "config.yaml"
+        payload.write_text("version: lifecycle-test\n", encoding="utf-8")
+        digest = hashlib.sha256(payload.read_bytes()).hexdigest()
+        (release / "MANIFEST.sha256").write_text(
+            f"{digest}  config.yaml\n", encoding="utf-8", newline="\n"
+        )
+        (release / "RELEASE.json").write_text(
+            "{}\n", encoding="utf-8", newline="\n"
+        )
+
+    def _materialize(self, home: Path, name: str, marker: str) -> None:
+        contract = next(root for root in RUNTIME_ROOTS if root.name == name)
+        path = home / name
+        if contract.kind == "directory":
+            path.mkdir()
+            (path / "lifecycle.marker").write_text(marker, encoding="utf-8")
+        else:
+            path.write_text(marker, encoding="utf-8")
+
+    def test_contract_is_exact_disjoint_and_evidenced(self) -> None:
+        names = [root.name for root in RUNTIME_ROOTS]
+        self.assertEqual(len(names), len(set(names)))
+        self.assertTrue(all(root.evidence for root in RUNTIME_ROOTS))
+        self.assertTrue(all(root.lifecycle for root in RUNTIME_ROOTS))
+        self.assertFalse(MUTABLE_TOP_LEVEL & CONTROL_OWNED_TOP_LEVEL)
+        self.assertFalse(MUTABLE_TOP_LEVEL & FORBIDDEN_TOP_LEVEL)
+        self.assertEqual(bootstrap.MUTABLE_TOP_LEVEL, MUTABLE_TOP_LEVEL)
+
+    @unittest.skipUnless(LIVE_PROFILE.is_dir(), "reviewed live profile absent")
+    def test_current_live_has_no_unknown_roots(self) -> None:
+        manifest = bootstrap._manifest(self.LIVE_PROFILE)
+        payload_roots = {path.parts[0] for path in manifest}
+        result = classify_top_level(
+            {path.name for path in self.LIVE_PROFILE.iterdir()}, payload_roots
+        )
+        self.assertEqual(result["unknown"], frozenset())
+
+    def test_complete_gateway_agent_lifecycle_survives_hydration(self) -> None:
+        immutable = self.root / "immutable"
+        profiles = self.root / "profiles"
+        runtime = profiles / "live"
+        backup = self.root / "backups"
+        self._write_immutable_profile(immutable)
+        profiles.mkdir()
+        shutil.copytree(immutable, runtime)
+        created: dict[str, str] = {}
+        for index, stage in enumerate(self.LIFECYCLE):
+            for name in sorted(roots_for_lifecycle(stage) - created.keys()):
+                marker = f"{stage}:{name}"
+                self._materialize(runtime, name, marker)
+                created[name] = marker
+            bootstrap.hydrate_runtime_home(
+                immutable,
+                runtime,
+                backup,
+                release_unit_id=f"lifecycle-unit-{index}",
+            )
+            for name, marker in created.items():
+                contract = next(root for root in RUNTIME_ROOTS if root.name == name)
+                path = runtime / name
+                actual = (
+                    (path / "lifecycle.marker").read_text(encoding="utf-8")
+                    if contract.kind == "directory"
+                    else path.read_text(encoding="utf-8")
+                )
+                self.assertEqual(actual, marker, name)
+        self.assertEqual(set(created), set(MUTABLE_TOP_LEVEL))
+
+    def test_each_forbidden_item_is_rejected_before_staging(self) -> None:
+        immutable = self.root / "immutable"
+        profiles = self.root / "profiles"
+        backup = self.root / "backups"
+        self._write_immutable_profile(immutable)
+        profiles.mkdir()
+        for forbidden in sorted(FORBIDDEN_TOP_LEVEL):
+            with self.subTest(forbidden=forbidden):
+                runtime = profiles / f"live-{len(list(profiles.iterdir()))}"
+                shutil.copytree(immutable, runtime)
+                path = runtime / forbidden
+                if forbidden in {".pytest_cache", "gateway-service"}:
+                    path.mkdir()
+                else:
+                    path.write_text("pollution", encoding="utf-8")
+                with self.assertRaisesRegex(RuntimeError, "forbidden"):
+                    bootstrap.hydrate_runtime_home(
+                        immutable,
+                        runtime,
+                        backup,
+                        release_unit_id="forbidden-unit",
+                    )
+                self.assertFalse(any(profiles.glob(f".{runtime.name}.stage.*")))
+
+    def test_unknown_item_is_rejected_even_on_current_view(self) -> None:
+        immutable = self.root / "immutable"
+        profiles = self.root / "profiles"
+        runtime = profiles / "live"
+        backup = self.root / "backups"
+        self._write_immutable_profile(immutable)
+        profiles.mkdir()
+        shutil.copytree(immutable, runtime)
+        bootstrap.hydrate_runtime_home(
+            immutable,
+            runtime,
+            backup,
+            release_unit_id="current-unit",
+        )
+        (runtime / "unowned-runtime.json").write_text("{}", encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "unclassified"):
+            bootstrap.hydrate_runtime_home(
+                immutable,
+                runtime,
+                backup,
+                release_unit_id="current-unit",
+            )
 
 class CanonicalUnitIdentityTests(unittest.TestCase):
     def test_each_control_identity_field_changes_unit_identity(self) -> None:
