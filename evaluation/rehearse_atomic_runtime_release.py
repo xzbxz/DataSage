@@ -64,6 +64,16 @@ def verify_unit(unit: Path) -> dict[str, Any]:
         raise RuntimeError("runtime unit release metadata is invalid")
     if release.get("release_unit_id") != unit.name:
         raise RuntimeError("runtime unit directory identity does not match")
+    identity_sha256 = atomic._unit_identity_sha256(release)
+    expected_unit_id = (
+        f"datasage-runtime-{release.get('profile', {}).get('distribution_version')}-"
+        f"{identity_sha256[:16]}"
+    )
+    if (
+        release.get("unit_identity_sha256") != identity_sha256
+        or release.get("release_unit_id") != expected_unit_id
+    ):
+        raise RuntimeError("runtime unit canonical identity does not match")
 
     payload_records = [
         (relative, digest)

@@ -31,6 +31,29 @@ OFFLINE_HEALTH_PROBE_RELATIVE = "evaluation/runtime_offline_health.py"
 OFFLINE_HEALTH_EXECUTOR_ID = "datasage-atomic-offline-health/v1"
 
 
+def _unit_identity_sha256(release: dict[str, Any]) -> str:
+    canonical = {
+        key: release[key]
+        for key in (
+            "payload_sha256",
+            "profile",
+            "hermes",
+            "compatibility",
+            "control_plane",
+            "runtime",
+        )
+        if key in release
+    }
+    return hashlib.sha256(
+        json.dumps(
+            canonical,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def _hash_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -540,20 +563,8 @@ def build(
 
         payload_records = _tree_records(stage)
         payload_sha256 = _aggregate_records(payload_records)
-        unit_id = (
-            f"datasage-runtime-{profile_release['distribution_version']}-"
-            f"{payload_sha256[:16]}"
-        )
-        unit = output_root / unit_id
-        if unit.exists():
-            raise RuntimeError(f"immutable runtime release already exists: {unit}")
-
-        release_dir = stage / ".release"
-        release_dir.mkdir()
-        metadata = {
-            "release_unit_id": unit_id,
+        identity = {
             "payload_sha256": payload_sha256,
-            "built_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "profile": {
                 **{
                     field: profile_release[field]
@@ -601,6 +612,23 @@ def build(
                 if offline_health is not None
                 else {}
             ),
+        }
+        unit_identity_sha256 = _unit_identity_sha256(identity)
+        unit_id = (
+            f"datasage-runtime-{profile_release['distribution_version']}-"
+            f"{unit_identity_sha256[:16]}"
+        )
+        unit = output_root / unit_id
+        if unit.exists():
+            raise RuntimeError(f"immutable runtime release already exists: {unit}")
+
+        release_dir = stage / ".release"
+        release_dir.mkdir()
+        metadata = {
+            "release_unit_id": unit_id,
+            "unit_identity_sha256": unit_identity_sha256,
+            "built_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            **identity,
         }
         metadata_path = release_dir / "RELEASE.json"
         metadata_path.write_text(

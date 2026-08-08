@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 from evaluation import current_runtime_launcher as launcher
+from evaluation import build_atomic_runtime_release as builder
 
 
 @unittest.skipUnless(os.name == "nt", "Windows extended paths only")
@@ -80,6 +81,59 @@ class WindowsLongPathStageTests(unittest.TestCase):
             handle.write(b"partial")
         launcher._remove_tree_within_root(operation, staging)
         self.assertFalse(operation.exists())
+
+
+class CanonicalUnitIdentityTests(unittest.TestCase):
+    def test_each_control_identity_field_changes_unit_identity(self) -> None:
+        release = {
+            "payload_sha256": "1" * 64,
+            "profile": {
+                "artifact_id": "profile",
+                "distribution_name": "datasage-canary-next",
+                "distribution_version": "0.12.0-dev1",
+                "payload_sha256": "2" * 64,
+                "manifest_sha256": "3" * 64,
+                "release_metadata_sha256": "4" * 64,
+                "runtime_profile_name": "datasage-canary-next",
+            },
+            "hermes": {
+                "commit": "5" * 40,
+                "tag": "hermes-tag",
+                "tree_oid": "6" * 40,
+                "uv_lock_sha256": "7" * 64,
+                "source": "exact_git_tree_archive",
+            },
+            "compatibility": {"hermes_requires": "==0.19.0"},
+            "control_plane": {
+                "commit": "8" * 40,
+                "tag": "control-tag",
+                "tree_oid": "9" * 40,
+                "probe_blob_oid": "a" * 40,
+                "executor_id": "datasage-atomic-offline-health/v1",
+                "probe_sha256": "b" * 64,
+                "profile_source_commit": "c" * 40,
+                "profile_source_tag": "profile-tag",
+            },
+            "runtime": {"offline_health": {"version": "offline-health/v1"}},
+        }
+        baseline = builder._unit_identity_sha256(release)
+        alternatives = {
+            "commit": "d" * 40,
+            "tag": "control-tag-2",
+            "tree_oid": "e" * 40,
+            "probe_blob_oid": "f" * 40,
+            "executor_id": "datasage-atomic-offline-health/v2",
+            "probe_sha256": "0" * 64,
+            "profile_source_commit": "1" * 40,
+            "profile_source_tag": "profile-tag-2",
+        }
+        for field, replacement in alternatives.items():
+            changed = __import__("copy").deepcopy(release)
+            changed["control_plane"][field] = replacement
+            with self.subTest(field=field):
+                self.assertNotEqual(
+                    baseline, builder._unit_identity_sha256(changed)
+                )
 
 
 if __name__ == "__main__":
