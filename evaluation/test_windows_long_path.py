@@ -9,6 +9,7 @@ from unittest import mock
 
 from evaluation import current_runtime_launcher as launcher
 from evaluation import build_atomic_runtime_release as builder
+import runtime_gateway_bootstrap as bootstrap
 
 
 @unittest.skipUnless(os.name == "nt", "Windows extended paths only")
@@ -109,6 +110,40 @@ class WindowsLeaseLivenessTests(unittest.TestCase):
             self.assertTrue(launcher._default_liveness(424242))
         identity.assert_called_once_with(424242)
 
+
+class RuntimeViewClassificationTests(unittest.TestCase):
+    def test_operational_runtime_state_is_explicitly_allowlisted(self) -> None:
+        expected = {
+            ".hermes_history",
+            "channel_directory.json",
+            "gateway-starts.log",
+            "gateway.lock",
+            "gateway.pid",
+            "home",
+            "lsp",
+            "ollama_cloud_models_cache.json",
+            "pastes",
+            "pending_messages",
+            "plans",
+            "platforms",
+            "processes.json",
+            "provider_models_cache.json",
+            "skins",
+            "state",
+            "verification_evidence.db",
+            "verification_evidence.db-shm",
+            "verification_evidence.db-wal",
+            "workspace",
+        }
+        self.assertTrue(expected.issubset(bootstrap.MUTABLE_TOP_LEVEL))
+
+    def test_test_and_backup_pollution_remains_fail_closed(self) -> None:
+        forbidden = {
+            ".pytest_cache",
+            "pytest.ini",
+            "config.yaml.bak-20260807",
+        }
+        self.assertTrue(forbidden.isdisjoint(bootstrap.MUTABLE_TOP_LEVEL))
 
 class CanonicalUnitIdentityTests(unittest.TestCase):
     def test_each_control_identity_field_changes_unit_identity(self) -> None:
