@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
 from evaluation import current_runtime_launcher as launcher
 from evaluation import build_atomic_runtime_release as builder
@@ -81,6 +82,32 @@ class WindowsLongPathStageTests(unittest.TestCase):
             handle.write(b"partial")
         launcher._remove_tree_within_root(operation, staging)
         self.assertFalse(operation.exists())
+
+
+@unittest.skipUnless(os.name == "nt", "Windows process identity only")
+class WindowsLeaseLivenessTests(unittest.TestCase):
+    def test_dead_pid_uses_handle_identity_without_os_kill(self) -> None:
+        with (
+            mock.patch.object(
+                launcher, "_process_start_identity", return_value=None
+            ) as identity,
+            mock.patch.object(
+                launcher.os,
+                "kill",
+                side_effect=AssertionError("os.kill must not be used"),
+            ),
+        ):
+            self.assertFalse(launcher._default_liveness(424242))
+        identity.assert_called_once_with(424242)
+
+    def test_live_pid_uses_exact_handle_identity(self) -> None:
+        with mock.patch.object(
+            launcher,
+            "_process_start_identity",
+            return_value="windows-filetime:123",
+        ) as identity:
+            self.assertTrue(launcher._default_liveness(424242))
+        identity.assert_called_once_with(424242)
 
 
 class CanonicalUnitIdentityTests(unittest.TestCase):

@@ -245,6 +245,12 @@ def _atomic_json(path: Path, value: Mapping[str, Any]) -> None:
 def _default_liveness(pid: int) -> bool:
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return False
+    if os.name == "nt":
+        # CPython distributions on Windows can surface ERROR_INVALID_PARAMETER
+        # from os.kill(pid, 0) as an uncatchable-looking SystemError for a dead
+        # PID.  The control plane already has an exact, handle-based process
+        # identity probe, so use it for Windows liveness as well.
+        return _process_start_identity(pid) is not None
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
