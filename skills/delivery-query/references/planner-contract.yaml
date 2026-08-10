@@ -1,0 +1,384 @@
+version: datasage-mini-delivery-planner/v11
+domain: delivery
+audience: agent_planner
+purpose: 将业务问题映射为受控指标、维度、时间和回答范围，不承载物理数据实现。
+
+phase_a_acceptance:
+  status: dev1_single_metric_vertical_slice
+  selected_metric: delivery_amount
+  selection_reason: 净出库金额已完成生产只读核验，人民币单位明确，不依赖待对账的数量单位，也不要求实体解析或输出分组。
+  catalog_sequence:
+    - {domain: delivery}
+    - {domain: delivery, metric: delivery_amount}
+  query_shape:
+    domain: delivery
+    mode: metric
+    delivery_scope: default_net
+    dimensions: []
+    required_business_inputs: [resolved_start_inclusive, resolved_end_exclusive]
+  answer_evidence:
+    - business_metric_label
+    - business_metric_unit
+    - metric_value
+    - actual_time_range
+    - delivery.net-flow.meaning
+  hermes_answer: 直接给出净出库金额、人民币单位和实际时间范围；说明这是同期毛出库减同期有效退货的当期流量净额，结果允许为负数。
+  local_failure: 只说明本次数据查询未完成；不得接管、冻结或污染后续普通对话。
+  non_goals: [turn_scope, grounding, model_authored_sql, dataset_mode, entity_search, grouping, ranking, comparison]
+
+dimension_policy:
+  filter_only: never_add_output_dimension
+  output_dimension_triggers: [explicit_grouping, explicit_ranking, explicit_comparison, explicit_breakdown, metric_required_grain]
+  overall_with_filters: dimensions_empty
+
+required_common_references:
+  - common-data-foundation/references/query-rules.md
+  - common-data-foundation/references/answer-boundary.md
+
+visibility:
+  user_answers_use_business_labels_only: true
+  never_echo_metric_or_dimension_codes: true
+  physical_execution_contract_is_plugin_only: true
+  internal_restrictions_are_not_answer_content: true
+  unavailable_behavior:
+    default: 不执行、不主动列举、不主动命名附近的其他计算。
+    explicit_user_question: 只用业务语言解释缺少的证据或当前可提供的范围。
+
+tool_planning:
+  summaries_mode: metric
+  summaries_include: [汇总, 单数, 比率, 排名, 趋势, 比较, 净值, 结构, 目标对照]
+  routing_precedence:
+    first: 判断用户要求的输出操作。
+    aggregate_operations: [合计, 汇总, 总额, 数量, 单数, 净值, 比率, 排名, 趋势, 比较, 分组统计]
+    rule: 只要输出属于 aggregate_operations 就使用 metric mode，即使同一句还包含“明细”“原始”“直接查表”或要求绕过指标。
+    detail_eligibility: 当前发布版本不开放模型侧明细合同；任何逐行明细请求均不得生成查询。
+    no_auxiliary_dataset_after_metric: 不得追加 dataset 请求作为来源、佐证或原始补充；每个要求的指标只生成一个必要请求。
+    dimension_selection: 筛选只缩小输入行，绝不因此加入输出维度。只有用户明确要求分组、排名、比较、拆解，或指标要求固定粒度时才加入 dimensions；带筛选的整体汇总仍为空。“原始”“明细”“来源”“表”或“直接查”不是维度。
+  dataset_mode: unavailable_until_semantic_detail_contract_is_governed
+  physical_dataset_contract: plugin_only_never_read_in_business_conversation
+  user_selected_internal_mode: ignore_and_route_by_business_meaning
+  metric_scope_guardrails:
+    precedence: 先确定用户要求的净或毛业务口径，再检查该口径支持的维度；不得为满足维度而改写口径。
+    unqualified_delivery: 使用净出库指标。
+    gross_delivery_trigger: 只有用户明确说“毛出库”或“未扣退货”时才使用毛出库指标。
+    not_a_gross_trigger: [原始, 明细, 直接查表, dataset, 越原始越好, 原条码, 来源条码, 缸号]
+    gross_only_dimension_is_not_evidence: 来源条码、缸号或其他毛口径专属维度本身不能证明用户明确要求毛出库。
+    unsupported_net_dimension: 用户要求净口径或未限定口径且维度只支持毛口径时，不调用查询工具；说明缺少同维度退货证据并询问是否改查毛口径。
+    structured_scope_field:
+      unqualified_net: omit_or_default_net
+      explicit_gross: explicit_gross
+      governed_order_delivery_alignment: order_delivery_alignment
+      rule: 工具只验证结构化 scope，不读取 purpose 文本重做自然语言判断。
+    ready_goods_filter:
+      ready_or_trial_ready: {metric_filters: {ready_goods: y}}
+      not_ready: {metric_filters: {ready_goods: n}}
+      group_only_when_requested: {dimensions: [ready_goods]}
+  raw_sql_or_model_join: forbidden
+  max_requests_per_call: 10
+  multi_question: 将每个子问题放入同一次工具调用的独立 request_id；单项失败不抹去其他结果。
+  time_range:
+    always_send_resolved_start_and_end: true
+    start_inclusive_end_exclusive: true
+    governed_by: common.query_policy.governed_metric_time_range
+  ranking:
+    order_by_field: metric_value
+    default_direction: desc
+    default_limit: 10
+
+defaults:
+  time:
+    transaction_total_or_ranking: current_natural_month
+    recent_without_unit: latest_30_natural_days
+  currency:
+    default: rmb
+    bare_original_currency:
+      action: add_currency_dimension
+      result: one_row_per_currency
+    explicit_currency:
+      action: filter_currency_dimension
+    never_sum_mixed_currency: true
+  internal_customer: exclude
+  delivery_meaning: period_flow_net
+  order_count_meaning: delivery_order_count
+  return_rate_meaning: return_amount_rate
+
+catalog_status:
+  status: test_time_consistency_assertion_only
+  authoritative_source: execution_semantics
+  model_visibility: false
+  rule: 以下手写 metric_families、metric_labels 与 dimension_sets 仅供发布期验证 code 仍存在；合同服务不得投影这些影子目录，模型目录必须由 execution semantics 生成。
+
+metric_families:
+  business_delivery:
+    net: [delivery_amount, delivery_quantity, delivery_roll_count]
+    gross: [gross_delivery_amount, gross_delivery_quantity, gross_delivery_roll_count]
+    return: [return_amount, return_quantity, return_roll_count]
+    return_counts: [return_document_count, returned_delivery_order_count]
+    return_rates: [return_amount_rate, return_quantity_rate, return_roll_rate]
+    counts: [delivery_order_count]
+    original_currency: [delivery_amount_original, gross_delivery_amount_original, return_amount_original]
+  order:
+    values: [order_amount, order_quantity, order_roll_count]
+    counts: [placed_order_count]
+    original_currency: [order_amount_original]
+  physical_delivery:
+    net: [warehouse_delivery_amount, warehouse_delivery_quantity, warehouse_delivery_roll_count]
+    gross: [warehouse_gross_delivery_amount, warehouse_gross_delivery_quantity, warehouse_gross_delivery_roll_count]
+    return: [warehouse_return_amount, warehouse_return_quantity, warehouse_return_roll_count]
+    original_currency: [warehouse_delivery_amount_original, warehouse_gross_delivery_amount_original, warehouse_return_amount_original]
+
+metric_labels:
+  delivery_amount: 净出库金额
+  delivery_quantity: 净出库数量
+  delivery_roll_count: 净出库卷数
+  gross_delivery_amount: 毛出库金额
+  gross_delivery_quantity: 毛出库数量
+  gross_delivery_roll_count: 毛出库卷数
+  return_amount: 退货金额
+  return_quantity: 退货数量
+  return_roll_count: 退货卷数
+  return_document_count: 退货单数
+  returned_delivery_order_count: 涉及退货的来源出库订单数
+  return_amount_rate: 金额退货率
+  return_quantity_rate: 数量退货率
+  return_roll_rate: 卷数退货率
+  delivery_order_count: 出库订单数
+  order_amount: 下单金额
+  order_quantity: 下单数量
+  order_roll_count: 下单卷数
+  placed_order_count: 下单订单数
+  delivery_amount_original: 原币净出库金额
+  gross_delivery_amount_original: 原币毛出库金额
+  return_amount_original: 原币退货金额
+  order_amount_original: 原币下单金额
+  warehouse_delivery_amount: 仓库或物理维度净出库金额
+  warehouse_delivery_quantity: 仓库或物理维度净出库数量
+  warehouse_delivery_roll_count: 仓库或物理维度净出库卷数
+  warehouse_gross_delivery_amount: 仓库或物理维度毛出库金额
+  warehouse_gross_delivery_quantity: 仓库或物理维度毛出库数量
+  warehouse_gross_delivery_roll_count: 仓库或物理维度毛出库卷数
+  warehouse_return_amount: 仓库或物理维度退货金额
+  warehouse_return_quantity: 仓库或物理维度退货数量
+  warehouse_return_roll_count: 仓库或物理维度退货卷数
+  warehouse_delivery_amount_original: 原币仓库或物理维度净出库金额
+  warehouse_gross_delivery_amount_original: 原币仓库或物理维度毛出库金额
+  warehouse_return_amount_original: 原币仓库或物理维度退货金额
+
+dimension_sets:
+  business_common:
+    - customer
+    - salesperson
+    - department
+    - organization
+    - product
+    - color
+    - color_label
+    - customer_region
+    - customer_type
+    - customer_category
+    - customer_label
+    - ha_customer
+    - vip_customer
+    - ccbs_customer
+    - ht_customer
+    - brand_customer
+    - product_region
+    - product_category
+    - printed_product
+    - ht_product
+    - ready_goods
+    - customized_order
+    - bill_type
+    - supplier
+    - customer_grade
+    - customer_resource
+    - customer_biz_label
+    - customer_current_salesperson
+    - product_component
+    - product_technology
+    - product_usage
+    - product_pattern
+    - product_width
+    - current_product_self_operated
+    - current_product_made_to_order
+    - supplier_region
+    - supplier_type
+    - supplier_level
+    - supplier_full_name
+    - supplier_main_products
+    - currency
+  physical_net:
+    - warehouse
+    - warehouse_region
+    - warehouse_department
+    - warehouse_category
+    - missing_warehouse
+    - defective_warehouse
+    - ccbs_warehouse
+    - batch_no
+    - barcode
+    - defective_item
+    - currency
+  physical_gross_additional: [source_barcode, cylinder_no]
+
+intent_routes:
+  delivery_overview:
+    match_when: 用户询问出库整体、概览或怎么样，且没有显式指标、趋势、排名、比较、分组或原因诊断。
+    request_policy: adaptive
+    recipe: delivery_overview
+    answer_scope: 由 Hermes 从治理目录选择足够回答问题的最小证据组合；指标数量不固定。每个指标保持独立业务含义，评价高低或变化必须有返回的比较基准，原因判断必须有对应证据。
+  gross_delivery_overview:
+    match_when: 用户明确要求毛出库整体概览，或同时询问毛出库金额和卷数。
+    request_policy: exact
+    metrics: [gross_delivery_amount, gross_delivery_roll_count]
+  unqualified_order_count:
+    request_policy: exact
+    metrics: [delivery_order_count]
+    answer_scope: 直接说明出库口径；不主动介绍其他计数口径。
+  explicit_placed_order_count:
+    request_policy: exact
+    metrics: [placed_order_count]
+    answer_scope: 直接说明下单口径。
+  unqualified_return_rate:
+    request_policy: exact
+    metrics: [return_amount_rate]
+    answer_scope: 说明金额口径和时间范围。
+  explicit_quantity_return_rate:
+    request_policy: exact
+    metrics: [return_quantity_rate]
+  explicit_roll_return_rate:
+    request_policy: exact
+    metrics: [return_roll_rate]
+  warehouse_delivery_overview:
+    match_when: 用户要求按仓库看出库且没有指定金额、数量、卷数等单项指标或其他分析操作。
+    request_policy: exact
+    metrics: [warehouse_delivery_amount, warehouse_delivery_roll_count]
+    dimensions: [warehouse]
+    answer_scope: 实际仓库净流量；说明退货按实际退入仓扣减。
+  physical_dimension_delivery_overview:
+    match_when: 用户按批次、条码或是否次品看出库且没有指定单项指标或其他分析操作。
+    request_policy: exact
+    metrics: [warehouse_delivery_amount, warehouse_delivery_roll_count]
+    allowed_dimensions: [batch_no, barcode, defective_item]
+    default_scope: period_flow_net
+  source_barcode_or_cylinder:
+    request_policy: explicit_metric_or_overview_bundle
+    allowed_dimensions: [source_barcode, cylinder_no]
+    requirement: 用户明确要求毛出库
+    metrics: [warehouse_gross_delivery_amount, warehouse_gross_delivery_roll_count]
+    on_other_scope: 不查询；说明退货侧缺少可靠的同维度证据，并询问是否改查毛出库。
+
+  original_currency:
+    bare_request: 使用对应原币指标并增加 currency 维度。
+    named_currency: 使用对应原币指标并按 currency 过滤。
+    bare_answer_disclosure: 必须明确写出“各币种独立列示，不将不同币种金额相加”，不能只靠结果中的币种列暗示。
+  ready_goods:
+    dimension: ready_goods
+    metric_filter: {ready_goods: y}
+    filter_meaning: y 同时代表备货和试备货；不得把“备货”中文文本或其他自由值直接作为过滤值。
+    answer_scope: 必须说明同时包含备货和试备货。
+
+removed_capabilities:
+  original_outbound_warehouse_attribution:
+    trigger: 用户要求按原出库仓、来源出库仓或责任仓归因
+    status: unsupported
+    behavior: 不查询；说明当前只支持实际出库仓减实际退入仓的仓库净流量，不得静默改用该口径冒充来源仓归因。
+
+recipe_policy:
+  exact_overview_bundle: 只有命中 intent_routes 中窄化的 match_when 才逐项使用，不得由“模糊”二字触发。
+  analysis_seed: 仅供 Hermes 形成假设和挑选最小证据，不是固定清单，不授权未登记指标，也不覆盖用户明确的指标、维度、筛选、时间或操作。
+  adaptive_seed: 先查最小治理证据，只有首批结果暴露实质证据缺口时才允许一次针对性跟进。
+
+analysis_recipes:
+  delivery_overview:
+    kind: adaptive_seed
+    request_policy: adaptive
+    metric_count: not_fixed
+    selection_policy: smallest_relevant_governed_bundle
+    first: one_batched_evidence_call
+    followup: at_most_one_material_evidence_gap
+    max_tool_calls: 2
+  return_overview:
+    kind: exact_overview_bundle
+    request_policy: exact
+    default_metrics: [return_amount, return_roll_count, return_document_count]
+    max_tool_calls: 1
+  order_overview:
+    kind: exact_overview_bundle
+    request_policy: exact
+    metrics: [order_amount, order_roll_count, placed_order_count]
+    max_tool_calls: 1
+  warehouse_delivery_overview:
+    kind: exact_overview_bundle
+    request_policy: exact
+    metrics: [warehouse_delivery_amount, warehouse_delivery_roll_count]
+    dimensions: [warehouse]
+    max_tool_calls: 1
+  physical_dimension_delivery_overview:
+    kind: exact_overview_bundle
+    request_policy: exact
+    metrics: [warehouse_delivery_amount, warehouse_delivery_roll_count]
+    allowed_dimensions: [batch_no, barcode, defective_item]
+    max_tool_calls: 1
+  trend_change:
+    kind: analysis_seed
+    request_policy: seed
+    delivery_metric: delivery_amount
+    order_metric: order_amount
+    default_time: latest_30_natural_days
+    time_bucket: day_for_30_days_or_less_otherwise_month
+  ranking_structure:
+    kind: analysis_seed
+    request_policy: seed
+    dimensions: [customer, product, salesperson, department, organization, warehouse]
+    default_limit: 10
+    order_by: {field: metric_value, direction: desc}
+  governed_change_decomposition:
+    kind: analysis_seed
+    dimensions: [customer, product, salesperson, department, organization]
+    comparison: {kind: previous_period}
+    same_batch: {overall: dimensionless_comparison, decomposition: linked_full_non_truncated_partition}
+    relation: reconciled_change_only
+  change_observations:
+    kind: analysis_seed
+    request_policy: fallback
+    label: partial_observations_only
+    dimensions: [customer, product, salesperson, department, organization]
+    comparison: {kind: previous_period}
+    two_sided_requests: {increases: delta_value_desc, decreases: delta_value_asc}
+    default_limit_per_side: 5
+  entity_evidence_card:
+    kind: analysis_seed
+    request_policy: adaptive
+    required_filter: one_explicit_customer_product_or_salesperson
+    keep_delivery_and_order_separate: true
+  delivery_order_alignment:
+    kind: analysis_seed
+    request_policy: seed
+    amount: [order_amount, gross_delivery_amount]
+    rolls: [order_roll_count, gross_delivery_roll_count]
+    counts: [placed_order_count, delivery_order_count]
+    structured_scope: 每个成对请求都使用 delivery_scope=order_delivery_alignment；该标记只允许登记的毛出库指标采用毛口径。
+    output: 只并列同期数值和直接差额，说明两侧时间含义不同；不生成目录中未登记的派生指标或订单级结论。
+  explain_change:
+    kind: analysis_seed
+    request_policy: adaptive
+    first: governed_change_decomposition
+    fallback: change_observations
+
+answer_contract:
+  user_visible_vocabulary: business_labels_only_including_meta_followups
+  judgment_policy: comparative_language_requires_returned_benchmark_evidence
+  comparison_label_policy: derive_month_over_month_or_year_over_year_from_returned_periods
+  cross_metric_inference_policy: state_computed_relation_only_without_unproven_business_proxy
+  headline_policy: returned_fact_or_reconciled_driver_only
+  driver_language_policy: requires_complete_returned_reconciliation
+  required_scope: [actual_time_range, net_or_gross, delivery_or_order, currency_or_grouping_when_relevant]
+  actual_time_range_rule: 每个成功查询回答都必须用业务可读文字写出实际时间范围；当前或最新快照写出快照范围，不得只靠用户问题或表头暗示。
+  hidden_execution_scope: [fixed_status_filters, internal_customer_filter, physical_source, table_and_field_mapping]
+  hidden_execution_scope_rule: 用户未明确询问对应业务范围时，不主动说明，不使用“直接取明细得出”等实现性措辞。
+  simple: 直接给结论和口径。
+  complex_order: [结论, 关键数据, 口径, 限制]
+  current_master_supplement: 说明是当前属性，不表述为交易时点历史事实。
+  unsupported_or_unrequested_metrics: 不计算、不主动复述；只有用户明确追问时才用业务语言说明。
+  business_decision: 不代替用户做客户、产品、人员、库存或授信决策。

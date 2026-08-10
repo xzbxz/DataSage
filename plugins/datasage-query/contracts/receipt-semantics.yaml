@@ -1,0 +1,582 @@
+version: datasage-mini-receipt-semantics/v8
+domain: receipt
+contract_role: plugin_physical_execution
+model_planner_contract: references/planner-contract.yaml
+triggers: [收款, 回款, 到账, 实收, 退款, 净收款, 收款金额, 回款排名, 回款趋势]
+
+tables:
+  - vk_dwd.receive_bill_detail_dwd
+  - vk_dwd.receive_return_bill_detail_dwd
+  - vk_dwd.customer_dwd
+
+facts:
+  receipt:
+    table: vk_dwd.receive_bill_detail_dwd
+    grain: 一行是一条收款单明细
+    primary_key: [detail_id]
+    document_key: bill_id
+    display_document_number: bill_no
+    time_field: bill_time
+    updated_at: gmt_modified
+  refund:
+    table: vk_dwd.receive_return_bill_detail_dwd
+    grain: 一行是一条收款退款单明细
+    primary_key: [detail_id]
+    document_key: bill_id
+    display_document_number: bill_no
+    time_field: bill_time
+    updated_at: gmt_modified
+
+defaults:
+  time_range: current_month
+  recent_without_unit: latest_30_natural_days
+  currency: rmb
+  department: customer_dept
+  organization: org_name
+  salesperson: [final_sales_id, final_sales_name]
+  salesperson_ledger: transaction_detail
+  include_internal_customers: true
+  receipt_usage_scope: all
+  intents:
+    receipt_or_collection: {metric: receipt_amount, answer_scope: 收款人民币金额}
+    actual_receipt: {metric: actual_receipt_amount, answer_scope: 实收人民币金额}
+    receipt_count: {metric: receipt_bill_count, answer_scope: 收款单数}
+    refund: {metric: refund_amount, answer_scope: 退款人民币金额}
+    actual_refund: {metric: actual_refund_amount, answer_scope: 实退人民币金额}
+    refund_count: {metric: refund_bill_count, answer_scope: 退款单数}
+    net_receipt: {metric: net_receipt_amount, answer_scope: 净收款人民币金额}
+    refund_original: {metric: refund_amount_original, answer_scope: 退款原币金额}
+    net_receipt_original: {metric: net_receipt_amount_original, answer_scope: 按币种的净收款原币金额}
+
+ledger_policy:
+  default: transaction_detail
+  transaction_detail:
+    positive_fact: vk_dwd.receive_bill_detail_dwd
+    negative_fact: vk_dwd.receive_return_bill_detail_dwd
+    salesperson_rule: each_fact_uses_final_sales_id
+  salesperson_allocation:
+    handoff_domain: target
+    triggers: [目标, 协作, 分摊, 分摊业绩]
+    positive_fact: vk_dwd.receive_bill_split_dwd
+    negative_fact: vk_dwd.receive_return_bill_split_dwd
+
+analysis_defaults:
+  overview_time: current_natural_month
+  trend_without_time: latest_30_natural_days_by_day
+  change_without_time:
+    current: latest_30_natural_days
+    comparison: preceding_30_natural_days
+  ranking_limit: 10
+  change_observation_limit: 10
+  comparison_kind: previous_period
+  disclosure: 说明时间、指标类型、人民币口径、内部客户与收款用途范围。
+
+value_contract_templates:
+  entity_exact: &vc_entity_exact
+    kind: entity_exact
+    model_rule: 保留用户明确提供的精确实体 token；由工具做实体预检和稳定身份绑定，不得猜测。
+  source_exact: &vc_source_exact
+    kind: source_exact
+    model_rule: 仅使用用户明确提供或受控结果返回的精确原值；不得猜测、翻译、归一化或扩展。
+  boolean_yn: &vc_boolean_yn
+    kind: closed
+    allowed_values: [y, n]
+    business_meanings: {y: 是, n: 否}
+
+currency_policy_templates:
+  original_currency: &original_currency_policy
+    mode: original_currency
+    column: currency_no
+    require_filter_or_group: true
+    never_sum_mixed_currency: true
+
+dimensions:
+  customer:
+    label: 客户
+    columns: [customer_id, customer_no, customer_name]
+    filter_column: customer_name
+    identity_filter: {entity_type: customer, value_field: canonical_id, column: customer_id}
+    value_contract: *vc_entity_exact
+  salesperson:
+    label: 业务员
+    columns: [final_sales_id, final_sales_name]
+    filter_column: final_sales_name
+    identity_filter: {entity_type: salesperson, value_field: canonical_id, column: final_sales_id}
+    value_contract: *vc_entity_exact
+    answer_note: 默认使用交易事实账，销售归属按收退款明细中的最终业务员口径；只有目标、协作或明确分摊问题才交给目标域的业务员分摊账。
+  department:
+    label: 客户部门
+    columns: [customer_dept]
+    filter_column: customer_dept
+    value_contract: *vc_source_exact
+    answer_note: 部门统一按客户部门 customer_dept。
+  organization:
+    label: 业务组织
+    columns: [org_id, org_name]
+    filter_column: org_name
+    value_contract: *vc_source_exact
+    answer_note: 未限定组织口径时按 org_name。
+  settlement_organization:
+    label: 结算组织
+    columns: [settle_org_name]
+    filter_column: settle_org_name
+    value_contract: *vc_source_exact
+  receipt_organization:
+    label: 收款组织
+    columns: [receive_org_name]
+    filter_column: receive_org_name
+    value_contract: *vc_source_exact
+  sales_organization:
+    label: 销售组织
+    columns: [sale_org_name]
+    filter_column: sale_org_name
+    value_contract: *vc_source_exact
+  customer_region:
+    label: 客户区域
+    columns: [customer_region]
+    filter_column: customer_region
+    value_contract: *vc_source_exact
+  customer_type:
+    label: 客户类型
+    columns: [customer_type]
+    filter_column: customer_type
+    value_contract: *vc_source_exact
+  customer_category:
+    label: 客户分类
+    columns: [customer_category]
+    filter_column: customer_category
+    value_contract: *vc_source_exact
+  ha_customer:
+    label: HA客户
+    columns: [is_ha_cus]
+    filter_column: is_ha_cus
+    value_contract: *vc_boolean_yn
+  ccbs_customer:
+    label: CCBS客户
+    columns: [is_ccbs_cus]
+    filter_column: is_ccbs_cus
+    value_contract: *vc_boolean_yn
+  internal_customer:
+    label: 内部客户
+    columns: [is_inner_cus]
+    filter_column: is_inner_cus
+    value_contract: *vc_boolean_yn
+    answer_note: 收款域默认包含内部客户；只有用户明确要求时才按该字段筛选。
+  currency:
+    label: 币种
+    columns: [currency_no]
+    filter_column: currency_no
+    value_contract: *vc_source_exact
+  settlement_method:
+    label: 结算方式
+    columns: [settle_way]
+    filter_column: settle_way
+    value_contract: *vc_source_exact
+  receipt_usage:
+    label: 收款用途
+    columns: [receive_usage]
+    filter_column: receive_usage
+    value_contract: *vc_source_exact
+  refund_usage:
+    label: 退款用途
+    columns: [return_usage]
+    filter_column: return_usage
+    value_contract: *vc_source_exact
+  customer_grade:
+    label: 当前客户等级
+    columns: [{column: customer_grade, alias: current_customer_grade}]
+    filter_column: customer_grade
+    value_contract: *vc_source_exact
+    source: {type: governed_join, dataset: vk_dwd.customer_dwd, local_column: customer_id, remote_column: customer_id, cardinality: many_to_one}
+    answer_note: 当前客户主数据属性可能不是收退款发生时的历史属性。
+  customer_resource:
+    label: 当前客户来源
+    columns: [{column: customer_resource, alias: current_customer_resource}]
+    filter_column: customer_resource
+    value_contract: *vc_source_exact
+    source: {type: governed_join, dataset: vk_dwd.customer_dwd, local_column: customer_id, remote_column: customer_id, cardinality: many_to_one}
+    answer_note: 当前客户主数据属性可能不是收退款发生时的历史属性。
+  customer_business_label:
+    label: 当前客户业务标签
+    columns: [{column: biz_label, alias: current_customer_business_label}]
+    filter_column: biz_label
+    value_contract: *vc_source_exact
+    source: {type: governed_join, dataset: vk_dwd.customer_dwd, local_column: customer_id, remote_column: customer_id, cardinality: many_to_one}
+    answer_note: 当前客户主数据属性可能不是收退款发生时的历史属性。
+  current_customer_owner:
+    label: 当前客户负责人
+    columns:
+      - {column: sales_id, alias: current_customer_owner_id}
+      - {column: sales_name, alias: current_customer_owner_name}
+    filter_column: sales_name
+    value_contract: *vc_source_exact
+    source: {type: governed_join, dataset: vk_dwd.customer_dwd, local_column: customer_id, remote_column: customer_id, cardinality: many_to_one}
+    answer_note: 当前客户负责人仅用于补充当前属性，不替代收退款事实中的最终业务员归属。
+
+common_dimensions: &common_dimensions
+  [customer, salesperson, department, organization, settlement_organization, receipt_organization, sales_organization, customer_region, customer_type, customer_category, ha_customer, ccbs_customer, internal_customer, currency, settlement_method, customer_grade, customer_resource, customer_business_label, current_customer_owner]
+
+receipt_dimensions: &receipt_dimensions
+  [customer, salesperson, department, organization, settlement_organization, receipt_organization, sales_organization, customer_region, customer_type, customer_category, ha_customer, ccbs_customer, internal_customer, currency, settlement_method, receipt_usage, customer_grade, customer_resource, customer_business_label, current_customer_owner]
+
+refund_dimensions: &refund_dimensions
+  [customer, salesperson, department, organization, settlement_organization, receipt_organization, sales_organization, customer_region, customer_type, customer_category, ha_customer, ccbs_customer, internal_customer, currency, settlement_method, refund_usage, customer_grade, customer_resource, customer_business_label, current_customer_owner]
+
+default_disclosures:
+  - id: receipt.domain.scope
+    mode: required_always
+    text: "收款及退款域指标均包含内部客户并排除A状态；涉及用途时以本次实际筛选范围为准。"
+
+metrics:
+  receipt_amount:
+    disclosures:
+      - id: receipt.receipt.scope
+        mode: required_always
+        text: "收款范围包含内部客户并排除A状态；收款用途以本次实际筛选范围为准。"
+      - id: receipt.receipt_amount.legacy-note
+        mode: contract_only
+        text: "本指标为收款金额，默认人民币并包含内部客户，仅排除 A 状态。未限定用途时包含全部收款用途；显式限定用途时只说明实际筛选范围，禁止仍声称全部用途。"
+    label: 收款金额（人民币）
+    business_definition: 所选收款期间内的人民币收款金额；默认包含内部客户，未限定用途时包含全部收款用途。
+    unit: 人民币元
+    table: vk_dwd.receive_bill_detail_dwd
+    aggregation: sum
+    measure: detail_receive_rmb
+    time_field: bill_time
+    time_policy: current_month
+    required_filters: {bill_status: {op: ne, value: A}}
+    allowed_dimensions: *receipt_dimensions
+    change_decomposition:
+      mode: additive_partition
+      dimensions: [customer, salesperson, department, organization]
+    reasoning_topics:
+      [collection_timing, credit_or_settlement, customer_mix, external_event]
+    answer_note: 本指标为收款金额，默认人民币并包含内部客户，仅排除 A 状态。未限定用途时包含全部收款用途；显式限定用途时只说明实际筛选范围，禁止仍声称全部用途。
+  actual_receipt_amount:
+    disclosures:
+      - id: receipt.actual_receipt_amount.legacy-note
+        mode: contract_only
+        text: "实收按 detail_deal_amount × exchange_rate 逐明细换算人民币后汇总。"
+    label: 实收金额（人民币）
+    business_definition: 所选收款期间内，按治理汇率折算后的人民币实际收款金额。
+    unit: 人民币元
+    formula: SUM(detail_deal_amount * exchange_rate)
+    table: vk_dwd.receive_bill_detail_dwd
+    aggregation: sum_product
+    measure_columns: [detail_deal_amount, exchange_rate]
+    time_field: bill_time
+    time_policy: current_month
+    required_filters: {bill_status: {op: ne, value: A}}
+    allowed_dimensions: *receipt_dimensions
+    answer_note: 实收按 detail_deal_amount × exchange_rate 逐明细换算人民币后汇总。
+  receipt_bill_count:
+    disclosures:
+      - id: receipt.receipt_bill_count.legacy-note
+        mode: contract_only
+        text: "收款单数按 bill_id 非重复计数。"
+    label: 收款单数
+    business_definition: 所选收款期间内的非重复收款单数量。
+    unit: 单
+    table: vk_dwd.receive_bill_detail_dwd
+    aggregation: count_distinct
+    measure: bill_id
+    time_field: bill_time
+    time_policy: current_month
+    required_filters: {bill_status: {op: ne, value: A}}
+    allowed_dimensions: *receipt_dimensions
+    answer_note: 收款单数按 bill_id 非重复计数。
+  receipt_amount_original:
+    disclosures:
+      - id: currency.original.no-cross-currency
+        mode: required_always
+        text: "原币金额必须限定单一币种或按币种分组，不同币种不得直接相加。"
+      - id: receipt.receipt_amount_original.legacy-note
+        mode: contract_only
+        text: "原币不能跨币种直接汇总，必须限定或按 currency_no 分组。"
+    label: 收款金额（原币）
+    business_definition: 所选收款期间内的原币收款金额；必须按币种筛选或分组，不得跨币种相加。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.receive_bill_detail_dwd
+    aggregation: sum
+    measure: detail_receive_amount
+    currency_policy: *original_currency_policy
+    time_field: bill_time
+    time_policy: current_month
+    required_filters: {bill_status: {op: ne, value: A}}
+    allowed_dimensions: *receipt_dimensions
+    answer_note: 原币不能跨币种直接汇总，必须限定或按 currency_no 分组。
+  actual_receipt_amount_original:
+    disclosures:
+      - id: currency.original.no-cross-currency
+        mode: required_always
+        text: "原币金额必须限定单一币种或按币种分组，不同币种不得直接相加。"
+      - id: receipt.actual_receipt_amount_original.legacy-note
+        mode: contract_only
+        text: "原币不能跨币种直接汇总，必须限定或按 currency_no 分组。"
+    label: 实收金额（原币）
+    business_definition: 所选收款期间内的原币实际收款金额；必须按币种筛选或分组，不得跨币种相加。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.receive_bill_detail_dwd
+    aggregation: sum
+    measure: detail_deal_amount
+    currency_policy: *original_currency_policy
+    time_field: bill_time
+    time_policy: current_month
+    required_filters: {bill_status: {op: ne, value: A}}
+    allowed_dimensions: *receipt_dimensions
+    answer_note: 原币不能跨币种直接汇总，必须限定或按 currency_no 分组。
+  refund_amount:
+    disclosures:
+      - id: receipt.refund.scope
+        mode: required_always
+        text: "退款范围包含内部客户并排除A状态。"
+      - id: receipt.refund_amount.legacy-note
+        mode: contract_only
+        text: "本指标为退款人民币金额，包含内部客户及全部退款用途，仅排除 A 状态。"
+    label: 退款金额（人民币）
+    business_definition: 所选退款期间内的人民币退款金额；默认包含内部客户，未限定用途时包含全部退款用途。
+    unit: 人民币元
+    table: vk_dwd.receive_return_bill_detail_dwd
+    aggregation: sum
+    measure: detail_return_rmb
+    time_field: bill_time
+    time_policy: current_month
+    required_filters: {bill_status: {op: ne, value: A}}
+    allowed_dimensions: *refund_dimensions
+    change_decomposition:
+      mode: additive_partition
+      dimensions: [customer, salesperson, department, organization]
+    reasoning_topics: [customer_mix, external_event, return_activity]
+    answer_note: 本指标为退款人民币金额，包含内部客户及全部退款用途，仅排除 A 状态。
+  actual_refund_amount:
+    disclosures:
+      - id: receipt.actual_refund_amount.legacy-note
+        mode: contract_only
+        text: "实退按退款明细 detail_deal_amount × exchange_rate 逐明细换算人民币后汇总。"
+    label: 实退金额（人民币）
+    business_definition: 所选退款期间内，按治理汇率折算后的人民币实际退款金额。
+    unit: 人民币元
+    formula: SUM(detail_deal_amount * exchange_rate)
+    table: vk_dwd.receive_return_bill_detail_dwd
+    aggregation: sum_product
+    measure_columns: [detail_deal_amount, exchange_rate]
+    time_field: bill_time
+    time_policy: current_month
+    required_filters: {bill_status: {op: ne, value: A}}
+    allowed_dimensions: *refund_dimensions
+    answer_note: 实退按退款明细 detail_deal_amount × exchange_rate 逐明细换算人民币后汇总。
+  refund_bill_count:
+    disclosures:
+      - id: receipt.refund_bill_count.legacy-note
+        mode: contract_only
+        text: "退款单数按 bill_id 非重复计数。"
+    label: 退款单数
+    business_definition: 所选退款期间内的非重复退款单数量。
+    unit: 单
+    table: vk_dwd.receive_return_bill_detail_dwd
+    aggregation: count_distinct
+    measure: bill_id
+    time_field: bill_time
+    time_policy: current_month
+    required_filters: {bill_status: {op: ne, value: A}}
+    allowed_dimensions: *refund_dimensions
+    answer_note: 退款单数按 bill_id 非重复计数。
+  actual_refund_amount_original:
+    disclosures:
+      - id: currency.original.no-cross-currency
+        mode: required_always
+        text: "原币金额必须限定单一币种或按币种分组，不同币种不得直接相加。"
+      - id: receipt.actual_refund_amount_original.legacy-note
+        mode: contract_only
+        text: "原币不能跨币种直接汇总，必须限定或按 currency_no 分组。"
+    label: 实退金额（原币）
+    business_definition: 所选退款期间内的原币实际退款金额；必须按币种筛选或分组，不得跨币种相加。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.receive_return_bill_detail_dwd
+    aggregation: sum
+    measure: detail_deal_amount
+    currency_policy: *original_currency_policy
+    time_field: bill_time
+    time_policy: current_month
+    required_filters: {bill_status: {op: ne, value: A}}
+    allowed_dimensions: *refund_dimensions
+    answer_note: 原币不能跨币种直接汇总，必须限定或按 currency_no 分组。
+  refund_amount_original:
+    disclosures:
+      - id: currency.original.no-cross-currency
+        mode: required_always
+        text: "原币金额必须限定单一币种或按币种分组，不同币种不得直接相加。"
+      - id: receipt.refund_amount_original.legacy-note
+        mode: contract_only
+        text: "退款原币金额按 detail_return_amount 汇总；不同币种不得直接相加。"
+    label: 退款金额（原币）
+    business_definition: 所选退款期间内的原币退款金额；必须按币种筛选或分组，不得跨币种相加。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.receive_return_bill_detail_dwd
+    aggregation: sum
+    measure: detail_return_amount
+    currency_policy: *original_currency_policy
+    time_field: bill_time
+    time_policy: current_month
+    required_filters: {bill_status: {op: ne, value: A}}
+    allowed_dimensions: *refund_dimensions
+    answer_note: 退款原币金额按 detail_return_amount 汇总；不同币种不得直接相加。
+  net_receipt_amount:
+    disclosures:
+      - id: receipt.net.scope
+        mode: required_always
+        text: "净收款为收款人民币金额减退款人民币金额；收款和退款范围均包含内部客户并排除A状态。"
+      - id: receipt.net_receipt_amount.legacy-note
+        mode: contract_only
+        text: "净收款由查询工具按收款人民币金额减退款人民币金额计算，不由模型在回答阶段临时相减。"
+    label: 净收款金额（人民币）
+    business_definition: 所选期间和维度范围内，人民币收款金额扣除人民币退款金额后的净流量。
+    unit: 人民币元
+    formula: receipt_amount - refund_amount
+    components:
+      - {metric: receipt_amount, sign: 1}
+      - {metric: refund_amount, sign: -1}
+    time_policy: current_month
+    allowed_dimensions: *common_dimensions
+    change_decomposition:
+      mode: additive_partition
+      dimensions: [customer, salesperson, department, organization]
+    reasoning_topics:
+      [collection_timing, credit_or_settlement, customer_mix, external_event, return_activity]
+    answer_note: 净收款由查询工具按收款人民币金额减退款人民币金额计算，不由模型在回答阶段临时相减。
+  net_receipt_amount_original:
+    disclosures:
+      - id: currency.original.no-cross-currency
+        mode: required_always
+        text: "原币金额必须限定单一币种或按币种分组，不同币种不得直接相加。"
+      - id: receipt.net_receipt_amount_original.legacy-note
+        mode: contract_only
+        text: "净收款原币必须限定单一 currency_no 或按 currency_no 分组，由查询工具计算收款原币减退款原币。"
+    label: 净收款金额（原币）
+    business_definition: 所选期间和维度范围内，同币种收款原币金额扣除退款原币金额后的净流量；必须按币种筛选或分组，不得跨币种相加。
+    unit: 原币金额（按币种分别计量）
+    formula: receipt_amount_original - refund_amount_original
+    components:
+      - {metric: receipt_amount_original, sign: 1}
+      - {metric: refund_amount_original, sign: -1}
+    currency_policy: *original_currency_policy
+    time_policy: current_month
+    allowed_dimensions: *common_dimensions
+    answer_note: 净收款原币必须限定单一 currency_no 或按 currency_no 分组，由查询工具计算收款原币减退款原币。
+
+analysis_recipes_status:
+  status: reference_only_not_runtime_or_model_authority
+  authoritative_source: planner_contract
+  rule: 本块仅保留发布维护比对；运行时不读取，合同服务不投影，不能作为固定配方或指标授权来源。
+
+analysis_recipes:
+  receipt_overview:
+    question_types: [回款整体怎么样, 收款情况怎么样, 本月到账情况]
+    max_tool_calls: 1
+    requests: [receipt_amount, refund_amount, net_receipt_amount]
+    default_time: current_natural_month
+    output: 收款、退款和净收款分别展示，并说明三者口径；实收和实退仅在用户明确询问时补充。
+
+  trend_change:
+    question_types: [回款趋势怎么样, 收款走势, 最近到账变化]
+    max_tool_calls: 1
+    metric_selection: follow_explicit_receipt_actual_refund_or_net_subject_default_receipt_amount
+    time_bucket: day_for_30_days_or_less_otherwise_month
+    default_time: latest_30_natural_days
+    output: 按时间升序展示，不把变化自动解释为催收效果或客户风险。
+
+  period_change:
+    question_types: [回款比前期怎么样, 净收款增长多少, 退款有没有增加]
+    max_tool_calls: 1
+    metric_selection: follow_explicit_subject_default_receipt_amount
+    comparison: {kind: previous_period}
+    default_time:
+      current: latest_30_natural_days
+      comparison: preceding_30_natural_days
+    output_fields: [metric_value, comparison_value, delta_value, change_rate]
+
+  ranking_structure:
+    question_types: [哪些客户回款多, 部门收款排名, 业务员回款排名]
+    max_tool_calls: 1
+    metric_selection: follow_explicit_subject_default_receipt_amount
+    allowed_primary_dimensions: [customer, salesperson, department, organization]
+    default_limit: 10
+    output: 排名、指标类型和时间范围；没有总量查询时不输出模型心算占比。
+
+  governed_change_decomposition:
+    question_types: [回款变化来自哪里, 哪些完整分区解释净变化, 为什么净收款变化]
+    max_tool_calls: 1
+    metric_selection: contract_authorized_metric_only
+    allowed_primary_dimensions: [customer, salesperson, department, organization]
+    comparison: {kind: previous_period}
+    same_batch_requests:
+      overall: {dimensions: [], comparison: {kind: previous_period}}
+      decomposition:
+        comparison: {kind: previous_period}
+        decomposition_of_request_id: required_overall_request_id
+        completeness: full_non_truncated_partition
+    relation: reconciled_change_only
+    default_time:
+      current: latest_30_natural_days
+      comparison: preceding_30_natural_days
+    output_fields: [metric_value, comparison_value, delta_value, change_rate]
+    interpretation: 只把完整三列精确对账的非零分区称为变化来源，不推断催收效果、客户意图或人员责任。
+
+  change_observations:
+    question_types: [哪些客户回款下降最多, 哪些部门净收款增长最多]
+    max_tool_calls: 1
+    metric_selection: follow_explicit_subject_default_receipt_amount
+    allowed_primary_dimensions: [customer, salesperson, department, organization]
+    comparison: {kind: previous_period}
+    default_time:
+      current: latest_30_natural_days
+      comparison: preceding_30_natural_days
+    default_limit: 10
+    output_fields: [metric_value, comparison_value, delta_value, change_rate]
+    interpretation: 仅作为截断的增减 observations；不得称为完整 drivers、集中度或原因。
+
+  source_structure:
+    question_types: [回款来自哪里, 收款用途结构, 结算方式分布]
+    max_tool_calls: 1
+    metric_selection:
+      receipt_subject: receipt_amount
+      refund_subject: refund_amount
+      net_subject: net_receipt_amount
+    allowed_primary_dimensions: [receipt_usage, refund_usage, settlement_method, customer, department, organization]
+    rule: 收款用途只用于收款侧，退款用途只用于退款侧；净收款仅使用两侧共同支持的维度。
+
+  customer_receipt_card:
+    question_types: [某客户回款怎么样, 某客户收退款情况, 某客户净收款]
+    max_tool_calls: 2
+    required_filter: one_explicit_customer
+    first_call: [receipt_amount, receipt_bill_count, refund_amount, net_receipt_amount]
+    optional_second_call: selected_amount_metric_with_time_bucket_or_previous_period
+    output_order: [当前范围汇总, 趋势或比较, 默认范围, 数据限制]
+
+  explain_change:
+    question_types: [为什么回款下降, 为什么退款增加, 净收款变化原因]
+    max_tool_calls: 2
+    first_call: use_governed_change_decomposition
+    fallback: use_change_observations_only_when_complete_partition_is_unavailable
+    output: 先确认非零变化；优先输出完整对账的结构来源。Top-N 只能作为有边界的 observations，不能称为 drivers 或原因。
+
+query_rules:
+  - 收款、回款、到账未进一步限定时使用 receipt_amount；“实收”使用 actual_receipt_amount；“退款”使用 refund_amount；“实退”使用 actual_refund_amount；“净收款”使用 net_receipt_amount。
+  - “退款原币”使用 refund_amount_original；“净收款原币”使用 net_receipt_amount_original，必须限定单一币种或按 currency_no 分组。
+  - 只排除 bill_status = A；Z、B、C 均保留。
+  - 不默认排除内部客户；只有用户明确限定时才使用 internal_customer 过滤。
+  - 默认包含全部收款用途；仅在用户明确限定用途时筛选 receipt_usage 或 refund_usage。
+  - 部门统一按 customer_dept；biz_dept 仅保留为物理来源字段，dept_name 仅是展示字段。
+  - 默认组织按 org_name；用户明确询问结算、收款或销售组织时才切换对应维度。
+  - 当前客户主数据只能补充事实表没有的当前属性，并在回答中说明不是历史快照。
+
+answer_contract:
+  - 说明时间范围、人民币口径以及指标是收款、实收、实退还是净收款。
+  - 始终说明包含内部客户并且仅排除 A 状态。只有未使用 receipt_usage 或 refund_usage 显式筛选时才说明包含全部用途；已显式筛选时必须说明实际用途范围，禁止仍声称“全部收款用途”。
+  - 查询失败、无数据和数值为零必须区分，不得编造数值。
+
+analysis_boundaries:
+  - 回款下降是观察到的变化，不能单独证明催收失效、客户风险或人员绩效问题。
+  - 当前 Profile 只提供查询、描述和受证据支持的分析，不做业务决策或责任认定。
+  - 净收款在任何趋势、排名或比较中都必须由工具分别聚合收款与退款后计算，禁止模型自行相减。
+  - 收款变化只能归纳可验证的客户、部门、业务员、用途或结算方式变化，不证明催收成效、付款意图或人员绩效。

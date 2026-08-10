@@ -1,0 +1,199 @@
+version: datasage-expert-playbooks/v1
+
+planning_semantics:
+  required_roles: Normal minimum for a fresh answer; clarification, already-returned compatible evidence, or an unavailable governed capability may reduce the new query plan.
+  optional_roles: Add only when the role could change a decision-relevant conclusion.
+  claim_requirements: Proof conditions remain mandatory even when a role label is present.
+
+evidence_roles:
+  outcome: Direct evidence for the requested measure or operating state.
+  comparison: A compatible baseline or comparison period.
+  benchmark: A governed target, norm, threshold, or peer reference.
+  offset: A governed counterflow or offset that helps interpret the outcome.
+  breadth: Evidence about how widely an observation is distributed.
+  composition: A governed dimensional decomposition of the outcome or change.
+  concentration: Evidence about whether results are concentrated in a bounded set.
+  anomaly: Evidence that an observation differs materially from a valid reference.
+  hypothesis_test: Evidence selected to distinguish plausible explanations.
+
+playbooks:
+  metric_lookup:
+    required_roles:
+      - outcome
+    optional_roles:
+      - comparison
+      - benchmark
+    claim_requirements:
+      - claim: exact_value_or_state
+        requires:
+          - successful outcome evidence at the requested scope
+      - claim: period_or_scope_difference
+        requires:
+          - compatible comparison evidence
+      - claim: norm_judgment
+        requires:
+          - returned governed benchmark evidence
+    continue_when:
+      - A requested comparison is supported but missing and could change the answer.
+      - The returned scope is ambiguous and one clarification or resolution can bind it.
+    stop_when:
+      - The requested value or state and its material scope are supported.
+      - The requested capability remains unavailable or materially ambiguous, and no available evidence is likely to change the bounded answer.
+
+  performance_review:
+    required_roles:
+      - outcome
+    optional_roles:
+      - comparison
+      - benchmark
+      - offset
+      - breadth
+      - composition
+      - concentration
+      - anomaly
+    claim_requirements:
+      - claim: performance_direction
+        requires:
+          - compatible outcome and comparison evidence
+      - claim: performance_level
+        requires:
+          - returned governed benchmark evidence
+      - claim: uneven_or_concentrated_performance
+        requires:
+          - complete compatible composition or concentration evidence
+      - claim: structural_contribution
+        requires:
+          - complete additive reconciliation from a fully returned partition or a declared same-statement full-partition aggregate proof
+          - aggregate-proof truncation authorizes returned rows only, not unreturned detail or causality
+    continue_when:
+      - A material change or internal divergence is visible but its structure is unresolved.
+      - A missing evidence role could reverse the headline assessment.
+    stop_when:
+      - Outcome and a valid comparison or benchmark support the headline and no material unresolved contradiction remains.
+      - Further evidence would add detail without changing the decision-relevant conclusion.
+
+  change_diagnosis:
+    required_roles:
+      - outcome
+      - comparison
+    optional_roles:
+      - benchmark
+      - composition
+      - offset
+      - breadth
+      - concentration
+      - anomaly
+      - hypothesis_test
+    claim_requirements:
+      - claim: observed_change
+        requires:
+          - compatible outcome and comparison evidence
+      - claim: structural_contribution
+        requires:
+          - complete additive reconciliation from a fully returned partition or a declared same-statement full-partition aggregate proof
+          - aggregate-proof truncation authorizes returned rows only, not unreturned detail or causality
+      - claim: causal_explanation
+        requires:
+          - returned evidence that supports causality
+      - claim: possible_explanation
+        requires:
+          - explicit hypothesis label
+          - a useful validation path when material
+    continue_when:
+      - Competing explanations remain and one governed hypothesis test could distinguish them.
+      - A material decomposition is incomplete or conflicts with the overall change.
+    stop_when:
+      - The supported structural explanation is sufficient for the user's decision.
+      - Remaining explanations can only be hypotheses or require unavailable evidence.
+
+  anomaly_scan:
+    required_roles:
+      - outcome
+    optional_roles:
+      - comparison
+      - benchmark
+      - offset
+      - anomaly
+      - breadth
+      - composition
+      - concentration
+      - hypothesis_test
+    claim_requirements:
+      - claim: anomaly_or_extreme
+        requires:
+          - a governed benchmark, compatible comparison, or valid full-population ranking
+      - claim: anomaly_scope
+        requires:
+          - returned population, coverage, and truncation state
+      - claim: anomaly_cause
+        requires:
+          - returned evidence that supports causality
+    continue_when:
+      - A material anomaly is established but one targeted breakdown could localize it.
+      - Coverage or reference validity could change whether the observation is anomalous.
+    stop_when:
+      - Material anomalies and their scopes are established with valid references.
+      - No valid reference exists, so only the observed values can be reported.
+
+  entity_deep_dive:
+    required_roles:
+      - outcome
+    optional_roles:
+      - comparison
+      - benchmark
+      - offset
+      - breadth
+      - composition
+      - concentration
+      - anomaly
+      - hypothesis_test
+    claim_requirements:
+      - claim: entity_specific_fact
+        requires:
+          - a uniquely resolved governed entity at the returned scope
+      - claim: entity_relationship_or_group
+        requires:
+          - a returned governed relationship or entity set
+      - claim: entity_assessment
+        requires:
+          - compatible comparison or governed benchmark evidence
+      - claim: entity_explanation
+        requires:
+          - returned evidence that supports the explanation
+          - otherwise an explicit hypothesis label
+    continue_when:
+      - A material entity ambiguity can be resolved by one concise clarification.
+      - One targeted composition or hypothesis test could change the entity assessment.
+    stop_when:
+      - The entity is resolved and evidence supports the decision-relevant assessment.
+      - The identity, relationship, or decisive evidence remains unavailable, and no feasible resolution or evidence is likely to change the assessment.
+
+  contribution_analysis:
+    required_roles:
+      - outcome
+      - comparison
+    optional_roles:
+      - composition
+      - concentration
+      - anomaly
+    claim_requirements:
+      - claim: ranked_change
+        requires:
+          - correctly ordered returned change evidence with stated coverage
+      - claim: structural_contribution
+        requires:
+          - an additive compatible basis
+          - complete reconciliation to the overall change from a fully returned partition or a declared same-statement full-partition aggregate proof
+          - aggregate-proof truncation authorizes returned rows only, not unreturned detail or causality
+      - claim: residual_or_complete_explanation
+        requires:
+          - explicit returned residual and reconciliation status
+      - claim: top_n_observation
+        requires:
+          - explicit truncation and population scope
+    continue_when:
+      - Reconciliation is supported and one targeted request can complete a material missing branch.
+      - A scope mismatch could invalidate the contribution basis and a feasible correction could materially change the conclusion.
+    stop_when:
+      - A complete reconciliation supports the requested contribution claim.
+      - Only a partial or ordinary Top-N view without full-partition proof is available, so report ranks without structural attribution.

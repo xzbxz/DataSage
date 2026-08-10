@@ -1,0 +1,80 @@
+version: datasage-mini-receipt-planner/v3
+domain: receipt
+audience: agent_planner
+purpose: 将收款、实收、退款和净收款问题映射为受控指标与维度；不包含表、字段、主键或 Join。
+
+dimension_policy:
+  filter_only: never_add_output_dimension
+  output_dimension_triggers: [explicit_grouping, explicit_ranking, explicit_comparison, explicit_breakdown, metric_required_grain]
+  overall_with_filters: dimensions_empty
+
+defaults:
+  time: current_natural_month
+  recent_without_unit: latest_30_natural_days
+  currency: rmb
+  include_internal_customers: true
+  receipt_usage_scope: all
+  department: customer_department
+  salesperson_ledger: transaction_detail
+
+catalog_status:
+  status: test_time_consistency_assertion_only
+  authoritative_source: execution_semantics
+  model_visibility: false
+  rule: 以下手写目录仅供发布期验证 code 仍存在；合同服务不得投影，模型指标和维度目录必须由 execution semantics 生成。
+
+metric_catalog:
+  receipt: [receipt_amount, receipt_bill_count]
+  actual_receipt: [actual_receipt_amount]
+  refund: [refund_amount, refund_bill_count]
+  actual_refund: [actual_refund_amount]
+  net_receipt: [net_receipt_amount]
+  original_currency: [receipt_amount_original, actual_receipt_amount_original, refund_amount_original, actual_refund_amount_original, net_receipt_amount_original]
+
+dimension_catalog:
+  common: [customer, salesperson, department, organization, customer_region, customer_type, customer_category, ha_customer, ccbs_customer, internal_customer, currency]
+  organization_roles: [settlement_organization, receipt_organization, sales_organization]
+  receipt_only: [settlement_method, receipt_usage]
+  refund_only: [refund_usage]
+  current_customer_supplement: [customer_grade, customer_resource, customer_business_label, current_customer_owner]
+
+planning_rules:
+  - 用户只说收款、回款或到账时使用 receipt_amount；实收使用 actual_receipt_amount。
+  - 净收款、净收款趋势、排名和比较必须直接查询 net_receipt_amount，不由模型自行相减。
+  - 默认包含全部收款用途；只有用户明确限定用途时才使用 receipt_usage 或 refund_usage 筛选。
+  - 普通收退款概览只查询收款、退款和净收款；实收、实退仅在用户明确询问时查询。
+  - 用户明确原币时按 currency 分组或限定单一币种，不跨币种汇总。
+  - 目标、协作、分摊或分摊业绩路由到 target-query，本域不切换账本。
+  - 只有命中精确概览条件时才使用固定概览包；诊断或开放问题由 Hermes 从已登记指标中选择能检验假设的最小证据。分析种子不是固定清单，不授权未登记指标，也不覆盖用户明确的指标、维度、筛选、时间或操作。
+
+recipe_policy:
+  exact_overview_bundle: 仅在用户询问收退款整体或概览，且没有显式单项、趋势、排名、比较、拆解或原因诊断时使用。
+  analysis_seed: 非约束规划提示；必须通过能力覆盖门，且最多在首批结果暴露实质缺口时追加一次针对性查询。
+recipes:
+  receipt_overview:
+    kind: exact_overview_bundle
+    metrics: [receipt_amount, refund_amount, net_receipt_amount]
+  trend_change: {kind: analysis_seed, metric: follow_explicit_subject_default_receipt_amount, time_bucket: day_or_month, default_time: latest_30_natural_days}
+  period_change: {kind: analysis_seed, metric: follow_explicit_subject_default_receipt_amount, comparison: previous_period}
+  ranking_structure: {kind: analysis_seed, dimensions: [customer, salesperson, department, organization], default_limit: 10}
+  governed_change_decomposition:
+    kind: analysis_seed
+    metric_selection: contract_authorized_metric_only
+    dimensions: [customer, salesperson, department, organization]
+    comparison: {kind: previous_period}
+    same_batch_requests:
+      overall: {dimensions: [], comparison: {kind: previous_period}}
+      decomposition:
+        comparison: {kind: previous_period}
+        decomposition_of_request_id: required_overall_request_id
+        completeness: full_non_truncated_partition
+    relation: reconciled_change_only
+  change_observations: {kind: analysis_seed, request_policy: fallback, label: partial_observations_only, dimensions: [customer, salesperson, department, organization], comparison: {kind: previous_period}, default_limit: 10}
+  source_structure: {kind: analysis_seed, dimensions: [receipt_usage, refund_usage, settlement_method, customer, department, organization]}
+  customer_receipt_card: {kind: analysis_seed, metrics: [receipt_amount, receipt_bill_count, refund_amount, net_receipt_amount]}
+  explain_change: {kind: analysis_seed, first: governed_change_decomposition, fallback: change_observations}
+
+answer_boundary:
+  - 说明实际时间和指标口径；始终说明包含内部客户。只有未使用 receipt_usage 或 refund_usage 显式筛选时才说明包含全部用途；已显式筛选时改为说明实际用途范围，禁止仍声称“全部收款用途”。
+  - 当前客户主数据只作为当前属性补充，不表述为交易时历史属性。
+  - 区分失败、empty、zero、undefined 和 truncated；不做责任或绩效认定。

@@ -1,0 +1,422 @@
+version: datasage-mini-customer-risk-semantics/v5
+domain: customer_risk
+contract_role: plugin_physical_execution
+model_planner_contract: references/planner-contract.yaml
+business_name: 客户应收风险证据分析
+triggers: [客户风险, 应收风险, 授信风险, 账期风险, 哪些客户需要关注, 客户风险怎么样, 应收周转, DSO, 结算速度, 出库收款背离]
+
+positioning:
+  purpose: 使用欠款、账龄、逾期、授信、结算、出库、收款和应收周转证据，回答客户应收风险问题。
+  not_equivalent_to: 客户整体经营风险或违约预测
+  decision_boundary: 只提供事实、变化、比较、证据总结和数据限制，不决定停货、冻结、催收顺序、授信额度或账期。
+
+tables:
+  - vk_dw.customer_debt_bymonth_dw
+  - vk_dwd.customer_aging_dwd
+  - vk_dwd.receivable_bill_detail_dwd
+  - vk_dwd.customer_credit_dwd
+  - vk_dwd.sale_bill_goods_detail_dwd
+  - vk_dwd.delivery_return_detail_dwd
+  - vk_dwd.receive_bill_detail_dwd
+  - vk_dwd.receive_return_bill_detail_dwd
+  - vk_dwd.customer_dwd
+
+defaults:
+  currency: rmb
+  exclude_internal_customers: true
+  current_snapshot: latest_available
+  snapshot_comparison_months: 3
+  activity_comparison:
+    current: latest_3_completed_natural_months
+    comparison: preceding_3_completed_natural_months
+  peer_scope:
+    default: same_customer_department
+    override_when_user_specifies: [customer_type, customer_region, customer_category]
+    minimum_rule: 样本不足时只展示客户自身历史，不输出横向结论。
+  formal_dso_period: latest_12_completed_natural_months
+  formal_dso_target_days: null
+  delivery_receipt_period: latest_3_completed_natural_months
+  attention_limit_per_lane: 5
+  attention_unique_customer_cap: 15
+
+dimensions:
+  customer:
+    label: 客户
+    columns: [customer_id, customer_name]
+    filter_column: customer_name
+    identity_filter: {entity_type: customer, value_field: canonical_id, column: customer_id}
+    value_contract:
+      kind: entity_exact
+      model_rule: 保留用户明确提供的精确实体 token；由工具做实体预检和稳定身份绑定，不得猜测。
+  salesperson:
+    label: 业务员
+    columns:
+      - {column: final_sales_id, alias: sales_id}
+      - {column: final_sales_name, alias: sales_name}
+    filter_column: final_sales_name
+    identity_filter: {entity_type: salesperson, value_field: canonical_id, column: final_sales_id}
+    value_contract:
+      kind: entity_exact
+      model_rule: 保留用户明确提供的精确实体 token；由工具做实体预检和稳定身份绑定，不得猜测。
+  department:
+    label: 客户部门
+    columns: [customer_dept]
+    filter_column: customer_dept
+    value_contract:
+      kind: source_exact
+      model_rule: 仅使用用户明确提供或受控结果返回的精确原值；不得猜测、翻译、归一化或扩展。
+  organization:
+    label: 组织
+    columns: [org_name]
+    filter_column: org_name
+    value_contract:
+      kind: source_exact
+      model_rule: 仅使用用户明确提供或受控结果返回的精确原值；不得猜测、翻译、归一化或扩展。
+
+dimension_sets:
+  settlement: &settlement_dimensions [customer, salesperson, department, organization]
+  portfolio: &portfolio_dimensions [customer, salesperson, department, organization]
+
+metrics:
+  average_settlement_days:
+    disclosures:
+      - id: customer-risk.settlement.sample-coverage
+        mode: required_always
+        text: "历史结算天数仅覆盖已完成且通过异常校验的应收单，不代表当前未结算压力。"
+      - id: customer-risk.average_settlement_days.legacy-note
+        mode: contract_only
+        text: "按非重复应收单计算；排除结算天数为负以及结算完成后仍有正数未结余额的异常单据。"
+    label: 平均实际结算天数
+    business_definition: 在所选已完成结算应收单范围内，从应收发生日期到结算完成日期的自然日数平均值；未结清应收不纳入。
+    unit: 自然日
+    query_kind: settlement_days
+    max_group_dimensions: 2
+    statistic: average
+    table: vk_dwd.receivable_bill_detail_dwd
+    document_key: bill_id
+    bill_time_field: bill_time
+    completion_time_field: verification_complete_time
+    open_amount_field: detail_unsettled_amount
+    time_policy: last_12_completed_months
+    required_filters:
+      bill_status: {op: ne, value: A}
+      is_inner_cus: {op: eq, value: n}
+    allowed_dimensions: *settlement_dimensions
+    answer_note: 按非重复应收单计算；排除结算天数为负以及结算完成后仍有正数未结余额的异常单据。
+
+  maximum_settlement_days:
+    disclosures:
+      - id: customer-risk.settlement.sample-coverage
+        mode: required_always
+        text: "历史结算天数仅覆盖已完成且通过异常校验的应收单，不代表当前未结算压力。"
+      - id: customer-risk.maximum_settlement_days.legacy-note
+        mode: contract_only
+        text: "最大值只反映已完成结算单据；不能替代当前未结算压力。"
+    label: 最大实际结算天数
+    business_definition: 在所选已完成结算应收单范围内，单笔实际结算自然日数的最大值；未结清应收不纳入。
+    unit: 自然日
+    query_kind: settlement_days
+    max_group_dimensions: 2
+    statistic: maximum
+    table: vk_dwd.receivable_bill_detail_dwd
+    document_key: bill_id
+    bill_time_field: bill_time
+    completion_time_field: verification_complete_time
+    open_amount_field: detail_unsettled_amount
+    time_policy: last_12_completed_months
+    required_filters:
+      bill_status: {op: ne, value: A}
+      is_inner_cus: {op: eq, value: n}
+    allowed_dimensions: *settlement_dimensions
+    answer_note: 最大值只反映已完成结算单据；不能替代当前未结算压力。
+
+  settlement_days_distribution:
+    disclosures:
+      - id: customer-risk.settlement.sample-coverage
+        mode: required_always
+        text: "历史结算天数仅覆盖已完成且通过异常校验的应收单，不代表当前未结算压力。"
+      - id: customer-risk.settlement_days_distribution.legacy-note
+        mode: contract_only
+        text: "分布按应收单而不是明细行计数；未结算单据不进入历史结算分布。"
+    label: 实际结算天数分布
+    business_definition: 将所选已完成结算应收单按实际结算自然日数分档，并统计各档的非重复应收单数量。
+    unit_policy: 结算时长按自然日；各分档计数单位为应收单
+    query_kind: settlement_days
+    max_group_dimensions: 2
+    statistic: distribution
+    table: vk_dwd.receivable_bill_detail_dwd
+    document_key: bill_id
+    bill_time_field: bill_time
+    completion_time_field: verification_complete_time
+    open_amount_field: detail_unsettled_amount
+    time_policy: last_12_completed_months
+    required_filters:
+      bill_status: {op: ne, value: A}
+      is_inner_cus: {op: eq, value: n}
+    allowed_dimensions: *settlement_dimensions
+    answer_note: 分布按应收单而不是明细行计数；未结算单据不进入历史结算分布。
+
+  formal_receivable_turnover_days:
+    disclosures:
+      - id: customer-risk.formal-receivable-turnover.coverage
+        mode: required_always
+        text: "正式应收周转天数默认使用最近12个完整自然月，并要求连续13个月末净欠款快照；没有公司目标天数时，不与30天或其他假设目标比较。"
+      - id: customer-risk.formal_receivable_turnover_days.legacy-note
+        mode: contract_only
+        text: "默认最近12个完整自然月并要求连续13个月末净欠款快照；没有公司目标天数，不得与30天或其他假设目标比较。"
+    label: 正式应收周转天数
+    business_definition: 在指定完整期间内，以平均净经营欠款与有效出库规模衡量的正式应收周转速度，结果按自然日表示。
+    unit: 自然日
+    query_kind: formal_dso
+    max_group_dimensions: 1
+    debt_table: vk_dw.customer_debt_bymonth_dw
+    debt_time_field: bill_date
+    debt_measure: debt_amount_rmb
+    delivery_table: vk_dwd.sale_bill_goods_detail_dwd
+    delivery_time_field: delivery_time
+    delivery_measure: delivery_amount_rmb
+    time_policy: last_12_completed_months
+    debt_required_filters:
+      is_inner_cus: {op: eq, value: n}
+    delivery_required_filters:
+      bill_status: {op: eq, value: 6}
+      is_inner_cus: {op: eq, value: n}
+    allowed_dimensions: *portfolio_dimensions
+    dimension_mappings:
+      customer:
+        debt_key: customer_id
+        delivery_key: customer_id
+        debt_filter: customer_name
+        delivery_filter: customer_name
+        debt_outputs:
+          - {column: customer_id, alias: customer_id}
+          - {column: customer_name, alias: customer_name}
+        delivery_outputs: []
+      salesperson:
+        debt_key: sales_id
+        delivery_key: sales_id
+        debt_filter: sales_name
+        delivery_filter: sales_name
+        debt_outputs:
+          - {column: sales_id, alias: sales_id}
+          - {column: sales_name, alias: sales_name}
+        delivery_outputs: []
+      department:
+        debt_key: customer_dept
+        delivery_key: customer_dept
+        debt_filter: customer_dept
+        delivery_filter: customer_dept
+        debt_outputs:
+          - {column: customer_dept, alias: customer_dept}
+        delivery_outputs: []
+      organization:
+        debt_key: org_name
+        delivery_key: org_name
+        debt_filter: org_name
+        delivery_filter: org_name
+        debt_outputs:
+          - {column: org_name, alias: org_name}
+        delivery_outputs: []
+    answer_note: 默认最近12个完整自然月并要求连续13个月末净欠款快照；没有公司目标天数，不得与30天或其他假设目标比较。
+
+  delivery_receipt_comparison:
+    disclosures:
+      - id: customer-risk.delivery-receipt.scope-asymmetry
+        mode: required_always
+        text: "净出库侧排除内部客户，净收款侧包含内部客户；两侧业务范围并不对称。"
+      - id: customer-risk.delivery_receipt_comparison.legacy-note
+        mode: contract_only
+        text: "左侧为排除内部客户的当期流量净出库，右侧为包含内部客户的净收款；这是经确认的非对称业务范围，回答必须披露。净出库小于等于零时收款覆盖率为空，不解释为零；两侧净额允许为负。"
+    label: 出库与收款对照
+    business_definition: 对照同期净出库与净收款的金额、两者差额及收款覆盖比例；两侧保留各自治理客户范围。
+    unit_policy: 净出库、净收款与差额为人民币元；收款覆盖率为比例（可大于1，展示为百分比时可超过100%）
+    query_kind: paired_amounts
+    max_group_dimensions: 1
+    time_policy: last_3_completed_months
+    left:
+      components:
+        - table: vk_dwd.sale_bill_goods_detail_dwd
+          measure: delivery_amount_rmb
+          sign: 1
+          time_field: delivery_time
+          required_filters: {bill_status: {op: eq, value: 6}, is_inner_cus: {op: eq, value: n}}
+          dimension_mappings:
+            customer: {key: customer_id, outputs: [{column: customer_id, alias: customer_id}, {column: customer_name, alias: customer_name}], filter: customer_name}
+            department: {key: customer_dept, outputs: [{column: customer_dept, alias: customer_dept}], filter: customer_dept}
+            organization: {key: org_name, outputs: [{column: org_name, alias: org_name}], filter: org_name}
+        - table: vk_dwd.delivery_return_detail_dwd
+          measure: return_amount_rmb
+          sign: -1
+          time_field: statement_time
+          required_filters: {status: {op: eq, value: 4}, complnt_type: {op: eq, value: 1}, channel_type: {op: eq, value: 1}, is_inner_cus: {op: eq, value: n}}
+          dimension_mappings:
+            customer: {key: customer_id, outputs: [{column: customer_id, alias: customer_id}, {column: customer_name, alias: customer_name}], filter: customer_name}
+            department: {key: customer_dept, outputs: [{column: customer_dept, alias: customer_dept}], filter: customer_dept}
+            organization: {key: biz_org, outputs: [{column: biz_org, alias: org_name}], filter: biz_org}
+    right:
+      components:
+        - table: vk_dwd.receive_bill_detail_dwd
+          measure: detail_receive_rmb
+          sign: 1
+          time_field: bill_time
+          required_filters: {bill_status: {op: ne, value: A}}
+          dimension_mappings:
+            customer: {key: customer_id, outputs: [{column: customer_id, alias: customer_id}, {column: customer_name, alias: customer_name}], filter: customer_name}
+            department: {key: customer_dept, outputs: [{column: customer_dept, alias: customer_dept}], filter: customer_dept}
+            organization: {key: org_name, outputs: [{column: org_name, alias: org_name}], filter: org_name}
+        - table: vk_dwd.receive_return_bill_detail_dwd
+          measure: detail_return_rmb
+          sign: -1
+          time_field: bill_time
+          required_filters: {bill_status: {op: ne, value: A}}
+          dimension_mappings:
+            customer: {key: customer_id, outputs: [{column: customer_id, alias: customer_id}, {column: customer_name, alias: customer_name}], filter: customer_name}
+            department: {key: customer_dept, outputs: [{column: customer_dept, alias: customer_dept}], filter: customer_dept}
+            organization: {key: org_name, outputs: [{column: org_name, alias: org_name}], filter: org_name}
+    allowed_dimensions: [customer, department, organization]
+    dimension_mappings:
+      customer:
+        left_key: customer_id
+        right_key: customer_id
+        left_filter: customer_name
+        right_filter: customer_name
+        left_outputs:
+          - {column: customer_id, alias: customer_id}
+          - {column: customer_name, alias: customer_name}
+        right_outputs:
+          - {column: customer_id, alias: customer_id}
+          - {column: customer_name, alias: customer_name}
+      department:
+        left_key: customer_dept
+        right_key: customer_dept
+        left_filter: customer_dept
+        right_filter: customer_dept
+        left_outputs:
+          - {column: customer_dept, alias: customer_dept}
+        right_outputs:
+          - {column: customer_dept, alias: customer_dept}
+      organization:
+        left_key: org_name
+        right_key: org_name
+        left_filter: org_name
+        right_filter: org_name
+        left_outputs:
+          - {column: org_name, alias: org_name}
+        right_outputs:
+          - {column: org_name, alias: org_name}
+    answer_note: 左侧为排除内部客户的当期流量净出库，右侧为包含内部客户的净收款；这是经确认的非对称业务范围，回答必须披露。净出库小于等于零时收款覆盖率为空，不解释为零；两侧净额允许为负。
+
+evidence_axes:
+  exposure: [positive_debt_amount, current_debt_amount]
+  aging_and_overdue: [aging_over_90_amount, overdue_receivable_amount, overdue_days, debt_days]
+  credit_position: [credit_amount_original, credit_days, excess_credit_amount, uncredited_positive_debt_amount]
+  settlement_behavior: [average_settlement_days, maximum_settlement_days, settlement_days_distribution]
+  delivery_and_receipt: [delivery_receipt_comparison]
+  turnover_efficiency: [formal_receivable_turnover_days]
+
+analysis_recipes_status:
+  status: reference_only_not_runtime_or_model_authority
+  authoritative_source: planner_contract
+  rule: 本块仅保留发布维护比对；运行时不读取，合同服务不投影，不能作为固定配方或指标授权来源。
+
+analysis_recipes:
+  portfolio_overview:
+    question_types: [整体客户应收风险怎么样, 当前客户风险概览]
+    max_tool_calls: 2
+    first_call:
+      - {domain: receivable, metric: positive_debt_amount, metric_filters: {internal_customer: n}}
+      - {domain: receivable, metric: aging_over_90_amount, metric_filters: {internal_customer: n}}
+      - {domain: receivable, metric: overdue_receivable_amount, metric_filters: {internal_customer: n}}
+      - {domain: receivable, metric: excess_credit_amount, metric_filters: {internal_customer: n}}
+      - {domain: receivable, metric: uncredited_positive_debt_amount, metric_filters: {internal_customer: n}}
+    optional_second_call:
+      - {domain: customer_risk, metric: delivery_receipt_comparison}
+      - {domain: customer_risk, metric: formal_receivable_turnover_days}
+    output: 当前敞口、长账龄与逾期、授信位置、近期出库收款、正式周转及限制。
+
+  attention_map:
+    question_types: [哪些客户风险高, 哪些客户需要关注, 风险客户有哪些]
+    max_tool_calls: 2
+    current_evidence_lanes:
+      explicit_breach:
+        - {domain: receivable, metric: overdue_receivable_amount, dimension: customer, limit: 5, metric_filters: {internal_customer: n}}
+        - {domain: receivable, metric: excess_credit_amount, dimension: customer, limit: 5, metric_filters: {internal_customer: n}}
+        - {domain: receivable, metric: uncredited_positive_debt_amount, dimension: customer, limit: 5, metric_filters: {internal_customer: n}}
+      scale:
+        - {domain: receivable, metric: positive_debt_amount, dimension: customer, limit: 5, metric_filters: {internal_customer: n}}
+        - {domain: receivable, metric: aging_over_90_amount, dimension: customer, limit: 5, metric_filters: {internal_customer: n}}
+    change_evidence:
+      snapshot: latest_snapshot_vs_3_months_before
+      activity: latest_3_completed_months_vs_preceding_3_completed_months
+    output_rules:
+      - 按证据类型展示，不生成综合风险分或高中低标签。
+      - 同一客户命中多类证据时合并说明，不按命中数自动排序。
+      - 每类默认前5名，去重后最多15名；被截断时明确范围。
+
+  customer_evidence_card:
+    question_types: [某客户风险怎么样, 帮我分析某客户应收风险]
+    max_tool_calls: 2
+    evidence:
+      - current_exposure
+      - aging_and_overdue
+      - credit_position
+      - historical_settlement_behavior
+      - current_open_invoice_pressure
+      - delivery_receipt_comparison
+      - formal_dso_and_effective_months
+    output_order: [当前敞口, 账龄逾期, 授信位置, 历史结算, 当前未结算, 出库收款, 周转效率, 数据限制]
+
+  trend_change:
+    question_types: [哪些客户最近变差, 风险有什么变化, 回款是不是变慢]
+    comparison:
+      snapshot: latest_snapshot_vs_3_months_before
+      activity: latest_3_completed_months_vs_preceding_3_completed_months
+    allowed_findings: [欠款变化, 长账龄变化, 授信占用变化, 结算天数变化, 出库收款差额变化]
+    forbidden_findings: [客户经营困难, 客户将违约, 业务员失职, 无数据支持的因果解释]
+
+  peer_comparison:
+    question_types: [这个客户算慢吗, 这个客户欠款算高吗, 这个客户表现是否异常]
+    default_peer: same_customer_department
+    method: 同一指标分别查询目标客户和同部门整体；用户指定类型、区域或分类时改用指定范围。
+    guardrail: 样本不足、结果截断或历史经营月份过短时，只展示自身历史并说明不可稳定横向判断。
+
+  settlement_and_open_pressure:
+    question_types: [结算速度怎么样, 未结算单据怎么了, 回款周期长不长]
+    historical_settled:
+      source: [average_settlement_days, maximum_settlement_days, settlement_days_distribution]
+      default_period: latest_12_completed_months
+      cohort_time: verification_complete_time
+    current_open:
+      source_domain: receivable
+      source_metrics: [open_receivable_amount, open_receivable_bill_count, earliest_open_receivable_date, debt_days, overdue_receivable_amount, overdue_days]
+      rule: 未结算和已结算分开呈现，未结算天数不得称为实际结算天数。
+
+  decision_handoff:
+    question_types: [要不要停货, 是否冻结客户, 应该催收谁, 授信额度设多少, 账期给多少天]
+    behavior:
+      - 明确当前 Profile 不替业务做该决定。
+      - 返回与问题有关的应收风险证据及数据缺口，不只做空白拒绝。
+      - 可以建议人工复核证据，不建议具体经营动作。
+
+query_rules:
+  - 客户风险域默认排除内部客户；基础收款和应收查询域的默认范围不因此改变。
+  - 当前敞口使用最新可用欠款快照；正式DSO只使用完整自然月。
+  - 风险敞口、逾期、授信、账龄等基础指标复用 receivable-query，不在本域复制第二套公式。
+  - 历史实际结算按非重复应收单计算，时间范围按结算完成时间筛选。
+  - 未结算以正数未结余额判定；部分结算但仍有余额的单据继续属于当前未结算压力。
+  - 出库、退货、收款和退款必须先分别聚合到目标维度，再合成净出库与净收款进行对照，禁止原始事实直接相连。
+  - 出库收款对照左侧排除内部客户，右侧包含内部客户；回答必须明确披露这一经确认的非对称范围。
+  - “为什么”只能解释可验证的指标变化，不能把同时发生表述为因果关系。
+
+answer_contract:
+  - 使用“客户应收风险证据”“需关注”“建议业务复核”，不把证据描述成违约预测。
+  - 每个关注结论必须列出命中的具体指标、期间和比较范围。
+  - 明确区分历史结算行为与当前未结算压力。
+  - DSO展示平均净欠款、毛出库分母、自然天数、快照覆盖和有效经营月份；没有目标天数，且该指标不随默认净出库口径改写。
+  - 缺少授信、结算历史、有效经营月份或结果截断时必须说明限制。
+
+analysis_boundaries:
+  - 不生成隐藏综合风险分、自动高中低风险标签或虚构金额阈值。
+  - 不推断客户经营状况、付款意图或违约概率。
+  - 不建议停货、冻结、催收优先级、授信额度或账期。
+  - 不将相关变化表述为因果关系，不认定业务员责任。

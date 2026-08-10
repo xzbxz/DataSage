@@ -1,0 +1,108 @@
+_config_version: 33
+timezone: Asia/Shanghai
+model:
+  provider: deepseek
+  default: deepseek-v4-flash
+  base_url: https://api.deepseek.com/v1
+agent:
+  reasoning_effort: high
+  tool_use_enforcement: auto
+  intent_ack_continuation: auto
+  task_completion_guidance: true
+  parallel_tool_call_guidance: true
+  disabled_toolsets: []
+platform_toolsets:
+  cli:
+    - hermes-cli
+    - datasage-query
+  wecom:
+    - datasage-query
+    - clarify
+    - todo
+  cron:
+    - datasage-query
+terminal:
+  backend: local
+  cwd: ${HERMES_HOME}/workspace
+  timeout: 180
+  home_mode: auto
+privacy:
+  redact_pii: true
+security:
+  redact_secrets: true
+plugins:
+  enabled:
+    - datasage-query
+  disabled: []
+  entries:
+    datasage-query:
+      allow_tool_override: false
+      settings:
+        production_mode: false
+        canary_accept_existing_account: true
+        require_tls: false
+        mysql_allowed_grant_scopes: []
+        mysql_connect_timeout_seconds: 8
+        mysql_health_connect_timeout_seconds: 5
+        mysql_grant_audit_timeout_seconds: 10
+        mysql_query_timeout_seconds: 30
+        call_timeout_seconds: 60
+        max_concurrent_queries: 4
+        entity_preflight_max_lookups: 10
+        max_rows: 100
+        max_cell_chars: 2000
+        max_dimension_display_chars: 80
+        max_result_bytes: 262144
+        max_batch_bytes: 524288
+skills:
+  template_vars: true
+  inline_shell: false
+  guard_agent_created: false
+  write_approval: false
+memory:
+  write_approval: false
+sessions:
+  auto_prune: true
+  retention_days: 30
+logging:
+  level: INFO
+  max_size_mb: 5
+  backup_count: 3
+platforms:
+  wecom:
+    enabled: true
+    extra:
+      bot_id: ${WECOM_BOT_ID}
+      secret: ${WECOM_SECRET}
+      dm_policy: allowlist
+      allow_from:
+        - '*'
+      group_policy: allowlist
+      group_allow_from:
+        - '*'
+      groups:
+        '*':
+          allow_from:
+            - '*'
+      allow_admin_from:
+        - zhangzhengwei
+      user_allowed_commands:
+        - new
+        - help
+        - status
+      group_user_allowed_commands:
+        - new
+        - help
+        - status
+streaming:
+  enabled: true
+approvals:
+  destructive_slash_confirm: false
+onboarding:
+  seen:
+    openclaw_residue_cleanup: true
+    tool_progress_prompt: true
+compression:
+  enabled: true
+  threshold: 0.3
+  target_ratio: 0.2

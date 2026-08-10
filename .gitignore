@@ -1,0 +1,13 @@
+.env
+auth.json
+auth.lock
+logs/
+sessions/
+runtime-state/
+cron/
+*.db
+*.db-shm
+*.db-wal
+__pycache__/
+*.pyc
+

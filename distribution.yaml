@@ -1,0 +1,45 @@
+name: datasage-canary-next
+version: 0.12.0-dev1
+description: Hermes-native digital business expert with governed read-only data tools.
+hermes_requires: ==0.19.0
+author: datasage
+license: Proprietary
+env_requires:
+- name: DEEPSEEK_API_KEY
+  description: DeepSeek API key used by the Profile model provider.
+- name: DATA_QUERY_MYSQL_HOST
+  description: MySQL host used by the governed read-only query plugin.
+- name: DATA_QUERY_MYSQL_PORT
+  description: MySQL port.
+  required: false
+  default: '3306'
+- name: DATA_QUERY_MYSQL_DATABASE
+  description: MySQL database containing the governed views and tables.
+- name: DATA_QUERY_MYSQL_USER
+  description: MySQL account used by the read-only DataSage query plugin.
+- name: DATA_QUERY_MYSQL_PASSWORD
+  description: Password for the DataSage MySQL account.
+- name: DATA_QUERY_MYSQL_SSL_CA
+  description: Optional CA certificate path for verified MySQL TLS.
+  required: false
+- name: WECOM_BOT_ID
+  description: WeCom AI Bot ID.
+- name: WECOM_SECRET
+  description: WeCom AI Bot secret.
+distribution_owned:
+- distribution.yaml
+- .gitattributes
+- .env.example
+- .gitignore
+- SOUL.md
+- AGENTS.md
+- ARCHITECTURE.md
+- profile.yaml
+- config.yaml
+- README.md
+- CHANGELOG.md
+- .release
+- skills
+- plugins/datasage-query
+source: C:\Users\10192\Documents\Codex\2026-08-04\c-users-10192-appdata-local-hermes\work\release-staging\datasage-canary-next
+installed_at: '2026-08-06T10:02:44+00:00'
