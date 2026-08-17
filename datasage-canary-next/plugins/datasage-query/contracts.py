@@ -22,7 +22,7 @@ _DOMAIN_FOLDERS = {
 }
 _MODEL_PROJECTION_VERSION = "datasage-model-semantic-projection/v3"
 _CATALOG_VERSION = "datasage-metric-catalog/v1"
-_ANALYSIS_AFFORDANCES_VERSION = "datasage-analysis-affordances/v7"
+_ANALYSIS_AFFORDANCES_VERSION = "datasage-analysis-affordances/v8"
 _CATALOG_PLANNING_GUIDANCE_VERSION = "datasage-catalog-planning-guidance/v1"
 _CATALOG_PLANNING_GUIDANCE_KEYS = (
     "planning_rules",
@@ -1492,6 +1492,39 @@ def _analysis_affordances(
             "cross_metric_direction_divergence": "observation_or_next_evidence_cue_only_not_proof_of_price_product_mix_placed_demand_or_business_cause_without_corresponding_returned_metric_or_dimension_evidence",
             "hypothesis": "must_be_labelled_and_tied_to_returned_evidence_or_an_explicit_evidence_gap",
             "causal_conclusion": "requires_independent_returned_business_evidence_beyond_structure_rate_movement_or_reasoning_topic",
+        },
+        "claim_wire_contracts": {
+            "net_change_contribution_rate": {
+                "field_path": "results[].claim_ledger[].facts.net_change_contribution_rate",
+                "consume_only_when": [
+                    "same_result_change_reconciliation_operation_is_complete_change_decomposition",
+                    "same_result_change_reconciliation_status_is_reconciled",
+                    "claim_is_validly_sealed",
+                    "claim_allowed_relations_contains_structural_contribution",
+                    "returned_overall_delta_is_nonzero",
+                    "producer_returned_the_field",
+                ],
+                "success_boundary": "result_status_success_alone_never_authorizes_consumption",
+                "wire_type": "decimal_string",
+                "semantic_type": "signed_dimensionless_fraction",
+                "scale": "one_equals_one_hundred_percent",
+                "valid_range": "negative_and_absolute_value_greater_than_one_are_valid",
+                "provenance": "sealed_returned_value_direct_use_only",
+                "percentage_display": "multiply_by_100_exactly_once_with_one_consistent_display_precision",
+                "forbidden_transformations": [
+                    "recompute_from_visible_amounts",
+                    "take_absolute_value",
+                    "clamp",
+                    "normalize_partition_rates_to_one_hundred_percent",
+                    "force_partition_rates_to_sum_to_one_hundred_percent",
+                    "invent_or_fill_when_absent",
+                ],
+                "absence_semantics": {
+                    "zero_overall_delta": "field_absent_not_zero_rate",
+                    "zero_partition_delta": "field_absent_not_zero_rate",
+                    "producer_omission": "field_absent_never_infer_or_fill",
+                },
+            }
         },
     }
     if selected_metric is not None:

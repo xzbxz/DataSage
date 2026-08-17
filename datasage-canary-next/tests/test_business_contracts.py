@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 import json
 import importlib
 import os
@@ -23,6 +24,112 @@ tools = importlib.import_module(f"{TEST_PACKAGE}.tools")
 
 
 class BusinessContractTests(unittest.TestCase):
+    @staticmethod
+    def _comparison_claim(
+        current: str,
+        comparison: str,
+        delta: str,
+        *,
+        dimensions: list[dict[str, str]],
+    ) -> dict[str, object]:
+        return {
+            "dimensions": dimensions,
+            "source_truncated": False,
+            "allowed_relations": ["period_comparison"],
+            "facts": {
+                "metric_value": current,
+                "comparison_value": comparison,
+                "delta_value": delta,
+            },
+            "states": {"comparison_state": "complete"},
+        }
+
+    @classmethod
+    def _run_synthetic_change_pipeline(
+        cls,
+        *,
+        overall_triplet: tuple[str, str, str],
+        partition_triplets: tuple[tuple[str, str, str], ...],
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        capability = {
+            "mode": "additive_partition",
+            "dimensions": ["synthetic_partition"],
+        }
+        contexts = [
+            {
+                "request": {"request_id": "overall"},
+                "dimensions": [],
+                "capability": capability,
+            },
+            {
+                "request": {
+                    "request_id": "partition",
+                    "decomposition_of_request_id": "overall",
+                },
+                "dimensions": ["synthetic_partition"],
+                "capability": capability,
+            },
+        ]
+        shared_result = {
+            "status": "success",
+            "data_state": "complete",
+            "_snapshot_group_marker": "synthetic-snapshot",
+            "scope_fingerprint": "synthetic-scope",
+            "business_metric_ref": "synthetic-metric",
+            "business_metric_unit": "synthetic-unit",
+            "applied_time_range": {
+                "start": "synthetic-start",
+                "end": "synthetic-end",
+            },
+            "truncated": False,
+        }
+        results: list[dict[str, object]] = [
+            {
+                **shared_result,
+                "request_id": "overall",
+                "projection_fingerprint": "synthetic-overall-projection",
+                "row_count": 1,
+                "claim_ledger": [
+                    cls._comparison_claim(
+                        *overall_triplet,
+                        dimensions=[],
+                    )
+                ],
+            },
+            {
+                **shared_result,
+                "request_id": "partition",
+                "projection_fingerprint": "synthetic-partition-projection",
+                "row_count": len(partition_triplets),
+                "claim_ledger": [
+                    cls._comparison_claim(
+                        *triplet,
+                        dimensions=[
+                            {
+                                "code": "synthetic_partition",
+                                "value": f"partition-{index}",
+                            }
+                        ],
+                    )
+                    for index, triplet in enumerate(partition_triplets)
+                ],
+            },
+        ]
+        operation_partitions = {"partition": "overall"}
+        tools._authorize_change_decompositions(contexts, results)
+        tools._tag_complete_decomposition_reconciliations(
+            results,
+            operation_partitions,
+        )
+        tools._seal_claim_ids(results)
+        tools._seal_change_reconciliations(results)
+        tools._finalize_complete_decomposition_outcomes(
+            results,
+            operation_partitions,
+        )
+        model_wire = [tools._model_wire_result(result) for result in results]
+        return results, model_wire
+
     def test_user_visible_datasage_skills_survive_tool_search_deferral(self) -> None:
         for relative_path in (
             "skills/datasage/SKILL.md",
@@ -116,12 +223,30 @@ class BusinessContractTests(unittest.TestCase):
             "“结构贡献” / “structural contribution”",
             "strictly equivalent non-causal accounting term",
             "returned overall delta",
-            "contribution amount for every returned partition",
-            "contribution rate only when the response returns that rate",
+            "using only that partition's returned `delta_value`",
             "cover all returned partitions",
             "response's reconciliation basis",
+            "Call a partition a structural contributor and report a rate only when that "
+            "same returned claim has `structural_contribution` in `allowed_relations`",
+            "valid seal covers a returned `facts.net_change_contribution_rate`",
+            "zero-delta partition or a claim without that relation is not a structural "
+            "contributor and has no zero rate to fill",
             "Never describe structural contribution as a cause, driver, or causal explanation",
-            "does not return a contribution rate, do not calculate or invent one",
+            "Use each authorized returned decimal-string rate directly",
+            "signed dimensionless fraction: `1` means `100%`",
+            "negative values and absolute values greater than `1` are valid",
+            "multiply by 100 exactly once",
+            "one consistent display precision across partitions",
+            "Preserve every nonzero direction",
+            "show `0 < rate < threshold` for a positive rate or "
+            "`-threshold < rate < 0` for a negative rate",
+            "never show it as `0.00%` or `-0.00%`",
+            "Never recompute a rate from visible amounts, scale it twice, take "
+            "its absolute "
+            "value, clamp it, normalize partition rates to 100%, or force them to sum "
+            "to 100%",
+            "do not calculate, infer, or invent it",
+            "absence for a zero overall delta or zero partition delta is not a zero rate",
             "When the returned `change_reconciliation.status` is `not_reconciled`, "
             "or when `change_reconciliation` or its status is missing",
             "preserve the returned gap or local-result scope and never call it structural "
@@ -145,15 +270,192 @@ class BusinessContractTests(unittest.TestCase):
             "only when `operation` is `complete_change_decomposition` AND the returned "
             "`change_reconciliation.status` is explicitly `reconciled`",
             "a general `status: success` does not authorize it",
-            "contribution amount for every returned partition",
-            "contribution rate only when the response returns that rate",
+            "using only that partition's returned `delta_value`",
+            "Call a partition a structural contributor and report a rate only when that "
+            "same returned claim has `structural_contribution` in `allowed_relations`",
+            "zero-delta partition or a claim without that relation is not a structural "
+            "contributor and has no zero rate to fill",
             "Never describe structural contribution as a cause, driver, or causal explanation",
+            "Use each authorized returned decimal-string rate directly",
+            "multiply by 100 exactly once",
+            "show `0 < rate < threshold` for a positive rate or "
+            "`-threshold < rate < 0` for a negative rate",
+            "never show it as `0.00%` or `-0.00%`",
+            "Never recompute a rate from visible amounts, scale it twice, take its absolute "
+            "value, clamp it, normalize partition rates to 100%, or force them to sum "
+            "to 100%",
+            "absence for a zero overall delta or zero partition delta is not a zero rate",
             "When the returned `change_reconciliation.status` is `not_reconciled`, "
             "or when `change_reconciliation` or its status is missing",
             "preserve the returned gap or local-result scope and never call it structural "
             "contribution",
         ):
             self.assertIn(required, projected_normalized)
+
+    def test_model_visible_contribution_rate_wire_contract_is_direct_use_only(
+        self,
+    ) -> None:
+        payload = json.loads(
+            contracts.datasage_catalog({"requests": [{"domain": "delivery"}]})
+        )
+        self.assertEqual("success", payload["status"])
+        affordances = payload["results"][0]["analysis_affordances"]
+        self.assertEqual("datasage-analysis-affordances/v8", affordances["version"])
+        contract = affordances["claim_wire_contracts"][
+            "net_change_contribution_rate"
+        ]
+
+        self.assertEqual(
+            "results[].claim_ledger[].facts.net_change_contribution_rate",
+            contract["field_path"],
+        )
+        self.assertEqual(
+            [
+                "same_result_change_reconciliation_operation_is_complete_change_decomposition",
+                "same_result_change_reconciliation_status_is_reconciled",
+                "claim_is_validly_sealed",
+                "claim_allowed_relations_contains_structural_contribution",
+                "returned_overall_delta_is_nonzero",
+                "producer_returned_the_field",
+            ],
+            contract["consume_only_when"],
+        )
+        self.assertEqual(
+            "result_status_success_alone_never_authorizes_consumption",
+            contract["success_boundary"],
+        )
+        self.assertEqual("decimal_string", contract["wire_type"])
+        self.assertEqual("signed_dimensionless_fraction", contract["semantic_type"])
+        self.assertEqual("one_equals_one_hundred_percent", contract["scale"])
+        self.assertEqual(
+            "negative_and_absolute_value_greater_than_one_are_valid",
+            contract["valid_range"],
+        )
+        self.assertEqual(
+            "sealed_returned_value_direct_use_only",
+            contract["provenance"],
+        )
+        self.assertEqual(
+            "multiply_by_100_exactly_once_with_one_consistent_display_precision",
+            contract["percentage_display"],
+        )
+
+        forbidden = set(contract["forbidden_transformations"])
+        self.assertEqual(
+            {
+                "recompute_from_visible_amounts",
+                "take_absolute_value",
+                "clamp",
+                "normalize_partition_rates_to_one_hundred_percent",
+                "force_partition_rates_to_sum_to_one_hundred_percent",
+                "invent_or_fill_when_absent",
+            },
+            forbidden,
+        )
+        self.assertEqual(
+            {
+                "zero_overall_delta": "field_absent_not_zero_rate",
+                "zero_partition_delta": "field_absent_not_zero_rate",
+                "producer_omission": "field_absent_never_infer_or_fill",
+            },
+            contract["absence_semantics"],
+        )
+
+        results, model_wire = self._run_synthetic_change_pipeline(
+            overall_triplet=("65.0000", "60", "5.0000"),
+            partition_triplets=(
+                ("11", "10", "1"),
+                ("8", "10", "-2"),
+                ("16", "10", "6"),
+                ("10", "10", "0"),
+                ("10.0001", "10", "0.0001"),
+                ("9.9999", "10", "-0.0001"),
+            ),
+        )
+        partition = results[1]
+        reconciliation = partition["change_reconciliation"]
+        self.assertEqual("reconciled", reconciliation["status"])
+        self.assertEqual(
+            "complete_change_decomposition",
+            reconciliation["operation"],
+        )
+        self.assertTrue(tools.evidence._reconciliation_is_valid(partition))
+        claims = partition["claim_ledger"]
+        self.assertTrue(
+            all(tools.evidence._claim_is_validly_sealed(claim) for claim in claims)
+        )
+        returned_rates = [
+            claim["facts"].get("net_change_contribution_rate")
+            for claim in claims
+        ]
+        self.assertEqual(
+            ["0.2", "-0.4", "1.2", None, "0.00002", "-0.00002"],
+            returned_rates,
+        )
+        self.assertTrue(
+            all(
+                isinstance(rate, str)
+                for rate in returned_rates
+                if rate is not None
+            )
+        )
+        self.assertGreater(Decimal(returned_rates[0]), 0)
+        self.assertLess(Decimal(returned_rates[1]), 0)
+        self.assertGreater(abs(Decimal(returned_rates[2])), 1)
+        self.assertGreater(Decimal(returned_rates[4]), 0)
+        self.assertLess(Decimal(returned_rates[5]), 0)
+        zero_partition = claims[3]
+        self.assertEqual("0", zero_partition["facts"]["delta_value"])
+        self.assertNotIn(
+            "structural_contribution",
+            zero_partition["allowed_relations"],
+        )
+        self.assertNotIn(
+            "net_change_contribution_rate",
+            zero_partition["facts"],
+        )
+        wire_claims = model_wire[1]["claim_ledger"]
+        self.assertEqual(returned_rates, [
+            claim["facts"].get("net_change_contribution_rate")
+            for claim in wire_claims
+        ])
+        self.assertTrue(
+            all("delta_value" in claim["facts"] for claim in wire_claims)
+        )
+
+    def test_zero_overall_success_fails_closed_without_contribution_rates(self) -> None:
+        results, model_wire = self._run_synthetic_change_pipeline(
+            overall_triplet=("20", "20", "0"),
+            partition_triplets=(
+                ("10", "10", "0"),
+                ("10", "10", "0"),
+            ),
+        )
+        self.assertTrue(all(result["status"] == "success" for result in results))
+        partition = results[1]
+        reconciliation = partition["change_reconciliation"]
+        self.assertEqual("not_reconciled", reconciliation["status"])
+        self.assertEqual(
+            "complete_change_decomposition",
+            reconciliation["operation"],
+        )
+        self.assertEqual("OVERALL_CHANGE_ZERO", reconciliation["reason_code"])
+        for claim in partition["claim_ledger"]:
+            self.assertTrue(tools.evidence._claim_is_validly_sealed(claim))
+            self.assertNotIn(
+                "structural_contribution",
+                claim["allowed_relations"],
+            )
+            self.assertNotIn(
+                "net_change_contribution_rate",
+                claim["facts"],
+            )
+        wire_reconciliation = model_wire[1]["change_reconciliation"]
+        self.assertEqual("not_reconciled", wire_reconciliation["status"])
+        self.assertEqual(
+            "complete_change_decomposition",
+            wire_reconciliation["operation"],
+        )
 
     def test_domain_analysis_seeds_use_an_adaptive_soft_budget(self) -> None:
         for domain in ("receipt", "receivable", "inventory", "target"):

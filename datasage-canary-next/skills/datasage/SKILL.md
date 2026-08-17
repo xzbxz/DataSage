@@ -219,11 +219,27 @@ Finalization:
   contribution”, or a strictly equivalent non-causal accounting term, in the
   final answer. Link the
   returned overall delta to the contribution amount for every returned
-  partition and to its contribution rate only when the response returns that
-  rate; cover all returned partitions using the response's reconciliation
-  basis. Never describe structural contribution as a cause, driver, or causal
-  explanation. If the response does not return a contribution rate, do not
-  calculate or invent one. When the returned `change_reconciliation.status` is
+  partition using only that partition's returned `delta_value`; cover all
+  returned partitions using the response's reconciliation basis. Call a
+  partition a structural contributor and report a rate only when that same
+  returned claim has `structural_contribution` in `allowed_relations` and its
+  valid seal covers a returned `facts.net_change_contribution_rate`. A
+  zero-delta partition or a claim without that relation is not a structural
+  contributor and has no zero rate to fill. Never describe structural
+  contribution as a cause, driver, or causal explanation. Use each authorized
+  returned decimal-string rate directly. It is a signed dimensionless fraction:
+  `1` means `100%`; negative values and absolute values greater than `1` are
+  valid. Preserve the sign and value; for percentage display, multiply by 100
+  exactly once and use one consistent display precision across partitions.
+  Preserve every nonzero direction: when a nonzero percentage would round to
+  zero at that precision, show `0 < rate < threshold` for a positive rate or
+  `-threshold < rate < 0` for a negative rate, where `threshold` is the smallest
+  positive percentage unit at the chosen precision; never show it as `0.00%` or
+  `-0.00%`. Never recompute a rate from visible amounts, scale it twice, take
+  its absolute value, clamp it, normalize partition rates to 100%, or force them
+  to sum to 100%. If the response does not return this field, do not calculate,
+  infer, or invent it; absence for a zero overall delta or zero partition delta
+  is not a zero rate. When the returned `change_reconciliation.status` is
   `not_reconciled`, or when `change_reconciliation` or its status is missing,
   preserve the returned gap or local-result scope and never call it structural
   contribution.
