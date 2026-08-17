@@ -116,3 +116,5 @@ platforms:
         - new
         - help
         - status
+approvals:
+  destructive_slash_confirm: false
