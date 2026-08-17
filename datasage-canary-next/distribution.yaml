@@ -28,11 +28,9 @@ env_requires:
   description: WeCom AI Bot secret.
 distribution_owned:
 - distribution.yaml
-- .no-bundled-skills
 - SOUL.md
 - profile.yaml
 - config.yaml
-- .release
 - plugins/datasage-query/__init__.py
 - plugins/datasage-query/analytical_queries.py
 - plugins/datasage-query/contracts.py
@@ -57,7 +55,6 @@ distribution_owned:
 - plugins/datasage-query/entities.py
 - plugins/datasage-query/entitlements.py
 - plugins/datasage-query/evidence.py
-- plugins/datasage-query/payload_manifest.py
 - plugins/datasage-query/plugin.yaml
 - plugins/datasage-query/references.py
 - plugins/datasage-query/requirements.txt

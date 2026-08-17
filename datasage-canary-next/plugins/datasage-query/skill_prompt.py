@@ -1,63 +1,66 @@
-"""Hash-pinned, read-only DataSage guidance for WeCom turns."""
+"""Bounded, read-only DataSage guidance for WeCom turns."""
 
 from __future__ import annotations
 
-import hashlib
-import json
 from pathlib import Path
+import stat
 from typing import Any, Mapping
 
 
 MAIN_SKILL_PATH = "skills/datasage/SKILL.md"
 _WECOM_PLATFORMS = frozenset({"wecom", "hermes-wecom"})
+_MAX_MAIN_SKILL_BYTES = 64 * 1024
 
 
 class SkillPromptIntegrityError(RuntimeError):
-    """Raised when the governed main skill is absent or not release-pinned."""
+    """Raised when the governed main skill is not a safe profile file."""
 
 
 def _profile_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def _release_digest(profile_root: Path, relative_path: str) -> str:
-    release_path = profile_root / ".release" / "RELEASE.json"
+def _is_reparse(path: Path) -> bool:
     try:
-        release = json.loads(release_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise SkillPromptIntegrityError("release manifest is unavailable") from exc
-    entries = release.get("payload_files") if isinstance(release, Mapping) else None
-    if not isinstance(entries, list):
-        raise SkillPromptIntegrityError("release manifest files are unavailable")
-    matches = [
-        entry.get("sha256")
-        for entry in entries
-        if isinstance(entry, Mapping) and entry.get("path") == relative_path
-    ]
-    if (
-        len(matches) != 1
-        or not isinstance(matches[0], str)
-        or len(matches[0]) != 64
-    ):
-        raise SkillPromptIntegrityError("main skill is not uniquely release-pinned")
-    return matches[0].lower()
+        details = path.lstat()
+    except OSError as exc:
+        raise SkillPromptIntegrityError("main skill path is unavailable") from exc
+    if stat.S_ISLNK(details.st_mode):
+        return True
+    return bool(
+        getattr(details, "st_file_attributes", 0)
+        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    )
 
 
-def load_pinned_main_skill(profile_root: Path | None = None) -> str:
-    """Read and verify the release-owned main skill before freezing it."""
+def load_main_skill(profile_root: Path | None = None) -> str:
+    """Read the Git-governed main skill through its fixed profile path."""
 
-    root = (profile_root or _profile_root()).resolve(strict=True)
-    skill_path = root / MAIN_SKILL_PATH
     try:
-        if skill_path.is_symlink() or not skill_path.is_file():
+        candidate_root = Path(profile_root) if profile_root is not None else _profile_root()
+        root = candidate_root.resolve(strict=True)
+        if not root.is_dir() or _is_reparse(candidate_root):
+            raise SkillPromptIntegrityError("profile root is not a regular directory")
+        skill_path = root.joinpath(*MAIN_SKILL_PATH.split("/"))
+        for candidate in (
+            root / "skills",
+            root / "skills" / "datasage",
+            skill_path,
+        ):
+            if _is_reparse(candidate):
+                raise SkillPromptIntegrityError("main skill path contains a reparse point")
+        resolved_skill = skill_path.resolve(strict=True)
+        if not resolved_skill.is_relative_to(root) or resolved_skill != skill_path:
+            raise SkillPromptIntegrityError("main skill escapes the profile root")
+        if not skill_path.is_file():
             raise SkillPromptIntegrityError("main skill is not a regular file")
         raw = skill_path.read_bytes()
-    except (OSError, UnicodeError) as exc:
+    except SkillPromptIntegrityError:
+        raise
+    except OSError as exc:
         raise SkillPromptIntegrityError("main skill is unavailable") from exc
-    expected = _release_digest(root, MAIN_SKILL_PATH)
-    actual = hashlib.sha256(raw).hexdigest()
-    if actual != expected:
-        raise SkillPromptIntegrityError("main skill does not match its release digest")
+    if not 0 < len(raw) <= _MAX_MAIN_SKILL_BYTES:
+        raise SkillPromptIntegrityError("main skill size is outside the allowed range")
     try:
         content = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -72,7 +75,8 @@ def build_wecom_skill_hook(main_skill: str):
 
     frozen = str(main_skill)
     context = (
-        "<datasage_main_skill immutable=\"true\" source=\"release-manifest\">\n"
+        "<datasage_main_skill immutable=\"process\" source=\"profile-file\" "
+        "authority=\"git\">\n"
         + frozen
         + "\n</datasage_main_skill>"
     )
@@ -128,4 +132,4 @@ def build_wecom_skill_hook(main_skill: str):
 def frozen_wecom_skill_hook():
     """Load once at plugin registration, then serve only the frozen value."""
 
-    return build_wecom_skill_hook(load_pinned_main_skill())
+    return build_wecom_skill_hook(load_main_skill())

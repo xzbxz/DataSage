@@ -2,6 +2,9 @@
 name: datasage-query-patterns
 description: >-
   Use for DataSage entity-filtered or ranked metric queries.
+metadata:
+  hermes:
+    requires_toolsets: [datasage-query]
 ---
 
 # DataSage Query Patterns
@@ -32,9 +35,11 @@ authority for planning and evidence boundaries.
    `dimensions` so the request contains only user-requested dimensions; set
    `order_by: {field: "metric_value", direction: "desc"}` and `limit: N`, and
    use a single period (`calendar_month` or `time_range`).
-5. Expect `data_state: "truncated"` with limitations
-   `COMPLETE_POPULATION_STATEMENT_NOT_AUTHORIZED` / `SOURCE_TRUNCATED` for a
-   Top-N result.
+5. Read `truncated` and `data_state` exactly as returned. Only when
+   `truncated: true` or `data_state: "truncated"`, disclose limitations
+   `COMPLETE_POPULATION_STATEMENT_NOT_AUTHORIZED` / `SOURCE_TRUNCATED`. When
+   the result is not truncated, do not describe it as truncated; still scope
+   the ranking to its returned period, filters, and dimension.
 
 ## Bounded analysis
 

@@ -6,26 +6,18 @@ model:
   base_url: https://api.deepseek.com/v1
 agent:
   reasoning_effort: high
-  tool_use_enforcement: auto
-  intent_ack_continuation: auto
-  task_completion_guidance: true
-  parallel_tool_call_guidance: true
-  disabled_toolsets: []
 platform_toolsets:
   cli:
     - hermes-cli
     - datasage-query
+  # Intentional channel-security exception: WeCom exposes only governed
+  # business tools plus clarification/todo; CLI retains ordinary Hermes tools.
   wecom:
     - datasage-query
     - clarify
     - todo
   cron:
     - datasage-query
-terminal:
-  backend: local
-  cwd: ${HERMES_HOME}/workspace
-  timeout: 180
-  home_mode: auto
 privacy:
   redact_pii: true
 security:
@@ -36,7 +28,6 @@ hooks:
 plugins:
   enabled:
     - datasage-query
-  disabled: []
   entries:
     datasage-query:
       allow_tool_override: false
@@ -101,19 +92,8 @@ plugins:
               allow_reference_index: true
               allow_all_rows: true
 skills:
-  template_vars: true
-  inline_shell: false
-  guard_agent_created: false
-  write_approval: false
-memory:
-  write_approval: false
-sessions:
-  auto_prune: true
-  retention_days: 30
-logging:
-  level: INFO
-  max_size_mb: 5
-  backup_count: 3
+  # Git is authoritative; tracked expert guidance requires operator approval.
+  write_approval: true
 platforms:
   wecom:
     enabled: true
@@ -136,17 +116,3 @@ platforms:
         - new
         - help
         - status
-streaming:
-  enabled: true
-approvals:
-  destructive_slash_confirm: false
-onboarding:
-  profile_build: "off"
-  seen:
-    busy_input_prompt: true
-    openclaw_residue_cleanup: true
-    tool_progress_prompt: true
-compression:
-  enabled: true
-  threshold: 0.3
-  target_ratio: 0.2

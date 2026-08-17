@@ -5,7 +5,6 @@ from . import (
     entitlements,
     entities,
     references,
-    runtime_health,
     schemas,
     skill_prompt,
     tools,
@@ -14,7 +13,6 @@ from . import (
 
 
 def register(ctx) -> None:
-    runtime_health.record_startup_health()
     ctx.register_hook("pre_llm_call", skill_prompt.frozen_wecom_skill_hook())
     ctx.register_tool(
         name="datasage_catalog",

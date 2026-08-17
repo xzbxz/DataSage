@@ -1,6 +1,9 @@
 ---
 name: datasage
 description: Internal company facts requiring DataSage lookup only.
+metadata:
+  hermes:
+    requires_toolsets: [datasage-query]
 ---
 
 # DataSage

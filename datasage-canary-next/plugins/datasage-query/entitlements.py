@@ -38,23 +38,42 @@ DENIED_CODE = "DATA_ENTITLEMENT_DENIED"
 _SCALAR_TYPES = (str, int, float, bool)
 _REPLAY_PLATFORM = "replay"
 _REPLAY_SOURCE = "datasage-trusted-replay"
+_MISSING_SESSION_VALUE = object()
 
 
 def _session_value(name: str) -> str:
-    """Read only Hermes' request-local ContextVar; never fall back to env."""
+    """Read a strictly bound Hermes request identity; never fall back to env.
+
+    Prefer a public strict-bound helper when Hermes exposes one.  Hermes 0.20
+    only has ``get_session_env()``, whose environment fallback is unsafe for an
+    authorization decision, so the compatibility branch is deliberately
+    isolated here and fails closed if its private ContextVar surface changes.
+    """
 
     try:
         from gateway import session_context
 
         if not session_context.session_context_engaged():
             return ""
-        variable = session_context._VAR_MAP.get(name)
+
+        strict_getter = getattr(session_context, "get_bound_session_env", None)
+        if callable(strict_getter):
+            value = strict_getter(name, _MISSING_SESSION_VALUE)
+            if value is _MISSING_SESSION_VALUE:
+                return ""
+            return str(value).strip() if value is not None else ""
+
+        variables = getattr(session_context, "_VAR_MAP", None)
+        unset = getattr(session_context, "_UNSET", _MISSING_SESSION_VALUE)
+        if not isinstance(variables, Mapping):
+            return ""
+        variable = variables.get(name)
         if variable is None:
             return ""
         value = variable.get()
-        if value is session_context._UNSET:
+        if value is unset:
             return ""
-    except (AttributeError, ImportError, RuntimeError):
+    except (AttributeError, ImportError, RuntimeError, TypeError):
         return ""
     return str(value).strip() if value is not None else ""
 

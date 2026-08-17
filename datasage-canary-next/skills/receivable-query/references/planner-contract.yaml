@@ -58,7 +58,7 @@ planning_rules:
 
 recipe_policy:
   exact_overview_bundle: 仅在用户询问对应主题整体或概览，且没有显式单项、趋势、排名、比较、拆解或原因诊断时使用。
-  analysis_seed: 非约束规划提示；必须通过能力覆盖门，且最多在首批结果暴露实质缺口时追加一次针对性查询。
+  analysis_seed: 非约束规划提示；必须通过能力覆盖门并采用自适应软预算。仅当已返回证据仍存在可能实质改变结论的缺口时追加针对性查询；证据足够、边际信息价值低或受控能力不足时停止，不设固定查询、追问或轮数上限。
 recipes:
   receivable_occurrence_overview: {kind: exact_overview_bundle, metrics: [receivable_occurrence_amount, receivable_bill_count, receivable_customer_count]}
   current_debt_overview: {kind: exact_overview_bundle, metrics: [current_debt_amount, positive_debt_amount, debt_customer_count, open_receivable_amount, open_receivable_customer_count]}

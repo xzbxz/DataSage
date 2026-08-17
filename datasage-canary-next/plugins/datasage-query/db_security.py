@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 from typing import Any
 import uuid
 
@@ -49,33 +50,35 @@ def _profile_deployment_role(profile_root: Path) -> str:
 
 
 def _production_marker_present(profile_root: Path) -> bool:
+    """Treat an independent, safe marker file as the production signal.
+
+    Git is the profile version authority.  The marker therefore carries no
+    release-manifest identity; its presence only opts into the stricter
+    transport and account policy below.
+    """
+
     marker_path = profile_root / ".production-release"
-    if not marker_path.is_file():
-        return False
-    release_path = profile_root / ".release" / "RELEASE.json"
     try:
-        marker = json.loads(marker_path.read_text(encoding="utf-8"))
-        release = json.loads(release_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
+        details = marker_path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
         raise DatabaseSecurityError(
             "DATABASE_PRODUCTION_MARKER_INVALID",
-            "生产标记不可读或格式无效。",
+            "生产标记不可安全检查。",
         ) from exc
-    identity_fields = (
-        "artifact_id",
-        "distribution_version",
-        "payload_sha256",
+    is_reparse = bool(
+        getattr(details, "st_file_attributes", 0)
+        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
     )
-    if not all(
-        isinstance(marker, dict)
-        and isinstance(release, dict)
-        and marker.get(name)
-        and marker.get(name) == release.get(name)
-        for name in identity_fields
+    if (
+        stat.S_ISLNK(details.st_mode)
+        or is_reparse
+        or not stat.S_ISREG(details.st_mode)
     ):
         raise DatabaseSecurityError(
             "DATABASE_PRODUCTION_MARKER_INVALID",
-            "生产标记与已安装制品身份不一致。",
+            "生产标记必须是独立的普通文件，且不能是链接或重解析点。",
         )
     return True
 

@@ -1,6 +1,9 @@
 ---
 name: common-data-foundation
 description: Internal DataSage references; not a standalone workflow.
+metadata:
+  hermes:
+    requires_toolsets: [datasage-query]
 ---
 
 # Common Data Foundation

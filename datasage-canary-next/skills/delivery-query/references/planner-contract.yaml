@@ -5,29 +5,6 @@ purpose: 将业务问题映射为受控指标、维度、时间和回答范围�
 planning_rules:
   - "sales_amount_default: 销售额或销售金额默认使用 delivery_amount、人民币和 period_flow_net；明确下单金额或订单金额时才使用 order_amount；收款或回款金额属于 receipt 域。"
 
-phase_a_acceptance:
-  status: dev1_single_metric_vertical_slice
-  selected_metric: delivery_amount
-  selection_reason: 净出库金额已完成生产只读核验，人民币单位明确，不依赖待对账的数量单位，也不要求实体解析或输出分组。
-  catalog_sequence:
-    - {domain: delivery}
-    - {domain: delivery, metric: delivery_amount}
-  query_shape:
-    domain: delivery
-    mode: metric
-    delivery_scope: default_net
-    dimensions: []
-    required_business_inputs: [resolved_start_inclusive, resolved_end_exclusive]
-  answer_evidence:
-    - business_metric_label
-    - business_metric_unit
-    - metric_value
-    - actual_time_range
-    - delivery.net-flow.meaning
-  hermes_answer: 直接给出净出库金额、人民币单位和实际时间范围；说明这是同期毛出库减同期有效退货的当期流量净额，结果允许为负数。
-  local_failure: 只说明本次数据查询未完成；不得接管、冻结或污染后续普通对话。
-  non_goals: [turn_scope, grounding, model_authored_sql, dataset_mode, entity_search, grouping, ranking, comparison]
-
 dimension_policy:
   filter_only: never_add_output_dimension
   output_dimension_triggers: [explicit_grouping, explicit_ranking, explicit_comparison, explicit_breakdown, metric_required_grain]

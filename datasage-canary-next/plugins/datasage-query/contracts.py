@@ -1547,7 +1547,7 @@ def _analysis_affordances(
                         "authorization": "returned_nonzero_rows_structural_contribution_only",
                         "population_detail": "incomplete_hidden_tail_and_residual_must_be_explicit",
                         "complete_population_claims_returned": False,
-                        "driver_count_semantics": "returned_nonzero_driver_count_covers_returned_rows_only_full_partition_row_count_covers_population",
+                        "structural_contributor_count_semantics": "returned_nonzero_contributor_count_covers_returned_rows_only_full_partition_row_count_covers_population",
                         "causality": "never_authorized",
                     },
                     "metric_identity_explanation": "controlled_metric_definition_only_not_governed_dimension_structural_contribution_not_a_substitute_for_returned_reconciliation_and_not_causal_evidence",

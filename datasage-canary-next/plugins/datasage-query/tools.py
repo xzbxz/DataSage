@@ -5168,14 +5168,45 @@ _MODEL_WIRE_RESULT_FIELDS = (
 )
 
 
+_MODEL_WIRE_RECONCILIATION_FIELD_ALIASES = {
+    "driver_projection_fingerprint": "contributor_projection_fingerprint",
+    "driver_current_sum": "contributor_current_sum",
+    "driver_comparison_sum": "contributor_comparison_sum",
+    "driver_delta_sum": "contributor_delta_sum",
+    "returned_driver_row_count": "returned_partition_row_count",
+    "unreturned_driver_row_count": "unreturned_partition_row_count",
+    "driver_claim_ids": "structural_contributor_claim_ids",
+    "driver_row_count": "full_partition_row_count",
+    "returned_nonzero_driver_count": "returned_nonzero_contributor_count",
+    "nonzero_driver_count_scope": "nonzero_contributor_count_scope",
+    "nonzero_driver_count": "nonzero_contributor_count",
+}
+
+
+def _model_wire_change_reconciliation(value: Any) -> Any:
+    """Rename legacy reconciliation vocabulary only at the model boundary."""
+
+    if not isinstance(value, Mapping):
+        return value
+    return {
+        _MODEL_WIRE_RECONCILIATION_FIELD_ALIASES.get(key, key): item
+        for key, item in value.items()
+    }
+
+
 def _model_wire_result(result: Mapping[str, Any]) -> dict[str, Any]:
     """Project private execution state to the minimal model-visible result."""
 
-    return {
+    projected = {
         field: result.get(field)
         for field in _MODEL_WIRE_RESULT_FIELDS
         if field in result
     }
+    if "change_reconciliation" in projected:
+        projected["change_reconciliation"] = _model_wire_change_reconciliation(
+            projected["change_reconciliation"]
+        )
+    return projected
 
 
 _MODEL_WIRE_OPTIONAL_METRIC_CONTEXT_FIELDS = {

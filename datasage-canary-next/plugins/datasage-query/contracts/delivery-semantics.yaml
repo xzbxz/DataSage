@@ -4,18 +4,6 @@ contract_role: plugin_physical_execution
 model_planner_contract: references/planner-contract.yaml
 triggers: [出库, 净出库, 毛出库, 仓库出库, 条码出库, 退货, 退货率, 出货, 下单, 订单, 销量, 出库金额, 出库数量, 出库卷数, 原币, 客户排名, 产品排名, 色号, 供应商, 备货, 销售额, 销售金额]
 
-phase_a_acceptance:
-  status: dev1_single_metric_vertical_slice
-  selected_metric: delivery_amount
-  authority: metrics.delivery_amount
-  evidence_basis: 生产 RDS 固定月份只读核验已确认净出库金额结构化结果；运行时仍须经过只读事务、参数化查询、超时和结果上限保护。
-  required_runtime_invariants:
-    - model_cannot_submit_sql_tables_joins_or_formulas
-    - start_inclusive_end_exclusive
-    - read_only_transaction
-    - fixed_metric_filters
-    - bounded_timeout_and_result
-  public_evidence_path: [catalog_metric_contract, typed_query_request, claim_ledger, disclosure_ledger, hermes_answer]
 tables:
   - vk_dwd.sale_bill_goods_detail_dwd
   - vk_dwd.delivery_bill_barcode_detail_dwd
@@ -304,14 +292,14 @@ dimensions:
     answer_note: 默认使用交易事实账；毛出库和退货分别采用各自事实的 sales_id。只有目标、协作或明确分摊问题才交给目标域的业务员分摊账。
     semantics: 使用销售或出库事实上的业务员，不使用客户当前负责人。
   department:
-    label: 部门
+    label: 客户部门
     entity: customer_department
     source: {type: fact}
     columns: [customer_dept]
     filter_column: customer_dept
     value_contract: *vc_source_exact
   organization:
-    label: 组织
+    label: 业务组织
     entity: transaction_organization
     source: {type: fact}
     columns: [org_name]
@@ -721,7 +709,7 @@ current_attribute_overrides: &current_attribute_overrides
 return_dimension_overrides: &return_dimension_overrides
   <<: *current_attribute_overrides
   organization:
-    label: 组织
+    label: 业务组织
     entity: transaction_organization
     source: {type: fact}
     columns: [{column: biz_org, alias: org_name}]
