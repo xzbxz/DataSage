@@ -666,6 +666,14 @@ class BusinessContractTests(unittest.TestCase):
             expected_disclosure_texts,
             {key: item["text"] for key, item in disclosures.items()},
         )
+        domain_scope = disclosures["receipt.domain.scope"]["text"]
+        self.assertIn("内部客户", domain_scope)
+        self.assertIn("排除A状态", domain_scope)
+        self.assertIn("本次实际筛选范围", domain_scope)
+        net_scope = disclosures["receipt.net.scope"]["text"]
+        self.assertIn("收款人民币金额减退款人民币金额", net_scope)
+        self.assertIn("内部客户", net_scope)
+        self.assertIn("排除A状态", net_scope)
         for disclosure in disclosures.values():
             self.assertIs(disclosure["applies"], True)
             canonical = json.dumps(
@@ -733,8 +741,17 @@ class BusinessContractTests(unittest.TestCase):
             self.assertIn("`calendar_month` and `time_range`", normalized)
         normalized_hook = " ".join(hook_context.split())
         self.assertIn("When `answer_scope_line` is non-empty", normalized_hook)
-        self.assertIn("Present every sealed `disclosure_ledger` item", normalized_hook)
-        self.assertIn("summarization must not drop", normalized_hook)
+        self.assertIn("faithfully state its actual returned range", normalized_hook)
+        self.assertIn("For every sealed `disclosure_ledger` item", normalized_hook)
+        self.assertIn("fully cover all of its independent business propositions", normalized_hook)
+        self.assertIn("Natural rewording and lossless merging", normalized_hook)
+        self.assertIn("inclusion, exclusion, definition, or conditional scope", normalized_hook)
+        self.assertIn("another request, metric, or domain", normalized_hook)
+        self.assertIn("Semicolon-separated, coordinated, and conditional clauses", normalized_hook)
+        self.assertIn("never start another catalog, detail, or query call", normalized_hook)
+        for content in (main_skill, hook_context):
+            self.assertNotIn("one by one", content)
+            self.assertNotIn("must not drop or merge away", content)
 
     def test_target_metric_ambiguity_requires_official_clarification(self) -> None:
         payload = json.loads(

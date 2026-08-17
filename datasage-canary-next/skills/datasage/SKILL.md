@@ -216,12 +216,18 @@ likelihoods.
 
 Finalization:
 
-- When `answer_scope_line` is non-empty, present that actual returned scope
-  verbatim or faithfully without changing its range. Raw JSON is not required.
-- Present every sealed `disclosure_ledger` item whose `applies` value is
-  `true`, one by one; summarization must not drop or merge away any applicable
-  disclosure. Include unit and currency when returned and applicable. Raw JSON
+- When `answer_scope_line` is non-empty, faithfully state its actual returned
+  range; equivalent wording is allowed, but do not change the range. Raw JSON
   is not required.
+- For every sealed `disclosure_ledger` item whose `applies` value is `true`,
+  fully cover all of its independent business propositions. Natural rewording
+  and lossless merging of overlapping propositions are allowed, but do not omit,
+  change the meaning of, or broaden an inclusion, exclusion, definition, or
+  conditional scope to another request, metric, or domain. Semicolon-separated,
+  coordinated, and conditional clauses are not discardable background. Consume
+  only the returned ledger at finalization; never start another catalog, detail,
+  or query call merely to restate a disclosure. Include unit and currency when
+  returned and applicable. Raw JSON is not required.
 - A new difference, ratio, share, or percentage requires a successful governed
   calculation with a `calculation_seal` bound to sealed operands; never derive
   one from visible values.
