@@ -1,5 +1,6 @@
 *
 !.gitignore
+!.gitattributes
 !datasage-canary-next/
 datasage-canary-next/*
 !datasage-canary-next/plugins/

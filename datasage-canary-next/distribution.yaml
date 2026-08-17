@@ -1,5 +1,5 @@
 name: datasage-canary-next
-version: 0.12.0-dev35
+version: 0.12.0-dev37
 description: Hermes-native digital business expert with governed read-only data tools.
 hermes_requires: ==0.20.0
 author: datasage

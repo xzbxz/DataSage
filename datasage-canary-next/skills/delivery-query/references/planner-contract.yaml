@@ -1,4 +1,4 @@
-version: datasage-mini-delivery-planner/v12
+version: datasage-mini-delivery-planner/v13
 domain: delivery
 audience: agent_planner
 purpose: 将业务问题映射为受控指标、维度、时间和回答范围，不承载物理数据实现。
@@ -289,7 +289,7 @@ removed_capabilities:
 recipe_policy:
   exact_overview_bundle: 只有命中 intent_routes 中窄化的 match_when 才逐项使用，不得由“模糊”二字触发。
   analysis_seed: 仅供 Hermes 形成假设和挑选最小证据，不是固定清单，不授权未登记指标，也不覆盖用户明确的指标、维度、筛选、时间或操作。
-  adaptive_seed: 先查最小治理证据，只有首批结果暴露实质证据缺口时才允许一次针对性跟进。
+  adaptive_seed: 先查最小治理证据；仅当实质证据缺口仍存在且新增证据可能改变答案时才可继续。
 
 analysis_recipes:
   delivery_overview:
@@ -298,8 +298,8 @@ analysis_recipes:
     metric_count: not_fixed
     selection_policy: smallest_relevant_governed_bundle
     first: one_batched_evidence_call
-    followup: at_most_one_material_evidence_gap
-    max_tool_calls: 2
+    budget_policy: adaptive_soft_budget_not_a_hard_call_limit
+    followup: continue_while_a_material_evidence_gap_remains
   return_overview:
     kind: exact_overview_bundle
     request_policy: exact
@@ -373,8 +373,8 @@ answer_contract:
   judgment_policy: comparative_language_requires_returned_benchmark_evidence
   comparison_label_policy: derive_month_over_month_or_year_over_year_from_returned_periods
   cross_metric_inference_policy: state_computed_relation_only_without_unproven_business_proxy
-  headline_policy: returned_fact_or_reconciled_driver_only
-  driver_language_policy: requires_complete_returned_reconciliation
+  headline_policy: returned_fact_or_reconciled_structural_contribution_only
+  structural_contribution_language_policy: requires_complete_returned_reconciliation_and_is_explicitly_noncausal
   required_scope: [actual_time_range, net_or_gross, delivery_or_order, currency_or_grouping_when_relevant]
   actual_time_range_rule: 每个成功查询回答都必须用业务可读文字写出实际时间范围；当前或最新快照写出快照范围，不得只靠用户问题或表头暗示。
   hidden_execution_scope: [fixed_status_filters, internal_customer_filter, physical_source, table_and_field_mapping]

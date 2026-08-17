@@ -1,5 +1,5 @@
 name: datasage-query
-version: "0.12.0-dev35"
+version: "0.12.0-dev37"
 description: "Read-only governed metric catalog, bounded expert references, deterministic entity resolution, and guarded MySQL evidence queries for Hermes."
 author: "datasage"
 provides_tools:

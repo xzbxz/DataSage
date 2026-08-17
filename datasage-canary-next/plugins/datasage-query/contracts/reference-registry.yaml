@@ -10,7 +10,7 @@ sources:
     title: Evidence and answer boundary
     source_version: datasage-answer-boundary/v1
     path: skills/common-data-foundation/references/answer-boundary.md
-    source_sha256: 1e64692f5347b779430961cdf231387663766aad08868ea4f1da059bbbca8791
+    source_sha256: d3c9032a93da46135bf8eebd11d45550827d09af8ac37fbb7d0c6de8dc7d6836
     content_format: markdown
   entity_guidance:
     title: Model-safe entity resolution guidance
@@ -26,9 +26,9 @@ sources:
     content_format: markdown
   planner_delivery:
     title: Delivery planner guidance
-    source_version: datasage-mini-delivery-planner/v12
+    source_version: datasage-mini-delivery-planner/v13
     path: skills/delivery-query/references/planner-contract.yaml
-    source_sha256: 9c4bfa376881d05e8de7d07b705b4dad676a47cfea545060144d4365c302bc1c
+    source_sha256: 9d055fef5b80e84dd13876f47b3a4700207b2a53128e101a00c30c5449df18bb
     content_format: yaml_projection
   planner_receipt:
     title: Receipt planner guidance
@@ -50,9 +50,9 @@ sources:
     content_format: yaml_projection
   planner_customer_risk:
     title: Customer-risk planner guidance
-    source_version: datasage-mini-customer-risk-planner/v4
+    source_version: datasage-mini-customer-risk-planner/v5
     path: skills/customer-risk-query/references/planner-contract.yaml
-    source_sha256: 8db2642d1c2c3b95cf31545c1229f030e7ccd5d5a4a3ce3db3f5930a5667cdb1
+    source_sha256: 0ac2a39448bb38fc7fb06ac7952a23f7b4891d5141f7acfc63a6cab38363cc0d
     content_format: yaml_projection
   planner_inventory:
     title: Inventory planner guidance

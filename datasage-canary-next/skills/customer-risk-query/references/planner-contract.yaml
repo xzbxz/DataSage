@@ -1,4 +1,4 @@
-version: datasage-mini-customer-risk-planner/v4
+version: datasage-mini-customer-risk-planner/v5
 domain: customer_risk
 audience: agent_planner
 purpose: 组织客户应收风险证据，不做信用、停供、催收或经营决策；不包含表、字段或 Join。
@@ -68,7 +68,11 @@ planning_rules:
 
 recipe_policy:
   exact_overview_bundle: 仅在用户询问客户风险整体、关注地图或明确单客户综合证据，且没有显式单项、趋势、同业比较或原因诊断时使用。
-  analysis_seed: 非约束规划提示；必须通过能力覆盖门，且最多在首批结果暴露实质缺口时追加一次针对性查询。
+  analysis_seed: 非约束规划提示；必须通过能力覆盖门；仅当实质证据缺口仍存在且新增证据可能改变答案时才可继续。
+  adaptive_followup_policy:
+    role: seeded_conditional_followup
+    budget_policy: adaptive_soft_budget_not_a_hard_call_limit
+    continuation_policy: continue_while_a_material_evidence_gap_remains
 recipes:
   portfolio_overview:
     kind: exact_overview_bundle
@@ -84,6 +88,7 @@ recipes:
     optional_second_call:
       batch_policy: one_query_tool_call_only_if_first_call_leaves_a_material_gap
       request_id_policy: new_unique_ids_never_reuse_first_call_ids
+      followup_policy: adaptive_followup_policy
       requests:
         - {request: {domain: customer_risk, mode: metric, metric: delivery_receipt_comparison, dimensions: []}, bindings: {metric_filter_roles: {}, time_range: omit_use_metric_default}}
         - {request: {domain: customer_risk, mode: metric, metric: formal_receivable_turnover_days, dimensions: []}, bindings: {metric_filter_roles: {}, time_range: omit_use_metric_default}}
@@ -101,8 +106,11 @@ recipes:
     unique_customer_cap: 15
   customer_evidence_card:
     kind: exact_overview_bundle
+    entity_preflight:
+      unambiguous_typed_entity: handled_by_datasage_query_internal_shared_preflight_no_explicit_resolver
+      ambiguous_or_unresolved: use_existing_clarify_or_datasage_entity_resolve
     first_call:
-      batch_policy: one_query_tool_call_after_one_shared_entity_resolution
+      batch_policy: one_query_tool_call_with_query_internal_shared_entity_preflight
       request_id_policy: unique_recipe_and_metric
       requests:
         - {request: {domain: receivable, mode: metric, metric: positive_debt_amount, dimensions: []}, bindings: {metric_filter_roles: {customer: required_exact_user_token}, time_range: omit_use_metric_default}, system_scope: {internal_customer: exclude}}
@@ -113,6 +121,7 @@ recipes:
     optional_second_call:
       batch_policy: one_query_tool_call_only_if_first_call_leaves_a_material_gap
       request_id_policy: new_unique_ids_never_reuse_first_call_ids
+      followup_policy: adaptive_followup_policy
       requests:
         - {request: {domain: customer_risk, mode: metric, metric: delivery_receipt_comparison, dimensions: []}, bindings: {metric_filter_roles: {customer: required_exact_user_token}, time_range: omit_use_metric_default}}
         - {request: {domain: customer_risk, mode: metric, metric: formal_receivable_turnover_days, dimensions: []}, bindings: {metric_filter_roles: {customer: required_exact_user_token}, time_range: omit_use_metric_default}}

@@ -27,9 +27,11 @@ authority for planning and evidence boundaries.
    when the selected metric exposes that filter. Registered aliases resolve
    deterministically inside query preflight; do not pre-call
    `datasage_entity_resolve` for a labeled token.
-4. For ranking: use `dimensions: [customer]` (only user-requested dimensions),
-   `order_by: {field: "metric_value", direction: "desc"}`, `limit: N`,
-   and a single period (`calendar_month` or `time_range`).
+4. For ranking: from the selected metric detail's allowed dimensions, reuse the
+   exact dimension code explicitly requested by the user. Put only that code in
+   `dimensions` so the request contains only user-requested dimensions; set
+   `order_by: {field: "metric_value", direction: "desc"}` and `limit: N`, and
+   use a single period (`calendar_month` or `time_range`).
 5. Expect `data_state: "truncated"` with limitations
    `COMPLETE_POPULATION_STATEMENT_NOT_AUTHORIZED` / `SOURCE_TRUNCATED` for a
    Top-N result.

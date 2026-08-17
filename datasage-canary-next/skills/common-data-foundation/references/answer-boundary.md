@@ -63,6 +63,15 @@ cannot repair an earlier unsupported assertion.
   limitations, and useful next evidence or action.
 - Represent returned scope accurately: metric meaning, time range, filters,
   dimensions, unit, currency, snapshot, and material fixed business scope.
+- Include every disclosure whose `applies` value is true. State the actual
+  returned time range for each numeric claim, and state unit and currency when
+  returned and applicable; requested or default scope is not a substitute.
+- A new difference, ratio, share, or percentage must come from a successful
+  governed calculation whose `calculation_seal` binds sealed operand claims and
+  compatible scope. Do not derive it from visible values.
+- A display-only conversion of one returned value is allowed when it uses a
+  fixed conversion factor, preserves the returned meaning, and does not create
+  a new metric or relationship. State the displayed unit.
 - Do not require exact-copy boilerplate when the same scope can be stated
   accurately and more naturally.
 - For a partial batch, retain successful evidence and name every requested
