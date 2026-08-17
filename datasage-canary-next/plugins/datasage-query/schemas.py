@@ -105,7 +105,11 @@ REQUEST = {
             "description": (
                 "Exact metric code copied from the selected domain planner metrics; required in metric mode. Never "
                 "invent a code, derive a new metric, or try code synonyms. If the requested meaning has no exact code, "
-                "do not call this tool. For the delivery "
+                "do not call this tool. Load the selected metric detail first when expert_index returns "
+                "requires_metric_detail: true, when exact_default_lookup_supported is false or missing, or when the "
+                "request has any explicit business qualifier. An empty dimensions: [] value is not a business "
+                "qualifier. Direct query is allowed only for an exact governed default whose "
+                "expert_index exact_default_lookup_supported value is true and which has no explicit qualifier. For the delivery "
                 "domain, an unqualified delivery/outbound amount, quantity, or count is net delivery. A gross "
                 "delivery metric is permitted only when the user explicitly asks for gross delivery or a value "
                 "before returns. Words such as raw, detail, table, dataset, or original do not select gross scope."
@@ -173,7 +177,10 @@ REQUEST = {
                     }
                 },
             ],
-            "description": "Start-inclusive and end-exclusive governed metric range.",
+            "description": (
+                "Start-inclusive and end-exclusive governed metric range. Supplying time_range is an explicit, "
+                "non-default qualifier and requires the selected metric detail before datasage_query."
+            ),
         },
         "calendar_month": {
             "type": "string",
@@ -181,7 +188,8 @@ REQUEST = {
             "description": (
                 "Typed full calendar month. The runtime deterministically expands it to a start-inclusive, "
                 "end-exclusive range from the first day of this month to the first day of the next month. "
-                "Use either calendar_month or time_range, never both."
+                "Use either calendar_month or time_range, never both. Supplying calendar_month is an explicit, "
+                "non-default qualifier and requires the selected metric detail before datasage_query."
             ),
         },
         "time_bucket": {
@@ -460,10 +468,19 @@ DATASAGE_QUERY = {
     "name": "datasage_query",
     "description": (
         "Execute one to ten fresh, read-only governed metric queries. Load the relevant domains with "
-        "datasage_catalog first and copy exact metric and dimension codes from that catalog. The model-facing "
-        "surface accepts no SQL, physical tables, columns, joins, or formulas. Registered entity tokens may be "
+        "datasage_catalog first and copy exact metric and dimension codes from that catalog. The caller may query "
+        "directly only when the selected expert_index metric has exact_default_lookup_supported: "
+        "true and the request has no explicit business qualifier. Empty dimensions: [] does not count as a qualifier. "
+        "If that flag is false or missing, or if calendar_month, "
+        "time_range, dimensions, filters, an entity, comparison, decomposition, or ranking is explicit, load the "
+        "selected metric detail before calling datasage_query. The model-facing surface accepts no SQL, physical "
+        "tables, columns, joins, or formulas. Registered entity tokens may be "
         "provided as metric filters and are resolved deterministically inside the query. The response returns "
         "structured values, applied scope, data state, and evidence metadata for Hermes to analyze and summarize. "
+        "A non-empty answer_scope_line is a required final-answer scope statement: present it verbatim or faithfully "
+        "without changing the actual range. Every sealed disclosure_ledger item with applies: true is independently "
+        "required in the final answer; present each item and never drop one through summarization. Raw JSON is not "
+        "required. "
         "Unavailable data affects only this tool call and does not control the surrounding conversation."
     ),
     "parameters": {
@@ -506,7 +523,10 @@ DATASAGE_CATALOG = {
         "Load the trusted DataSage metric catalog needed to plan an internal business-data query. "
         "Hermes chooses whether data is needed and which domains match the user's request; DataSage does not "
         "classify or control ordinary conversation. Request expert_index for the smallest metric-discovery surface, "
-        "then request details only for the selected metric. Full summaries and metric details include bounded planning_guidance "
+        "then follow its metric_selection_boundary. Every expert-index metric declares requires_metric_detail. Direct "
+        "query is allowed only when exact_default_lookup_supported is true and no explicit business qualifier is "
+        "present; empty dimensions: [] does not count as a qualifier. "
+        "otherwise request detail only for the selected metric before query. Full summaries and metric details include bounded planning_guidance "
         "loaded from the versioned planner contract, plus non-binding analysis affordances describing proof capabilities, "
         "boundaries, adaptive follow-up, and stopping guidance. Metric detail also returns max_group_dimensions; "
         "they neither prescribe a fixed metric count nor authorize execution. Physical datasets, fields, filters, "

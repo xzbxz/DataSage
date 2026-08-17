@@ -32,9 +32,14 @@ When DataSage schemas are deferred, use the main Skill's `tool_search` ->
    otherwise give a domain-local gap or clarify. Never enumerate every domain,
    claim global non-support from one index, or query all candidates as a
    substitute for clarification.
-2. If the request needs dimensions/filters/ranking (not an exact default
-   lookup), load metric detail for that code to confirm allowed dimensions
-   and filter support.
+2. Direct query is allowed only when the selected metric has
+   `exact_default_lookup_supported: true` AND there is no explicit qualifier.
+   If `requires_metric_detail: true`, or the exact-default flag is false or
+   missing, load the selected metric detail before query. `calendar_month` and
+   `time_range` are explicit, non-default qualifiers, just like dimensions,
+   filters, entities, comparisons, decompositions, and rankings; any one of
+   them requires selected metric detail first even when the exact-default flag
+   is true. An empty `dimensions: []` value is not a business qualifier.
 3. Put an explicitly labeled entity token directly into `metric_filters`
    when the selected metric exposes that filter. Registered aliases resolve
    deterministically inside query preflight; do not pre-call

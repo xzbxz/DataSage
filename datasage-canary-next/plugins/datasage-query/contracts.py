@@ -1360,6 +1360,9 @@ def _catalog_expert_index(domain: str, planner: Mapping[str, Any]) -> dict[str, 
         item["supports_change_decomposition"] = bool(
             raw.get("change_decomposition_dimensions")
         )
+        item["requires_metric_detail"] = (
+            raw.get("exact_default_lookup_supported") is not True
+        )
         metrics.append(item)
     return {
         "domain": domain,
@@ -1376,10 +1379,42 @@ def _catalog_expert_index(domain: str, planner: Mapping[str, Any]) -> dict[str, 
                         "user wording and existing context leave one compatible "
                         "returned metric"
                     ),
-                    "next_step": (
-                        "select_that_returned_metric_then_query_exact_default_or_"
-                        "load_its_detail_as_needed"
-                    ),
+                    "direct_query_when_all": {
+                        "selected_metric.exact_default_lookup_supported": True,
+                        "explicit_qualifiers_present": False,
+                    },
+                    "detail_first_when_any": [
+                        {
+                            "selected_metric.exact_default_lookup_supported": False
+                        },
+                        {
+                            "selected_metric.exact_default_lookup_supported": "missing"
+                        },
+                        {
+                            "explicit_qualifiers_present": True,
+                            "examples": [
+                                "calendar_month",
+                                "time_range",
+                                "dimensions",
+                                "filters",
+                                "entity",
+                                "comparison",
+                                "decomposition",
+                                "ranking",
+                            ],
+                            "empty_values_do_not_count_as_present": {
+                                "dimensions": []
+                            },
+                        },
+                    ],
+                    "actions": {
+                        "direct_query": (
+                            "query_selected_metric_at_exact_governed_default"
+                        ),
+                        "detail_first": (
+                            "load_selected_metric_detail_before_query"
+                        ),
+                    },
                 },
                 "multiple_materially_distinct": {
                     "condition": (
@@ -1421,17 +1456,6 @@ def _catalog_expert_index(domain: str, planner: Mapping[str, Any]) -> dict[str, 
                     ],
                 },
             },
-        },
-        "next_step": {
-            "unique_compatible": (
-                "select_returned_metric_then_query_exact_default_or_load_detail"
-            ),
-            "multiple_materially_distinct": (
-                "call_official_clarify_before_metric_detail_or_query"
-            ),
-            "zero_compatible": (
-                "report_domain_local_gap_or_clarify_without_detail_or_query"
-            ),
         },
     }
 

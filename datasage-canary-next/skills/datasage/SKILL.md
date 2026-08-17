@@ -79,11 +79,16 @@ The catalog is authoritative for metric codes. Select from returned business
 labels and definitions. On an unambiguous match, reuse that exact returned
 code; never invent or probe code synonyms. Otherwise keep the gap explicit.
 
-Query an exact ungrouped period at governed default scope directly only when
-`expert_index` identifies one unambiguous metric with
-`exact_default_lookup_supported: true`. Otherwise load metric detail. Load
-detail before non-default scope, dimensions, filters, entities, comparisons,
-decompositions, rankings, or meaning-sensitive work.
+Query an exact governed default directly only when `expert_index` identifies
+one unambiguous metric with `exact_default_lookup_supported: true` AND the
+request has no explicit qualifier. Treat `calendar_month` and `time_range` as
+explicit, non-default qualifiers, as well as dimensions, filters, entities,
+comparisons, decompositions, and rankings. If `requires_metric_detail: true`,
+or `exact_default_lookup_supported` is false or missing, load the selected
+metric detail before `datasage_query`. Any explicit qualifier also makes the
+selected metric detail mandatory before query, even when
+`exact_default_lookup_supported: true`. An empty `dimensions: []` value is not
+a business qualifier.
 
 Analysis-class planning rules. For why/change/contribution questions
 ("为什么变好", "为什么没达标", "主要来自哪"), prefer, in order: one
@@ -211,8 +216,12 @@ likelihoods.
 
 Finalization:
 
-- Include each `applies: true` disclosure and the actual returned time range;
-  include unit and currency when returned and applicable.
+- When `answer_scope_line` is non-empty, present that actual returned scope
+  verbatim or faithfully without changing its range. Raw JSON is not required.
+- Present every sealed `disclosure_ledger` item whose `applies` value is
+  `true`, one by one; summarization must not drop or merge away any applicable
+  disclosure. Include unit and currency when returned and applicable. Raw JSON
+  is not required.
 - A new difference, ratio, share, or percentage requires a successful governed
   calculation with a `calculation_seal` bound to sealed operands; never derive
   one from visible values.

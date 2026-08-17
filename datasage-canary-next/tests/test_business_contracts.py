@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+import hashlib
 import json
 import importlib
 import os
@@ -8,6 +9,7 @@ from pathlib import Path
 import sys
 import types
 import unittest
+from unittest import mock
 
 import yaml
 
@@ -21,11 +23,36 @@ package.__path__ = [str(PLUGIN_ROOT)]
 sys.modules[TEST_PACKAGE] = package
 
 contracts = importlib.import_module(f"{TEST_PACKAGE}.contracts")
+schemas = importlib.import_module(f"{TEST_PACKAGE}.schemas")
 skill_prompt = importlib.import_module(f"{TEST_PACKAGE}.skill_prompt")
 tools = importlib.import_module(f"{TEST_PACKAGE}.tools")
 
 
 class BusinessContractTests(unittest.TestCase):
+    @staticmethod
+    def _read_only_source_evidence() -> dict[str, object]:
+        evidence: dict[str, object] = {
+            "schema": "datasage-query-source-evidence/v1",
+            "identity_sha256": "1" * 64,
+            "connection_verified": True,
+            "transport_mode": "tls",
+            "transport_policy_verified": True,
+            "grant_policy": "strict_object_read_only",
+            "grants_verified": True,
+            "read_only": True,
+            "source_commitment_sha256": "2" * 64,
+        }
+        canonical = json.dumps(
+            evidence,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        evidence["security_evidence_sha256"] = hashlib.sha256(
+            b"datasage-query-source-evidence/v1\x00" + canonical
+        ).hexdigest()
+        return evidence
+
     @staticmethod
     def _comparison_claim(
         current: str,
@@ -472,6 +499,243 @@ class BusinessContractTests(unittest.TestCase):
             self.assertIn("不设固定查询、追问或轮数上限", content)
             self.assertNotIn("最多在首批结果暴露实质缺口时追加一次", content)
 
+    def test_receipt_detail_gate_and_required_answer_scope_survive_model_wire(
+        self,
+    ) -> None:
+        payload = json.loads(
+            contracts.datasage_catalog(
+                {"requests": [{"domain": "receipt", "view": "expert_index"}]}
+            )
+        )
+        self.assertEqual("success", payload["status"])
+        expert_index = payload["results"][0]
+        metrics = {item["code"]: item for item in expert_index["metrics"]}
+        for item in metrics.values():
+            self.assertIsInstance(item["requires_metric_detail"], bool)
+            self.assertIs(
+                item["requires_metric_detail"],
+                item.get("exact_default_lookup_supported") is not True,
+            )
+        selected = metrics["net_receipt_amount"]
+        self.assertIs(selected["exact_default_lookup_supported"], False)
+        self.assertIs(selected["requires_metric_detail"], True)
+        delivery_payload = json.loads(
+            contracts.datasage_catalog(
+                {"requests": [{"domain": "delivery", "view": "expert_index"}]}
+            )
+        )
+        delivery_metrics = {
+            item["code"]: item
+            for item in delivery_payload["results"][0]["metrics"]
+        }
+        self.assertIs(
+            delivery_metrics["delivery_amount"]["exact_default_lookup_supported"],
+            True,
+        )
+        self.assertIs(
+            delivery_metrics["delivery_amount"]["requires_metric_detail"],
+            False,
+        )
+
+        unique = expert_index["metric_selection_boundary"]["branches"][
+            "unique_compatible"
+        ]
+        self.assertEqual(
+            {
+                "selected_metric.exact_default_lookup_supported": True,
+                "explicit_qualifiers_present": False,
+            },
+            unique["direct_query_when_all"],
+        )
+        detail_conditions = unique["detail_first_when_any"]
+        self.assertIn(
+            {"selected_metric.exact_default_lookup_supported": False},
+            detail_conditions,
+        )
+        self.assertIn(
+            {"selected_metric.exact_default_lookup_supported": "missing"},
+            detail_conditions,
+        )
+        qualifier_condition = next(
+            condition
+            for condition in detail_conditions
+            if condition.get("explicit_qualifiers_present") is True
+        )
+        self.assertIs(qualifier_condition["explicit_qualifiers_present"], True)
+        self.assertEqual(
+            {
+                "calendar_month",
+                "time_range",
+                "dimensions",
+                "filters",
+                "entity",
+                "comparison",
+                "decomposition",
+                "ranking",
+            },
+            set(qualifier_condition["examples"]),
+        )
+        self.assertEqual(
+            {"dimensions": []},
+            qualifier_condition["empty_values_do_not_count_as_present"],
+        )
+        self.assertIs(
+            unique["direct_query_when_all"]["explicit_qualifiers_present"],
+            False,
+        )
+        self.assertEqual(
+            "query_selected_metric_at_exact_governed_default",
+            unique["actions"]["direct_query"],
+        )
+        self.assertEqual(
+            "load_selected_metric_detail_before_query",
+            unique["actions"]["detail_first"],
+        )
+        self.assertNotIn("next_step", expert_index)
+
+        captured: dict[str, object] = {}
+
+        def execute_query(sql, params, limit, **_kwargs):
+            captured["sql"] = sql
+            captured["params"] = list(params)
+            captured["limit"] = limit
+            return (
+                [{"metric_value": "42.00"}],
+                False,
+                self._read_only_source_evidence(),
+            )
+
+        with mock.patch.object(
+            tools,
+            "_execute_with_source",
+            side_effect=execute_query,
+        ):
+            query_payload = json.loads(
+                tools.datasage_query(
+                    {
+                        "requests": [
+                            {
+                                "request_id": "receipt_month",
+                                "domain": "receipt",
+                                "mode": "metric",
+                                "purpose": "synthetic contract test",
+                                "metric": "net_receipt_amount",
+                                "dimensions": [],
+                                "calendar_month": "2026-07",
+                            }
+                        ]
+                    }
+                )
+            )
+
+        self.assertEqual("success", query_payload["status"])
+        self.assertIn("2026-07-01", captured["params"])
+        self.assertIn("2026-08-01", captured["params"])
+        result = query_payload["results"][0]
+        self.assertEqual(
+            {
+                "start": "2026-07-01",
+                "end": "2026-08-01",
+                "source": "explicit",
+            },
+            result["applied_time_range"],
+        )
+        self.assertEqual(
+            "查询范围：2026-07-01 至 2026-07-31",
+            query_payload["answer_scope_line"],
+        )
+        disclosures = {
+            item["disclosure_id"]: item
+            for item in result["disclosure_ledger"]
+        }
+        self.assertEqual(
+            {"receipt.domain.scope", "receipt.net.scope"},
+            set(disclosures),
+        )
+        expected_disclosure_texts = {
+            "receipt.domain.scope": (
+                "收款及退款域指标均包含内部客户并排除A状态；"
+                "涉及用途时以本次实际筛选范围为准。"
+            ),
+            "receipt.net.scope": (
+                "净收款为收款人民币金额减退款人民币金额；"
+                "收款和退款范围均包含内部客户并排除A状态。"
+            ),
+        }
+        self.assertEqual(
+            expected_disclosure_texts,
+            {key: item["text"] for key, item in disclosures.items()},
+        )
+        for disclosure in disclosures.values():
+            self.assertIs(disclosure["applies"], True)
+            canonical = json.dumps(
+                {
+                    key: value
+                    for key, value in disclosure.items()
+                    if key != "disclosure_seal"
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+            self.assertEqual(
+                "sha256_" + hashlib.sha256(canonical).hexdigest(),
+                disclosure["disclosure_seal"],
+            )
+        ledger_canonical = json.dumps(
+            {
+                "contract_version": "metric-disclosure-ledger/v1",
+                "request_id": result["request_id"],
+                "metric_ref": result["business_metric_ref"],
+                "scope_fingerprint": result["scope_fingerprint"],
+                "projection_fingerprint": result["projection_fingerprint"],
+                "ledger": result["disclosure_ledger"],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+        self.assertEqual(
+            "sha256_" + hashlib.sha256(ledger_canonical).hexdigest(),
+            result["disclosure_ledger_seal"],
+        )
+
+        query_description = schemas.DATASAGE_QUERY["description"]
+        self.assertIn("exact_default_lookup_supported: true", query_description)
+        self.assertIn("false or missing", query_description)
+        self.assertIn("calendar_month", query_description)
+        self.assertIn("time_range", query_description)
+        self.assertIn("answer_scope_line", query_description)
+        self.assertIn("Every sealed disclosure_ledger item", query_description)
+        self.assertIn(
+            "explicit, non-default qualifier",
+            schemas.REQUEST["properties"]["calendar_month"]["description"],
+        )
+        self.assertIn(
+            "explicit, non-default qualifier",
+            schemas.REQUEST["properties"]["time_range"]["description"],
+        )
+
+        main_skill = skill_prompt.load_main_skill(PROFILE_ROOT)
+        patterns = (
+            PROFILE_ROOT / "skills/datasage/datasage-query-patterns/SKILL.md"
+        ).read_text(encoding="utf-8")
+        hook_context = skill_prompt.build_wecom_skill_hook(main_skill)(
+            platform="wecom",
+            is_first_turn=True,
+        )["context"]
+        for content in (main_skill, patterns, hook_context):
+            normalized = " ".join(content.split())
+            self.assertIn("`exact_default_lookup_supported: true`", normalized)
+            self.assertIn("false or missing", normalized)
+            self.assertIn("`calendar_month` and `time_range`", normalized)
+        normalized_hook = " ".join(hook_context.split())
+        self.assertIn("When `answer_scope_line` is non-empty", normalized_hook)
+        self.assertIn("Present every sealed `disclosure_ledger` item", normalized_hook)
+        self.assertIn("summarization must not drop", normalized_hook)
+
     def test_target_metric_ambiguity_requires_official_clarification(self) -> None:
         payload = json.loads(
             contracts.datasage_catalog(
@@ -525,9 +789,7 @@ class BusinessContractTests(unittest.TestCase):
             ["enumerate_all_domains", "claim_globally_unsupported"],
             zero_branch["forbidden"],
         )
-        self.assertIn("unique_compatible", expert_index["next_step"])
-        self.assertIn("multiple_materially_distinct", expert_index["next_step"])
-        self.assertIn("zero_compatible", expert_index["next_step"])
+        self.assertNotIn("next_step", expert_index)
         serialized_index = json.dumps(expert_index, ensure_ascii=False)
         self.assertNotIn('"exact_match"', serialized_index)
         self.assertNotIn('"ambiguity"', serialized_index)
