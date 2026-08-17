@@ -1,4 +1,4 @@
-version: datasage-mini-receipt-semantics/v8
+version: datasage-mini-receipt-semantics/v9
 domain: receipt
 contract_role: plugin_physical_execution
 model_planner_contract: references/planner-contract.yaml
@@ -225,14 +225,16 @@ refund_dimensions: &refund_dimensions
 default_disclosures:
   - id: receipt.domain.scope
     mode: required_always
-    text: "收款及退款域指标均包含内部客户并排除A状态；涉及用途时以本次实际筛选范围为准。"
+    text: "收款及退款域指标均包含内部客户并排除A状态。"
+  - id: receipt.domain.usage-scope
+    mode: required_when
+    when:
+      any_request_dimension_or_filter_present: [receipt_usage, refund_usage]
+    text: "用途以本次实际查询的用途分组或筛选范围为准。"
 
 metrics:
   receipt_amount:
     disclosures:
-      - id: receipt.receipt.scope
-        mode: required_always
-        text: "收款范围包含内部客户并排除A状态；收款用途以本次实际筛选范围为准。"
       - id: receipt.receipt_amount.legacy-note
         mode: contract_only
         text: "本指标为收款金额，默认人民币并包含内部客户，仅排除 A 状态。未限定用途时包含全部收款用途；显式限定用途时只说明实际筛选范围，禁止仍声称全部用途。"
@@ -572,7 +574,7 @@ query_rules:
 
 answer_contract:
   - 说明时间范围、人民币口径以及指标是收款、实收、实退还是净收款。
-  - 始终说明包含内部客户并且仅排除 A 状态。只有未使用 receipt_usage 或 refund_usage 显式筛选时才说明包含全部用途；已显式筛选时必须说明实际用途范围，禁止仍声称“全部收款用途”。
+  - 始终说明包含内部客户并且仅排除 A 状态。请求按 receipt_usage 或 refund_usage 分组或筛选时，必须说明本次实际查询的用途分组或筛选范围；未按用途分组或筛选时才说明包含全部用途，禁止把有用途范围的请求仍声称为“全部收款用途”。
   - 查询失败、无数据和数值为零必须区分，不得编造数值。
 
 analysis_boundaries:

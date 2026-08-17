@@ -3848,6 +3848,7 @@ def _disclosure_applies(
     disclosure: Mapping[str, Any],
     *,
     request: Mapping[str, Any],
+    known_dimension_codes: set[str],
     inventory_scope: str | None,
     data_state: str,
     truncated: bool,
@@ -3870,6 +3871,7 @@ def _disclosure_applies(
         "data_state",
         "truncated",
         "dimension_present",
+        "any_request_dimension_or_filter_present",
         "inventory_scope",
     }
     if set(condition) - allowed or not condition:
@@ -3894,6 +3896,46 @@ def _disclosure_applies(
             and isinstance(dimensions, list)
             and dimension in dimensions
         )
+    if "any_request_dimension_or_filter_present" in condition:
+        codes = condition["any_request_dimension_or_filter_present"]
+        if (
+            not isinstance(codes, list)
+            or not codes
+            or len(codes) > 12
+            or any(
+                not isinstance(code, str)
+                or re.fullmatch(r"[a-z][a-z0-9_]{0,79}", code) is None
+                for code in codes
+            )
+            or len(set(codes)) != len(codes)
+        ):
+            raise QueryFailure(
+                "CONTRACT_UNAVAILABLE",
+                "指标披露条件无效。",
+                stage="contract_load",
+            )
+        if not set(codes) <= known_dimension_codes:
+            raise QueryFailure(
+                "CONTRACT_UNAVAILABLE",
+                "指标披露条件引用了未注册维度。",
+                stage="contract_load",
+            )
+        dimensions = request.get("dimensions") or []
+        metric_filters = request.get("metric_filters") or {}
+        if not isinstance(dimensions, list) or not isinstance(
+            metric_filters, Mapping
+        ):
+            raise QueryFailure(
+                "CONTRACT_UNAVAILABLE",
+                "指标披露条件无效。",
+                stage="contract_load",
+            )
+        checks.append(
+            any(
+                code in dimensions or code in metric_filters
+                for code in codes
+            )
+        )
     if "inventory_scope" in condition:
         expected_scope = condition["inventory_scope"]
         checks.append(
@@ -3913,6 +3955,7 @@ def _disclosure_ledger(
     projection_fingerprint: str,
     data_state: str,
     truncated: bool,
+    known_dimension_codes: set[str],
     inherited_disclosures: Sequence[Mapping[str, Any]] = (),
     inventory_scope: str | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
@@ -3925,6 +3968,16 @@ def _disclosure_ledger(
         raise QueryFailure(
             "CONTRACT_UNAVAILABLE",
             "指标缺少显式披露分类。",
+            stage="contract_load",
+        )
+    if not isinstance(known_dimension_codes, set) or any(
+        not isinstance(code, str)
+        or re.fullmatch(r"[a-z][a-z0-9_]{0,79}", code) is None
+        for code in known_dimension_codes
+    ):
+        raise QueryFailure(
+            "CONTRACT_UNAVAILABLE",
+            "业务域维度注册表无效。",
             stage="contract_load",
         )
     declarations = [*inherited_disclosures, *metric_declarations]
@@ -3994,6 +4047,7 @@ def _disclosure_ledger(
             "applies": _disclosure_applies(
                 declaration,
                 request=request,
+                known_dimension_codes=known_dimension_codes,
                 inventory_scope=inventory_scope,
                 data_state=data_state,
                 truncated=truncated,
@@ -5922,6 +5976,17 @@ def _run_one(
                 "CONTRACT_UNAVAILABLE",
                 "指标合同不可用。",
             )
+        domain_dimensions = semantics.get("dimensions")
+        if not isinstance(domain_dimensions, Mapping) or any(
+            not isinstance(code, str)
+            or re.fullmatch(r"[a-z][a-z0-9_]{0,79}", code) is None
+            for code in domain_dimensions
+        ):
+            raise QueryFailure(
+                "CONTRACT_UNAVAILABLE",
+                "业务域维度注册表无效。",
+                stage="contract_load",
+            )
         scope_fingerprint, projection_fingerprint = _scope_fingerprints(
             request,
             scope,
@@ -5959,6 +6024,7 @@ def _run_one(
             data_state=data_state,
             truncated=truncated,
             inherited_disclosures=semantics.get("default_disclosures") or (),
+            known_dimension_codes=set(domain_dimensions),
             inventory_scope=scope.get("inventory_scope"),
         )
         reasoning_topics = (

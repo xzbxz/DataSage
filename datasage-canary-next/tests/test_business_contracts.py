@@ -644,19 +644,62 @@ class BusinessContractTests(unittest.TestCase):
             "查询范围：2026-07-01 至 2026-07-31",
             query_payload["answer_scope_line"],
         )
-        disclosures = {
-            item["disclosure_id"]: item
-            for item in result["disclosure_ledger"]
-        }
+        def disclosures_by_id(
+            query_result: dict[str, object],
+        ) -> dict[str, dict[str, object]]:
+            return {
+                item["disclosure_id"]: item
+                for item in query_result["disclosure_ledger"]
+            }
+
+        def assert_ledger_seals(query_result: dict[str, object]) -> None:
+            for disclosure in query_result["disclosure_ledger"]:
+                canonical = json.dumps(
+                    {
+                        key: value
+                        for key, value in disclosure.items()
+                        if key != "disclosure_seal"
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                ).encode("utf-8")
+                self.assertEqual(
+                    "sha256_" + hashlib.sha256(canonical).hexdigest(),
+                    disclosure["disclosure_seal"],
+                )
+            ledger_canonical = json.dumps(
+                {
+                    "contract_version": "metric-disclosure-ledger/v1",
+                    "request_id": query_result["request_id"],
+                    "metric_ref": query_result["business_metric_ref"],
+                    "scope_fingerprint": query_result["scope_fingerprint"],
+                    "projection_fingerprint": query_result["projection_fingerprint"],
+                    "ledger": query_result["disclosure_ledger"],
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+            self.assertEqual(
+                "sha256_" + hashlib.sha256(ledger_canonical).hexdigest(),
+                query_result["disclosure_ledger_seal"],
+            )
+
+        disclosures = disclosures_by_id(result)
         self.assertEqual(
-            {"receipt.domain.scope", "receipt.net.scope"},
+            {
+                "receipt.domain.scope",
+                "receipt.domain.usage-scope",
+                "receipt.net.scope",
+            },
             set(disclosures),
         )
         expected_disclosure_texts = {
-            "receipt.domain.scope": (
-                "收款及退款域指标均包含内部客户并排除A状态；"
-                "涉及用途时以本次实际筛选范围为准。"
-            ),
+            "receipt.domain.scope": "收款及退款域指标均包含内部客户并排除A状态。",
+            "receipt.domain.usage-scope": "用途以本次实际查询的用途分组或筛选范围为准。",
             "receipt.net.scope": (
                 "净收款为收款人民币金额减退款人民币金额；"
                 "收款和退款范围均包含内部客户并排除A状态。"
@@ -669,45 +712,169 @@ class BusinessContractTests(unittest.TestCase):
         domain_scope = disclosures["receipt.domain.scope"]["text"]
         self.assertIn("内部客户", domain_scope)
         self.assertIn("排除A状态", domain_scope)
-        self.assertIn("本次实际筛选范围", domain_scope)
+        self.assertNotIn("本次实际筛选范围", domain_scope)
+        self.assertIn(
+            "本次实际查询的用途分组或筛选范围",
+            disclosures["receipt.domain.usage-scope"]["text"],
+        )
+        self.assertEqual("required_always", disclosures["receipt.domain.scope"]["mode"])
+        self.assertEqual(
+            "required_when",
+            disclosures["receipt.domain.usage-scope"]["mode"],
+        )
         net_scope = disclosures["receipt.net.scope"]["text"]
         self.assertIn("收款人民币金额减退款人民币金额", net_scope)
         self.assertIn("内部客户", net_scope)
         self.assertIn("排除A状态", net_scope)
-        for disclosure in disclosures.values():
-            self.assertIs(disclosure["applies"], True)
-            canonical = json.dumps(
-                {
-                    key: value
-                    for key, value in disclosure.items()
-                    if key != "disclosure_seal"
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-                default=str,
-            ).encode("utf-8")
-            self.assertEqual(
-                "sha256_" + hashlib.sha256(canonical).hexdigest(),
-                disclosure["disclosure_seal"],
-            )
-        ledger_canonical = json.dumps(
-            {
-                "contract_version": "metric-disclosure-ledger/v1",
-                "request_id": result["request_id"],
-                "metric_ref": result["business_metric_ref"],
-                "scope_fingerprint": result["scope_fingerprint"],
-                "projection_fingerprint": result["projection_fingerprint"],
-                "ledger": result["disclosure_ledger"],
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        ).encode("utf-8")
         self.assertEqual(
-            "sha256_" + hashlib.sha256(ledger_canonical).hexdigest(),
-            result["disclosure_ledger_seal"],
+            {
+                "receipt.domain.scope": True,
+                "receipt.domain.usage-scope": False,
+                "receipt.net.scope": True,
+            },
+            {key: item["applies"] for key, item in disclosures.items()},
+        )
+        assert_ledger_seals(result)
+
+        def run_receipt_case(
+            request: dict[str, object],
+        ) -> dict[str, dict[str, object]]:
+            with mock.patch.object(
+                tools,
+                "_execute_with_source",
+                side_effect=execute_query,
+            ):
+                payload = json.loads(tools.datasage_query({"requests": [request]}))
+            self.assertEqual("success", payload["status"])
+            query_result = payload["results"][0]
+            assert_ledger_seals(query_result)
+            return disclosures_by_id(query_result)
+
+        base_receipt_request = {
+            "domain": "receipt",
+            "mode": "metric",
+            "purpose": "synthetic disclosure condition test",
+            "calendar_month": "2026-07",
+        }
+        for request in (
+            {
+                **base_receipt_request,
+                "request_id": "receipt_usage_group",
+                "metric": "receipt_amount",
+                "dimensions": ["receipt_usage"],
+            },
+            {
+                **base_receipt_request,
+                "request_id": "receipt_usage_filter",
+                "metric": "receipt_amount",
+                "dimensions": [],
+                "metric_filters": {"receipt_usage": "synthetic_usage"},
+            },
+            {
+                **base_receipt_request,
+                "request_id": "refund_usage_filter",
+                "metric": "refund_amount",
+                "dimensions": [],
+                "metric_filters": {"refund_usage": "synthetic_usage"},
+            },
+        ):
+            case_disclosures = run_receipt_case(request)
+            self.assertIs(case_disclosures["receipt.domain.scope"]["applies"], True)
+            self.assertIs(
+                case_disclosures["receipt.domain.usage-scope"]["applies"],
+                True,
+            )
+            self.assertNotIn("receipt.receipt.scope", case_disclosures)
+
+        unrelated_disclosures = run_receipt_case(
+            {
+                **base_receipt_request,
+                "request_id": "receipt_unrelated_filter",
+                "metric": "receipt_amount",
+                "dimensions": [],
+                "metric_filters": {"currency": "CNY"},
+            }
+        )
+        self.assertIs(
+            unrelated_disclosures["receipt.domain.usage-scope"]["applies"],
+            False,
+        )
+
+        invalid_disclosure_conditions = (
+            {"unexpected_condition": True},
+            {"any_request_dimension_or_filter_present": []},
+            {
+                "any_request_dimension_or_filter_present": [
+                    "receipt_usage",
+                    "receipt_usage",
+                ]
+            },
+            {"any_request_dimension_or_filter_present": ["ReceiptUsage"]},
+            {"any_request_dimension_or_filter_present": [["receipt_usage"]]},
+            {"any_request_dimension_or_filter_present": ["receipt_usgae"]},
+        )
+        _, receipt_semantics = tools._contracts("receipt")
+        known_receipt_dimension_codes = set(receipt_semantics["dimensions"])
+        self.assertTrue(
+            {"receipt_usage", "refund_usage"} <= known_receipt_dimension_codes
+        )
+        for condition in invalid_disclosure_conditions:
+            with self.assertRaises(tools.QueryFailure):
+                tools._disclosure_applies(
+                    {"mode": "required_when", "when": condition},
+                    request={"dimensions": [], "metric_filters": {}},
+                    known_dimension_codes=known_receipt_dimension_codes,
+                    inventory_scope=None,
+                    data_state="complete",
+                    truncated=False,
+                )
+
+        invalid_registry_semantics = json.loads(
+            json.dumps(receipt_semantics, ensure_ascii=False)
+        )
+        invalid_usage_scope = next(
+            item
+            for item in invalid_registry_semantics["default_disclosures"]
+            if item["id"] == "receipt.domain.usage-scope"
+        )
+        invalid_usage_scope["when"] = {
+            "any_request_dimension_or_filter_present": ["receipt_usgae"]
+        }
+        receipt_datasets, _ = tools._contracts("receipt")
+        with self.assertRaises(tools.QueryFailure) as invalid_registry_error:
+            tools._disclosure_ledger(
+                request={
+                    "request_id": "invalid_usage_registry",
+                    "dimensions": [],
+                    "metric_filters": {},
+                },
+                metric_ref="net_receipt_amount",
+                metric_definition=receipt_semantics["metrics"]["net_receipt_amount"],
+                datasets=receipt_datasets,
+                scope_fingerprint="scope",
+                projection_fingerprint="projection",
+                data_state="complete",
+                truncated=False,
+                known_dimension_codes=known_receipt_dimension_codes,
+                inherited_disclosures=invalid_registry_semantics[
+                    "default_disclosures"
+                ],
+            )
+        self.assertEqual("CONTRACT_UNAVAILABLE", invalid_registry_error.exception.code)
+
+        receipt_contract = yaml.safe_load(
+            (
+                PROFILE_ROOT
+                / "plugins"
+                / "datasage-query"
+                / "contracts"
+                / "receipt-semantics.yaml"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual("datasage-mini-receipt-semantics/v9", receipt_contract["version"])
+        self.assertIn(
+            "本次实际查询的用途分组或筛选范围",
+            "\n".join(receipt_contract["answer_contract"]),
         )
 
         query_description = schemas.DATASAGE_QUERY["description"]
@@ -743,6 +910,7 @@ class BusinessContractTests(unittest.TestCase):
         self.assertIn("When `answer_scope_line` is non-empty", normalized_hook)
         self.assertIn("faithfully state its actual returned range", normalized_hook)
         self.assertIn("For every sealed `disclosure_ledger` item", normalized_hook)
+        self.assertIn("whose `applies` value is `true`", normalized_hook)
         self.assertIn("fully cover all of its independent business propositions", normalized_hook)
         self.assertIn("Natural rewording and lossless merging", normalized_hook)
         self.assertIn("inclusion, exclusion, definition, or conditional scope", normalized_hook)
