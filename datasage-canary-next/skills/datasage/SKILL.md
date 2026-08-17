@@ -206,6 +206,12 @@ Finalization:
 - A display-only unit conversion may use a fixed conversion factor only for one
   returned value; preserve meaning, state the new unit, and create no new metric
   or relationship.
+- For every ranked or Top-N result, read the returned `datasage_query`
+  `truncated` and `data_state` fields before finalizing. If `truncated: true`
+  OR `data_state: truncated`, explicitly disclose that only the requested Top
+  N is returned and that the source result was truncated; never imply a
+  complete ranking. When `truncated` is not `true` AND `data_state` is not
+  `truncated`, do not claim or imply that the result is truncated.
 
 Evidence is local; caveats can't fix claims. Preserve returned meaning/scope/grain,
 freshness, completeness, reconciliation, and typed states; keep zero/empty/

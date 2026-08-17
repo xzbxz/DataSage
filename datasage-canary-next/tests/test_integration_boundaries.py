@@ -158,10 +158,29 @@ class GitGovernedSkillTests(unittest.TestCase):
                         skill_prompt.load_main_skill(root)
 
     def test_wecom_hook_declares_git_authority_and_freezes_process_value(self):
-        hook = skill_prompt.build_wecom_skill_hook("governed")
+        main_skill = skill_prompt.load_main_skill(PROFILE_ROOT)
+        hook = skill_prompt.build_wecom_skill_hook(main_skill)
         result = hook(platform="wecom", is_first_turn=True)
-        self.assertIn('authority="git"', result["context"])
-        self.assertIn('immutable="process"', result["context"])
+        context = result["context"]
+        normalized = " ".join(context.split())
+
+        self.assertIn('authority="git"', context)
+        self.assertIn('immutable="process"', context)
+        self.assertIn(
+            "If `truncated: true` OR `data_state: truncated`",
+            normalized,
+        )
+        self.assertIn("only the requested Top N is returned", normalized)
+        self.assertIn("never imply a complete ranking", normalized)
+        self.assertIn(
+            "When `truncated` is not `true` AND `data_state` is not `truncated`",
+            normalized,
+        )
+        self.assertIn(
+            "do not claim or imply that the result is truncated",
+            normalized,
+        )
+        self.assertIsNone(hook(platform="cli", is_first_turn=True))
 
 
 class ProductionSafetyTests(unittest.TestCase):

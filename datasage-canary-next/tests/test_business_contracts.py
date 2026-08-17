@@ -59,13 +59,36 @@ class BusinessContractTests(unittest.TestCase):
         for content in (main_skill, companion):
             self.assertIn("Never guess a tool name or argument", content)
 
-    def test_top_n_truncation_guidance_depends_on_returned_state(self) -> None:
-        content = (
-            PROFILE_ROOT / "skills/datasage/datasage-query-patterns/SKILL.md"
-        ).read_text(encoding="utf-8")
-        self.assertIn("Read `truncated` and `data_state` exactly as returned", content)
-        self.assertIn("When\n   the result is not truncated", content)
-        self.assertNotIn('Expect `data_state: "truncated"`', content)
+    def test_main_skill_top_n_disclosure_depends_on_returned_state(self) -> None:
+        content = (PROFILE_ROOT / "skills/datasage/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        finalization = content.split("Finalization:", 1)[1].split(
+            "## Stop and failure behavior", 1
+        )[0]
+        top_n_rule = next(
+            paragraph
+            for paragraph in finalization.split("\n-")
+            if "ranked or Top-N result" in paragraph
+        )
+        normalized = " ".join(top_n_rule.split())
+
+        for required in (
+            "ranked or Top-N result",
+            "returned `datasage_query`",
+            "`truncated` and `data_state`",
+            "If `truncated: true` OR `data_state: truncated`",
+            "only the requested Top N is returned",
+            "source result was truncated",
+            "never imply a complete ranking",
+            "When `truncated` is not `true` AND `data_state` is not `truncated`",
+            "do not claim or imply that the result is truncated",
+        ):
+            self.assertIn(required, normalized)
+        self.assertNotIn(
+            "`truncated: true` AND `data_state: truncated`",
+            normalized,
+        )
 
     def test_domain_analysis_seeds_use_an_adaptive_soft_budget(self) -> None:
         for domain in ("receipt", "receivable", "inventory", "target"):
