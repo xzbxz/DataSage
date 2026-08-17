@@ -1,0 +1,484 @@
+version: datasage-mini-inventory-semantics/v7
+domain: inventory
+contract_role: plugin_physical_execution
+model_planner_contract: references/planner-contract.yaml
+business_name: 库存事实、未动销与周转分析
+triggers: [库存, 存货, 当前库存, 在仓, 可用库存, 已配库存, 在途库存, 月末库存, 库龄, 未动销, 备货, 滞销, 周转, 库存周转]
+tables: [vk_dw.inventory_barcode_detail_dw, vk_dwd.inventory_cost_dwd, vk_dw.goods_turnover_basic_data_dw, vk_dwd.goods_detail_dwd, vk_dwd.whse_info_dwd]
+
+defaults:
+  currency: RMB
+  current_inventory_source: current_barcode_snapshot
+  current_inventory_scope: total
+  current_on_hand_scope: on_hand
+  historical_inventory_source: month_end_cost_snapshot
+  recent_history: latest_6_available_snapshot_months
+  turnover_period: latest_12_complete_accounting_months
+  turnover_primary_output: cost_turnover_days
+  turnover_guidance_output: ddp_turnover_days
+  ranking_limit: 10
+  ready_goods_scope: [备货, 试备货]
+  slow_moving_threshold: null
+  turnover_formula:
+    common: average_inventory_amount * period_natural_days / period_net_delivery_rmb
+    cost: average_cost_amount_rmb * period_natural_days / period_net_delivery_rmb
+    ddp: average_ddp_amount_rmb * period_natural_days / period_net_delivery_rmb
+    average_inventory: trapezoid_with_opening_and_ending_half_weight
+
+dimension_sources:
+  product_master: &product_master {type: governed_join, dataset: vk_dwd.goods_detail_dwd, local_column: goods_id, remote_column: goods_id, cardinality: many_to_one}
+  warehouse_master: &warehouse_master {type: governed_join, dataset: vk_dwd.whse_info_dwd, local_column: whse_id, remote_column: whse_id, cardinality: many_to_one}
+
+dimension_sets:
+  current: &current_dimensions [warehouse, warehouse_department, warehouse_organization, warehouse_region, warehouse_type, warehouse_category, warehouse_missing, warehouse_defective, warehouse_ccbs, product, color, batch, unit, currency, ready_goods, ready_type, product_category, product_region, product_print, product_ht, product_made_to_order, product_supplier]
+  month_end: &month_end_dimensions [warehouse, warehouse_department, warehouse_organization, warehouse_region, warehouse_type, accounting_organization, product, color, batch, unit, currency, ready_goods, ready_type, product_category, product_region, product_print, product_ht, product_made_to_order, product_supplier]
+  turnover: &turnover_dimensions [department, organization, product, ready_goods, ready_type, ccbs_customer]
+
+current_inventory_scope_filters: &current_inventory_scopes
+  total: {status: {op: in, value: [1, 2, 3]}}
+  on_hand: {status: {op: in, value: [1, 2]}}
+  available: {status: {op: eq, value: 1}, is_missing: {op: eq, value: n}, is_defective_whse: {op: eq, value: n}}
+  allocated: {status: {op: eq, value: 2}}
+  in_transit: {status: {op: eq, value: 3}}
+
+value_contract_templates:
+  entity_exact: &vc_entity_exact
+    kind: entity_exact
+    model_rule: 保留用户明确提供的精确实体 token；由工具做实体预检和稳定身份绑定，不得猜测。
+  source_exact: &vc_source_exact
+    kind: source_exact
+    model_rule: 仅使用用户明确提供或受控结果返回的精确原值；不得猜测、翻译、归一化或扩展。
+  boolean_yn: &vc_boolean_yn
+    kind: closed
+    allowed_values: [y, n]
+    business_meanings: {y: 是, n: 否}
+  ready_type: &vc_ready_type
+    kind: closed
+    allowed_values: [备货, 试备货]
+    business_meanings: {备货: 备货, 试备货: 试备货}
+  inventory_unit: &vc_inventory_unit
+    kind: closed
+    allowed_values: [m, y, kg, Pcs]
+    canonical_aliases: {M: m}
+    business_meanings: {m: 米, y: 码, kg: 千克, Pcs: 件}
+
+currency_policy_templates:
+  original_currency: &original_currency_policy
+    mode: original_currency
+    column: currency_no
+    require_filter_or_group: true
+    never_sum_mixed_currency: true
+
+dimensions:
+  warehouse: {label: 仓库, columns: [whse_id, whse_name], filter_column: whse_name, identity_filter: {entity_type: warehouse, value_field: canonical_id, column: whse_id}, value_contract: *vc_entity_exact}
+  warehouse_department: {label: 仓库部门, columns: [whse_dept], filter_column: whse_dept, value_contract: *vc_source_exact}
+  warehouse_organization: {label: 仓库组织, columns: [whse_org], filter_column: whse_org, value_contract: *vc_source_exact, answer_note: 仓库组织使用 whse_org，表示实物库存归属。}
+  warehouse_region: {label: 仓库区域, columns: [whse_region], filter_column: whse_region, value_contract: *vc_source_exact}
+  warehouse_type: {label: 仓库类型, columns: [whse_type], filter_column: whse_type, value_contract: *vc_source_exact}
+  warehouse_category: {label: 仓库类别, source: *warehouse_master, columns: [{column: whse_category, alias: warehouse_category}], filter_column: whse_category, value_contract: *vc_source_exact, answer_note: 仓库类别来自当前仓库主数据。}
+  warehouse_missing: {label: 盘亏仓, source: *warehouse_master, columns: [{column: is_missing, alias: warehouse_is_missing}], filter_column: is_missing, value_contract: *vc_boolean_yn, answer_note: 缺失仓标识来自当前仓库主数据。}
+  warehouse_defective: {label: 次品仓, source: *warehouse_master, columns: [{column: is_defective, alias: warehouse_is_defective}], filter_column: is_defective, value_contract: *vc_boolean_yn, answer_note: 次品仓标识来自当前仓库主数据。}
+  warehouse_ccbs: {label: CCBS仓, source: *warehouse_master, columns: [{column: is_ccbs, alias: warehouse_is_ccbs}], filter_column: is_ccbs, value_contract: *vc_boolean_yn, answer_note: CCBS 仓标识来自当前仓库主数据。}
+  accounting_organization: {label: 核算组织, columns: [{column: org_id, alias: accounting_org_id}, {column: org_name, alias: accounting_org_name}], filter_column: org_name, value_contract: *vc_source_exact, answer_note: 核算组织仅用于月末成本快照，不等同于仓库组织。}
+  department: {label: 客户部门, columns: [dept_name], filter_column: dept_name, value_contract: *vc_source_exact}
+  organization: {label: 业务组织, columns: [org_name], filter_column: org_name, value_contract: *vc_source_exact}
+  product: {label: 产品, columns: [goods_id, goods_name], filter_column: goods_name, identity_filter: {entity_type: product, value_field: canonical_id, column: goods_id}, value_contract: *vc_entity_exact}
+  color: {label: 色号, columns: [attr_val, color_label], filter_column: attr_val, value_contract: *vc_source_exact}
+  batch: {label: 批次, columns: [batch_no], filter_column: batch_no, value_contract: *vc_source_exact}
+  unit: {label: 单位, columns: [unit], filter_column: unit, value_contract: *vc_inventory_unit, normalization: meter_case, answer_note: 仅合同声明的 M 别名归一为 m；y、kg、Pcs 与 m 不换算，其他拼写不猜测。}
+  currency: {label: 币种, columns: [currency_no], filter_column: currency_no, value_contract: *vc_source_exact}
+  ready_goods: {label: 备货产品, columns: [is_ready], filter_column: is_ready, value_contract: *vc_boolean_yn, answer_note: is_ready=y 默认包含备货与试备货；精确类型使用 ready_type。}
+  ready_type: {label: 备货类型, columns: [ready_type], filter_column: ready_type, value_contract: *vc_ready_type}
+  ccbs_customer: {label: CCBS客户, columns: [is_ccbs_cus], filter_column: is_ccbs_cus, value_contract: *vc_boolean_yn}
+  product_category: {label: 当前产品分类, source: *product_master, columns: [{column: category_name, alias: product_category}], filter_column: category_name, value_contract: *vc_source_exact, answer_note: 产品分类来自当前产品主数据，不是历史快照。}
+  product_region: {label: 当前产品区域, source: *product_master, columns: [{column: goods_region, alias: product_region}], filter_column: goods_region, value_contract: *vc_source_exact, answer_note: 产品区域来自当前产品主数据，不是历史快照。}
+  product_print: {label: 当前印花产品, source: *product_master, columns: [{column: is_print, alias: product_is_print}], filter_column: is_print, value_contract: *vc_boolean_yn, answer_note: 印花属性来自当前产品主数据。}
+  product_ht: {label: 当前HT产品, source: *product_master, columns: [{column: is_ht, alias: product_is_ht}], filter_column: is_ht, value_contract: *vc_boolean_yn, answer_note: HT 属性来自当前产品主数据。}
+  product_made_to_order: {label: 当前需定做产品, source: *product_master, columns: [{column: is_customized, alias: product_is_made_to_order}], filter_column: is_customized, value_contract: *vc_boolean_yn, answer_note: 这里表示当前产品是否需要定做，不是订单定制属性。}
+  product_supplier: {label: 当前产品供应商, source: *product_master, columns: [supplier_id, supplier_no, supplier_name], filter_column: supplier_name, identity_filter: {entity_type: supplier, value_field: canonical_id, column: supplier_id}, value_contract: *vc_entity_exact, answer_note: 供应商来自当前产品主数据。}
+
+current_inventory_scope_disclosures:
+  total: &inventory_current_scope_total
+    id: inventory.current-scope.total
+    mode: required_when
+    when: {inventory_scope: total}
+    text: "总库存范围包含未分配、已分配和在途状态。"
+  on_hand: &inventory_current_scope_on_hand
+    id: inventory.current-scope.on-hand
+    mode: required_when
+    when: {inventory_scope: on_hand}
+    text: "在仓库存范围包含未分配和已分配状态，不包含在途。"
+  available: &inventory_current_scope_available
+    id: inventory.current-scope.available
+    mode: required_when
+    when: {inventory_scope: available}
+    text: "可用库存范围仅包含未分配，并排除缺失仓和次品仓；不默认排除CCBS仓。"
+  allocated: &inventory_current_scope_allocated
+    id: inventory.current-scope.allocated
+    mode: required_when
+    when: {inventory_scope: allocated}
+    text: "已配库存范围仅包含已分配状态。"
+  in_transit: &inventory_current_scope_in_transit
+    id: inventory.current-scope.in-transit
+    mode: required_when
+    when: {inventory_scope: in_transit}
+    text: "在途库存范围仅包含在途状态。"
+
+metrics:
+  current_inventory_quantity:
+    disclosures:
+      - *inventory_current_scope_total
+      - *inventory_current_scope_on_hand
+      - *inventory_current_scope_available
+      - *inventory_current_scope_allocated
+      - *inventory_current_scope_in_transit
+    label: 当前库存数量
+    business_definition: 当前库存快照所选范围的业务数量，须按单位分组或筛选。
+    unit_policy:
+      mode: group_or_filter
+      business_rule: 按计量单位分别返回；仅合同声明的 M 归一为 m，不在不同单位之间换算或相加
+    table: vk_dw.inventory_barcode_detail_dw
+    aggregation: sum
+    measure: goods_num
+    completeness_measure: goods_num
+    time_field: null
+    time_policy: current_snapshot
+    default_inventory_scope: total
+    inventory_scope_filters: *current_inventory_scopes
+    required_filters: {}
+    allowed_dimensions: *current_dimensions
+  current_inventory_roll_count:
+    disclosures:
+      - *inventory_current_scope_total
+      - *inventory_current_scope_on_hand
+      - *inventory_current_scope_available
+      - *inventory_current_scope_allocated
+      - *inventory_current_scope_in_transit
+    label: 当前库存卷/匹数
+    business_definition: 当前库存快照所选范围的卷或匹数，与业务数量分开计量。
+    unit: 卷/匹
+    table: vk_dw.inventory_barcode_detail_dw
+    aggregation: sum
+    measure: piece_num
+    completeness_measure: piece_num
+    time_field: null
+    time_policy: current_snapshot
+    default_inventory_scope: total
+    inventory_scope_filters: *current_inventory_scopes
+    required_filters: {}
+    allowed_dimensions: *current_dimensions
+  current_inventory_amount_rmb:
+    disclosures:
+      - *inventory_current_scope_total
+      - *inventory_current_scope_on_hand
+      - *inventory_current_scope_available
+      - *inventory_current_scope_allocated
+      - *inventory_current_scope_in_transit
+      - id: inventory.current-value.valuation-boundary
+        mode: required_always
+        text: "当前金额是条码快照的人民币DDP估值，不等同于月末正式核算成本；缺失金额需结合覆盖率解释。"
+      - id: inventory.current_inventory_amount_rmb.legacy-note
+        mode: contract_only
+        text: "当前金额是条码快照的人民币 DDP 估值；缺失金额按已知小计和覆盖率披露，不等同于月末正式核算成本。"
+    label: 当前库存人民币 DDP 估值
+    business_definition: 当前库存快照所选范围的人民币 DDP 估值；覆盖不完整时仅表示已知小计。
+    unit: 人民币元
+    table: vk_dw.inventory_barcode_detail_dw
+    aggregation: sum
+    measure: ddp_amount_rmb
+    completeness_measure: ddp_amount_rmb
+    time_field: null
+    time_policy: current_snapshot
+    default_inventory_scope: total
+    inventory_scope_filters: *current_inventory_scopes
+    required_filters: {}
+    allowed_dimensions: *current_dimensions
+    answer_note: 当前金额是条码快照的人民币 DDP 估值；缺失金额按已知小计和覆盖率披露，不等同于月末正式核算成本。
+  current_inventory_amount_original:
+    disclosures:
+      - *inventory_current_scope_total
+      - *inventory_current_scope_on_hand
+      - *inventory_current_scope_available
+      - *inventory_current_scope_allocated
+      - *inventory_current_scope_in_transit
+      - id: currency.original.no-cross-currency
+        mode: required_always
+        text: "原币金额必须限定单一币种或按币种分组，不同币种不得直接相加。"
+      - id: inventory.current-original.valuation-boundary
+        mode: required_always
+        text: "当前原币金额是条码快照的DDP估值，不等同于月末正式核算成本；缺失金额需结合覆盖率解释。"
+      - id: inventory.current_inventory_amount_original.legacy-note
+        mode: contract_only
+        text: "原币 DDP 估值必须按币种分组或限定单一币种，币种缺失记录单独体现为不完整。"
+    label: 当前库存原币 DDP 估值
+    business_definition: 当前库存快照所选范围的原币 DDP 估值；必须按币种筛选或分组，不得跨币种相加。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dw.inventory_barcode_detail_dw
+    aggregation: sum
+    measure: ddp_amount
+    completeness_measure: ddp_amount
+    currency_policy: *original_currency_policy
+    time_field: null
+    time_policy: current_snapshot
+    default_inventory_scope: total
+    inventory_scope_filters: *current_inventory_scopes
+    required_filters: {}
+    allowed_dimensions: *current_dimensions
+    answer_note: 原币 DDP 估值必须按币种分组或限定单一币种，币种缺失记录单独体现为不完整。
+  current_warehouse_age_days:
+    disclosures:
+      - *inventory_current_scope_total
+      - *inventory_current_scope_on_hand
+      - *inventory_current_scope_available
+      - *inventory_current_scope_allocated
+      - *inventory_current_scope_in_transit
+      - id: inventory.current_warehouse_age_days.legacy-note
+        mode: contract_only
+        text: "该指标基于当前在仓记录的最早入仓时间，不等同于月末未动销天数。"
+    label: 当前在仓最早入仓距今天数
+    business_definition: 当前在仓范围内，最早有效入仓日期距今天的自然日数。
+    unit: 自然日
+    table: vk_dw.inventory_barcode_detail_dw
+    aggregation: days_since_min
+    measure: come_whse_time
+    completeness_measure: come_whse_time
+    time_field: null
+    time_policy: current_snapshot
+    default_inventory_scope: on_hand
+    inventory_scope_filters: *current_inventory_scopes
+    required_filters: {}
+    allowed_dimensions: *current_dimensions
+    answer_note: 该指标基于当前在仓记录的最早入仓时间，不等同于月末未动销天数。
+
+  month_end_inventory_quantity:
+    disclosures: []
+    label: 月末库存数量
+    business_definition: 指定或最近月末核算快照的业务数量，须按单位分组或筛选。
+    unit_policy:
+      mode: group_or_filter
+      business_rule: 按计量单位分别返回；仅合同声明的 M 归一为 m，不在不同单位之间换算或相加
+    table: vk_dwd.inventory_cost_dwd
+    aggregation: sum
+    measure: goods_num
+    completeness_measure: goods_num
+    time_field: bill_date
+    time_policy: latest_snapshot
+    time_granularity: month
+    required_filters: {}
+    allowed_dimensions: *month_end_dimensions
+  month_end_inventory_roll_count:
+    disclosures:
+      - id: inventory.month-end-roll-count.signed-values
+        mode: required_always
+        text: "月末核算卷或匹数保留正负值，不取绝对值、不截断；该指标不属于默认库存概览。"
+      - id: inventory.month_end_inventory_roll_count.legacy-note
+        mode: contract_only
+        text: "保留月末核算中的正负卷/匹数，不取绝对值、不截断；默认概览不展示该指标。"
+    label: 月末核算卷/匹数
+    business_definition: 指定或最近月末核算快照的卷或匹数，保留正负值。
+    unit: 卷/匹
+    table: vk_dwd.inventory_cost_dwd
+    aggregation: sum
+    measure: piece_num
+    completeness_measure: piece_num
+    time_field: bill_date
+    time_policy: latest_snapshot
+    time_granularity: month
+    required_filters: {}
+    allowed_dimensions: *month_end_dimensions
+    answer_note: 保留月末核算中的正负卷/匹数，不取绝对值、不截断；默认概览不展示该指标。
+  month_end_inventory_cost_rmb:
+    disclosures:
+      - id: inventory.month-end-cost.accounting-basis
+        mode: required_always
+        text: "月末库存金额采用人民币正式核算成本，不与当前库存的DDP估值直接作差。"
+      - id: inventory.month_end_inventory_cost_rmb.legacy-note
+        mode: contract_only
+        text: "月末金额使用人民币核算成本，不与当前条码快照的 DDP 估值直接作差。"
+    label: 月末库存人民币核算成本
+    business_definition: 指定或最近月末核算快照的人民币正式核算成本。
+    unit: 人民币元
+    table: vk_dwd.inventory_cost_dwd
+    aggregation: sum
+    measure: cost_amount_rmb
+    completeness_measure: cost_amount_rmb
+    time_field: bill_date
+    time_policy: latest_snapshot
+    time_granularity: month
+    required_filters: {}
+    allowed_dimensions: *month_end_dimensions
+    answer_note: 月末金额使用人民币核算成本，不与当前条码快照的 DDP 估值直接作差。
+  month_end_inventory_cost_original:
+    disclosures: []
+    label: 月末库存原币核算成本
+    business_definition: 指定或最近月末核算快照的原币正式核算成本；必须按币种筛选或分组，不得跨币种相加。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.inventory_cost_dwd
+    aggregation: sum
+    measure: cost_amount
+    completeness_measure: cost_amount
+    currency_policy: *original_currency_policy
+    time_field: bill_date
+    time_policy: latest_snapshot
+    time_granularity: month
+    required_filters: {}
+    allowed_dimensions: *month_end_dimensions
+  month_end_inventory_ddp_rmb:
+    disclosures: []
+    label: 月末库存人民币 DDP 估值
+    business_definition: 指定或最近月末核算快照的人民币 DDP 估值。
+    unit: 人民币元
+    table: vk_dwd.inventory_cost_dwd
+    aggregation: sum
+    measure: ddp_amount_rmb
+    completeness_measure: ddp_amount_rmb
+    time_field: bill_date
+    time_policy: latest_snapshot
+    time_granularity: month
+    required_filters: {}
+    allowed_dimensions: *month_end_dimensions
+  month_end_inventory_ddp_original:
+    disclosures: []
+    label: 月末库存原币 DDP 估值
+    business_definition: 指定或最近月末核算快照的原币 DDP 估值；必须按币种筛选或分组，不得跨币种相加。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.inventory_cost_dwd
+    aggregation: sum
+    measure: ddp_amount
+    completeness_measure: ddp_amount
+    currency_policy: *original_currency_policy
+    time_field: bill_date
+    time_policy: latest_snapshot
+    time_granularity: month
+    required_filters: {}
+    allowed_dimensions: *month_end_dimensions
+  oldest_inventory_days:
+    disclosures:
+      - id: inventory.oldest-days.business-meaning
+        mode: required_always
+        text: "该指标表示月末最长未动销或未成交天数，不是严格物理库龄；未指定月份时取最近有效月末，显式指定月份无值时不自动替换。"
+      - id: inventory.oldest_inventory_days.legacy-note
+        mode: contract_only
+        text: "这是月末未动销/未成交天数，不是严格物理库龄；默认取最近存在有效值的快照并披露月份，显式指定无值月份时不自动替换。"
+    label: 月末最长未动销/未成交天数
+    business_definition: 指定月末最长未动销或未成交自然日数；未指定月份时取最近有效月末。
+    unit: 自然日
+    table: vk_dwd.inventory_cost_dwd
+    aggregation: max
+    measure: unclosed_days
+    completeness_measure: unclosed_days
+    time_field: bill_date
+    time_policy: latest_non_null_snapshot
+    snapshot_required_non_null: unclosed_days
+    time_granularity: month
+    required_filters: {}
+    allowed_dimensions: *month_end_dimensions
+    answer_note: 这是月末未动销/未成交天数，不是严格物理库龄；默认取最近存在有效值的快照并披露月份，显式指定无值月份时不自动替换。
+
+  turnover_net_delivery_rmb:
+    disclosures:
+      - id: inventory.turnover-net-delivery.denominator-scope
+        mode: required_always
+        text: "该指标采用与周转库存一致的核算口径，用作正式库存周转天数分母；通用净出库仍以出库域口径为准。"
+      - id: inventory.turnover_net_delivery_rmb.legacy-note
+        mode: contract_only
+        text: "该指标是周转表口径的净出库人民币金额，用作正式周转天数分母；通用净出库仍以出库域明细事实为准。"
+    label: 周转表净出库人民币金额
+    business_definition: 周转核算期间内，与周转库存范围一致的净出库人民币金额。
+    unit: 人民币元
+    table: vk_dw.goods_turnover_basic_data_dw
+    aggregation: sum
+    measure: pur_delivery_rmb
+    time_field: bill_date
+    time_policy: latest_snapshot
+    time_granularity: month
+    required_filters: {}
+    allowed_dimensions: *turnover_dimensions
+    answer_note: 该指标是周转表口径的净出库人民币金额，用作正式周转天数分母；通用净出库仍以出库域明细事实为准。
+  inventory_turnover_days:
+    disclosures:
+      - id: inventory.turnover-days.calculation-and-coverage
+        mode: required_always
+        text: "库存周转天数以成本口径为主并同时返回DDP指导口径，采用期初期末半权重的平均库存和期间自然天数；净出库或平均库存不大于零、或月末快照不连续时，对应结果未定义。"
+      - id: inventory.inventory_turnover_days.legacy-note
+        mode: contract_only
+        text: "默认主结果为成本口径周转天数，同时返回 DDP 指导口径；使用期初期末半权重的梯形平均库存和期间自然天数。净出库不大于零、平均库存不大于零或全局月快照不连续时，对应结果不可定义。"
+    label: 库存周转天数（成本主口径与 DDP 指导口径）
+    business_definition: 完整核算期间的库存周转速度，同时返回成本主口径与 DDP 指导口径；关键证据不可用时未定义。
+    unit_policy: 成本主口径周转天数与 DDP 指导口径周转天数均为自然日
+    query_kind: inventory_turnover_days
+    max_group_dimensions: 2
+    table: vk_dw.goods_turnover_basic_data_dw
+    time_field: bill_date
+    time_policy: latest_complete_accounting_months
+    default_complete_months: 12
+    cost_measure: cost_amount_rmb
+    ddp_measure: ddp_amount_rmb
+    net_delivery_measure: pur_delivery_rmb
+    required_filters: {}
+    allowed_dimensions: *turnover_dimensions
+    answer_note: 默认主结果为成本口径周转天数，同时返回 DDP 指导口径；使用期初期末半权重的梯形平均库存和期间自然天数。净出库不大于零、平均库存不大于零或全局月快照不连续时，对应结果不可定义。
+
+analysis_recipes_status:
+  status: reference_only_not_runtime_or_model_authority
+  authoritative_source: planner_contract
+  rule: 本块仅保留发布维护比对；运行时不读取，合同服务不投影，不能作为固定配方或指标授权来源。
+
+analysis_recipes:
+  current_inventory_overview:
+    requests:
+      - {metric: current_inventory_quantity, dimensions: [unit]}
+      - {metric: current_inventory_roll_count, dimensions: []}
+      - {metric: current_inventory_amount_rmb, dimensions: []}
+    default_scope: total
+  current_on_hand_overview:
+    requests:
+      - {metric: current_inventory_quantity, dimensions: [unit], inventory_scope: on_hand}
+      - {metric: current_inventory_roll_count, dimensions: [], inventory_scope: on_hand}
+      - {metric: current_inventory_amount_rmb, dimensions: [], inventory_scope: on_hand}
+  current_inventory_ranking:
+    metric: choose_from_current_inventory_metrics
+    dimensions: [product, warehouse, warehouse_department, warehouse_organization, ready_goods, ready_type]
+    default_limit: 10
+  month_end_inventory_overview:
+    requests:
+      - {metric: month_end_inventory_quantity, dimensions: [unit]}
+      - {metric: month_end_inventory_cost_rmb, dimensions: []}
+    time: latest_snapshot
+  month_end_trend:
+    metrics: [month_end_inventory_quantity, month_end_inventory_cost_rmb]
+    time_bucket: month
+    default_period: latest_6_available_snapshot_months
+  change_observations:
+    label: partial_observations_only
+    metric: choose_from_month_end_inventory_metrics
+    dimensions: [product, warehouse, warehouse_department, warehouse_organization, ready_goods]
+    comparison: {kind: previous_period}
+    default_limit: 10
+    interpretation: 排名和分组差异只是未完全分解的结构 observations；不得称为驱动、贡献或原因，未展示分组也不代表没有变化。
+  explain_change:
+    first: change_observations
+    causal_status: unavailable_without_independent_evidence
+    output: 只报告已验证的产品、仓库或组织结构观察；原因必须有独立证据，否则明确为当前数据无法验证。
+  inventory_age_evidence:
+    requests: [current_warehouse_age_days, oldest_inventory_days]
+    limitation: 两项分别表示当前在仓入仓时间证据和月末未动销证据，不得互相替代。
+  turnover_days:
+    metric: inventory_turnover_days
+    default_period: latest_12_complete_accounting_months
+    outputs: [cost_turnover_days, ddp_turnover_days]
+  slow_moving_evidence:
+    steps: [show_month_end_inventory, show_unclosed_days, show_turnover_days_and_states]
+    limitation: 不发明滞销阈值，不自动输出补货、清仓或责任判断。
+
+analysis_boundaries:
+  - 当前库存快照、月末核算快照和周转月汇总是不同粒度，不得直接逐行连接。
+  - 当前总库存默认含未配、已配和在途；当前在仓只含未配和已配；可用库存只含未配并排除缺失仓和次品仓。CCBS 仓不默认排除。
+  - 数量必须按单位分组或过滤；仅 M/m 归一为 m，不换算 y、kg、Pcs 与 m。
+  - 当前 DDP 金额和月末核算成本不得静默混用；原币金额不得跨币种汇总。
+  - 月末表的 id 是物理唯一键；月+仓库+产品+色号+批次不是唯一键，合法的币种、核算组织、单位和成本层必须保留求和。
+  - whse_org 是仓库组织，org_name 是核算组织；回答必须按所选维度明确区分。
+  - 月末负卷/匹数是可能合法的核算数据，不取绝对值、不截断。
+  - 周转天数按 N 个经营月读取 N+1 个连续月末快照；期初和期末半权重，分母不含期初月净出库。
+  - 全局月份缺失时周转不可用；已存在全局月份内某对象无记录可按零补齐；有库存无出库的对象不能被删除。
+  - 高库存、低净出库、长未动销或长周转只是证据，不自动生成补货、清仓或责任判断。

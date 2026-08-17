@@ -1,0 +1,26 @@
+name: datasage-query
+version: "0.12.0-dev35"
+description: "Read-only governed metric catalog, bounded expert references, deterministic entity resolution, and guarded MySQL evidence queries for Hermes."
+author: "datasage"
+provides_tools:
+  - datasage_catalog
+  - datasage_entity_resolve
+  - datasage_reference
+  - datasage_query
+requires_env:
+  - name: DATA_QUERY_MYSQL_HOST
+    description: "MySQL RDS host."
+  - name: DATA_QUERY_MYSQL_PORT
+    description: "MySQL RDS port."
+    required: false
+    default: "3306"
+  - name: DATA_QUERY_MYSQL_DATABASE
+    description: "Default MySQL database."
+  - name: DATA_QUERY_MYSQL_USER
+    description: "MySQL account. Account origin is unrestricted; live grants must pass the SELECT-only object-scope policy."
+  - name: DATA_QUERY_MYSQL_PASSWORD
+    description: "MySQL password."
+    secret: true
+  - name: DATA_QUERY_MYSQL_SSL_CA
+    description: "Optional CA certificate path; required in production mode."
+    required: false

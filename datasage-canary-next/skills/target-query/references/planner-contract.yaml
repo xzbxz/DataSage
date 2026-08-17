@@ -1,0 +1,98 @@
+version: datasage-mini-target-planner/v7
+domain: target
+audience: agent_planner
+purpose: 将出库或收款目标、净实际、缺口、完成率和分摊业绩映射为受控指标；不包含拆分表或物理实现。
+
+dimension_policy:
+  filter_only: never_add_output_dimension
+  output_dimension_triggers: [explicit_grouping, explicit_ranking, explicit_comparison, explicit_breakdown, metric_required_grain]
+  overall_with_filters: dimensions_empty
+
+defaults:
+  time: current_natural_month
+  currency: rmb
+  internal_customer:
+    delivery_target_and_actual: exclude
+    receipt_target_and_actual: include
+  ranking_limit: 10
+  zero_target_completion_rate: null
+  attribution_mode_required: true
+  max_business_dimensions: 5
+  name_alignment: exact
+  current_month_progress: full_month_target_vs_actual_to_date
+  ambiguous_target_type: return_delivery_and_receipt_together
+  trend_without_time: latest_6_natural_months_including_current
+  mixed_past_current_future: monthly_breakdown_required
+  missing_target_display: 未设置目标
+
+attribution_modes:
+  transaction_detail:
+    use_for: [普通总体目标, 客户目标, 部门目标, 组织目标]
+  salesperson_allocation:
+    use_for: [业务员目标, 协作, 分摊, 分摊业绩]
+    invariant: 一旦问题明确分摊账，即使按部门、组织或总体汇总也不切回交易事实账。
+
+catalog_status:
+  status: test_time_consistency_assertion_only
+  authoritative_source: execution_semantics
+  model_visibility: false
+  rule: 以下手写目录仅供发布期验证 code 仍存在；合同服务不得投影，模型指标和维度目录必须由 execution semantics 生成。
+
+metric_catalog:
+  target_only_transaction: [delivery_target_amount, receipt_target_amount]
+  target_only_allocated: [delivery_allocated_target_amount, receipt_allocated_target_amount]
+  allocated_actual_only: [allocated_net_delivery_amount, allocated_net_receipt_amount]
+  completion: [delivery_target_completion, receipt_target_completion]
+
+dimension_catalog: [salesperson, department, organization, customer]
+
+planning_rules:
+  - 用户只问“目标完成怎么样”而未说明出库或收款时，同时返回出库与收款目标完成，不猜测其中一个；两个请求分别使用 transaction_detail 总体账。
+  - 完成率、实际和缺口直接使用 completion 指标一次返回，模型不分别查后拼接、相减或相除。
+  - 业务维度仅受工具 schema 上限、指标 allowed_dimensions 与显式用户请求约束；当前与执行一致最多五个，不再设置模型侧两维补丁式上限。趋势通过 time_bucket=month 表达，月份不占业务维度。
+  - 目标缺失、目标真实为零和目标金额含空值必须读取工具返回的 target_data_state 分别表达，不得互相替代。
+  - 目标为零时完成率为 null；有实际但没有目标时不称为超额完成；有目标但没有实际时实际为零、完成率为零。
+  - 本月按完整月目标对比截至当前的累计实际，不按日折算目标，不计算理论进度。
+  - 未来期间只展示目标，实际、缺口和完成率均为不可用，并说明尚未开始。
+  - 查询范围同时包含已发生期间和未来月份时必须使用 time_bucket=month，逐月保留历史/当前实际并对未来月份仅展示目标；不得把整段实际隐藏。
+  - 用户只说“目标趋势”而未给时间时，默认最近六个自然月（含当前月），按月份升序展示。
+  - target_data_state=missing 时业务文字必须写“未设置目标”，即使工具的数值占位为零也不得写成“目标为0”。
+  - target_data_state=not_set_for_future 表示期间尚未开始，业务文字写“尚未开始/未到期间”，不得描述为“目标不完整”或“目标为0”。
+  - 业务员分摊目标不支持客户维度；业务员×客户目标完成请求必须明确不支持，可分别提供业务员目标完成和客户实际分析，但不得伪造客户目标。
+  - 当前目标来源没有产品目标；按产品目标完成请求必须明确不支持，可转到出库域展示产品实际，但不得称为产品目标完成率。
+  - 月度趋势使用完整自然月边界并按月份升序；排名时无有效完成率的对象放在有效值之后。
+  - 出库实际为净出库；收款实际为净收款；净实际允许为负。
+  - 完成率按实际/目标直接返回，不截断到0-1；超额完成会大于1，负净实际会产生负完成率，均属正常表达，模型不得改写、夹取或解释为数据错误。
+  - 部门和组织名称精确对齐，不做模糊合并；未匹配对象保留为独立证据。
+  - 目标域只使用 metric mode。
+  - 为什么没完成先查目标完成事实，再把同期变化问题路由到出库或收款域；只描述共同出现的事实，不认定原因。
+
+recipe_policy:
+  exact_overview_bundle: 仅在用户只问“目标完成怎么样”且未说明出库或收款，也没有显式维度、趋势、排名、比较或原因诊断时使用。
+  analysis_seed: 非约束规划提示；必须通过能力覆盖门，不授权未登记指标，且最多在首批结果暴露实质缺口时追加一次针对性查询。
+recipes:
+  completion_overview:
+    kind: exact_overview_bundle
+    requests:
+      - {metric: delivery_target_completion, attribution_mode: transaction_detail, dimensions: []}
+      - {metric: receipt_target_completion, attribution_mode: transaction_detail, dimensions: []}
+  salesperson_ranking: {kind: analysis_seed, dimension: salesperson, default_limit: 10}
+  dimension_ranking: {kind: analysis_seed, dimensions: [customer, department, organization], default_limit: 10}
+  monthly_completion_trend: {kind: analysis_seed, time_bucket: month, default_period: latest_6_natural_months_including_current, order_by: {field: period, direction: asc}}
+  gap_attention: {kind: analysis_seed, order_by: {field: gap_amount_rmb, direction: desc}}
+  entity_target_card: {kind: analysis_seed, outputs: [target_amount_rmb, actual_amount_rmb, gap_amount_rmb, completion_rate]}
+  allocated_performance: {kind: analysis_seed, metrics: [allocated_net_delivery_amount, allocated_net_receipt_amount]}
+  completion_change_handoff:
+    kind: analysis_seed
+    plan: query_completion_then_route_same_period_change_capability
+    evidence_routes:
+      delivery: {metric: delivery_amount, first: governed_change_decomposition, fallback: change_observations}
+      receipt: {metric: net_receipt_amount, first: governed_change_decomposition, fallback: change_observations}
+
+answer_boundary:
+  - Delivery target and actual evidence exclude internal customers; receipt target and net-receipt actual evidence include internal customers. Keep each scope consistent across its transaction-detail and salesperson-allocation ledgers.
+  - 先给目标、实际、缺口、完成率，再说明时间、归属账本和出库或收款的数据范围。
+  - 根据 period_state、target_data_state 和 actual_data_state 区分未开始、无目标、零目标、目标不完整和无实际。
+  - target_data_state=missing 时写“未设置目标”，不得把数值占位零解释为真实零目标。
+  - 不支持业务员×客户或产品目标完成；可以提供边界清晰的替代证据，但不创建不存在的目标。
+  - 不展示物理拆分表名称，不做绩效裁定或资源分配。

@@ -1,0 +1,160 @@
+version: datasage-mini-entities/v1
+
+normalization:
+  - unicode_nfkc
+  - trim
+  - collapse_whitespace
+  - casefold
+
+policy:
+  explicit_type_wins: true
+  exact_before_candidates: true
+  registered_aliases_skip_lookup_when_entity_type_explicit: true
+  fuzzy_candidates_never_auto_bind: true
+  entity_only_stops_after_resolution: true
+  default_max_candidates: 5
+  hard_max_candidates: 10
+
+entity_types:
+  department:
+    input_filter_roles: [department, customer_department, warehouse_department]
+    roles_by_domain:
+      delivery: [department, warehouse_department]
+      receipt: [department]
+      receivable: [customer_department]
+      target: [department]
+      customer_risk: [department]
+      inventory: [warehouse_department, department]
+  customer:
+    input_filter_roles: [customer]
+    roles_by_domain:
+      delivery: [customer]
+      receipt: [customer]
+      receivable: [customer]
+      target: [customer]
+      customer_risk: [customer]
+  salesperson:
+    input_filter_roles: [salesperson, occurrence_salesperson, snapshot_salesperson, credit_salesperson]
+    roles_by_domain:
+      delivery: [salesperson]
+      receipt: [salesperson]
+      receivable: [occurrence_salesperson, snapshot_salesperson, credit_salesperson]
+      target: [salesperson]
+      customer_risk: [salesperson]
+  product:
+    input_filter_roles: [product]
+    roles_by_domain:
+      delivery: [product]
+      inventory: [product]
+  warehouse:
+    input_filter_roles: [warehouse]
+    roles_by_domain:
+      delivery: [warehouse]
+      inventory: [warehouse]
+  supplier:
+    input_filter_roles: [supplier, product_supplier]
+    roles_by_domain:
+      delivery: [supplier]
+      inventory: [product_supplier]
+
+# These are verified literals, not guesses. A bare department code never
+# expands to its -HT sibling; expansion requires an explicit all/HT phrase.
+known_entities:
+  - entity_type: department
+    display_name: 胡志明
+    canonical_values: [HCM]
+    aliases: [HCM]
+  - entity_type: department
+    display_name: 胡志明家纺
+    canonical_values: [HCM-HT]
+    aliases: [HCM-HT]
+  - entity_type: department
+    display_name: 胡志明（含家纺）
+    canonical_values: [HCM, HCM-HT]
+    aliases: [HCM全部, HCM所有, HCM含HT, HCM含家纺]
+  - entity_type: department
+    display_name: 河内
+    canonical_values: [HN]
+    aliases: [HN]
+  - entity_type: department
+    display_name: 河内家纺
+    canonical_values: [HN-HT]
+    aliases: [HN-HT]
+  - entity_type: department
+    display_name: 河内（含家纺）
+    canonical_values: [HN, HN-HT]
+    aliases: [HN全部, HN所有, HN含HT, HN含家纺]
+  - entity_type: department
+    display_name: 曼谷
+    canonical_values: [BKK]
+    aliases: [BKK]
+  - entity_type: department
+    display_name: 曼谷家纺
+    canonical_values: [BKK-HT]
+    aliases: [BKK-HT]
+  - entity_type: department
+    display_name: 曼谷（含家纺）
+    canonical_values: [BKK, BKK-HT]
+    aliases: [BKK全部, BKK所有, BKK含HT, BKK含家纺]
+  - entity_type: department
+    display_name: 印尼
+    canonical_values: [IDK]
+    aliases: [IDK, 印尼]
+  - entity_type: department
+    display_name: 印尼家纺
+    canonical_values: [IDK-HT]
+    aliases: [IDK-HT, 印尼家纺]
+  - entity_type: department
+    display_name: 印尼（含家纺）
+    canonical_values: [IDK, IDK-HT]
+    aliases: [IDK全部, IDK所有, IDK含HT, IDK含家纺, 印尼全部, 印尼所有, 印尼含HT, 印尼含家纺, 印尼（含家纺）, 印尼(含家纺)]
+  - entity_type: department
+    display_name: CCBS
+    canonical_values: [CCBS]
+    aliases: [CCBS]
+  - entity_type: department
+    display_name: 辅料
+    canonical_values: [Accessory]
+    aliases: [Accessory]
+  - entity_type: department
+    display_name: HT总部
+    canonical_values: [HT]
+    aliases: [HT]
+
+# Physical lookup sources are plugin-private. The model-facing contract
+# projects entity types and roles but never exposes these tables or columns.
+candidate_sources:
+  customer:
+    table: vk_dwd.customer_dwd
+    id_column: customer_id
+    code_column: customer_no
+    display_column: customer_name
+    search_columns: [customer_name, customer_no]
+    required_filters: {is_delete: n, is_void: n}
+  product:
+    table: vk_dwd.goods_detail_dwd
+    id_column: goods_id
+    code_column: goods_no
+    display_column: goods_name
+    search_columns: [goods_name, goods_no, alias]
+    required_filters: {is_delete: n, is_void: n}
+  salesperson:
+    table: vk_dwd.employee_dwd
+    id_column: person_id
+    code_column: person_no
+    display_column: person_name
+    search_columns: [person_name, person_no, alias]
+    required_filters: {}
+  warehouse:
+    table: vk_dwd.whse_info_dwd
+    id_column: whse_id
+    display_column: whse_name
+    search_columns: [whse_name, whse_full_name]
+    required_filters: {}
+  supplier:
+    table: vk_dwd.supplier_info_dwd
+    id_column: supplier_id
+    code_column: supplier_no
+    display_column: supplier_name
+    search_columns: [supplier_name, supplier_full_name, supplier_no]
+    required_filters: {}

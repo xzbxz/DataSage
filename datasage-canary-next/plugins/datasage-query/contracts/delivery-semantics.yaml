@@ -1,0 +1,1648 @@
+version: datasage-mini-delivery-semantics/v16
+domain: delivery
+contract_role: plugin_physical_execution
+model_planner_contract: references/planner-contract.yaml
+triggers: [出库, 净出库, 毛出库, 仓库出库, 条码出库, 退货, 退货率, 出货, 下单, 订单, 销量, 出库金额, 出库数量, 出库卷数, 原币, 客户排名, 产品排名, 色号, 供应商, 备货, 销售额, 销售金额]
+
+phase_a_acceptance:
+  status: dev1_single_metric_vertical_slice
+  selected_metric: delivery_amount
+  authority: metrics.delivery_amount
+  evidence_basis: 生产 RDS 固定月份只读核验已确认净出库金额结构化结果；运行时仍须经过只读事务、参数化查询、超时和结果上限保护。
+  required_runtime_invariants:
+    - model_cannot_submit_sql_tables_joins_or_formulas
+    - start_inclusive_end_exclusive
+    - read_only_transaction
+    - fixed_metric_filters
+    - bounded_timeout_and_result
+  public_evidence_path: [catalog_metric_contract, typed_query_request, claim_ledger, disclosure_ledger, hermes_answer]
+tables:
+  - vk_dwd.sale_bill_goods_detail_dwd
+  - vk_dwd.delivery_bill_barcode_detail_dwd
+  - vk_dwd.delivery_return_detail_dwd
+  - vk_dwd.customer_dwd
+  - vk_dwd.goods_detail_dwd
+  - vk_ods.goods_sku_ods
+  - vk_dwd.supplier_info_dwd
+  - vk_dwd.whse_info_dwd
+  - vk_ods.ready_goods_detail
+
+fact:
+  table: vk_dwd.sale_bill_goods_detail_dwd
+  grain: 一行是一张销售或出库单中的一个商品色号明细
+  primary_key: [goods_detail_id]
+  updated_at: gmt_modified
+
+barcode_fact:
+  table: vk_dwd.delivery_bill_barcode_detail_dwd
+  grain: 一行是一条真实出库的布匹条码明细
+  primary_key: [barcode_detail_id]
+  sales_detail_relation:
+    local: sale_bill_goods_id
+    remote_table: vk_dwd.sale_bill_goods_detail_dwd
+    remote: goods_detail_id
+    cardinality: many_to_one
+  document_key: sale_bill_id
+  time_field: delivery_time
+  updated_at: gmt_modified
+  usage: 仓库、条码、批次、缸号和单匹等真实物理维度；使用条码自身金额、数量和卷数，不把销售明细措施复制到条码粒度。
+
+return_fact:
+  table: vk_dwd.delivery_return_detail_dwd
+  grain: 一行是一条实实在在退回的布匹条码明细
+  primary_key: [barcode_detail_id]
+  document_key: complnt_apply_id
+  source_delivery_key: channel_id
+  actual_inbound_warehouse: [in_whse_id, whse_name]
+  time_field: statement_time
+  updated_at: gmt_modified
+
+defaults:
+  time_policy: current_natural_month
+  recent_without_unit: latest_30_natural_days
+  currency: rmb
+  original_currency_policy: bare_group_by_currency_or_explicit_currency_filter
+  original_currency_resolution:
+    bare_request: group_by_currency
+    named_currency: filter_named_currency
+    mixed_currency_total: forbidden
+  exclude_internal_customer: true
+  salesperson_ledger: transaction_detail
+  intents:
+    sales_volume:
+      phrases: [销量]
+      metrics: [delivery_amount, delivery_roll_count]
+      scope: period_flow_net_delivery
+      answer_note: 默认按当期流量净出库口径，同时返回净出库金额和净出库卷数，不附带订单数。
+    order_count:
+      phrases: [订单数, 单数]
+      metric: delivery_order_count
+      scope: delivery
+      answer_note: 默认按出库订单数口径；用户明确说下单订单数时改用 placed_order_count。
+    warehouse_delivery:
+      phrases: [按仓库看出库, 仓库出库]
+      metrics: [warehouse_delivery_amount, warehouse_delivery_roll_count]
+      scope: actual_warehouse_period_flow_net_delivery
+      attribution_mode: actual_outbound_minus_actual_return_inbound
+      answer_note: 按实际出库仓统计毛出库，按实际退入仓扣减退货；必须说明退货按实际退入仓扣减。
+    physical_net_delivery:
+      phrases: [按批次看出库, 按条码看出库, 按次品项看出库]
+      metrics: [warehouse_delivery_amount, warehouse_delivery_roll_count]
+      dimensions: [batch_no, barcode, defective_item]
+      scope: period_flow_net_delivery_by_each_fact_value
+      answer_note: 未限定毛出库时继续采用期间净出库；毛出库与退货按各自事实记录的同一维度值独立聚合后相减。
+    gross_only_physical_dimension:
+      phrases: [按原条码看毛出库, 按缸号看毛出库]
+      metrics: [warehouse_gross_delivery_amount, warehouse_gross_delivery_roll_count]
+      dimensions: [source_barcode, cylinder_no]
+      scope: physical_gross_delivery_only
+      answer_note: 原条码和缸号只支持用户明确要求毛出库；未限定口径的出库请求不得静默返回毛值，必须说明净出库能力边界。
+
+ledger_policy:
+  default: transaction_detail
+  transaction_detail:
+    positive_fact: vk_dwd.sale_bill_goods_detail_dwd
+    physical_positive_fact: vk_dwd.delivery_bill_barcode_detail_dwd
+    negative_fact: vk_dwd.delivery_return_detail_dwd
+    salesperson_rule: each_fact_uses_its_own_sales_id
+    physical_fact_rule: physical_dimensions_use_barcode_fact_measures
+  salesperson_allocation:
+    handoff_domain: target
+    triggers: [目标, 协作, 分摊, 分摊业绩]
+    ordinary_queries_must_not_use: [vk_dwd.sale_bill_split_dwd]
+
+analysis_defaults:
+  overview_time: current_natural_month
+  trend_without_time: latest_30_natural_days_by_day
+  change_without_time:
+    current: latest_30_natural_days
+    comparison: preceding_30_natural_days
+  ranking_limit: 10
+  change_observation_limit: 10
+  comparison_kind: previous_period
+  disclosure: 回答必须说明工具返回的实际时间范围，以及与用户问题相关的出库或下单口径、仓库归因、原币分组和当前主数据补充；内部客户等固定执行过滤不主动披露。
+
+execution_policy:
+  business_summary_mode: metric_only
+  dataset_mode:
+    purpose: controlled_single_dataset_detail_only
+    may_recalculate_business_metrics: false
+    may_bypass_metric_contracts: false
+    raw_sql_or_model_join: forbidden
+    detail_scopes:
+      delivery:
+        time_field: delivery_time
+        required_filters:
+          bill_status: {op: eq, value: 6}
+          is_inner_cus: {op: eq, value: n}
+      order:
+        time_field: sale_time
+        required_filters:
+          is_inner_cus: {op: eq, value: n}
+        prohibited_status_inheritance: bill_status
+      return:
+        time_field: statement_time
+        required_filters:
+          status: {op: eq, value: 4}
+          complnt_type: {op: eq, value: 1}
+          channel_type: {op: eq, value: 1}
+          is_inner_cus: {op: eq, value: n}
+  time_range:
+    require_resolved_start_and_end: true
+    governed_by: common.query_policy.governed_metric_time_range
+    retained_controls: [domain_default_time, timeout, row_cap, aggregation, database_safeguards]
+  freshness:
+    data_updated_at_user_facing: false
+    data_updated_at_required_for_answer: false
+    null_data_updated_at_blocks_query: false
+    rule: 不主动解释表同步时间，也不根据空值推断数据过期。
+
+dimension_sets:
+  delivery_analysis: &delivery_analysis
+    - customer
+    - salesperson
+    - department
+    - organization
+    - product
+    - color
+    - color_label
+    - customer_region
+    - customer_type
+    - customer_category
+    - customer_label
+    - ha_customer
+    - vip_customer
+    - ccbs_customer
+    - ht_customer
+    - brand_customer
+    - product_region
+    - product_category
+    - printed_product
+    - ht_product
+    - ready_goods
+    - customized_order
+    - bill_type
+    - supplier
+    - customer_grade
+    - customer_resource
+    - customer_biz_label
+    - customer_current_salesperson
+    - product_component
+    - product_technology
+    - product_usage
+    - product_pattern
+    - product_width
+    - current_product_self_operated
+    - current_product_made_to_order
+    - supplier_region
+    - supplier_type
+    - supplier_level
+    - supplier_full_name
+    - supplier_main_products
+    - currency
+
+  net_delivery_analysis: &net_delivery_analysis
+    - customer
+    - salesperson
+    - department
+    - organization
+    - product
+    - color
+    - color_label
+    - customer_region
+    - customer_type
+    - customer_category
+    - customer_label
+    - ha_customer
+    - vip_customer
+    - ccbs_customer
+    - ht_customer
+    - brand_customer
+    - product_region
+    - product_category
+    - printed_product
+    - ht_product
+    - ready_goods
+    - customized_order
+    - bill_type
+    - supplier
+    - customer_grade
+    - customer_resource
+    - customer_biz_label
+    - customer_current_salesperson
+    - product_component
+    - product_technology
+    - product_usage
+    - product_pattern
+    - product_width
+    - current_product_self_operated
+    - current_product_made_to_order
+    - supplier_region
+    - supplier_type
+    - supplier_level
+    - supplier_full_name
+    - supplier_main_products
+    - currency
+
+  physical_delivery_analysis: &physical_delivery_analysis
+    - warehouse
+    - warehouse_region
+    - warehouse_department
+    - warehouse_category
+    - batch_no
+    - barcode
+    - source_barcode
+    - cylinder_no
+    - missing_warehouse
+    - defective_warehouse
+    - defective_item
+    - ccbs_warehouse
+    - currency
+
+  actual_warehouse_net_analysis: &actual_warehouse_net_analysis
+    - warehouse
+    - warehouse_region
+    - warehouse_department
+    - warehouse_category
+    - missing_warehouse
+    - defective_warehouse
+    - ccbs_warehouse
+    - batch_no
+    - barcode
+    - defective_item
+    - currency
+
+value_contract_templates:
+  entity_exact: &vc_entity_exact
+    kind: entity_exact
+    model_rule: 保留用户明确提供的精确实体 token；由工具做实体预检和稳定身份绑定，不得猜测。
+  source_exact: &vc_source_exact
+    kind: source_exact
+    model_rule: 仅使用用户明确提供或受控结果返回的精确原值；不得猜测、翻译、归一化或扩展。
+  boolean_yn: &vc_boolean_yn
+    kind: closed
+    allowed_values: [y, n]
+    business_meanings: {y: 是, n: 否}
+
+dimensions:
+  customer:
+    label: 客户
+    entity: customer
+    source: {type: fact}
+    columns: [customer_id, customer_name]
+    filter_column: customer_name
+    identity_filter: {entity_type: customer, value_field: canonical_id, column: customer_id}
+    value_contract: *vc_entity_exact
+  salesperson:
+    label: 业务员
+    entity: transaction_salesperson
+    source: {type: fact}
+    columns: [sales_id, sales_name]
+    filter_column: sales_name
+    identity_filter: {entity_type: salesperson, value_field: canonical_id, column: sales_id}
+    value_contract: *vc_entity_exact
+    answer_note: 默认使用交易事实账；毛出库和退货分别采用各自事实的 sales_id。只有目标、协作或明确分摊问题才交给目标域的业务员分摊账。
+    semantics: 使用销售或出库事实上的业务员，不使用客户当前负责人。
+  department:
+    label: 部门
+    entity: customer_department
+    source: {type: fact}
+    columns: [customer_dept]
+    filter_column: customer_dept
+    value_contract: *vc_source_exact
+  organization:
+    label: 组织
+    entity: transaction_organization
+    source: {type: fact}
+    columns: [org_name]
+    filter_column: org_name
+    value_contract: *vc_source_exact
+  product:
+    label: 产品
+    entity: product
+    source: {type: fact}
+    columns: [goods_id, goods_name]
+    filter_column: goods_name
+    identity_filter: {entity_type: product, value_field: canonical_id, column: goods_id}
+    value_contract: *vc_entity_exact
+  color:
+    label: 色号
+    entity: product_color
+    source: {type: fact}
+    columns: [attr_val]
+    filter_column: attr_val
+    value_contract: *vc_source_exact
+    lineage: 由 goods_sku_id 关联 vk_ods.goods_sku_ods.sku_id 得到。
+  color_label:
+    label: 色号标签
+    entity: product_color
+    source: {type: fact}
+    columns: [color_label]
+    filter_column: color_label
+    value_contract: *vc_source_exact
+    lineage: 由 goods_sku_id 关联 vk_ods.goods_sku_ods.sku_id 得到。
+  customer_region:
+    label: 客户区域
+    entity: customer
+    source: {type: fact}
+    columns: [customer_region]
+    filter_column: customer_region
+    value_contract: *vc_source_exact
+  customer_type:
+    label: 客户类型
+    entity: customer
+    source: {type: fact}
+    columns: [customer_type]
+    filter_column: customer_type
+    value_contract: *vc_source_exact
+  customer_category:
+    label: 客户分类
+    entity: customer
+    source: {type: fact}
+    columns: [customer_category]
+    filter_column: customer_category
+    value_contract: *vc_source_exact
+  customer_label:
+    label: 客户标签
+    entity: customer
+    source: {type: fact}
+    columns: [customer_label]
+    filter_column: customer_label
+    value_contract: *vc_source_exact
+  ha_customer:
+    label: HA客户
+    entity: customer
+    source: {type: fact}
+    columns: [is_ha_cus]
+    filter_column: is_ha_cus
+    value_contract: *vc_boolean_yn
+  vip_customer:
+    label: VIP客户
+    entity: customer
+    source: {type: fact}
+    columns: [is_vip_cus]
+    filter_column: is_vip_cus
+    value_contract: *vc_boolean_yn
+  ccbs_customer:
+    label: CCBS客户
+    entity: customer
+    source: {type: fact}
+    columns: [is_ccbs_cus]
+    filter_column: is_ccbs_cus
+    value_contract: *vc_boolean_yn
+  ht_customer:
+    label: HT客户
+    entity: customer
+    source: {type: fact}
+    columns: [is_ht_cus]
+    filter_column: is_ht_cus
+    value_contract: *vc_boolean_yn
+  brand_customer:
+    label: 品牌客户
+    entity: customer
+    source: {type: fact}
+    columns: [is_brand_cus]
+    filter_column: is_brand_cus
+    value_contract: *vc_boolean_yn
+  product_region:
+    label: 产品区域
+    entity: product
+    source: {type: fact}
+    columns: [goods_region]
+    filter_column: goods_region
+    value_contract: *vc_source_exact
+  product_category:
+    label: 产品分类
+    entity: product
+    source: {type: fact}
+    columns: [goods_category]
+    filter_column: goods_category
+    value_contract: *vc_source_exact
+    lineage: 对应产品主数据的 category_name。
+  printed_product:
+    label: 印花产品
+    entity: product
+    source: {type: fact}
+    columns: [is_print]
+    filter_column: is_print
+    value_contract: *vc_boolean_yn
+  ht_product:
+    label: HT产品
+    entity: product
+    source: {type: fact}
+    columns: [is_ht]
+    filter_column: is_ht
+    value_contract: *vc_boolean_yn
+  ready_goods:
+    label: 备货产品
+    entity: ready_goods
+    source: {type: fact}
+    columns: [is_ready]
+    filter_column: is_ready
+    value_contract: *vc_boolean_yn
+    semantics: is_ready='y' 默认同时包含备货和试备货；回答必须说明该范围。
+  customized_order:
+    label: 中国订单或定制订单
+    entity: transaction_order
+    source: {type: fact}
+    columns: [is_customized]
+    filter_column: is_customized
+    value_contract: *vc_boolean_yn
+    semantics: 这是订单事实属性，不等于产品主数据中的“产品是否需要定做”。
+  bill_type:
+    label: 单据类型
+    entity: transaction_order
+    source: {type: fact}
+    columns: [bill_type]
+    filter_column: bill_type
+    value_contract: *vc_source_exact
+  supplier:
+    label: 供应商
+    entity: supplier
+    source: {type: fact}
+    columns: [supplier_id, supplier_no, supplier_name]
+    filter_column: supplier_name
+    identity_filter: {entity_type: supplier, value_field: canonical_id, column: supplier_id}
+    value_contract: *vc_entity_exact
+
+  currency:
+    label: 币种
+    entity: currency
+    source: {type: fact}
+    columns: [currency_no]
+    filter_column: currency_no
+    value_contract: *vc_source_exact
+    answer_note: 人民币指标可跨来源币种汇总；只说原币时按币种分组，明确币种时限定该币种，不得把不同原币相加。
+
+  warehouse:
+    label: 仓库
+    entity: physical_warehouse
+    source: {type: barcode_fact}
+    columns: [whse_id, whse_name]
+    filter_column: whse_name
+    identity_filter: {entity_type: warehouse, value_field: canonical_id, column: whse_id}
+    value_contract: *vc_entity_exact
+    answer_note: 仓库毛出库使用条码事实实际出库仓；默认仓库净出库按方案A用实际退入仓扣减退货。
+  warehouse_region:
+    label: 仓库区域
+    entity: physical_warehouse
+    source: {type: barcode_fact}
+    columns: [whse_region]
+    filter_column: whse_region
+    value_contract: *vc_source_exact
+  warehouse_department:
+    label: 仓库部门
+    entity: physical_warehouse
+    source: {type: barcode_fact}
+    columns: [whse_dept]
+    filter_column: whse_dept
+    value_contract: *vc_source_exact
+    semantics: 仓库部门，不是客户部门 customer_dept。
+  warehouse_category:
+    label: 仓库分类
+    entity: physical_warehouse
+    source: {type: barcode_fact}
+    columns: [whse_category]
+    filter_column: whse_category
+    value_contract: *vc_source_exact
+  batch_no:
+    label: 批次号
+    entity: physical_piece
+    source: {type: barcode_fact}
+    columns: [batch_no]
+    filter_column: batch_no
+    value_contract: *vc_source_exact
+  barcode:
+    label: 条码
+    entity: physical_piece
+    source: {type: barcode_fact}
+    columns: [bar_code]
+    filter_column: bar_code
+    value_contract: *vc_source_exact
+  source_barcode:
+    label: 原条码
+    entity: physical_piece
+    source: {type: barcode_fact}
+    columns: [resource_barcode]
+    filter_column: resource_barcode
+    value_contract: *vc_source_exact
+  cylinder_no:
+    label: 缸号
+    entity: physical_piece
+    source: {type: barcode_fact}
+    columns: [cylinder_no]
+    filter_column: cylinder_no
+    value_contract: *vc_source_exact
+  missing_warehouse:
+    label: 盘亏仓
+    entity: physical_warehouse
+    source: {type: barcode_fact}
+    columns: [is_missing]
+    filter_column: is_missing
+    value_contract: *vc_boolean_yn
+  defective_warehouse:
+    label: 次品仓
+    entity: physical_warehouse
+    source: {type: barcode_fact}
+    columns: [is_defective_whse]
+    filter_column: is_defective_whse
+    value_contract: *vc_boolean_yn
+  defective_item:
+    label: 次品项
+    entity: physical_piece
+    source: {type: barcode_fact}
+    columns: [is_defective]
+    filter_column: is_defective
+    value_contract: *vc_boolean_yn
+  ccbs_warehouse:
+    label: CCBS仓
+    entity: physical_warehouse
+    source: {type: barcode_fact}
+    columns: [is_ccbs_whse]
+    filter_column: is_ccbs_whse
+    value_contract: *vc_boolean_yn
+
+  customer_grade:
+    label: 当前客户等级
+    entity: customer
+    source: &customer_join {type: governed_join, dataset: vk_dwd.customer_dwd, local_column: customer_id, remote_column: customer_id, cardinality: many_to_one}
+    columns: [{column: customer_grade, alias: current_customer_grade}]
+    filter_column: customer_grade
+    value_contract: *vc_source_exact
+    answer_note: 当前客户主数据属性，不是交易发生时的历史快照。
+  customer_resource:
+    label: 当前客户来源
+    entity: customer
+    source: *customer_join
+    columns: [{column: customer_resource, alias: current_customer_resource}]
+    filter_column: customer_resource
+    value_contract: *vc_source_exact
+    answer_note: 当前客户主数据属性，不是交易发生时的历史快照。
+  customer_biz_label:
+    label: 当前客户业务标签
+    entity: customer
+    source: *customer_join
+    columns: [{column: biz_label, alias: current_customer_biz_label}]
+    filter_column: biz_label
+    value_contract: *vc_source_exact
+    answer_note: 当前客户主数据属性，不是交易发生时的历史快照。
+  customer_current_salesperson:
+    label: 客户当前负责人
+    entity: customer
+    source: *customer_join
+    columns:
+      - {column: sales_id, alias: current_customer_sales_id}
+      - {column: sales_name, alias: current_customer_sales_name}
+    filter_column: sales_name
+    value_contract: *vc_source_exact
+    answer_note: 仅表示客户当前负责人，不替代事实表业务员归属。
+
+  product_component:
+    label: 当前产品成分
+    entity: product
+    source: &product_join {type: governed_join, dataset: vk_dwd.goods_detail_dwd, local_column: goods_id, remote_column: goods_id, cardinality: many_to_one}
+    columns: [{column: component, alias: current_product_component}]
+    filter_column: component
+    value_contract: *vc_source_exact
+    answer_note: 当前产品主数据属性，不是交易发生时的历史快照。
+  product_technology:
+    label: 当前产品工艺
+    entity: product
+    source: *product_join
+    columns: [{column: technology, alias: current_product_technology}]
+    filter_column: technology
+    value_contract: *vc_source_exact
+    answer_note: 当前产品主数据属性，不是交易发生时的历史快照。
+  product_usage:
+    label: 当前产品用途
+    entity: product
+    source: *product_join
+    columns: [{column: usage, alias: current_product_usage}]
+    filter_column: usage
+    value_contract: *vc_source_exact
+    answer_note: 当前产品主数据属性，不是交易发生时的历史快照。
+  product_pattern:
+    label: 当前产品花型
+    entity: product
+    source: *product_join
+    columns: [{column: pattern, alias: current_product_pattern}]
+    filter_column: pattern
+    value_contract: *vc_source_exact
+    answer_note: 当前产品主数据属性，不是交易发生时的历史快照。
+  product_width:
+    label: 当前产品幅宽
+    entity: product
+    source: *product_join
+    columns: [{column: width, alias: current_product_width}]
+    filter_column: width
+    value_contract: *vc_source_exact
+    answer_note: 当前产品主数据属性，不是交易发生时的历史快照。
+  current_product_self_operated:
+    label: 当前自营产品
+    entity: product
+    source: *product_join
+    columns: [{column: is_self, alias: current_product_is_self}]
+    filter_column: is_self
+    value_contract: *vc_boolean_yn
+    semantics: 仅使用产品主数据 is_self；事实表同名字段已废弃，禁止使用。
+  current_product_made_to_order:
+    label: 当前需要定做的产品
+    entity: product
+    source: *product_join
+    columns: [{column: is_customized, alias: current_product_is_customized}]
+    filter_column: is_customized
+    value_contract: *vc_boolean_yn
+    semantics: 仅表示产品当前是否需要定做，不等于事实表中的中国订单或定制订单属性。
+
+  supplier_region:
+    label: 当前供应商区域
+    entity: supplier
+    source: &supplier_join {type: governed_join, dataset: vk_dwd.supplier_info_dwd, local_column: supplier_id, remote_column: supplier_id, cardinality: many_to_one}
+    columns: [{column: supplier_region, alias: current_supplier_region}]
+    filter_column: supplier_region
+    value_contract: *vc_source_exact
+    answer_note: 当前供应商主数据属性。
+  supplier_type:
+    label: 当前供应商类型
+    entity: supplier
+    source: *supplier_join
+    columns: [{column: supplier_type, alias: current_supplier_type}]
+    filter_column: supplier_type
+    value_contract: *vc_source_exact
+    answer_note: 当前供应商主数据属性。
+  supplier_level:
+    label: 当前供应商等级
+    entity: supplier
+    source: *supplier_join
+    columns: [{column: supplier_level, alias: current_supplier_level}]
+    filter_column: supplier_level
+    value_contract: *vc_source_exact
+    answer_note: 当前供应商主数据属性。
+  supplier_full_name:
+    label: 当前供应商全称
+    entity: supplier
+    source: *supplier_join
+    columns: [{column: supplier_full_name, alias: current_supplier_full_name}]
+    filter_column: supplier_full_name
+    value_contract: *vc_source_exact
+    answer_note: 当前供应商主数据属性。
+  supplier_main_products:
+    label: 当前供应商主营产品
+    entity: supplier
+    source: *supplier_join
+    columns: [{column: main_products, alias: current_supplier_main_products}]
+    filter_column: main_products
+    value_contract: *vc_source_exact
+    answer_note: 当前供应商主数据属性。
+
+current_attribute_overrides: &current_attribute_overrides
+  customer_label:
+    label: 当前客户标签
+    entity: customer
+    source: {type: governed_join, dataset: vk_dwd.customer_dwd, local_column: customer_id, remote_column: customer_id, cardinality: many_to_one}
+    columns: [{column: customer_label, alias: customer_label}]
+    filter_column: customer_label
+    answer_note: 退货事实缺少历史客户标签；净出库两侧统一按当前客户主数据标签归类。
+  product_category:
+    label: 当前产品分类
+    entity: product
+    source: {type: governed_join, dataset: vk_dwd.goods_detail_dwd, local_column: goods_id, remote_column: goods_id, cardinality: many_to_one}
+    columns: [{column: category_name, alias: goods_category}]
+    filter_column: category_name
+    answer_note: 退货事实缺少历史产品分类；净出库两侧统一按当前产品主数据分类归类。
+  ht_product:
+    label: 当前HT产品
+    entity: product
+    source: {type: governed_join, dataset: vk_dwd.goods_detail_dwd, local_column: goods_id, remote_column: goods_id, cardinality: many_to_one}
+    columns: [{column: is_ht, alias: is_ht}]
+    filter_column: is_ht
+    answer_note: 退货事实缺少历史产品HT属性；净出库两侧统一按当前产品主数据属性归类。
+
+return_dimension_overrides: &return_dimension_overrides
+  <<: *current_attribute_overrides
+  organization:
+    label: 组织
+    entity: transaction_organization
+    source: {type: fact}
+    columns: [{column: biz_org, alias: org_name}]
+    filter_column: biz_org
+    answer_note: 退货组织使用退货事实 biz_org，并统一输出为 org_name。
+  bill_type:
+    label: 单据类型
+    entity: transaction_order
+    source: {type: fact}
+    columns: [{column: sale_bill_type, alias: bill_type}]
+    filter_column: sale_bill_type
+    answer_note: 退货单据类型直接使用退货事实 sale_bill_type，并统一输出为 bill_type；不回连原出库补充。
+
+actual_return_warehouse_overrides: &actual_return_warehouse_overrides
+  warehouse:
+    label: 实际退入仓
+    entity: physical_warehouse
+    source: {type: fact}
+    columns:
+      - {column: in_whse_id, alias: whse_id}
+      - {column: whse_name, alias: whse_name}
+    filter_column: whse_name
+    identity_filter: {entity_type: warehouse, value_field: canonical_id, column: in_whse_id}
+    answer_note: 退货按实际退入仓扣减，不追溯原出库仓。
+  warehouse_region:
+    label: 当前仓库区域
+    entity: physical_warehouse
+    source: {type: governed_join, dataset: vk_dwd.whse_info_dwd, local_column: in_whse_id, remote_column: whse_id, cardinality: many_to_one}
+    columns: [{column: region, alias: whse_region}]
+    filter_column: region
+    answer_note: 退货事实没有仓库区域；按当前仓库主数据补充，并非退货时点历史快照。
+  warehouse_department:
+    label: 实际退入仓部门
+    entity: physical_warehouse
+    source: {type: fact}
+    columns: [whse_dept]
+    filter_column: whse_dept
+  warehouse_category:
+    label: 实际退入仓分类
+    entity: physical_warehouse
+    source: {type: fact}
+    columns: [whse_category]
+    filter_column: whse_category
+  missing_warehouse:
+    label: 当前盘亏仓
+    entity: physical_warehouse
+    source: {type: governed_join, dataset: vk_dwd.whse_info_dwd, local_column: in_whse_id, remote_column: whse_id, cardinality: many_to_one}
+    columns: [{column: is_missing, alias: is_missing}]
+    filter_column: is_missing
+    answer_note: 退货事实缺少盘亏仓标记；按当前仓库主数据补充，并非退货时点历史快照。
+  defective_warehouse:
+    label: 当前次品仓
+    entity: physical_warehouse
+    source: {type: governed_join, dataset: vk_dwd.whse_info_dwd, local_column: in_whse_id, remote_column: whse_id, cardinality: many_to_one}
+    columns: [{column: is_defective, alias: is_defective_whse}]
+    filter_column: is_defective
+    answer_note: 退货事实缺少次品仓标记；按当前仓库主数据补充，并非退货时点历史快照。该字段是仓库属性，不等于商品次品项。
+  ccbs_warehouse:
+    label: 当前CCBS仓
+    entity: physical_warehouse
+    source: {type: governed_join, dataset: vk_dwd.whse_info_dwd, local_column: in_whse_id, remote_column: whse_id, cardinality: many_to_one}
+    columns: [{column: is_ccbs, alias: is_ccbs_whse}]
+    filter_column: is_ccbs
+    answer_note: 退货事实缺少CCBS仓标记；按当前仓库主数据补充，并非退货时点历史快照。
+  batch_no:
+    label: 退货批次号
+    entity: physical_piece
+    source: {type: fact}
+    columns: [batch_no]
+    filter_column: batch_no
+    answer_note: 净出库两侧分别按各自事实记录的批次号独立聚合后相减，不回连原出库补值。
+  barcode:
+    label: 退货条码
+    entity: physical_piece
+    source: {type: fact}
+    columns: [bar_code]
+    filter_column: bar_code
+    answer_note: 净出库两侧分别按各自事实记录的条码独立聚合后相减，不使用来源单模糊回连。
+  defective_item:
+    label: 退货次品项
+    entity: physical_piece
+    source: {type: fact}
+    columns: [is_defective]
+    filter_column: is_defective
+    answer_note: 商品或订单次品标志，不属于次品仓标志；净出库两侧分别按各自事实记录值聚合。
+
+metrics:
+  warehouse_gross_delivery_amount:
+    disclosures:
+      - id: delivery.warehouse-gross-delivery-amount.no-duplicate
+        mode: required_always
+        text: "真实物理维度毛出库金额使用出库记录自身金额，不与销售明细金额重复汇总。"
+      - id: delivery.warehouse_gross_delivery_amount.legacy-note
+        mode: contract_only
+        text: "使用条码事实自身金额，禁止连接销售明细后重复汇总销售明细金额。"
+    label: 真实物理维度毛出库金额
+    business_definition: 按仓库、批次、条码等受控实物流转维度统计的毛出库人民币金额，尚未扣除退货。
+    unit: 人民币元
+    table: vk_dwd.delivery_bill_barcode_detail_dwd
+    aggregation: sum
+    measure: delivery_amount_rmb
+    time_field: delivery_time
+    time_policy: current_month
+    required_filters: &barcode_delivery_filters
+      is_inner_cus: {op: eq, value: n}
+    metric_join: &barcode_sale_detail_metric_join
+      dataset: vk_dwd.sale_bill_goods_detail_dwd
+      local_columns: [sale_bill_goods_id]
+      remote_columns: [goods_detail_id]
+      cardinality: many_to_one
+      required_filters:
+        bill_status: {op: eq, value: 6}
+    allowed_dimensions: *physical_delivery_analysis
+    answer_note: 使用条码事实自身金额，禁止连接销售明细后重复汇总销售明细金额。
+  warehouse_gross_delivery_quantity:
+    disclosures: []
+    availability: &quantity_pending_unit_reconciliation
+      status: pending_validation
+      error_code: SEMANTIC_UNIT_RECONCILIATION_REQUIRED
+      message: 数量来源存在多计量单位，当前合同尚未提供可执行单位筛选或分组，核验前不可用于回答。
+    label: 真实物理维度毛出库数量
+    business_definition: 按仓库、批次、条码等受控实物流转维度统计的毛出库业务数量，尚未扣除退货。
+    unit_policy: 来源业务数量单位；不同计量单位不得换算或合并解释
+    table: vk_dwd.delivery_bill_barcode_detail_dwd
+    aggregation: sum
+    measure: goods_num
+    time_field: delivery_time
+    time_policy: current_month
+    required_filters: *barcode_delivery_filters
+    metric_join: *barcode_sale_detail_metric_join
+    allowed_dimensions: *physical_delivery_analysis
+  warehouse_gross_delivery_roll_count:
+    disclosures: []
+    label: 真实物理维度毛出库卷数
+    business_definition: 按仓库、批次、条码等受控实物流转维度统计的毛出库卷数，尚未扣除退货。
+    unit: 卷
+    table: vk_dwd.delivery_bill_barcode_detail_dwd
+    aggregation: sum
+    measure: piece_num
+    time_field: delivery_time
+    time_policy: current_month
+    required_filters: *barcode_delivery_filters
+    metric_join: *barcode_sale_detail_metric_join
+    allowed_dimensions: *physical_delivery_analysis
+  warehouse_gross_delivery_amount_original:
+    disclosures: []
+    label: 原币真实物理维度毛出库金额
+    business_definition: 按仓库、批次、条码等受控实物流转维度统计的毛出库原币金额，尚未扣除退货；必须按币种筛选或分组，不得跨币种相加。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.delivery_bill_barcode_detail_dwd
+    aggregation: sum
+    measure: delivery_amount
+    time_field: delivery_time
+    time_policy: current_month
+    required_filters: *barcode_delivery_filters
+    metric_join: *barcode_sale_detail_metric_join
+    allowed_dimensions: *physical_delivery_analysis
+    currency_policy: {mode: original_currency, column: currency_no, require_filter_or_group: true, never_sum_mixed_currency: true}
+
+  warehouse_return_amount:
+    disclosures:
+      - id: delivery.warehouse-return-amount.attribution
+        mode: required_always
+        text: "物理维度退货按实际退入仓或退货记录自身的批次、条码和次品项归属统计。"
+      - id: delivery.warehouse_return_amount.legacy-note
+        mode: contract_only
+        text: "不额外限制 is_delivery、is_check 或 is_account。仓库族按实际退入仓扣减；批次、条码和次品项按退货事实自身记录值扣减。"
+    label: 物理维度退货金额
+    business_definition: 按实际退入仓或退货记录自身的受控实物流转维度统计的有效销售退货人民币金额。
+    unit: 人民币元
+    table: vk_dwd.delivery_return_detail_dwd
+    aggregation: sum
+    measure: return_amount_rmb
+    time_field: statement_time
+    time_policy: current_month
+    required_filters: &warehouse_return_filters
+      status: {op: eq, value: 4}
+      complnt_type: {op: eq, value: 1}
+      channel_type: {op: eq, value: 1}
+      is_inner_cus: {op: eq, value: n}
+    allowed_dimensions: *actual_warehouse_net_analysis
+    dimension_overrides: *actual_return_warehouse_overrides
+    answer_note: 不额外限制 is_delivery、is_check 或 is_account。仓库族按实际退入仓扣减；批次、条码和次品项按退货事实自身记录值扣减。
+  warehouse_return_quantity:
+    disclosures:
+      - id: delivery.warehouse-return-quantity.attribution
+        mode: contract_only
+        text: "物理维度退货数量按实际退入仓或退货记录自身的批次、条码和次品项归属统计。"
+      - id: delivery.warehouse_return_quantity.legacy-note
+        mode: contract_only
+        text: "仓库族按实际退入仓扣减；批次、条码和次品项按退货事实自身记录值扣减。"
+    availability: *quantity_pending_unit_reconciliation
+    label: 物理维度退货数量
+    business_definition: 与物理维度退货金额相同业务范围内的退货业务数量。
+    unit_policy: 来源业务数量单位；不同计量单位不得换算或合并解释
+    table: vk_dwd.delivery_return_detail_dwd
+    aggregation: sum
+    measure: return_goods_num
+    time_field: statement_time
+    time_policy: current_month
+    required_filters: *warehouse_return_filters
+    allowed_dimensions: *actual_warehouse_net_analysis
+    dimension_overrides: *actual_return_warehouse_overrides
+    answer_note: 仓库族按实际退入仓扣减；批次、条码和次品项按退货事实自身记录值扣减。
+  warehouse_return_roll_count:
+    disclosures:
+      - id: delivery.warehouse-return-roll-count.attribution
+        mode: required_always
+        text: "物理维度退货卷数按实际退入仓或退货记录自身的批次、条码和次品项归属统计。"
+      - id: delivery.warehouse_return_roll_count.legacy-note
+        mode: contract_only
+        text: "仓库族按实际退入仓扣减；批次、条码和次品项按退货事实自身记录值扣减。"
+    label: 物理维度退货卷数
+    business_definition: 与物理维度退货金额相同业务范围内的退货卷数。
+    unit: 卷
+    table: vk_dwd.delivery_return_detail_dwd
+    aggregation: sum
+    measure: return_piece_num
+    time_field: statement_time
+    time_policy: current_month
+    required_filters: *warehouse_return_filters
+    allowed_dimensions: *actual_warehouse_net_analysis
+    dimension_overrides: *actual_return_warehouse_overrides
+    answer_note: 仓库族按实际退入仓扣减；批次、条码和次品项按退货事实自身记录值扣减。
+  warehouse_return_amount_original:
+    disclosures: []
+    label: 原币物理维度退货金额
+    business_definition: 按受控实物流转维度统计的有效销售退货原币金额；必须按币种筛选或分组，不得跨币种相加。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.delivery_return_detail_dwd
+    aggregation: sum
+    measure: return_amount
+    time_field: statement_time
+    time_policy: current_month
+    required_filters: *warehouse_return_filters
+    allowed_dimensions: *actual_warehouse_net_analysis
+    dimension_overrides: *actual_return_warehouse_overrides
+    currency_policy: {mode: original_currency, column: currency_no, require_filter_or_group: true, never_sum_mixed_currency: true}
+
+  warehouse_delivery_amount:
+    disclosures:
+      - id: delivery.warehouse-delivery-amount.net-scope
+        mode: required_always
+        text: "未明确要求毛出库时采用期间净出库；退货按实际退入仓或退货记录归属扣减，结果允许为负数。"
+      - id: delivery.warehouse_delivery_amount.legacy-note
+        mode: contract_only
+        text: "未限定毛出库时继续采用期间净出库。仓库族退货按实际退入仓扣减；批次、条码和次品项按各自事实记录值扣减；结果允许为负数。"
+    label: 物理维度净出库金额
+    business_definition: 按受控实物流转维度统计的期间净出库人民币金额；毛出库按实际出库归属，退货按实际退入或退货记录归属扣减。
+    unit: 人民币元
+    formula: warehouse_gross_delivery_amount - warehouse_return_amount
+    components:
+      - {metric: warehouse_gross_delivery_amount, sign: 1}
+      - {metric: warehouse_return_amount, sign: -1}
+    time_policy: current_month
+    allowed_dimensions: *actual_warehouse_net_analysis
+    answer_note: 未限定毛出库时继续采用期间净出库。仓库族退货按实际退入仓扣减；批次、条码和次品项按各自事实记录值扣减；结果允许为负数。
+  warehouse_delivery_quantity:
+    disclosures:
+      - id: delivery.warehouse-delivery-quantity.net-scope
+        mode: contract_only
+        text: "物理维度净出库数量以毛出库数量扣除同范围有效退货数量，退货按实际归属扣减，结果允许为负数。"
+      - id: delivery.warehouse_delivery_quantity.legacy-note
+        mode: contract_only
+        text: "仓库族退货按实际退入仓扣减；批次、条码和次品项按各自事实记录值扣减；结果允许为负数。"
+    availability: *quantity_pending_unit_reconciliation
+    label: 物理维度净出库数量
+    business_definition: 按受控实物流转维度统计的期间净出库业务数量；毛出库数量扣除同范围有效退货数量。
+    unit_policy: 来源业务数量单位；不同计量单位不得换算或合并解释
+    formula: warehouse_gross_delivery_quantity - warehouse_return_quantity
+    components:
+      - {metric: warehouse_gross_delivery_quantity, sign: 1}
+      - {metric: warehouse_return_quantity, sign: -1}
+    time_policy: current_month
+    allowed_dimensions: *actual_warehouse_net_analysis
+    answer_note: 仓库族退货按实际退入仓扣减；批次、条码和次品项按各自事实记录值扣减；结果允许为负数。
+  warehouse_delivery_roll_count:
+    disclosures:
+      - id: delivery.warehouse-delivery-roll-count.net-scope
+        mode: required_always
+        text: "物理维度净出库卷数以毛出库卷数扣除同范围有效退货卷数，退货按实际归属扣减，结果允许为负数。"
+      - id: delivery.warehouse_delivery_roll_count.legacy-note
+        mode: contract_only
+        text: "仓库族退货按实际退入仓扣减；批次、条码和次品项按各自事实记录值扣减；结果允许为负数。"
+    label: 物理维度净出库卷数
+    business_definition: 按受控实物流转维度统计的期间净出库卷数；毛出库卷数扣除同范围有效退货卷数。
+    unit: 卷
+    formula: warehouse_gross_delivery_roll_count - warehouse_return_roll_count
+    components:
+      - {metric: warehouse_gross_delivery_roll_count, sign: 1}
+      - {metric: warehouse_return_roll_count, sign: -1}
+    time_policy: current_month
+    allowed_dimensions: *actual_warehouse_net_analysis
+    answer_note: 仓库族退货按实际退入仓扣减；批次、条码和次品项按各自事实记录值扣减；结果允许为负数。
+  warehouse_delivery_amount_original:
+    disclosures:
+      - id: currency.original.no-cross-currency
+        mode: required_always
+        text: "原币金额必须限定单一币种或按币种分组，不同币种不得直接相加。"
+      - id: delivery.warehouse_delivery_amount_original.legacy-note
+        mode: contract_only
+        text: "只说原币时按币种分组，明确币种时限定该币种；不同原币不得相加。仓库族退货按实际退入仓扣减，批次、条码和次品项按各自事实记录值扣减。"
+    label: 原币物理维度净出库金额
+    business_definition: 按受控实物流转维度统计的期间净出库原币金额；必须按币种筛选或分组，同币种毛出库金额扣除同币种有效退货金额，不得跨币种相加。
+    unit: 原币金额（按币种分别计量）
+    formula: warehouse_gross_delivery_amount_original - warehouse_return_amount_original
+    components:
+      - {metric: warehouse_gross_delivery_amount_original, sign: 1}
+      - {metric: warehouse_return_amount_original, sign: -1}
+    time_policy: current_month
+    allowed_dimensions: *actual_warehouse_net_analysis
+    currency_policy: {mode: original_currency, column: currency_no, require_filter_or_group: true, never_sum_mixed_currency: true}
+    answer_note: 只说原币时按币种分组，明确币种时限定该币种；不同原币不得相加。仓库族退货按实际退入仓扣减，批次、条码和次品项按各自事实记录值扣减。
+
+  gross_delivery_amount:
+    disclosures: []
+    label: 毛出库金额
+    business_definition: 所选范围内有效出库在扣除退货前的人民币金额。
+    unit: 人民币元
+    table: vk_dwd.sale_bill_goods_detail_dwd
+    aggregation: sum
+    measure: delivery_amount_rmb
+    time_field: delivery_time
+    time_policy: current_month
+    required_filters: &delivery_filters
+      bill_status: {op: eq, value: 6}
+      is_inner_cus: {op: eq, value: n}
+    allowed_dimensions: *delivery_analysis
+    change_decomposition:
+      mode: additive_partition
+      dimensions: [customer, salesperson, department, organization, product]
+    reasoning_topics:
+      [customer_mix, demand_timing, delivery_execution, external_event, product_mix]
+  gross_delivery_amount_original:
+    disclosures: []
+    label: 原币毛出库金额
+    business_definition: 所选范围内有效出库在扣除退货前的原币金额；必须按币种筛选或分组，不得跨币种相加。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.sale_bill_goods_detail_dwd
+    aggregation: sum
+    measure: delivery_amount
+    time_field: delivery_time
+    time_policy: current_month
+    required_filters: *delivery_filters
+    allowed_dimensions: *delivery_analysis
+    currency_policy: {mode: original_currency, column: currency_no, require_filter_or_group: true, never_sum_mixed_currency: true}
+  gross_delivery_quantity:
+    disclosures: []
+    availability: *quantity_pending_unit_reconciliation
+    label: 毛出库数量
+    business_definition: 所选范围内有效出库在扣除退货前的业务数量。
+    unit_policy: 来源业务数量单位；不同计量单位不得换算或合并解释
+    table: vk_dwd.sale_bill_goods_detail_dwd
+    aggregation: sum
+    measure: sorted_goods_num
+    time_field: delivery_time
+    time_policy: current_month
+    required_filters: *delivery_filters
+    allowed_dimensions: *delivery_analysis
+  gross_delivery_roll_count:
+    disclosures: []
+    label: 毛出库卷数
+    business_definition: 所选范围内有效出库在扣除退货前的卷数。
+    unit: 卷
+    table: vk_dwd.sale_bill_goods_detail_dwd
+    aggregation: sum
+    measure: sorted_piece_num
+    time_field: delivery_time
+    time_policy: current_month
+    required_filters: *delivery_filters
+    allowed_dimensions: *delivery_analysis
+
+  return_amount:
+    disclosures:
+      - id: delivery.return-amount.completed-scope
+        mode: required_always
+        text: "退货金额按所选退货结算期间内已完成的有效销售退货统计。"
+      - id: delivery.return_amount.legacy-note
+        mode: contract_only
+        text: "按 statement_time 统计状态4的销售退货；不额外限制 is_delivery、is_check 或 is_account。"
+    label: 退货金额
+    business_definition: 所选退货结算期间内已完成销售退货的人民币金额。
+    unit: 人民币元
+    table: vk_dwd.delivery_return_detail_dwd
+    aggregation: sum
+    measure: return_amount_rmb
+    time_field: statement_time
+    time_policy: current_month
+    required_filters: &return_filters
+      status: {op: eq, value: 4}
+      complnt_type: {op: eq, value: 1}
+      channel_type: {op: eq, value: 1}
+      is_inner_cus: {op: eq, value: n}
+    allowed_dimensions: *net_delivery_analysis
+    change_decomposition:
+      mode: additive_partition
+      dimensions: [customer, salesperson, department, organization, product]
+    reasoning_topics: [customer_mix, external_event, product_mix, return_activity]
+    dimension_overrides: *return_dimension_overrides
+    answer_note: 按 statement_time 统计状态4的销售退货；不额外限制 is_delivery、is_check 或 is_account。
+  return_amount_original:
+    disclosures:
+      - id: currency.original.no-cross-currency
+        mode: required_always
+        text: "原币金额必须限定单一币种或按币种分组，不同币种不得直接相加。"
+      - id: delivery.return_amount_original.legacy-note
+        mode: contract_only
+        text: "只说原币时按币种分组，明确币种时限定该币种；不额外限制 is_delivery、is_check 或 is_account。"
+    label: 原币退货金额
+    business_definition: 所选退货结算期间内已完成销售退货的原币金额；必须按币种筛选或分组，不得跨币种相加。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.delivery_return_detail_dwd
+    aggregation: sum
+    measure: return_amount
+    time_field: statement_time
+    time_policy: current_month
+    required_filters: *return_filters
+    allowed_dimensions: *net_delivery_analysis
+    dimension_overrides: *return_dimension_overrides
+    currency_policy: {mode: original_currency, column: currency_no, require_filter_or_group: true, never_sum_mixed_currency: true}
+    answer_note: 只说原币时按币种分组，明确币种时限定该币种；不额外限制 is_delivery、is_check 或 is_account。
+  return_quantity:
+    disclosures: []
+    availability: *quantity_pending_unit_reconciliation
+    label: 退货数量
+    business_definition: 与退货金额相同业务范围内的退货业务数量。
+    unit_policy: 来源业务数量单位；不同计量单位不得换算或合并解释
+    table: vk_dwd.delivery_return_detail_dwd
+    aggregation: sum
+    measure: return_goods_num
+    time_field: statement_time
+    time_policy: current_month
+    required_filters: *return_filters
+    allowed_dimensions: *net_delivery_analysis
+    dimension_overrides: *return_dimension_overrides
+  return_roll_count:
+    disclosures: []
+    label: 退货卷数
+    business_definition: 与退货金额相同业务范围内的退货卷数。
+    unit: 卷
+    table: vk_dwd.delivery_return_detail_dwd
+    aggregation: sum
+    measure: return_piece_num
+    time_field: statement_time
+    time_policy: current_month
+    required_filters: *return_filters
+    allowed_dimensions: *net_delivery_analysis
+    dimension_overrides: *return_dimension_overrides
+  return_document_count:
+    disclosures: []
+    label: 退货单数
+    business_definition: 与退货金额相同业务范围内的非重复退货单数量。
+    unit: 单
+    table: vk_dwd.delivery_return_detail_dwd
+    aggregation: count_distinct
+    measure: complnt_apply_id
+    time_field: statement_time
+    time_policy: current_month
+    required_filters: *return_filters
+    allowed_dimensions: *net_delivery_analysis
+    dimension_overrides: *return_dimension_overrides
+  returned_delivery_order_count:
+    disclosures: []
+    label: 涉及退货的来源出库订单数
+    business_definition: 与退货金额相同业务范围内，至少关联一笔有效退货的非重复来源出库订单数量。
+    unit: 单
+    table: vk_dwd.delivery_return_detail_dwd
+    aggregation: count_distinct
+    measure: channel_id
+    time_field: statement_time
+    time_policy: current_month
+    required_filters: *return_filters
+    allowed_dimensions: *net_delivery_analysis
+    dimension_overrides: *return_dimension_overrides
+
+  delivery_amount:
+    exact_default_lookup_supported: true
+    disclosures:
+      - id: delivery.net-flow.meaning
+        mode: required_always
+        text: "该指标为当期流量净出库，即毛出库减退货；结果允许为负数。"
+      - id: delivery.delivery_amount.legacy-note
+        mode: contract_only
+        text: "默认出库金额为当期流量净出库；毛出库按 delivery_time，退货按 statement_time，结果允许为负数。"
+    label: 净出库金额
+    business_definition: 所选期间毛出库人民币金额扣除同期有效退货人民币金额后的净流量。
+    unit: 人民币元
+    formula: gross_delivery_amount - return_amount
+    components:
+      - {metric: gross_delivery_amount, sign: 1}
+      - {metric: return_amount, sign: -1}
+    time_policy: current_month
+    allowed_dimensions: *net_delivery_analysis
+    change_decomposition:
+      mode: additive_partition
+      dimensions: [customer, salesperson, department, organization, product]
+    reasoning_topics:
+      [customer_mix, demand_timing, delivery_execution, external_event, product_mix, return_activity]
+    dimension_overrides: *current_attribute_overrides
+    answer_note: 默认出库金额为当期流量净出库；毛出库按 delivery_time，退货按 statement_time，结果允许为负数。
+  delivery_amount_original:
+    disclosures:
+      - id: currency.original.no-cross-currency
+        mode: required_always
+        text: "原币金额必须限定单一币种或按币种分组，不同币种不得直接相加。"
+      - id: delivery.delivery_amount_original.legacy-note
+        mode: contract_only
+        text: "只说原币时按币种分组，明确币种时限定该币种；不同原币不得相加，结果允许为负数。"
+    label: 原币净出库金额
+    business_definition: 所选期间同币种毛出库原币金额扣除同期有效退货原币金额后的净流量；必须按币种筛选或分组，不得跨币种相加。
+    unit: 原币金额（按币种分别计量）
+    formula: gross_delivery_amount_original - return_amount_original
+    components:
+      - {metric: gross_delivery_amount_original, sign: 1}
+      - {metric: return_amount_original, sign: -1}
+    time_policy: current_month
+    allowed_dimensions: *net_delivery_analysis
+    dimension_overrides: *current_attribute_overrides
+    currency_policy: {mode: original_currency, column: currency_no, require_filter_or_group: true, never_sum_mixed_currency: true}
+    answer_note: 只说原币时按币种分组，明确币种时限定该币种；不同原币不得相加，结果允许为负数。
+  delivery_quantity:
+    disclosures:
+      - id: delivery.net-flow.meaning
+        mode: contract_only
+        text: "该指标为当期流量净出库，即毛出库减退货；结果允许为负数。"
+      - id: delivery.delivery_quantity.legacy-note
+        mode: contract_only
+        text: "默认出库数量为当期流量净出库数量，结果允许为负数。"
+    availability: *quantity_pending_unit_reconciliation
+    label: 净出库数量
+    business_definition: 所选期间毛出库业务数量扣除同期有效退货业务数量后的净流量。
+    unit_policy: 来源业务数量单位；不同计量单位不得换算或合并解释
+    formula: gross_delivery_quantity - return_quantity
+    components:
+      - {metric: gross_delivery_quantity, sign: 1}
+      - {metric: return_quantity, sign: -1}
+    time_policy: current_month
+    allowed_dimensions: *net_delivery_analysis
+    dimension_overrides: *current_attribute_overrides
+    answer_note: 默认出库数量为当期流量净出库数量，结果允许为负数。
+  delivery_roll_count:
+    disclosures:
+      - id: delivery.net-flow.meaning
+        mode: required_always
+        text: "该指标为当期流量净出库，即毛出库减退货；结果允许为负数。"
+      - id: delivery.delivery_roll_count.legacy-note
+        mode: contract_only
+        text: "默认出库卷数为当期流量净出库卷数，结果允许为负数。"
+    label: 净出库卷数
+    business_definition: 所选期间毛出库卷数扣除同期有效退货卷数后的净流量。
+    unit: 卷
+    formula: gross_delivery_roll_count - return_roll_count
+    components:
+      - {metric: gross_delivery_roll_count, sign: 1}
+      - {metric: return_roll_count, sign: -1}
+    time_policy: current_month
+    allowed_dimensions: *net_delivery_analysis
+    dimension_overrides: *current_attribute_overrides
+    answer_note: 默认出库卷数为当期流量净出库卷数，结果允许为负数。
+
+  return_amount_rate:
+    disclosures:
+      - id: delivery.return-amount-rate.denominator
+        mode: required_always
+        text: "金额退货率以同期毛出库金额为分母；毛出库金额小于等于零时结果未定义，退货率允许超过100%。"
+      - id: delivery.return_amount_rate.legacy-note
+        mode: contract_only
+        text: "默认退货率为当期金额流量退货率；毛出库金额小于等于零时返回空值，退货率允许超过100%。"
+    label: 当期金额退货率
+    business_definition: 所选期间退货人民币金额相对于同期毛出库人民币金额的比例；基数不可用时结果未定义。
+    unit: 比例（可大于1；展示为百分比时可超过100%）
+    formula: return_amount / gross_delivery_amount
+    ratio: {numerator: return_amount, denominator: gross_delivery_amount}
+    time_policy: current_month
+    allowed_dimensions: *net_delivery_analysis
+    dimension_overrides: *current_attribute_overrides
+    answer_note: 默认退货率为当期金额流量退货率；毛出库金额小于等于零时返回空值，退货率允许超过100%。
+  return_quantity_rate:
+    disclosures:
+      - id: delivery.return-quantity-rate.denominator
+        mode: contract_only
+        text: "数量退货率仅用于明确的数量口径，并以同期毛出库数量为分母；毛出库数量小于等于零时结果未定义。"
+      - id: delivery.return_quantity_rate.legacy-note
+        mode: contract_only
+        text: "仅在用户明确要求数量退货率时使用；毛出库数量小于等于零时返回空值。"
+    availability: *quantity_pending_unit_reconciliation
+    label: 当期数量退货率
+    business_definition: 所选期间退货业务数量相对于同期毛出库业务数量的比例；基数不可用时结果未定义。
+    unit: 比例（可大于1；展示为百分比时可超过100%）
+    formula: return_quantity / gross_delivery_quantity
+    ratio: {numerator: return_quantity, denominator: gross_delivery_quantity}
+    time_policy: current_month
+    allowed_dimensions: *net_delivery_analysis
+    dimension_overrides: *current_attribute_overrides
+    answer_note: 仅在用户明确要求数量退货率时使用；毛出库数量小于等于零时返回空值。
+  return_roll_rate:
+    disclosures:
+      - id: delivery.return-roll-rate.denominator
+        mode: required_always
+        text: "卷数退货率仅用于明确的卷数口径，并以同期毛出库卷数为分母；毛出库卷数小于等于零时结果未定义。"
+      - id: delivery.return_roll_rate.legacy-note
+        mode: contract_only
+        text: "仅在用户明确要求卷数退货率时使用；毛出库卷数小于等于零时返回空值。"
+    label: 当期卷数退货率
+    business_definition: 所选期间退货卷数相对于同期毛出库卷数的比例；基数不可用时结果未定义。
+    unit: 比例（可大于1；展示为百分比时可超过100%）
+    formula: return_roll_count / gross_delivery_roll_count
+    ratio: {numerator: return_roll_count, denominator: gross_delivery_roll_count}
+    time_policy: current_month
+    allowed_dimensions: *net_delivery_analysis
+    dimension_overrides: *current_attribute_overrides
+    answer_note: 仅在用户明确要求卷数退货率时使用；毛出库卷数小于等于零时返回空值。
+
+  delivery_order_count:
+    disclosures:
+      - id: delivery.order-count.gross-scope
+        mode: required_always
+        text: "出库订单数是产生有效毛出库的非重复订单数；退货不会反向减少订单计数，也不构造净订单数。"
+      - id: delivery.delivery_order_count.legacy-note
+        mode: contract_only
+        text: "订单数是毛出库订单数，不能用退货单或来源单数相减生成净订单数。"
+    label: 出库订单数
+    business_definition: 所选出库期间内产生有效毛出库的非重复出库订单数量；退货不会反向减少订单计数。
+    unit: 单
+    table: vk_dwd.sale_bill_goods_detail_dwd
+    aggregation: count_distinct
+    measure: sale_bill_id
+    time_field: delivery_time
+    time_policy: current_month
+    required_filters: *delivery_filters
+    allowed_dimensions: *delivery_analysis
+    answer_note: 订单数是毛出库订单数，不能用退货单或来源单数相减生成净订单数。
+  order_amount:
+    disclosures: []
+    label: 下单金额
+    business_definition: 所选下单期间内订单记录的人民币金额，按订单发生口径统计。
+    unit: 人民币元
+    table: vk_dwd.sale_bill_goods_detail_dwd
+    aggregation: sum
+    measure: sale_amount_rmb
+    time_field: sale_time
+    time_policy: current_month
+    required_filters: &order_filters
+      is_inner_cus: {op: eq, value: n}
+    allowed_dimensions: *delivery_analysis
+    change_decomposition:
+      mode: additive_partition
+      dimensions: [customer, salesperson, department, organization, product]
+    reasoning_topics: [customer_mix, demand_timing, external_event, product_mix]
+  order_amount_original:
+    disclosures: []
+    label: 原币下单金额
+    business_definition: 所选下单期间内订单记录的原币金额；必须按币种筛选或分组，不得跨币种相加。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.sale_bill_goods_detail_dwd
+    aggregation: sum
+    measure: sale_amount
+    time_field: sale_time
+    time_policy: current_month
+    required_filters: *order_filters
+    allowed_dimensions: *delivery_analysis
+    currency_policy: {mode: original_currency, column: currency_no, require_filter_or_group: true, never_sum_mixed_currency: true}
+  order_quantity:
+    disclosures: []
+    availability: *quantity_pending_unit_reconciliation
+    label: 下单数量
+    business_definition: 所选下单期间内订单记录的业务数量。
+    unit_policy: 来源业务数量单位；不同计量单位不得换算或合并解释
+    table: vk_dwd.sale_bill_goods_detail_dwd
+    aggregation: sum
+    measure: sale_goods_num
+    time_field: sale_time
+    time_policy: current_month
+    required_filters: *order_filters
+    allowed_dimensions: *delivery_analysis
+  order_roll_count:
+    disclosures: []
+    label: 下单卷数
+    business_definition: 所选下单期间内订单记录的卷数。
+    unit: 卷
+    table: vk_dwd.sale_bill_goods_detail_dwd
+    aggregation: sum
+    measure: sale_piece_num
+    time_field: sale_time
+    time_policy: current_month
+    required_filters: *order_filters
+    allowed_dimensions: *delivery_analysis
+  placed_order_count:
+    disclosures: []
+    label: 下单订单数
+    business_definition: 所选下单期间内的非重复订单数量，按当前订单记录口径计数。
+    unit: 单
+    table: vk_dwd.sale_bill_goods_detail_dwd
+    aggregation: count_distinct
+    measure: sale_bill_id
+    time_field: sale_time
+    time_policy: current_month
+    required_filters: *order_filters
+    allowed_dimensions: *delivery_analysis
+
+analysis_recipes_status:
+  status: reference_only_not_runtime_or_model_authority
+  authoritative_source: planner_contract
+  rule: 本块仅保留发布维护比对；运行时不读取，合同服务不投影，不能作为固定配方或指标授权来源。
+
+analysis_recipes:
+  delivery_overview:
+    question_types: [出库怎么样, 出库整体情况, 看一下出库]
+    request_policy: adaptive
+    metric_count: not_fixed
+    selection_policy: smallest_relevant_governed_bundle
+    max_tool_calls: 2
+    default_time: current_natural_month
+    output: 每个选中指标保持独立业务含义并说明时间范围；评价需要比较基准，原因需要证据，不设置固定指标数量。
+
+  warehouse_delivery_overview:
+    question_types: [按仓库看出库, 仓库出库怎么样, 各仓库出库]
+    max_tool_calls: 1
+    attribution_mode: actual_outbound_minus_actual_return_inbound
+    requests: [warehouse_delivery_amount, warehouse_delivery_roll_count]
+    dimension: warehouse
+    default_time: current_natural_month
+    output: 方案A仓库净出库金额和卷数；必须说明退货按实际退入仓扣减。
+    explicit_gross_variant:
+      phrases: [仓库毛出库]
+      requests: [warehouse_gross_delivery_amount, warehouse_gross_delivery_roll_count]
+    explicit_original_currency_variant:
+      requests: [warehouse_delivery_amount_original]
+      requirement: bare_group_by_currency_or_explicit_currency_filter
+
+  physical_dimension_delivery_overview:
+    question_types: [按批次看出库, 按条码看出库, 按次品项看出库]
+    max_tool_calls: 1
+    requests: [warehouse_delivery_amount, warehouse_delivery_roll_count]
+    allowed_dimensions: [batch_no, barcode, defective_item]
+    default_time: current_natural_month
+    rule: 未限定毛出库时采用期间净出库；毛出库与退货按各自事实记录的相同维度值独立聚合后相减，不追溯改写任一侧维度值。
+    output: 净出库金额、卷数、实际时间和维度口径。
+    gross_only_dimensions:
+      dimensions: [source_barcode, cylinder_no]
+      requirement: explicit_gross_delivery_wording
+      on_default_net_request: return_capability_boundary_without_querying_gross
+      reason: 退货事实无原条码和缸号，且来源回连验证不能可靠补值。
+
+  return_overview:
+    question_types: [退货怎么样, 退货整体情况, 退货率多少]
+    max_tool_calls: 1
+    default_metrics: [return_amount, return_roll_count, return_document_count]
+    default_rate: return_amount_rate
+    explicit_rate_variants: {卷数退货率: return_roll_rate}
+    output: 退货事实及明确时间范围；退货率必须标注金额或卷数口径。
+
+  order_overview:
+    question_types: [下单怎么样, 下单整体情况, 看一下订单]
+    max_tool_calls: 1
+    requests: [order_amount, order_roll_count, placed_order_count]
+    default_time: current_natural_month
+    output: 下单金额、卷数、下单订单数及明确时间范围。
+    explicit_original_currency_metric: order_amount_original
+    original_currency_requirement: bare_group_by_currency_or_explicit_currency_filter
+
+  trend_change:
+    question_types: [趋势怎么样, 最近有什么变化, 走势如何]
+    max_tool_calls: 1
+    metric_selection:
+      delivery_subject: delivery_amount
+      order_subject: order_amount
+      explicit_rolls: use_matching_confirmed_metric
+    time_bucket: day_for_30_days_or_less_otherwise_month
+    default_time: latest_30_natural_days
+    output: 按时间升序展示真实趋势；不把波动自动解释为业务原因。
+
+  ranking_structure:
+    question_types: [哪些客户贡献高, 哪些产品出库多, 业务员排名, 结构怎么样]
+    max_tool_calls: 1
+    metric_selection: follow_explicit_delivery_or_order_subject
+    allowed_primary_dimensions: [customer, product, salesperson, department, organization, warehouse]
+    default_limit: 10
+    output: 排名及范围；没有总量查询时不输出模型心算占比。
+
+  governed_change_decomposition:
+    question_types: [变化主要来自哪里, 哪些完整分区解释净变化, 为什么出库变化]
+    max_tool_calls: 1
+    metric_selection: contract_authorized_metric_only
+    allowed_primary_dimensions: [customer, product, salesperson, department, organization]
+    comparison: {kind: previous_period}
+    same_batch_requests:
+      overall: {dimensions: [], comparison: {kind: previous_period}}
+      decomposition:
+        comparison: {kind: previous_period}
+        decomposition_of_request_id: required_overall_request_id
+        completeness: full_non_truncated_partition
+    relation: reconciled_change_only
+    default_time:
+      current: latest_30_natural_days
+      comparison: preceding_30_natural_days
+    output_fields: [metric_value, comparison_value, delta_value, change_rate]
+    interpretation: 只把完整三列精确对账的非零分区称为变化来源，不表述为业务因果。
+
+  change_observations:
+    question_types: [哪些客户下降最多, 哪些产品增长最多]
+    max_tool_calls: 1
+    metric_selection: follow_explicit_delivery_or_order_subject
+    allowed_primary_dimensions: [customer, product, salesperson, department, organization]
+    comparison: {kind: previous_period}
+    two_sided_requests:
+      increases: {order_by: {field: delta_value, direction: desc}}
+      decreases: {order_by: {field: delta_value, direction: asc}}
+    default_limit_per_side: 5
+    forbidden_order_by: [metric_value, comparison_value]
+    default_time:
+      current: latest_30_natural_days
+      comparison: preceding_30_natural_days
+    default_limit: 10
+    output_fields: [metric_value, comparison_value, delta_value, change_rate]
+    interpretation: 仅作为截断的增减 observations；不得称为完整 drivers、集中度或原因。
+
+  entity_evidence_card:
+    question_types: [某客户出库怎么样, 某产品卖得怎么样, 某业务员下单情况]
+    max_tool_calls: 2
+    required_filter: one_explicit_customer_product_or_salesperson
+    first_call:
+      delivery_subject: [delivery_amount, delivery_roll_count]
+      order_subject: [order_amount, order_roll_count, placed_order_count]
+    optional_second_call: matching_amount_metric_with_time_bucket
+    output_order: [当前范围汇总, 时间趋势, 口径, 数据限制]
+
+  delivery_order_alignment:
+    question_types: [下单和出库是否匹配, 下单与出库差多少, 订单与出库对比]
+    max_tool_calls: 2
+    paired_metrics:
+      - [order_amount, gross_delivery_amount]
+      - [order_roll_count, gross_delivery_roll_count]
+      - [placed_order_count, delivery_order_count]
+    explicit_original_currency_pair: [order_amount_original, gross_delivery_amount_original]
+    original_currency_requirement: bare_group_by_currency_or_explicit_currency_filter
+    rule: 履约对照属于明确例外，使用同期下单与毛出库并列展示，不扣退货，不自动计算转化率、履约率或订单级匹配率。
+    limitation: 下单和出库使用不同时间字段，拆单后出库单可能多于下单单据，不能据此自动归因。
+
+  explain_change:
+    question_types: [为什么出库下降, 为什么下单增长, 变化原因是什么]
+    max_tool_calls: 2
+    first_call: use_governed_change_decomposition
+    fallback: use_change_observations_only_when_complete_partition_is_unavailable
+    output: 先确认非零变化；优先输出完整对账的结构来源。Top-N 只能作为有边界的 observations，不能称为 drivers 或原因。
+
+field_semantics:
+  is_ready:
+    status: canonical
+    rule: 使用事实表 is_ready；y 同时包含备货和试备货。
+    lineage:
+      source: vk_ods.ready_goods_detail
+      match: goods_id + customer_dept + sale_time within start_time/end_time
+      accepted_types: [备货, 试备货]
+      implementation: standard_metrics_use_fact_copy
+  fact_is_self:
+    status: forbidden
+    rule: 该字段原本表达备货但值存在问题，已由 is_ready 替代；不得查询、过滤、分组或回退使用。
+  product_is_self:
+    status: current_master_attribute
+    rule: 仅表示产品主数据当前是否自营，与事实表废弃字段无替换关系。
+  fact_is_customized:
+    status: transaction_attribute
+    rule: 表示中国订单或定制订单。
+  product_is_customized:
+    status: current_master_attribute
+    rule: 表示产品当前是否需要定做。
+  barcode_fact_is_self:
+    status: not_used_in_phase_one
+    rule: 条码事实同名字段首期不用于备货、自营或普通销售事实口径，不得替代销售事实 is_ready 或产品当前 is_self。
+  barcode_fact_is_customized:
+    status: not_used_in_phase_one
+    rule: 条码事实同名字段首期不用于替代销售事实中的中国订单或定制订单属性。
+
+join_rules:
+  - 仅允许语义中声明且 datasets.yaml 验证为 many_to_one 的客户、产品、供应商主数据关联。
+  - 关联由工具根据维度代码自动生成；模型不能提交表名、关联键或 JOIN 片段。
+  - 客户和产品主数据关联必须在 ON 条件中限制 is_delete='n' AND is_void='n'，以保留历史事实。
+  - 正常色号分析使用事实表 attr_val 和 color_label；goods_sku_ods 只作为字段血缘和当前属性来源。
+  - 正常备货分析使用事实表 is_ready；不得直接 JOIN ready_goods_detail，以免生命周期多行放大事实。
+  - 普通出库和下单使用销售明细事实；仓库、条码、批次、缸号和单匹等物理维度使用真实出库条码事实，不得用组织字段推断仓库。
+  - 条码事实通过 sale_bill_goods_id = goods_detail_id 多对一关联销售明细，仅用于强制有效出库状态 bill_status=6；聚合必须使用条码事实自身 delivery_amount_rmb、delivery_amount、goods_num 和 piece_num，不得重复汇总销售明细措施。
+  - 仓库净出库先按实际出库仓聚合条码毛出库，再按实际退入仓聚合退货，最后按统一仓库维度相减；禁止条码与退货逐行连接。
+  - 仓库族包括仓库、仓库区域、仓库部门、仓库分类、盘亏仓、次品仓和CCBS仓；区域及三个仓库标志在退货侧缺失时通过唯一仓库主数据补当前属性，必须披露 current-master supplement。
+  - 批次、条码和次品项的净出库分别使用两侧事实中的 batch_no、bar_code、is_defective 独立聚合后相减；不回连原出库改写退货事实的维度值。
+  - 原条码和缸号只允许明确毛出库查询。退货事实无对应字段，且来源单加条码的只读回连未形成可靠映射；默认净出库请求必须返回能力边界，不得静默改用毛出库。
+  - 退货仓库名称、部门和分类优先使用退货事实 whse_name、whse_dept、whse_category；退货事实缺少仓库区域时，才通过 in_whse_id 多对一补充当前仓库主数据 region，并说明不是退货时点历史快照。仓库部门不得与 customer_dept 混用。
+  - 仓库出库属于本域；库存余额、库存成本和库龄仍属于 inventory-query。
+  - 供应商主数据中的 sale_amount 是供应商画像文本字段，不是下单金额，禁止作为本域金额指标。
+  - 条码事实的普通供应商、条码供应商和最终供应商不得混为同一口径；首期普通供应商仍使用销售事实供应商。
+
+answer_rules:
+  - 不适用、未登记或用户未要求的指标不计算且不主动复述；只有用户明确追问时才用业务语言解释可提供的证据与缺失的业务依据，不暴露物理实现。
+  - 当前发布面仅支持 metric mode；模型不可提交 dataset、物理字段或明细计划。
+  - 当前发布面没有 dataset mode；出库、下单和退货指标始终继承各自时间、状态和内部客户固定口径。
+  - 交易查询必须解析出起止时间，但不设置固定最大查询跨度；不得把“跨度较长”本身说成口径错误或拒绝理由。
+  - "`data_updated_at` 不对外解释、不要求出现在回答中，也不作为查询成功与否的判断依据。"
+  - 每次回答都说明实际时间范围。
+  - “销量”或“出库”未限定时明确说明默认采用当期流量净出库口径，并同时给出净出库金额和净出库卷数，不默认附带订单数。
+  - “按仓库看出库”未限定时采用实际仓库净流量，并明确说明退货按实际退入仓扣减；“仓库毛出库”才不扣退货。
+  - “按批次、条码或次品项看出库”未限定时仍采用期间净出库，并说明毛出库与退货按各自事实记录值分组后相减。
+  - “按原条码或缸号看出库”未明确毛出库时，不得执行毛出库并伪装成默认结果；必须说明退货侧缺少可靠维度，询问是否改查毛出库。
+  - “订单数”未限定时明确说明默认采用出库订单数；下单订单数必须明确标为下单口径。
+  - 不存在净订单数；退货单数按 complnt_apply_id，涉及退货的来源出库订单数按 channel_id，二者不得与出库订单数相减。
+  - 默认退货率为当期金额流量退货率；数量或卷数退货率必须由用户明确指定，分母小于等于零时返回空值，超过100%不截断。
+  - 净出库结果允许为负数，不得归零；增长率仅在基期大于零时计算。
+  - 金额默认人民币；用户只说原币时自动按币种分组，明确币种时限定该币种；不同原币不得相加，原币净出库只在同币种内相减。
+  - 备货产品口径必须说明同时包含备货和试备货。
+  - 使用客户、产品或供应商当前主数据属性时，说明它是当前属性补充，不表述为历史事实。
+  - 退货使用独立退货事实和已确认状态范围；不得从出库事实推测退货或把两张事实逐行直接连接。
+  - 支持事实、趋势、结构、排名和异常描述；不做客户去留、人员绩效或其他业务决策。
+
+analysis_boundaries:
+  - 排名和趋势是描述性证据，不证明客户流失、产品失败或业务员能力问题。
+  - 当前主数据与交易时点可能不同，按当前属性回看历史时必须标注限制。
+  - 当前版本没有用户级权限控制；客户联系方式虽经业务确认可查，仍应遵守 100 行返回上限并避免无目的批量展示。
+  - 同期下单和出库不能自动解释为订单级履约、转化或未交付；二者时间字段不同且存在拆单。
+  - 默认净出库是期间流量口径，不追溯退货对应的原始出库月份；毛出库和退货必须按各自事实时间独立聚合。
+  - 按单据类型分析净出库时，毛出库使用 bill_type，退货使用 sale_bill_type；两侧独立聚合后统一输出为 bill_type。
+  - 物理维度只开放仓库、仓库区域、仓库部门、仓库分类、批次、条码、原条码、缸号、盘亏仓、次品仓、次品项和CCBS仓；业务或订单备注、价格明细、接单人和协作文本首期禁止开放。
+  - 上述开放表示维度名称受控，不表示所有维度同时支持净出库。原条码和缸号仅支持显式毛出库；净出库请求不得降级。批次、条码和次品项可按两侧事实直接字段计算期间净流量。
+  - 条码事实一行是一匹真实出库布，销售明细一行是商品色号明细；任何先一对多连接条码再汇总销售明细金额或数量的结果都不可信。
+  - 仓库净出库只表达实际仓库出入流量，不提供按原出库仓的责任归因；用户要求原出库仓归因时不得查询，也不得用实际仓库净流量静默替代。
+  - “原因”只允许指向查询证实的客户、产品、业务员、部门或组织结构变化，不推断客户意图、市场原因或人员责任。

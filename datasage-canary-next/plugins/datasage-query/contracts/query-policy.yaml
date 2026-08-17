@@ -1,0 +1,6 @@
+version: datasage-query-policy/v1
+governed_metric_time_range:
+  start_inclusive: true
+  end_exclusive: true
+  max_days: 1096
+  wider_analysis: split_into_independently_bounded_periods

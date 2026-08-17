@@ -1,0 +1,1100 @@
+version: datasage-mini-receivable-semantics/v6
+domain: receivable
+contract_role: plugin_physical_execution
+model_planner_contract: references/planner-contract.yaml
+triggers: [应收, 应收发生额, 欠款, 当前欠款, 净欠款, 欠款客户, 未核销, 未结清, 欠款天数, 逾期, 逾期金额, 超账期金额, 授信, 无授信有欠款, 账龄]
+
+tables:
+  - vk_dwd.receivable_bill_detail_dwd
+  - vk_dw.customer_debt_bymonth_dw
+  - vk_dwd.customer_aging_dwd
+  - vk_dwd.customer_credit_dwd
+  - vk_dwd.customer_dwd
+
+facts:
+  receivable_occurrence:
+    table: vk_dwd.receivable_bill_detail_dwd
+    grain: 一行是一条应收单明细
+    primary_key: [detail_id]
+    document_key: bill_id
+    time_field: bill_time
+    updated_at: gmt_modified
+  debt_snapshot:
+    table: vk_dw.customer_debt_bymonth_dw
+    grain: 一行是一个月份、客户的欠款快照
+    primary_key: [bill_date, customer_id]
+    time_field: bill_date
+  aging_snapshot:
+    table: vk_dwd.customer_aging_dwd
+    grain: 一行是一个月份、客户的账龄分桶记录
+    primary_key: [bill_date, customer_id]
+    time_field: bill_date
+  credit_policy:
+    table: vk_dwd.customer_credit_dwd
+    grain: 一行是一条客户、组织、币种授信政策
+    primary_key: [id]
+    business_key: [customer_id, org_name, currency_no]
+    updated_at: gmt_modified
+
+defaults:
+  occurrence_time_range: current_month
+  snapshot_time: latest_available_bill_date
+  currency: rmb
+  occurrence_department: customer_dept
+  snapshot_department: customer_dept
+  occurrence_salesperson: [final_sales_id, final_sales_name]
+  snapshot_salesperson: [sales_id, sales_name]
+  organization: org_name
+  exclude_internal_customers: true
+  debt_total_scope: signed_net_debt
+  debt_customer_scope: positive_debt_only
+  credit_join_key: [customer_id, org_name, currency_no]
+  intents:
+    receivable: {metric: receivable_occurrence_amount, answer_scope: 应收发生额人民币}
+    current_debt: {metric: current_debt_amount, answer_scope: 最新月签名净欠款人民币}
+    who_owes_us: {metric: positive_debt_amount, answer_scope: 最新月正欠款客户}
+    open_receivable: {metric: open_receivable_amount, answer_scope: 正数未结清应收人民币}
+    debt_days: {metric: debt_days, answer_scope: 最早未结清应收至今天数}
+    overdue_amount: {metric: overdue_receivable_amount, answer_scope: 按授信天数逐笔判断的逾期应收人民币}
+    excess_credit_amount: {metric: excess_credit_amount, answer_scope: "max(欠款原币减授信原币, 0)后折人民币"}
+    uncredited_debt: {metric: uncredited_positive_debt_amount, answer_scope: 无授信记录客户的正欠款人民币}
+    aging: {metric: aging_total_amount, answer_scope: 最新月账龄结构人民币}
+
+analysis_defaults:
+  occurrence_overview_time: current_natural_month
+  occurrence_trend_without_time: latest_30_natural_days_by_day
+  occurrence_change_without_time:
+    current: latest_30_natural_days
+    comparison: preceding_30_natural_days
+  debt_trend_without_time: latest_6_available_snapshot_months
+  snapshot_comparison_months: 3
+  ranking_limit: 10
+  change_observation_limit: 10
+  disclosure: 说明数据来源、时间、人民币或原币、默认不含内部客户，以及签名净欠款或正欠款口径。
+
+value_contract_templates:
+  entity_exact: &vc_entity_exact
+    kind: entity_exact
+    model_rule: 保留用户明确提供的精确实体 token；由工具做实体预检和稳定身份绑定，不得猜测。
+  source_exact: &vc_source_exact
+    kind: source_exact
+    model_rule: 仅使用用户明确提供或受控结果返回的精确原值；不得猜测、翻译、归一化或扩展。
+  boolean_yn: &vc_boolean_yn
+    kind: closed
+    allowed_values: [y, n]
+    business_meanings: {y: 是, n: 否}
+
+currency_policy_templates:
+  original_currency: &original_currency_policy
+    mode: original_currency
+    column: currency_no
+    require_filter_or_group: true
+    never_sum_mixed_currency: true
+
+dimensions:
+  customer:
+    label: 客户
+    columns: [customer_id, customer_no, customer_name]
+    filter_column: customer_name
+    identity_filter: {entity_type: customer, value_field: canonical_id, column: customer_id}
+    value_contract: *vc_entity_exact
+  occurrence_salesperson:
+    label: 应收发生业务员
+    columns: [final_sales_id, final_sales_name]
+    filter_column: final_sales_name
+    identity_filter: {entity_type: salesperson, value_field: canonical_id, column: final_sales_id}
+    value_contract: *vc_entity_exact
+    answer_note: 应收发生与未结清明细的业务员归属按 final_sales_id、final_sales_name。
+  snapshot_salesperson:
+    label: 欠款快照业务员
+    columns: [sales_id, sales_name]
+    filter_column: sales_name
+    identity_filter: {entity_type: salesperson, value_field: canonical_id, column: sales_id}
+    value_contract: *vc_entity_exact
+    answer_note: 欠款和账龄快照按快照 sales_id、sales_name；未知值保留，不用当前客户负责人补写。
+  credit_salesperson:
+    label: 授信业务员
+    columns: [sales_id, sales_name]
+    filter_column: sales_name
+    identity_filter: {entity_type: salesperson, value_field: canonical_id, column: sales_id}
+    value_contract: *vc_entity_exact
+    answer_note: 授信政策按授信表 sales_id、sales_name。
+  customer_department:
+    label: 客户部门
+    columns: [customer_dept]
+    filter_column: customer_dept
+    value_contract: *vc_source_exact
+    answer_note: 应收发生、未结清、欠款、账龄和授信均按客户所属部门。
+  organization:
+    label: 业务组织
+    columns: [org_name]
+    filter_column: org_name
+    value_contract: *vc_source_exact
+  occurrence_organization:
+    label: 应收发生组织
+    columns: [org_name]
+    filter_column: org_name
+    value_contract: *vc_source_exact
+  settlement_organization:
+    label: 结算组织
+    columns: [settle_org_name]
+    filter_column: settle_org_name
+    value_contract: *vc_source_exact
+  receipt_organization:
+    label: 收款组织
+    columns: [receive_org_name]
+    filter_column: receive_org_name
+    value_contract: *vc_source_exact
+  sales_organization:
+    label: 销售组织
+    columns: [sale_org_name]
+    filter_column: sale_org_name
+    value_contract: *vc_source_exact
+  customer_region:
+    label: 客户区域
+    columns: [customer_region]
+    filter_column: customer_region
+    value_contract: *vc_source_exact
+  ccbs_customer:
+    label: CCBS客户
+    columns: [is_ccbs_cus]
+    filter_column: is_ccbs_cus
+    value_contract: *vc_boolean_yn
+  ha_customer:
+    label: HA客户
+    columns: [is_ha_cus]
+    filter_column: is_ha_cus
+    value_contract: *vc_boolean_yn
+  brand_customer:
+    label: 品牌客户
+    columns: [is_brand_cus]
+    filter_column: is_brand_cus
+    value_contract: *vc_boolean_yn
+  ht_customer:
+    label: HT客户
+    columns: [is_ht_cus]
+    filter_column: is_ht_cus
+    value_contract: *vc_boolean_yn
+  currency:
+    label: 币种
+    columns: [currency_no]
+    filter_column: currency_no
+    value_contract: *vc_source_exact
+  receivable_type:
+    label: 应收类型
+    columns: [bill_type]
+    filter_column: bill_type
+    value_contract: *vc_source_exact
+  product:
+    label: 产品（仅分组）
+    columns: [goods_no, goods_name]
+    filter_column: goods_name
+    value_contract:
+      kind: source_exact
+      filterable: false
+      model_rule: 仅可作为受控分组结果，不接受 metric_filters；不得猜测或绑定产品实体。
+    answer_note: 可用于分组展示；当前事实没有产品稳定主键，单产品实体过滤在产品编码唯一性得到治理前失败关闭。
+  month:
+    label: 月份
+    columns: [bill_date]
+    filter_column: bill_date
+    value_contract: *vc_source_exact
+  current_customer_grade:
+    label: 当前客户等级
+    columns: [{column: customer_grade, alias: current_customer_grade}]
+    filter_column: customer_grade
+    value_contract: *vc_source_exact
+    source: {type: governed_join, dataset: vk_dwd.customer_dwd, local_column: customer_id, remote_column: customer_id, cardinality: many_to_one}
+    answer_note: 当前客户等级只补充当前属性，不代表历史时点属性。
+  current_customer_resource:
+    label: 当前客户来源
+    columns: [{column: customer_resource, alias: current_customer_resource}]
+    filter_column: customer_resource
+    value_contract: *vc_source_exact
+    source: {type: governed_join, dataset: vk_dwd.customer_dwd, local_column: customer_id, remote_column: customer_id, cardinality: many_to_one}
+    answer_note: 当前客户来源只补充当前属性，不代表历史时点属性。
+  current_customer_business_label:
+    label: 当前客户业务标签
+    columns: [{column: biz_label, alias: current_customer_business_label}]
+    filter_column: biz_label
+    value_contract: *vc_source_exact
+    source: {type: governed_join, dataset: vk_dwd.customer_dwd, local_column: customer_id, remote_column: customer_id, cardinality: many_to_one}
+    answer_note: 当前客户业务标签只补充当前属性，不代表历史时点属性。
+  current_customer_owner:
+    label: 当前客户负责人
+    columns:
+      - {column: sales_id, alias: current_customer_owner_id}
+      - {column: sales_name, alias: current_customer_owner_name}
+    filter_column: sales_name
+    value_contract: *vc_source_exact
+    source: {type: governed_join, dataset: vk_dwd.customer_dwd, local_column: customer_id, remote_column: customer_id, cardinality: many_to_one}
+    answer_note: 当前客户负责人只用于补充当前属性，不替代事实或快照中的业务员归属。
+
+current_customer_dimensions: &current_customer_dimensions
+  [current_customer_grade, current_customer_resource, current_customer_business_label, current_customer_owner]
+occurrence_dimensions: &occurrence_dimensions
+  [customer, occurrence_salesperson, customer_department, occurrence_organization, settlement_organization, receipt_organization, sales_organization, customer_region, ccbs_customer, currency, receivable_type, product, current_customer_grade, current_customer_resource, current_customer_business_label, current_customer_owner]
+snapshot_dimensions: &snapshot_dimensions
+  [customer, snapshot_salesperson, customer_department, organization, customer_region, ccbs_customer, ha_customer, brand_customer, ht_customer, currency, month, current_customer_grade, current_customer_resource, current_customer_business_label, current_customer_owner]
+aging_dimensions: &aging_dimensions
+  [customer, snapshot_salesperson, customer_department, organization, customer_region, ccbs_customer, ha_customer, currency, month, current_customer_grade, current_customer_resource, current_customer_business_label, current_customer_owner]
+credit_dimensions: &credit_dimensions
+  [customer, credit_salesperson, customer_department, organization, customer_region, currency, current_customer_grade, current_customer_resource, current_customer_business_label, current_customer_owner]
+
+credit_policy_join: &credit_policy_join
+  dataset: vk_dwd.customer_credit_dwd
+  local_columns: [customer_id, org_name, currency_no]
+  remote_columns: [customer_id, org_name, currency_no]
+  cardinality: many_to_one
+
+current_customer_scope_join: &current_customer_scope_join
+  dataset: vk_dwd.customer_dwd
+  local_columns: [customer_id]
+  remote_columns: [customer_id]
+  cardinality: many_to_one
+  required_filters: {is_inner_cus: {op: eq, value: n}}
+
+default_disclosures:
+  - id: receivable.external-customer.scope
+    mode: required_always
+    text: "应收域指标固定排除内部客户。"
+
+metrics:
+  receivable_occurrence_amount:
+    disclosures:
+      - id: receivable.occurrence.scope
+        mode: required_always
+        text: "应收发生额包含正负应收类型，并排除A状态和内部客户。"
+      - id: receivable.receivable_occurrence_amount.legacy-note
+        mode: contract_only
+        text: "应收发生额包含正负应收类型，排除 A 状态和内部客户，默认人民币。"
+    label: 应收发生额（人民币）
+    business_definition: 所选应收发生期间内的人民币应收发生额，包含全部应收类型，并按治理范围排除无效状态和内部客户。
+    unit: 人民币元
+    table: vk_dwd.receivable_bill_detail_dwd
+    aggregation: sum
+    measure: detail_receivable_rmb
+    time_field: bill_time
+    time_policy: current_month
+    required_filters: {bill_status: {op: ne, value: A}}
+    allowed_dimensions: *occurrence_dimensions
+    answer_note: 应收发生额包含正负应收类型，排除 A 状态和内部客户，默认人民币。
+  receivable_occurrence_amount_original:
+    disclosures:
+      - id: currency.original.no-cross-currency
+        mode: required_always
+        text: "原币金额必须限定单一币种或按币种分组，不同币种不得直接相加。"
+      - id: receivable.receivable_occurrence_amount_original.legacy-note
+        mode: contract_only
+        text: "原币应收必须限定单一币种或按 currency_no 分组。"
+    label: 应收发生额（原币）
+    business_definition: 所选应收发生期间内的原币应收发生额；必须按币种筛选或分组，不得跨币种相加。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.receivable_bill_detail_dwd
+    aggregation: sum
+    measure: detail_receivable_amount
+    currency_policy: *original_currency_policy
+    time_field: bill_time
+    time_policy: current_month
+    required_filters: {bill_status: {op: ne, value: A}}
+    allowed_dimensions: *occurrence_dimensions
+    answer_note: 原币应收必须限定单一币种或按 currency_no 分组。
+  receivable_bill_count:
+    disclosures:
+      - id: receivable.receivable_bill_count.legacy-note
+        mode: contract_only
+        text: "应收单数按 bill_id 非重复计数。"
+    label: 应收单数
+    business_definition: 所选应收发生期间和治理范围内的非重复应收单数量。
+    unit: 单
+    table: vk_dwd.receivable_bill_detail_dwd
+    aggregation: count_distinct
+    measure: bill_id
+    time_field: bill_time
+    time_policy: current_month
+    required_filters: {bill_status: {op: ne, value: A}}
+    allowed_dimensions: *occurrence_dimensions
+    answer_note: 应收单数按 bill_id 非重复计数。
+  receivable_customer_count:
+    disclosures: []
+    label: 应收客户数
+    business_definition: 所选应收发生期间和治理范围内产生应收的非重复客户数量。
+    unit: 客户
+    table: vk_dwd.receivable_bill_detail_dwd
+    aggregation: count_distinct
+    measure: customer_id
+    time_field: bill_time
+    time_policy: current_month
+    required_filters: {bill_status: {op: ne, value: A}}
+    allowed_dimensions: *occurrence_dimensions
+  receivable_quantity:
+    disclosures: []
+    availability:
+      status: pending_validation
+      error_code: SEMANTIC_UNIT_RECONCILIATION_REQUIRED
+      message: 应收商品数量尚未提供可执行单位筛选或分组，完成单位口径核验前不可用于回答。
+    label: 应收商品数量
+    business_definition: 所选应收发生期间和治理范围内的应收商品业务数量。
+    unit_policy: 来源业务数量单位；当前合同不提供单位拆分，不得解释为可跨单位换算的统一物理数量
+    table: vk_dwd.receivable_bill_detail_dwd
+    aggregation: sum
+    measure: goods_num
+    time_field: bill_time
+    time_policy: current_month
+    required_filters: {bill_status: {op: ne, value: A}}
+    allowed_dimensions: *occurrence_dimensions
+  receivable_piece_count:
+    disclosures: []
+    label: 应收卷数
+    business_definition: 所选应收发生期间和治理范围内的应收商品卷数。
+    unit: 卷
+    table: vk_dwd.receivable_bill_detail_dwd
+    aggregation: sum
+    measure: piece_num
+    time_field: bill_time
+    time_policy: current_month
+    required_filters: {bill_status: {op: ne, value: A}}
+    allowed_dimensions: *occurrence_dimensions
+
+  open_receivable_amount:
+    disclosures:
+      - id: receivable.open_receivable_amount.legacy-note
+        mode: contract_only
+        text: "未结清按 detail_unsettled_amount > 0 判定，不使用核销状态；该指标不是当前欠款余额。"
+    label: 未结清应收（人民币）
+    business_definition: 当前仍有正数未结清余额的应收项目，按治理汇率折算后的人民币金额；不等同于欠款快照余额。
+    unit: 人民币元
+    table: vk_dwd.receivable_bill_detail_dwd
+    aggregation: sum_product
+    measure_columns: [detail_unsettled_amount, exchange_rate]
+    time_policy: current_snapshot
+    required_filters: {bill_status: {op: ne, value: A}, detail_unsettled_amount: {op: gt, value: 0}}
+    allowed_dimensions: *occurrence_dimensions
+    answer_note: 未结清按 detail_unsettled_amount > 0 判定，不使用核销状态；该指标不是当前欠款余额。
+  open_receivable_amount_original:
+    disclosures:
+      - id: currency.original.no-cross-currency
+        mode: required_always
+        text: "原币金额必须限定单一币种或按币种分组，不同币种不得直接相加。"
+      - id: receivable.open_receivable_amount_original.legacy-note
+        mode: contract_only
+        text: "未结清原币必须限定单一币种或按 currency_no 分组。"
+    label: 未结清应收（原币）
+    business_definition: 当前仍有正数未结清余额的应收项目原币金额；必须按币种筛选或分组，不得跨币种相加。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.receivable_bill_detail_dwd
+    aggregation: sum
+    measure: detail_unsettled_amount
+    currency_policy: *original_currency_policy
+    time_policy: current_snapshot
+    required_filters: {bill_status: {op: ne, value: A}, detail_unsettled_amount: {op: gt, value: 0}}
+    allowed_dimensions: *occurrence_dimensions
+    answer_note: 未结清原币必须限定单一币种或按 currency_no 分组。
+  open_receivable_bill_count:
+    disclosures: []
+    label: 未结清应收单数
+    business_definition: 当前仍有正数未结清余额的非重复应收单数量。
+    unit: 单
+    table: vk_dwd.receivable_bill_detail_dwd
+    aggregation: count_distinct
+    measure: bill_id
+    time_policy: current_snapshot
+    required_filters: {bill_status: {op: ne, value: A}, detail_unsettled_amount: {op: gt, value: 0}}
+    allowed_dimensions: *occurrence_dimensions
+  open_receivable_customer_count:
+    disclosures: []
+    label: 未结清应收客户数
+    business_definition: 当前至少有一笔正数未结清应收的非重复客户数量。
+    unit: 客户
+    table: vk_dwd.receivable_bill_detail_dwd
+    aggregation: count_distinct
+    measure: customer_id
+    time_policy: current_snapshot
+    required_filters: {bill_status: {op: ne, value: A}, detail_unsettled_amount: {op: gt, value: 0}}
+    allowed_dimensions: *occurrence_dimensions
+  earliest_open_receivable_date:
+    disclosures: []
+    label: 最早未结清应收日期
+    business_definition: 当前正数未结清应收范围内最早的应收发生日期。
+    unit: 日期
+    table: vk_dwd.receivable_bill_detail_dwd
+    aggregation: min
+    measure: bill_time
+    time_policy: current_snapshot
+    required_filters: {bill_status: {op: ne, value: A}, detail_unsettled_amount: {op: gt, value: 0}}
+    allowed_dimensions: *occurrence_dimensions
+  debt_days:
+    disclosures:
+      - id: receivable.debt_days.legacy-note
+        mode: contract_only
+        text: "欠款天数按 DATEDIFF(CURDATE(), MIN(bill_time))，仅使用正数未结清应收明细。"
+    label: 欠款天数
+    business_definition: 从当前最早一笔正数未结清应收的发生日期到今天的自然日数。
+    unit: 自然日
+    table: vk_dwd.receivable_bill_detail_dwd
+    aggregation: days_since_min
+    measure: bill_time
+    time_policy: current_snapshot
+    required_filters: {bill_status: {op: ne, value: A}, detail_unsettled_amount: {op: gt, value: 0}}
+    allowed_dimensions: *occurrence_dimensions
+    answer_note: 欠款天数按 DATEDIFF(CURDATE(), MIN(bill_time))，仅使用正数未结清应收明细。
+
+  current_debt_amount:
+    disclosures:
+      - id: receivable.current-debt.snapshot-meaning
+        mode: required_always
+        text: "当前欠款是最新月签名净欠款，包含正数、负数和零值；负数不代表已经确认的具体业务原因。"
+      - id: receivable.current_debt_amount.legacy-note
+        mode: contract_only
+        text: "当前欠款默认是最新月签名净欠款，包含正数、负数和零值；负数不解释成具体原因。"
+    label: 当前净欠款（人民币）
+    business_definition: 最新可用欠款快照中的人民币净欠款余额，保留正数、负数和零的业务含义。
+    unit: 人民币元
+    table: vk_dw.customer_debt_bymonth_dw
+    aggregation: sum
+    measure: debt_amount_rmb
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions: *snapshot_dimensions
+    answer_note: 当前欠款默认是最新月签名净欠款，包含正数、负数和零值；负数不解释成具体原因。
+  current_debt_amount_original:
+    disclosures:
+      - id: currency.original.no-cross-currency
+        mode: required_always
+        text: "原币金额必须限定单一币种或按币种分组，不同币种不得直接相加。"
+      - id: receivable.current_debt_amount_original.legacy-note
+        mode: contract_only
+        text: "原币欠款必须限定单一币种或按 currency_no 分组。"
+    label: 当前净欠款（原币）
+    business_definition: 最新可用欠款快照中的原币净欠款余额，保留正负值；必须按币种筛选或分组，不得跨币种相加。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dw.customer_debt_bymonth_dw
+    aggregation: sum
+    measure: debt_amount
+    currency_policy: *original_currency_policy
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions: *snapshot_dimensions
+    answer_note: 原币欠款必须限定单一币种或按 currency_no 分组。
+  positive_debt_amount:
+    disclosures:
+      - id: receivable.positive_debt_amount.legacy-note
+        mode: contract_only
+        text: "“哪些客户欠我们”只看 debt_amount_rmb > 0，负数和零不进入名单及排名。"
+    label: 正欠款金额（人民币）
+    business_definition: 最新可用欠款快照中，仅对正数欠款客户统计的人民币欠款金额；负数和零不纳入。
+    unit: 人民币元
+    table: vk_dw.customer_debt_bymonth_dw
+    aggregation: sum_positive
+    measure: debt_amount_rmb
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {debt_amount_rmb: {op: gt, value: 0}}
+    allowed_dimensions: *snapshot_dimensions
+    answer_note: “哪些客户欠我们”只看 debt_amount_rmb > 0，负数和零不进入名单及排名。
+  debt_customer_count:
+    disclosures:
+      - id: receivable.debt_customer_count.legacy-note
+        mode: contract_only
+        text: "欠款客户数是最新快照中正欠款客户 customer_id 的非重复计数。"
+    label: 欠款客户数
+    business_definition: 最新可用欠款快照中存在正数欠款的非重复客户数量。
+    unit: 客户
+    table: vk_dw.customer_debt_bymonth_dw
+    aggregation: count_distinct
+    measure: customer_id
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {debt_amount_rmb: {op: gt, value: 0}}
+    allowed_dimensions: *snapshot_dimensions
+    answer_note: 欠款客户数是最新快照中正欠款客户 customer_id 的非重复计数。
+  debt_balance_trend:
+    disclosures:
+      - id: receivable.debt_balance_trend.legacy-note
+        mode: contract_only
+        text: "历史欠款趋势必须显式提供月份范围，并按 bill_date 月份解释。"
+    label: 欠款余额趋势（人民币）
+    business_definition: 用户明确月份范围内，各月欠款快照人民币净余额的时间序列，保留正负值。
+    unit: 人民币元
+    table: vk_dw.customer_debt_bymonth_dw
+    aggregation: sum
+    measure: debt_amount_rmb
+    time_field: bill_date
+    time_policy: required
+    time_granularity: month
+    required_filters: {}
+    allowed_dimensions: *snapshot_dimensions
+    answer_note: 历史欠款趋势必须显式提供月份范围，并按 bill_date 月份解释。
+
+  aging_total_amount:
+    disclosures:
+      - id: receivable.aging.coverage-boundary
+        mode: required_always
+        text: "账龄总额来自账龄口径，不替代当前欠款；与欠款快照比较时必须说明覆盖差异。"
+      - id: receivable.aging_total_amount.legacy-note
+        mode: contract_only
+        text: "账龄总额来自账龄表，不替代当前欠款；与欠款快照比较时需说明覆盖差异。"
+    label: 账龄总额（人民币）
+    business_definition: 最新可用账龄快照中各账龄分档人民币金额的合计；与欠款快照是独立证据来源。
+    unit: 人民币元
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum_product
+    measure_columns: [debt_amount, exchange_rate]
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions: *aging_dimensions
+    answer_note: 账龄总额来自账龄表，不替代当前欠款；与欠款快照比较时需说明覆盖差异。
+  aging_total_amount_original:
+    disclosures: []
+    label: 账龄总额（原币）
+    business_definition: 最新可用账龄快照中各账龄分档的原币金额合计；必须按币种筛选或分组，不得跨币种相加。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum
+    measure: debt_amount
+    currency_policy: *original_currency_policy
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions: *aging_dimensions
+  aging_0_30_amount:
+    disclosures: []
+    label: 0至30天账龄（人民币）
+    business_definition: 最新账龄快照的0至30天应收人民币金额。
+    unit: 人民币元
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum_product
+    measure_columns: [0_30_debt, exchange_rate]
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions: *aging_dimensions
+  aging_31_60_amount:
+    disclosures: []
+    label: 31至60天账龄（人民币）
+    business_definition: 最新账龄快照的31至60天应收人民币金额。
+    unit: 人民币元
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum_product
+    measure_columns: [31_60_debt, exchange_rate]
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions: *aging_dimensions
+  aging_61_90_amount:
+    disclosures: []
+    label: 61至90天账龄（人民币）
+    business_definition: 最新账龄快照的61至90天应收人民币金额。
+    unit: 人民币元
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum_product
+    measure_columns: [61_90_debt, exchange_rate]
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions: *aging_dimensions
+  aging_91_120_amount:
+    disclosures: []
+    label: 91至120天账龄（人民币）
+    business_definition: 最新账龄快照的91至120天应收人民币金额。
+    unit: 人民币元
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum_product
+    measure_columns: [91_120_debt, exchange_rate]
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions: *aging_dimensions
+  aging_121_150_amount:
+    disclosures: []
+    label: 121至150天账龄（人民币）
+    business_definition: 最新账龄快照的121至150天应收人民币金额。
+    unit: 人民币元
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum_product
+    measure_columns: [121_150_debt, exchange_rate]
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions: *aging_dimensions
+  aging_151_180_amount:
+    disclosures: []
+    label: 151至180天账龄（人民币）
+    business_definition: 最新账龄快照的151至180天应收人民币金额。
+    unit: 人民币元
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum_product
+    measure_columns: [151_180_debt, exchange_rate]
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions: *aging_dimensions
+  aging_181_240_amount:
+    disclosures: []
+    label: 181至240天账龄（人民币）
+    business_definition: 最新账龄快照的181至240天应收人民币金额。
+    unit: 人民币元
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum_product
+    measure_columns: [181_240_debt, exchange_rate]
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions: *aging_dimensions
+  aging_241_300_amount:
+    disclosures: []
+    label: 241至300天账龄（人民币）
+    business_definition: 最新账龄快照的241至300天应收人民币金额。
+    unit: 人民币元
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum_product
+    measure_columns: [241_300_debt, exchange_rate]
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions: *aging_dimensions
+  aging_301_360_amount:
+    disclosures: []
+    label: 301至360天账龄（人民币）
+    business_definition: 最新账龄快照的301至360天应收人民币金额。
+    unit: 人民币元
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum_product
+    measure_columns: [301_360_debt, exchange_rate]
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions: *aging_dimensions
+  aging_over_360_amount:
+    disclosures: []
+    label: 超过360天账龄（人民币）
+    business_definition: 最新账龄快照中超过360天的应收人民币金额。
+    unit: 人民币元
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum_product
+    measure_columns: [361_debt, exchange_rate]
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions: *aging_dimensions
+
+  aging_over_30_amount:
+    disclosures: []
+    label: 超过30天账龄（人民币）
+    business_definition: 最新账龄快照中超过30天的分档金额合计。
+    unit: 人民币元
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum_product_many
+    measure_columns: [31_60_debt, 61_90_debt, 91_120_debt, 121_150_debt, 151_180_debt, 181_240_debt, 241_300_debt, 301_360_debt, 361_debt]
+    multiplier: exchange_rate
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions: *aging_dimensions
+  aging_over_60_amount:
+    disclosures: []
+    label: 超过60天账龄（人民币）
+    business_definition: 最新账龄快照中超过60天的分档金额合计。
+    unit: 人民币元
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum_product_many
+    measure_columns: [61_90_debt, 91_120_debt, 121_150_debt, 151_180_debt, 181_240_debt, 241_300_debt, 301_360_debt, 361_debt]
+    multiplier: exchange_rate
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions: *aging_dimensions
+  aging_over_90_amount:
+    disclosures: []
+    label: 超过90天账龄（人民币）
+    business_definition: 最新账龄快照中超过90天的分档金额合计。
+    unit: 人民币元
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum_product_many
+    measure_columns: [91_120_debt, 121_150_debt, 151_180_debt, 181_240_debt, 241_300_debt, 301_360_debt, 361_debt]
+    multiplier: exchange_rate
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions: *aging_dimensions
+  aging_over_120_amount:
+    disclosures: []
+    label: 超过120天账龄（人民币）
+    business_definition: 最新账龄快照中超过120天的分档金额合计。
+    unit: 人民币元
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum_product_many
+    measure_columns: [121_150_debt, 151_180_debt, 181_240_debt, 241_300_debt, 301_360_debt, 361_debt]
+    multiplier: exchange_rate
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions: *aging_dimensions
+  aging_over_150_amount:
+    disclosures: []
+    label: 超过150天账龄（人民币）
+    business_definition: 最新账龄快照中超过150天的分档金额合计。
+    unit: 人民币元
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum_product_many
+    measure_columns: [151_180_debt, 181_240_debt, 241_300_debt, 301_360_debt, 361_debt]
+    multiplier: exchange_rate
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions: *aging_dimensions
+  aging_over_180_amount:
+    disclosures: []
+    label: 超过180天账龄（人民币）
+    business_definition: 最新账龄快照中超过180天的分档金额合计。
+    unit: 人民币元
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum_product_many
+    measure_columns: [181_240_debt, 241_300_debt, 301_360_debt, 361_debt]
+    multiplier: exchange_rate
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions: *aging_dimensions
+  aging_over_240_amount:
+    disclosures: []
+    label: 超过240天账龄（人民币）
+    business_definition: 最新账龄快照中超过240天的分档金额合计。
+    unit: 人民币元
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum_product_many
+    measure_columns: [241_300_debt, 301_360_debt, 361_debt]
+    multiplier: exchange_rate
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions: *aging_dimensions
+  aging_over_300_amount:
+    disclosures: []
+    label: 超过300天账龄（人民币）
+    business_definition: 最新账龄快照中超过300天的分档金额合计。
+    unit: 人民币元
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum_product_many
+    measure_columns: [301_360_debt, 361_debt]
+    multiplier: exchange_rate
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions: *aging_dimensions
+
+  overdue_receivable_amount:
+    disclosures:
+      - id: receivable.overdue.credit-coverage
+        mode: required_always
+        text: "逾期逐笔按客户、组织和币种授信天数判断；无授信或授信天数为空的明细不计入。"
+      - id: receivable.overdue_receivable_amount.legacy-note
+        mode: contract_only
+        text: "逾期按客户、组织、币种授信天数逐笔判断；无授信或授信天数为空的明细不计入，需说明覆盖范围。"
+    label: 逾期应收金额（人民币）
+    business_definition: 当前正数未结清应收中，超过适用授信天数的部分按治理汇率折算后的人民币金额。
+    unit: 人民币元
+    table: vk_dwd.receivable_bill_detail_dwd
+    aggregation: sum_product
+    measure_columns: [detail_unsettled_amount, exchange_rate]
+    time_policy: current_snapshot
+    required_filters: {bill_status: {op: ne, value: A}, detail_unsettled_amount: {op: gt, value: 0}}
+    metric_join:
+      <<: *credit_policy_join
+      required_not_null: [credit_days]
+      condition: {type: date_plus_days_before_today, date_column: bill_time, days_column: credit_days}
+    allowed_dimensions: *occurrence_dimensions
+    answer_note: 逾期按客户、组织、币种授信天数逐笔判断；无授信或授信天数为空的明细不计入，需说明覆盖范围。
+  overdue_receivable_amount_original:
+    disclosures: []
+    label: 逾期应收金额（原币）
+    business_definition: 当前正数未结清应收中，超过适用授信天数的原币金额；必须按币种筛选或分组，不得跨币种相加。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.receivable_bill_detail_dwd
+    aggregation: sum
+    measure: detail_unsettled_amount
+    currency_policy: *original_currency_policy
+    time_policy: current_snapshot
+    required_filters: {bill_status: {op: ne, value: A}, detail_unsettled_amount: {op: gt, value: 0}}
+    metric_join:
+      <<: *credit_policy_join
+      required_not_null: [credit_days]
+      condition: {type: date_plus_days_before_today, date_column: bill_time, days_column: credit_days}
+    allowed_dimensions: *occurrence_dimensions
+  overdue_customer_count:
+    disclosures: []
+    label: 逾期客户数
+    business_definition: 当前至少有一笔正数未结清应收超过适用授信天数的非重复客户数量。
+    unit: 客户
+    table: vk_dwd.receivable_bill_detail_dwd
+    aggregation: count_distinct
+    measure: customer_id
+    time_policy: current_snapshot
+    required_filters: {bill_status: {op: ne, value: A}, detail_unsettled_amount: {op: gt, value: 0}}
+    metric_join:
+      <<: *credit_policy_join
+      required_not_null: [credit_days]
+      condition: {type: date_plus_days_before_today, date_column: bill_time, days_column: credit_days}
+    allowed_dimensions: *occurrence_dimensions
+  overdue_days:
+    disclosures:
+      - id: receivable.overdue_days.legacy-note
+        mode: contract_only
+        text: "逾期天数是最大逐笔逾期天数；无授信或授信天数为空的客户不进入计算。"
+    label: 逾期天数
+    business_definition: 当前正数未结清应收超过适用授信天数的最大自然日数；未超过时不作为正逾期天数。
+    unit: 自然日
+    table: vk_dwd.receivable_bill_detail_dwd
+    aggregation: max_days_over
+    measure: bill_time
+    subtract_measure: credit_days
+    time_policy: current_snapshot
+    required_filters: {bill_status: {op: ne, value: A}, detail_unsettled_amount: {op: gt, value: 0}}
+    metric_join:
+      <<: *credit_policy_join
+      required_not_null: [credit_days]
+      condition: {type: date_plus_days_before_today, date_column: bill_time, days_column: credit_days}
+    allowed_dimensions: *occurrence_dimensions
+    answer_note: 逾期天数是最大逐笔逾期天数；无授信或授信天数为空的客户不进入计算。
+
+  excess_credit_amount:
+    disclosures:
+      - id: receivable.excess-credit.calculation-and-coverage
+        mode: required_always
+        text: "超授信金额按正欠款超过授信金额的部分计算，负差额归零；无授信记录或授信金额为空的客户不计入，另由无授信有欠款指标单列。"
+      - id: receivable.excess_credit_amount.legacy-note
+        mode: contract_only
+        text: "按最新欠款快照逐行计算 GREATEST(debt_amount - credit_amount, 0) × exchange_rate；授信金额为空的行不进入计算。"
+    label: 超授信金额（人民币）
+    business_definition: 最新欠款快照中正欠款超过授信金额的人民币部分；负差额按零处理，不含无授信记录或授信金额为空的客户。
+    unit: 人民币元
+    formula: SUM(GREATEST(debt_amount - credit_amount, 0) * exchange_rate)
+    table: vk_dw.customer_debt_bymonth_dw
+    aggregation: sum_positive_difference_product
+    measure: debt_amount
+    subtract_measure: credit_amount
+    multiplier: exchange_rate
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {debt_amount: {op: gt, value: 0}}
+    metric_join:
+      <<: *credit_policy_join
+      required_not_null: [credit_amount]
+    allowed_dimensions: *snapshot_dimensions
+    answer_note: 超授信金额负差额归零；无授信记录或授信金额为空的客户不混入本指标。
+  excess_credit_amount_original:
+    disclosures:
+      - id: currency.original.no-cross-currency
+        mode: required_always
+        text: "原币金额必须限定单一币种或按币种分组，不同币种不得直接相加。"
+      - id: receivable.excess-credit.calculation-and-coverage
+        mode: required_always
+        text: "超授信金额按正欠款超过授信金额的部分计算，负差额归零；无授信记录或授信金额为空的客户不计入，另由无授信有欠款指标单列。"
+      - id: receivable.excess_credit_amount_original.legacy-note
+        mode: contract_only
+        text: "逐行计算 GREATEST(debt_amount - credit_amount, 0)；授信金额为空的行不进入计算。"
+    label: 超授信金额（原币）
+    business_definition: 最新欠款快照中正欠款超过授信金额的原币部分；负差额按零处理，不含无授信记录或授信金额为空的客户；必须按币种筛选或分组，不得跨币种相加。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dw.customer_debt_bymonth_dw
+    aggregation: sum_positive_difference
+    measure: debt_amount
+    subtract_measure: credit_amount
+    currency_policy: *original_currency_policy
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {debt_amount: {op: gt, value: 0}}
+    metric_join:
+      <<: *credit_policy_join
+      required_not_null: [credit_amount]
+    allowed_dimensions: *snapshot_dimensions
+    answer_note: 原币超授信金额必须限定单一币种或按 currency_no 分组；负差额归零；无授信或授信金额为空的客户不计入。
+  uncredited_positive_debt_amount:
+    disclosures:
+      - id: receivable.uncredited_positive_debt_amount.legacy-note
+        mode: contract_only
+        text: "本指标单列无授信记录的正欠款，不与超账期金额混算。"
+    label: 无授信有欠款金额（人民币）
+    business_definition: 最新欠款快照中存在正数欠款、但在相同客户组织与币种范围内没有授信记录的人民币金额。
+    unit: 人民币元
+    table: vk_dw.customer_debt_bymonth_dw
+    aggregation: sum_positive
+    measure: debt_amount_rmb
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {debt_amount_rmb: {op: gt, value: 0}}
+    metric_join:
+      <<: *credit_policy_join
+      required_missing: id
+    allowed_dimensions: *snapshot_dimensions
+    answer_note: 本指标单列无授信记录的正欠款，不与超账期金额混算。
+  uncredited_debt_customer_count:
+    disclosures:
+      - id: receivable.uncredited_debt_customer_count.legacy-note
+        mode: contract_only
+        text: "按 customer_id 非重复计数；同一客户多个无授信币种仍只计一个客户。"
+    label: 无授信有欠款客户数
+    business_definition: 最新欠款快照中存在正数欠款、但在相同客户组织与币种范围内没有授信记录的非重复客户数量。
+    unit: 客户
+    table: vk_dw.customer_debt_bymonth_dw
+    aggregation: count_distinct
+    measure: customer_id
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {debt_amount_rmb: {op: gt, value: 0}}
+    metric_join:
+      <<: *credit_policy_join
+      required_missing: id
+    allowed_dimensions: *snapshot_dimensions
+    answer_note: 按 customer_id 非重复计数；同一客户多个无授信币种仍只计一个客户。
+  credit_amount_original:
+    disclosures:
+      - id: currency.original.no-cross-currency
+        mode: required_always
+        text: "原币金额必须限定单一币种或按币种分组，不同币种不得直接相加。"
+      - id: receivable.credit_amount_original.legacy-note
+        mode: contract_only
+        text: "授信金额按客户、组织、币种维护，不同币种不得直接相加；当前内部客户按客户主数据排除。"
+    label: 授信金额（原币）
+    business_definition: 当前客户组织与币种范围内维护的原币授信金额；必须按币种筛选或分组，不得跨币种相加。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.customer_credit_dwd
+    aggregation: sum
+    measure: credit_amount
+    currency_policy: *original_currency_policy
+    time_policy: current_snapshot
+    required_filters: {}
+    metric_join: *current_customer_scope_join
+    allowed_dimensions: *credit_dimensions
+    answer_note: 授信金额按客户、组织、币种维护，不同币种不得直接相加；当前内部客户按客户主数据排除。
+  credit_days:
+    disclosures:
+      - id: receivable.credit_days.legacy-note
+        mode: contract_only
+        text: "查询授信天数时应限定或按客户、组织、币种分组；空值表示未知，不按零处理；当前内部客户按客户主数据排除。"
+    label: 授信天数
+    business_definition: 当前客户组织与币种范围内维护的授信账期天数；缺失表示未知，不按零处理。
+    unit: 自然日
+    table: vk_dwd.customer_credit_dwd
+    aggregation: max
+    measure: credit_days
+    time_policy: current_snapshot
+    required_filters: {}
+    metric_join: *current_customer_scope_join
+    allowed_dimensions: *credit_dimensions
+    answer_note: 查询授信天数时应限定或按客户、组织、币种分组；空值表示未知，不按零处理；当前内部客户按客户主数据排除。
+
+analysis_recipes_status:
+  status: reference_only_not_runtime_or_model_authority
+  authoritative_source: planner_contract
+  rule: 本块仅保留发布维护比对；运行时不读取，合同服务不投影，不能作为固定配方或指标授权来源。
+
+analysis_recipes:
+  receivable_occurrence_overview:
+    question_types: [本月应收怎么样, 应收发生整体情况, 应收新增情况]
+    max_tool_calls: 1
+    requests: [receivable_occurrence_amount, receivable_bill_count, receivable_customer_count]
+    default_time: current_natural_month
+    output: 应收发生额、非重复应收单数、涉及客户数及明确时间范围。
+
+  current_debt_overview:
+    question_types: [当前欠款整体怎么样, 现在欠款情况, 当前未结清情况]
+    max_tool_calls: 1
+    requests: [current_debt_amount, positive_debt_amount, debt_customer_count, open_receivable_amount, open_receivable_customer_count]
+    output_order: [最新签名净欠款, 最新正欠款, 正欠款客户数, 当前未结清应收, 未结清客户数, 来源差异]
+    rule: 欠款快照和未结清明细分别展示，不相互替代或强制勾稽。
+
+  aging_structure:
+    question_types: [账龄结构怎么样, 欠款账龄分布, 各账龄段金额]
+    max_tool_calls: 2
+    first_call: [aging_0_30_amount, aging_31_60_amount, aging_61_90_amount, aging_91_120_amount, aging_121_150_amount]
+    second_call: [aging_151_180_amount, aging_181_240_amount, aging_241_300_amount, aging_301_360_amount, aging_over_360_amount]
+    snapshot: latest_available_bill_date
+    output: 十个物理账龄桶分别展示；账龄表不替代当前欠款。
+
+  trend_change:
+    question_types: [应收趋势怎么样, 欠款走势, 最近欠款变化]
+    max_tool_calls: 1
+    modes:
+      occurrence:
+        metric: receivable_occurrence_amount
+        default_time: latest_30_natural_days
+        time_bucket: day
+      debt_snapshot:
+        metric: debt_balance_trend
+        default_time: latest_6_available_snapshot_months
+        dimension: month
+    output: 按时间升序展示，并明确应收发生或欠款快照来源。
+
+  change_observations:
+    question_types: [哪些客户应收增长最多, 哪些部门欠款变差, 欠款变化来自哪里]
+    label: partial_observations_only
+    max_tool_calls: 1
+    modes:
+      occurrence:
+        metric: receivable_occurrence_amount
+        allowed_dimensions: [customer, occurrence_salesperson, customer_department, occurrence_organization]
+        comparison: {kind: previous_period}
+        default_time:
+          current: latest_30_natural_days
+          comparison: preceding_30_natural_days
+      debt_snapshot:
+        metric: positive_debt_amount
+        allowed_dimensions: [customer, snapshot_salesperson, customer_department, organization]
+        comparison: {kind: snapshot_months_before, months: 3}
+    default_limit: 10
+    output_fields: [metric_value, comparison_value, delta_value, change_rate]
+    interpretation: 排名和分组差异只是未完全分解的结构 observations；不得称为驱动、贡献或原因，未展示分组也不代表没有变化。
+
+  customer_receivable_card:
+    question_types: [某客户应收怎么样, 某客户现在欠多少, 某客户欠款情况]
+    max_tool_calls: 2
+    required_filter: one_explicit_customer
+    first_call: [current_debt_amount, positive_debt_amount, open_receivable_amount, debt_days, aging_over_90_amount]
+    optional_second_call: receivable_occurrence_amount_with_time_bucket_or_previous_period
+    output_order: [当前净欠款和正欠款, 未结清与欠款天数, 长账龄, 应收发生趋势, 来源限制]
+
+  source_reconciliation:
+    question_types: [欠款和未结清为什么对不上, 欠款与账龄差异, 三个数为什么不一致]
+    max_tool_calls: 1
+    requests: [current_debt_amount, open_receivable_amount, aging_total_amount]
+    rule: 保持欠款快照、应收明细和账龄快照各自口径；仅报告差异和覆盖限制，不强行调平或推测原因。
+
+  explain_change:
+    question_types: [为什么应收增加, 为什么欠款上升, 欠款变化原因]
+    max_tool_calls: 2
+    first: change_observations
+    optional_second_call: drill_down_one_governed_dimension_from_the_same_source
+    causal_status: unavailable_without_independent_evidence
+    output: 只报告已验证的客户、部门、业务员或组织结构观察；原因必须有独立证据，否则明确为当前数据无法验证。
+
+query_rules:
+  - 应收发生额使用应收明细；当前或历史欠款使用欠款月快照；账龄只使用账龄表；授信使用客户授信表。
+  - 应收发生、未结清、欠款和账龄固定排除内部客户；应收事实另排除 bill_status = A，其他状态和全部应收类型均保留。
+  - 当前欠款默认是最新 bill_date 的签名净欠款；总额保留正、负、零。“哪些客户欠款”只看正数，零和负数不进入名单及排名。
+  - 未结清按 detail_unsettled_amount > 0 判定，不使用 bill_verification_status；未结清明细不能替代当前欠款快照。
+  - 欠款天数从最早正数未结清应收 bill_time 到今天；逾期天数再减该客户、组织、币种的 credit_days。
+  - 逾期金额逐条应收明细判断并汇总，不使用“总欠款是否逾期”的粗略替代。
+  - 授信关联固定使用 customer_id + org_name + currency_no，模型不得改成单字段关联。
+  - 无授信记录或 credit_days 为空的明细不进入逾期指标；结果必须提示授信覆盖限制。
+  - “超授信金额”按 max(欠款金额 - 授信金额, 0) 计算；无授信或授信金额为空的客户不计入，并由无授信有欠款指标单列。
+  - 原币金额必须限定单一 currency_no 或按币种分组；默认货币指标统一人民币。
+  - 应收发生、欠款和账龄的部门统一使用 customer_dept；组织统一使用 org_name；发生额业务员是 final_sales，欠款和账龄业务员是快照 sales。
+  - 当前客户主数据只补充事实或快照没有的当前属性，不得覆盖历史已有属性；未知快照业务员不补写。
+
+answer_contract:
+  - 说明时间范围、人民币或原币、指标来源以及当前欠款是签名净额还是正欠款口径。
+  - 每个应收域结果必须明确说明不含内部客户；按部门或组织展示时说明采用客户所属部门和业务组织口径。
+  - 回答逾期、超授信金额时说明授信关联口径、负差额归零和无授信客户的处理方式。
+  - 回答账龄时说明账龄表用于结构分析，不能替代当前欠款或精确欠款天数。
+  - 查询失败、无数据、数值为零和结果被截断必须区分，不得编造数值。
+
+analysis_boundaries:
+  - 负欠款可能来自退货等多种业务过程，本 Profile 不在缺少证据时解释具体原因。
+  - 欠款、账龄、逾期或超授信是描述性证据，不能单独认定客户违约、业务员失职或采取停供等决策。
+  - 当前 Profile 只提供查询、描述和受证据支持的分析，不做业务决策或责任认定。
+  - 应收发生、当前欠款、未结清应收和账龄结构来自不同粒度或时点，不能假设天然一致或强行调平。
+  - “原因”只允许指向同一来源内查询证实的客户、部门、业务员或组织变化，不推断付款意图、争议原因或责任。

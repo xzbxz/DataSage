@@ -1,0 +1,152 @@
+_config_version: 34
+timezone: Asia/Shanghai
+model:
+  provider: deepseek
+  default: deepseek-v4-flash
+  base_url: https://api.deepseek.com/v1
+agent:
+  reasoning_effort: high
+  tool_use_enforcement: auto
+  intent_ack_continuation: auto
+  task_completion_guidance: true
+  parallel_tool_call_guidance: true
+  disabled_toolsets: []
+platform_toolsets:
+  cli:
+    - hermes-cli
+    - datasage-query
+  wecom:
+    - datasage-query
+    - clarify
+    - todo
+  cron:
+    - datasage-query
+terminal:
+  backend: local
+  cwd: ${HERMES_HOME}/workspace
+  timeout: 180
+  home_mode: auto
+privacy:
+  redact_pii: true
+security:
+  redact_secrets: true
+hooks:
+  output_spill:
+    max_chars: 16000
+plugins:
+  enabled:
+    - datasage-query
+  disabled: []
+  entries:
+    datasage-query:
+      allow_tool_override: false
+      settings:
+        production_mode: false
+        canary_accept_existing_account: true
+        require_tls: false
+        mysql_allowed_grant_scopes: []
+        mysql_connect_timeout_seconds: 8
+        mysql_health_connect_timeout_seconds: 5
+        mysql_grant_audit_timeout_seconds: 10
+        mysql_query_timeout_seconds: 30
+        call_timeout_seconds: 60
+        max_concurrent_queries: 4
+        entity_preflight_max_lookups: 10
+        max_rows: 100
+        max_cell_chars: 2000
+        max_dimension_display_chars: 80
+        # Hermes' executor has an effective ~100k character ceiling. Preserve
+        # internal proof construction, then bound the final JSON wire envelope.
+        max_tool_result_chars: 90000
+        max_result_bytes: 262144
+        max_batch_bytes: 524288
+        # Business owner approval recorded 2026-08-11: every authenticated
+        # WeCom member may use the complete governed DataSage data surface.
+        data_entitlements:
+          enforcement: enforce
+          default_effect: deny
+          principals:
+            - platform: wecom
+              user_id: "*"
+              tools:
+                - datasage_catalog
+                - datasage_entity_resolve
+                - datasage_reference
+                - datasage_query
+              domains: ["*"]
+              metrics:
+                delivery: ["*"]
+                receipt: ["*"]
+                receivable: ["*"]
+                target: ["*"]
+                customer_risk: ["*"]
+                inventory: ["*"]
+              entity_types: ["*"]
+              allow_catalog_discovery: true
+              allow_unscoped_entity_resolution: true
+              allow_type_neutral_entity_resolution: true
+              allow_entity_resolution_all_rows: true
+              reference_sources:
+                - expert_playbooks
+                - answer_boundary
+                - entity_guidance
+                - query_rules
+                - planner_delivery
+                - planner_receipt
+                - planner_receivable
+                - planner_target
+                - planner_customer_risk
+                - planner_inventory
+              allow_shared_references: true
+              allow_reference_index: true
+              allow_all_rows: true
+skills:
+  template_vars: true
+  inline_shell: false
+  guard_agent_created: false
+  write_approval: false
+memory:
+  write_approval: false
+sessions:
+  auto_prune: true
+  retention_days: 30
+logging:
+  level: INFO
+  max_size_mb: 5
+  backup_count: 3
+platforms:
+  wecom:
+    enabled: true
+    extra:
+      bot_id: ${WECOM_BOT_ID}
+      secret: ${WECOM_SECRET}
+      dm_policy: allowlist
+      allow_from: ["*"]
+      group_policy: allowlist
+      group_allow_from: ["*"]
+      groups:
+        "*":
+          allow_from: ["*"]
+      allow_admin_from: []
+      user_allowed_commands:
+        - new
+        - help
+        - status
+      group_user_allowed_commands:
+        - new
+        - help
+        - status
+streaming:
+  enabled: true
+approvals:
+  destructive_slash_confirm: false
+onboarding:
+  profile_build: "off"
+  seen:
+    busy_input_prompt: true
+    openclaw_residue_cleanup: true
+    tool_progress_prompt: true
+compression:
+  enabled: true
+  threshold: 0.3
+  target_ratio: 0.2

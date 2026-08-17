@@ -1,0 +1,581 @@
+version: datasage-mini-datasets/v9
+
+defaults:
+  max_detail_rows: 100
+  max_requests_per_call: 10
+  default_currency: rmb
+  blocked_columns:
+    - cost
+    - cost_price
+    - profit
+    - gross_profit
+    - deal_price
+    - overpart_price
+    - purchase_cost_price
+    - purchase_price
+    - ddp_price
+    - sale_price
+    - unit_price
+    - partner_ids
+    - partner_names
+    - creator_id
+    - modifier_id
+    - gmt_create
+    - gmt_modified
+    - void_reason
+    - remarks
+    - salary
+    - commission
+
+datasets:
+  vk_dwd.customer_dwd:
+    domains: [shared]
+    kind: master_snapshot
+    grain: one_row_per_customer
+    primary_key: [customer_id]
+    updated_at: gmt_modified
+    allowed_columns: [customer_id, customer_no, customer_name, customer_resource, sales_id, sales_name, customer_grade, customer_label, biz_label, customer_type, parent_org_ids, org_name, customer_dept, customer_region, is_ht_cus, is_ha_cus, is_inner_cus, is_ccbs_cus, is_brand_cus, is_vip_cus, default_currency_no, customer_category, is_delete, is_void]
+    required_filters:
+      - {column: is_delete, op: eq, value: n}
+      - {column: is_void, op: eq, value: n}
+    dataset_query_policies:
+      default: {mode: detail_only, time_requirement: forbidden}
+    joins: []
+    warnings:
+      - Current attributes are not transaction-time history.
+
+  vk_dwd.employee_dwd:
+    domains: [shared]
+    kind: master_snapshot
+    grain: current_employee_identity_record_with_known_duplicate
+    primary_key: []
+    candidate_key_sets:
+      - [id]
+      - [person_id]
+      - [person_no]
+      - [erp_account]
+      - [wecom_account]
+    updated_at: gmt_modified
+    allowed_columns: [person_id, person_no, person_name, depts, region, position, country, main_dept, alias, wecom_status, title, is_delete]
+    forbidden_columns: [id, creator_id, modifier_id, gmt_create, gmt_modified, sex, erp_account, wecom_account, wecom_name, direct_leaders]
+    required_filters: []
+    dataset_query_policies:
+      default: {mode: detail_only, time_requirement: forbidden}
+    joins: []
+    identity_mappings:
+      fact_salesperson: {local_columns: [sales_id, final_sales_id], remote_column: person_id}
+      erp_identity: {column: person_id}
+      wecom_identity: {column: wecom_account}
+    data_quality:
+      status: blocked_for_metric_join
+      evidence_date: 2026-07-17
+      observed: 632_rows_631_distinct_id_551_distinct_person_id_one_conflicting_payroll_leave_pair
+      release_condition: person_id_is_unique_or_an_owner_confirmed_deterministic_canonical_view_exists
+    warnings:
+      - Fact sales_id or final_sales_id maps to employee person_id; never join transaction facts by id or person_name.
+      - The physical id is a mixed identity: it equals person_id when ERP identity exists and otherwise equals wecom_account.
+      - Current employee attributes supplement facts but never replace transaction-time salesperson ownership or department.
+      - Historical fact analysis must not filter to payroll employees because that would remove departed employees' history.
+      - Metric joins are disabled until the known duplicate and conflicting payroll/leave status are resolved deterministically.
+
+  vk_dwd.goods_detail_dwd:
+    domains: [shared]
+    kind: master_snapshot
+    grain: one_row_per_product
+    primary_key: [goods_id]
+    updated_at: gmt_modified
+    allowed_columns: [goods_id, goods_no, goods_name, unit, weaving_way, weight, width, technology, component, m_kg, kg_m_num, is_self, is_customized, is_parabolic, is_embryo, supplier_id, usage, min_weight, pattern, is_push, category_name, supplier_name, is_ht, is_accessory, goods_region, is_print, moq_num, supplier_no, min_days, max_days, alias, is_ccbs, first_purchase_time, is_delete, is_void]
+    required_filters:
+      - {column: is_delete, op: eq, value: n}
+      - {column: is_void, op: eq, value: n}
+    dataset_query_policies:
+      default: {mode: detail_only, time_requirement: forbidden}
+    joins: []
+    warnings:
+      - Current attributes are not transaction-time history.
+
+  vk_ods.goods_sku_ods:
+    domains: [shared]
+    kind: master_snapshot
+    grain: one_row_per_product_color
+    primary_key: [sku_id]
+    updated_at: gmt_modified
+    allowed_columns: [sku_id, goods_id, attr_val, color_label, is_delete, is_void]
+    required_filters:
+      - {column: is_delete, op: eq, value: n}
+      - {column: is_void, op: eq, value: n}
+    dataset_query_policies:
+      default: {mode: detail_only, time_requirement: forbidden}
+    joins: []
+    warnings:
+      - Current SKU status must not remove historical delivery facts; apply active filters in a LEFT JOIN ON clause.
+
+  vk_dwd.supplier_info_dwd:
+    domains: [shared]
+    kind: master_snapshot
+    grain: one_row_per_supplier
+    primary_key: [supplier_id]
+    updated_at: gmt_modified
+    allowed_columns: [supplier_id, supplier_no, supplier_name, supplier_region, supplier_full_name, org_id, supplier_group_id, supplier_type, supplier_type_no, supplier_level, main_products, employee_num, cooperation_year, currency_no, company_address, is_invoice, first_cooperation_time, settlement_method]
+    required_filters: []
+    dataset_query_policies:
+      default: {mode: detail_only, time_requirement: forbidden}
+    joins: []
+    warnings:
+      - Current attributes are not transaction-time history.
+      - The physical sale_amount column is intentionally excluded; it is supplier-profile text, not an order amount metric.
+
+  vk_ods.ready_goods_detail:
+    domains: [delivery, inventory]
+    kind: lifecycle_reference
+    grain: one_ready_or_trial_ready_product_department_lifecycle
+    primary_key: [id]
+    updated_at: null
+    allowed_columns: [id, goods_id, goods_no, goods_name, dept, type, supplier, rolls_g, start_time, end_time]
+    required_filters: []
+    dataset_query_policies:
+      default: {mode: detail_only, time_requirement: forbidden}
+    joins: []
+    warnings:
+      - A product and department can have multiple lifecycle rows; never directly join this table to delivery facts.
+      - Standard delivery metrics use the fact is_ready field, where ready and trial-ready are both included.
+
+  vk_dwd.whse_info_dwd:
+    domains: [delivery, inventory]
+    kind: master_snapshot
+    grain: one_row_per_warehouse
+    primary_key: [whse_id]
+    updated_at: gmt_modified
+    allowed_columns: [whse_id, whse_name, whse_full_name, whse_type, whse_category, org_id, org_name, region, dept_name, is_missing, is_ccbs, is_defective]
+    required_filters: []
+    dataset_query_policies:
+      default: {mode: detail_only, time_requirement: forbidden}
+    joins: []
+    warnings:
+      - Warehouse attributes are current master data, not transaction-time history.
+      - Ordinary sale-detail delivery facts have no whse_id; joining them by org_id would multiply delivery rows and is forbidden.
+      - Delivery warehouse flow may join only the barcode fact by whse_id or the return fact by in_whse_id.
+
+  vk_dwd.sale_bill_goods_detail_dwd:
+    domains: [delivery, order, target, customer_risk]
+    kind: fact
+    grain: one_sales_or_delivery_document_product_color_detail
+    primary_key: [goods_detail_id]
+    updated_at: gmt_modified
+    allowed_columns: [goods_detail_id, sale_bill_id, delivery_time, sale_time, bill_status, is_inner_cus, currency_no, delivery_exchange_rate, sale_exchange_rate, delivery_amount_rmb, sale_amount_rmb, delivery_amount, sale_amount, sorted_goods_num, sorted_piece_num, sale_goods_num, sale_piece_num, customer_id, customer_no, customer_name, customer_dept, customer_region, customer_type, customer_category, customer_label, sales_id, sales_name, org_name, goods_id, goods_no, goods_name, goods_region, goods_category, goods_sku_id, attr_val, color_label, supplier_id, supplier_no, supplier_name, is_ready, is_print, is_ht, bill_type, is_brand_cus, is_ha_cus, is_ccbs_cus, is_ht_cus, is_vip_cus, is_customized]
+    forbidden_columns: [is_self]
+    required_filters: []
+    dataset_query_policies:
+      delivery:
+        mode: detail_only
+        time_requirement: required
+        time_routes:
+          delivery_time:
+            format: date
+            required_filters:
+              - {column: bill_status, op: eq, value: 6}
+              - {column: is_inner_cus, op: eq, value: n}
+          sale_time:
+            format: date
+            required_filters:
+              - {column: is_inner_cus, op: eq, value: n}
+        companion_rules:
+          - {if_selected_any: [delivery_amount, sale_amount], require_selected: [currency_no], error_code: CURRENCY_SCOPE_REQUIRED}
+    joins:
+      - {target: vk_dwd.customer_dwd, local: [customer_id], remote: [customer_id], cardinality: many_to_one, stage: before_metric_aggregation}
+      - {target: vk_dwd.goods_detail_dwd, local: [goods_id], remote: [goods_id], cardinality: many_to_one, stage: before_metric_aggregation}
+      - {target: vk_ods.goods_sku_ods, local: [goods_sku_id], remote: [sku_id], cardinality: many_to_one, stage: before_metric_aggregation}
+      - {target: vk_dwd.supplier_info_dwd, local: [supplier_id], remote: [supplier_id], cardinality: many_to_one, stage: before_metric_aggregation}
+    derived_fields:
+      is_ready:
+        source: vk_ods.ready_goods_detail
+        relationship: exists
+        local_keys: [goods_id, customer_dept]
+        remote_keys: [goods_id, dept]
+        event_time: sale_time
+        start_field: start_time
+        end_field: end_time
+        accepted_types: [备货, 试备货]
+        query_policy: use_fact_copy
+    warnings:
+      - Delivery uses delivery_time and bill_status = 6; order uses sale_time and must not inherit that delivery status filter.
+      - Fact is_self is deprecated and forbidden; ready-goods queries use is_ready.
+      - Fact is_customized is an order attribute; product-master is_customized is a different current product attribute.
+      - Aggregate before joining another fact to avoid multiplication; only governed many-to-one master joins are supported for metric dimensions.
+
+  vk_dwd.delivery_return_detail_dwd:
+    domains: [delivery, target, customer_risk]
+    kind: fact
+    grain: one_actual_returned_piece_or_barcode
+    primary_key: [barcode_detail_id]
+    updated_at: gmt_modified
+    allowed_columns: [barcode_detail_id, complnt_apply_id, complnt_no, complnt_goods_id, channel_id, channel_no, sale_bill_type, statement_time, status, complnt_type, channel_type, return_amount_rmb, return_amount, return_goods_num, return_piece_num, currency_no, in_whse_id, whse_name, whse_dept, whse_category, batch_no, bar_code, is_defective, customer_id, customer_no, customer_name, customer_dept, customer_region, customer_type, customer_category, sales_id, sales_name, biz_org, biz_dept, biz_region, goods_id, goods_no, goods_name, goods_region, goods_sku_id, attr_val, color_label, supplier_id, supplier_no, supplier_name, is_ready, is_print, is_customized, is_brand_cus, is_ha_cus, is_ccbs_cus, is_ht_cus, is_vip_cus, is_inner_cus]
+    required_filters: []
+    dataset_query_policies:
+      delivery:
+        mode: detail_only
+        time_requirement: required
+        time_routes:
+          statement_time:
+            format: date
+            required_filters:
+              - {column: status, op: eq, value: 4}
+              - {column: complnt_type, op: eq, value: 1}
+              - {column: channel_type, op: eq, value: 1}
+              - {column: is_inner_cus, op: eq, value: n}
+        companion_rules:
+          - {if_selected_any: [return_amount], require_selected: [currency_no], error_code: CURRENCY_SCOPE_REQUIRED}
+    joins:
+      - {target: vk_dwd.customer_dwd, local: [customer_id], remote: [customer_id], cardinality: many_to_one, stage: before_metric_aggregation}
+      - {target: vk_dwd.goods_detail_dwd, local: [goods_id], remote: [goods_id], cardinality: many_to_one, stage: before_metric_aggregation}
+      - {target: vk_dwd.supplier_info_dwd, local: [supplier_id], remote: [supplier_id], cardinality: many_to_one, stage: before_metric_aggregation}
+      - {target: vk_dwd.whse_info_dwd, local: [in_whse_id], remote: [whse_id], cardinality: many_to_one, stage: before_metric_aggregation}
+    warnings:
+      - Standard delivery returns use statement_time, status = 4, complnt_type = 1, channel_type = 1, and exclude internal customers.
+      - Return salesperson and ready-goods attribution use this return fact; they are not inherited from the source delivery.
+      - Return document type uses the fact sale_bill_type field and is exposed as the governed bill_type dimension; it must not be backfilled from the source delivery.
+      - The table has no goods_category, customer_label, or product is_ht snapshot. Missing attributes may use an explicitly disclosed current master attribute.
+      - Never join this fact row-by-row to delivery facts for net metrics; aggregate each fact independently and combine the aggregates.
+
+  vk_dwd.delivery_bill_barcode_detail_dwd:
+    domains: [delivery]
+    kind: fact
+    grain: one_actual_outbound_piece_or_barcode
+    primary_key: [barcode_detail_id]
+    updated_at: gmt_modified
+    metric_only: true
+    allowed_columns: [barcode_detail_id, sale_bill_id, sale_bill_goods_id, delivery_time, sale_time, whse_id, whse_name, whse_region, whse_dept, whse_category, bar_code, resource_barcode, batch_no, cylinder_no, goods_id, goods_sku_id, currency_no, delivery_amount, delivery_amount_rmb, exchange_rate, goods_num, piece_num, is_inner_cus, is_missing, is_defective_whse, is_defective, is_ccbs_whse]
+    required_filters: []
+    joins:
+      - {target: vk_dwd.sale_bill_goods_detail_dwd, local: [sale_bill_goods_id], remote: [goods_detail_id], cardinality: many_to_one, stage: before_metric_aggregation}
+      - {target: vk_dwd.whse_info_dwd, local: [whse_id], remote: [whse_id], cardinality: many_to_one, stage: before_metric_aggregation}
+    warnings:
+      - Physical outbound metrics aggregate this barcode fact's own measures; never re-sum sale-detail measures after the one-to-many relationship.
+      - A governed many-to-one join to sale detail enforces bill_status = 6 without changing the barcode grain.
+      - Dataset mode is disabled because the valid-delivery status is a related-table rule; use governed physical-delivery metrics.
+      - Barcode is_self and is_customized are intentionally not exposed in the first phase.
+      - Business remarks, order remarks, receiver or collaborator text, and price-detail fields are intentionally excluded.
+
+  vk_dwd.receive_bill_detail_dwd:
+    domains: [receipt, target, customer_risk]
+    kind: fact
+    grain: one_receipt_document_detail
+    primary_key: [detail_id]
+    updated_at: gmt_modified
+    allowed_columns: [detail_id, bill_id, bill_no, bill_time, bill_status, is_inner_cus, detail_receive_rmb, detail_receive_amount, detail_deal_amount, exchange_rate, currency_no, customer_id, customer_no, customer_name, customer_dept, customer_region, customer_type, customer_category, final_sales_id, final_sales_no, final_sales_name, biz_dept, biz_region, dept_name, settle_org_name, receive_org_name, sale_org_name, org_id, org_name, is_ha_cus, is_ccbs_cus, settle_way, receive_usage]
+    required_filters:
+      - {column: bill_status, op: ne, value: A}
+    dataset_query_policies:
+      default:
+        mode: detail_only
+        time_requirement: required
+        time_routes:
+          bill_time: {format: date, required_filters: []}
+    joins:
+      - {target: vk_dwd.customer_dwd, local: [customer_id], remote: [customer_id], cardinality: many_to_one, stage: before_metric_aggregation}
+    warnings:
+      - Sales attribution uses final_sales_id and final_sales_name.
+      - Receipt metrics include internal customers unless the user explicitly filters them.
+      - The governed department for this Profile is customer_dept; biz_dept remains available only as a physical source field.
+      - Gross receipt uses detail_receive_rmb; actual receipt uses detail_deal_amount multiplied by exchange_rate.
+
+  vk_dwd.receive_return_bill_detail_dwd:
+    domains: [receipt, target, customer_risk]
+    kind: fact
+    grain: one_receipt_refund_document_detail
+    primary_key: [detail_id]
+    updated_at: gmt_modified
+    allowed_columns: [detail_id, bill_id, bill_no, bill_time, bill_status, is_inner_cus, detail_return_rmb, detail_return_amount, detail_deal_amount, exchange_rate, currency_no, customer_id, customer_no, customer_name, customer_dept, customer_region, customer_type, customer_category, final_sales_id, final_sales_no, final_sales_name, biz_dept, biz_region, dept_name, settle_org_name, receive_org_name, sale_org_name, org_id, org_name, is_ha_cus, is_ccbs_cus, settle_way, return_usage]
+    required_filters:
+      - {column: bill_status, op: ne, value: A}
+    dataset_query_policies:
+      default:
+        mode: detail_only
+        time_requirement: required
+        time_routes:
+          bill_time: {format: date, required_filters: []}
+    joins:
+      - {target: vk_dwd.customer_dwd, local: [customer_id], remote: [customer_id], cardinality: many_to_one, stage: before_metric_aggregation}
+    warnings:
+      - Refund metrics include internal customers unless the user explicitly filters them.
+      - Actual refund uses detail_deal_amount multiplied by exchange_rate.
+      - The governed department for this Profile is customer_dept.
+      - The table currently has no bill_time index; retain a bounded time range, timeout, and row limit.
+
+  vk_dwd.receivable_bill_detail_dwd:
+    domains: [receivable, customer_risk]
+    kind: fact
+    grain: one_receivable_document_detail
+    primary_key: [detail_id]
+    updated_at: gmt_modified
+    allowed_columns: [detail_id, bill_id, bill_no, bill_time, end_time, bill_type, bill_status, bill_verification_status, verification_complete_time, is_inner_cus, detail_receivable_rmb, detail_receivable_amount, detail_settled_amount, detail_unsettled_amount, exchange_rate, currency_no, customer_id, customer_no, customer_name, customer_dept, customer_region, final_sales_id, final_sales_no, final_sales_name, biz_dept, biz_region, dept_name, settle_org_name, receive_org_name, sale_org_name, org_id, org_name, is_ccbs_cus, goods_no, goods_name, goods_num, piece_num]
+    required_filters:
+      - {column: bill_status, op: ne, value: A}
+      - {column: is_inner_cus, op: eq, value: n}
+    dataset_query_policies:
+      default:
+        mode: detail_only
+        time_requirement: required
+        time_routes:
+          bill_time: {format: date, required_filters: []}
+    joins:
+      - {target: vk_dwd.customer_dwd, local: [customer_id], remote: [customer_id], cardinality: many_to_one, stage: before_metric_aggregation}
+      - {target: vk_dwd.customer_credit_dwd, local: [customer_id, org_name, currency_no], remote: [customer_id, org_name, currency_no], cardinality: many_to_one, stage: before_metric_aggregation}
+    warnings:
+      - This is occurrence and open-invoice evidence, not the current debt balance.
+      - Open receivables use detail_unsettled_amount greater than zero; verification status is not the open-balance rule.
+      - Receivable occurrence and open-receivable evidence exclude internal customers by fixed business scope.
+      - Department attribution uses customer_dept; organization attribution uses org_name.
+      - Credit-policy joins must use customer_id, org_name, and currency_no together.
+
+  vk_dw.customer_debt_bymonth_dw:
+    domains: [receivable, customer_risk]
+    kind: monthly_snapshot
+    grain: one_month_customer_debt_snapshot
+    primary_key: [bill_date, customer_id]
+    updated_at: null
+    allowed_columns: [bill_date, customer_id, customer_no, customer_name, customer_dept, customer_region, sales_id, sales_name, org_name, currency_no, receivable_amount, receive_amount, return_amount, reverse_amount, cumulative_receivable_amount, cumulative_receive_amount, cumulative_return_amount, cumulative_reverse_amount, debt_amount, debt_amount_rmb, exchange_rate, is_inner_cus, is_brand_cus, is_ha_cus, is_ht_cus, is_ccbs_cus]
+    required_filters:
+      - {column: is_inner_cus, op: eq, value: n}
+    dataset_query_policies:
+      default:
+        mode: detail_only
+        time_requirement: required
+        time_routes:
+          bill_date: {format: month, required_filters: []}
+    joins:
+      - {target: vk_dwd.customer_dwd, local: [customer_id], remote: [customer_id], cardinality: many_to_one, stage: before_metric_aggregation}
+      - {target: vk_dwd.customer_credit_dwd, local: [customer_id, org_name, currency_no], remote: [customer_id, org_name, currency_no], cardinality: many_to_one, stage: before_metric_aggregation}
+    warnings:
+      - Bind bill_date to an explicit or latest month.
+      - Current debt is signed; positive values are customer debt and negative values are retained in net totals.
+      - Original-currency values must remain grouped by currency_no.
+      - Snapshot salesperson can be unknown and must not be silently filled from current customer master.
+      - Credit-policy joins must use customer_id, org_name, and currency_no together.
+      - Debt exposure excludes internal customers by fixed business scope.
+
+  vk_dwd.customer_aging_dwd:
+    domains: [receivable, customer_risk]
+    kind: monthly_snapshot
+    grain: one_month_customer_aging_bucket_record
+    primary_key: [bill_date, customer_id]
+    updated_at: null
+    allowed_columns: [bill_date, customer_id, customer_no, customer_name, customer_dept, customer_region, sales_id, sales_name, org_name, currency_no, exchange_rate, debt_amount, is_inner_cus, is_ccbs_cus, is_ha_cus, 0_30_debt, 31_60_debt, 61_90_debt, 91_120_debt, 121_150_debt, 151_180_debt, 181_240_debt, 241_300_debt, 301_360_debt, 361_debt]
+    required_filters:
+      - {column: is_inner_cus, op: eq, value: n}
+    dataset_query_policies:
+      default:
+        mode: detail_only
+        time_requirement: required
+        time_routes:
+          bill_date: {format: month, required_filters: []}
+    joins:
+      - {target: vk_dwd.customer_dwd, local: [customer_id], remote: [customer_id], cardinality: many_to_one, stage: before_metric_aggregation}
+    warnings:
+      - Aging is bucket evidence, not the current-debt numerator or debt-days source.
+      - Aging coverage does not fully reconcile to the monthly debt snapshot; disclose this limit when comparing the two sources.
+      - RMB aging is calculated from original-currency buckets multiplied by the row exchange rate.
+      - Aging exposure excludes internal customers by fixed business scope.
+
+  vk_dwd.customer_credit_dwd:
+    domains: [receivable, customer_risk]
+    kind: master_snapshot
+    metric_only: true
+    grain: one_customer_credit_policy_record
+    primary_key: [id]
+    unique_key_sets:
+      - [customer_id, org_name, currency_no]
+    updated_at: gmt_modified
+    allowed_columns: [id, customer_id, customer_no, customer_name, customer_dept, customer_region, sales_id, sales_name, org_id, org_name, currency_no, credit_days, credit_amount]
+    required_filters: []
+    dataset_query_policies:
+      default: {mode: detail_only, time_requirement: forbidden}
+    joins:
+      - {target: vk_dwd.customer_dwd, local: [customer_id], remote: [customer_id], cardinality: many_to_one, stage: before_metric_aggregation}
+    warnings:
+      - Credit limits are original-currency and currency-specific.
+      - Match credit policy by customer_id, org_name, and currency_no together.
+      - Missing credit_days or credit_amount is unknown, not zero.
+      - Credit-policy access is metric-only so the current non-internal-customer scope cannot be bypassed by a raw detail query.
+
+  vk_dwd.delivery_target_split_dwd:
+    domains: [target]
+    kind: monthly_target_fact
+    grain: delivery_target_detail_by_sales
+    primary_key: [detail_id, sales_id]
+    updated_at: null
+    allowed_columns: [detail_id, year_month, sales_id, sales_name, customer_dept, org_name, detail_target_rmb, detail_target_amount, is_inner_cus]
+    required_filters:
+      - {column: is_inner_cus, op: eq, value: n}
+    joins: []
+    warnings: [Use only for salesperson target questions.]
+
+  vk_dwd.sale_bill_split_dwd:
+    domains: [target]
+    kind: actual_fact
+    grain: delivery_actual_product_detail_by_sales
+    primary_key: [goods_detail_id, sales_id]
+    updated_at: null
+    allowed_columns: [goods_detail_id, delivery_time, sales_id, sales_name, customer_dept, org_name, delivery_amount_rmb, delivery_amount, bill_status, is_inner_cus]
+    required_filters:
+      - {column: bill_status, op: eq, value: 6}
+      - {column: is_inner_cus, op: eq, value: n}
+    joins: []
+    allocation_contract:
+      ledger: salesperson_allocation
+      base_table: vk_dwd.sale_bill_goods_detail_dwd
+      base_key: goods_detail_id
+      allocation_key: sales_id
+      quality_owner: ETL
+      runtime_policy: pending_production_read_only_reconciliation
+      required_checks: [every_valid_base_detail_has_allocation, composite_key_unique, allocated_rmb_equals_base_rmb, no_orphans]
+    warnings:
+      - Use only for salesperson target, collaboration, or explicitly allocated performance questions.
+      - Aggregate actuals to the exact target keys before merging.
+      - ETL owns coverage and amount reconciliation; the Profile applies the confirmed allocation semantics without a static runtime quality gate.
+
+  vk_dwd.receive_target_split_dwd:
+    domains: [target]
+    kind: monthly_target_fact
+    grain: receipt_target_by_sales
+    primary_key: [target_id, sales_id]
+    updated_at: null
+    allowed_columns: [target_id, plan_receive_time, sales_id, sales_name, customer_dept, org_name, plan_receive_rmb, plan_receive_amount, is_inner_cus]
+    required_filters: []
+    joins: []
+    warnings: [Use only for salesperson target questions; receipt targets include internal customers.]
+
+  vk_dwd.receive_bill_split_dwd:
+    domains: [target]
+    kind: actual_fact
+    grain: receipt_actual_detail_by_sales
+    primary_key: [sales_id, detail_id]
+    updated_at: null
+    allowed_columns: [sales_id, sales_name, detail_id, bill_time, customer_dept, org_name, detail_receive_rmb, detail_receive_amount, bill_status, is_inner_cus]
+    required_filters:
+      - {column: bill_status, op: ne, value: A}
+    joins: []
+    allocation_contract:
+      ledger: salesperson_allocation
+      base_table: vk_dwd.receive_bill_detail_dwd
+      base_key: detail_id
+      allocation_key: sales_id
+      quality_owner: ETL
+      runtime_policy: pending_production_read_only_reconciliation
+      required_checks: [every_valid_base_detail_has_allocation, composite_key_unique, allocated_rmb_equals_base_rmb, no_orphans]
+    warnings:
+      - Use only for salesperson target, collaboration, or explicitly allocated performance questions.
+      - Aggregate actuals to the exact target keys before merging; receipt actuals include internal customers.
+      - ETL owns coverage and amount reconciliation; the Profile applies the confirmed allocation semantics without a static runtime quality gate.
+
+  vk_dwd.receive_return_bill_split_dwd:
+    domains: [target]
+    kind: actual_fact
+    grain: receipt_refund_detail_by_sales
+    primary_key: [sales_id, detail_id]
+    updated_at: null
+    allowed_columns: [sales_id, sales_name, detail_id, bill_id, bill_no, bill_time, customer_id, customer_no, customer_name, customer_region, customer_dept, biz_dept, biz_region, dept_no, dept_name, org_name, currency_no, detail_return_rmb, detail_return_amount, bill_status, is_inner_cus, is_ccbs_cus]
+    required_filters:
+      - {column: bill_status, op: ne, value: A}
+    joins: []
+    allocation_contract:
+      ledger: salesperson_allocation
+      base_table: vk_dwd.receive_return_bill_detail_dwd
+      base_key: detail_id
+      allocation_key: sales_id
+      quality_owner: ETL
+      runtime_policy: pending_production_read_only_reconciliation
+      required_checks: [every_valid_base_detail_has_allocation, composite_key_unique, allocated_rmb_equals_base_rmb, allocated_original_equals_base_original, no_orphans]
+    warnings:
+      - Use only for salesperson target, collaboration, or explicitly allocated performance questions; ordinary refund and net receipt remain on the transaction-detail ledger.
+      - No collaborator means one 100-percent row for the final salesperson; collaborators produce proportional rows.
+      - ETL must reconcile each detail_id to the base refund detail; the Profile does not substitute the transaction-detail refund fact.
+
+  vk_dwd.delivery_target_detail_dwd:
+    domains: [target]
+    kind: monthly_target_fact
+    grain: delivery_target_detail
+    primary_key: [detail_id]
+    updated_at: null
+    allowed_columns: [detail_id, year_month, customer_id, customer_no, customer_name, customer_dept, org_name, detail_target_rmb, detail_target_amount, is_inner_cus]
+    required_filters:
+      - {column: is_inner_cus, op: eq, value: n}
+    joins: []
+    warnings: [Use for organization, department, or customer targets; not salesperson targets.]
+
+  vk_dwd.receive_target_dwd:
+    domains: [target]
+    kind: monthly_target_fact
+    grain: receipt_target_detail
+    primary_key: [target_id]
+    updated_at: null
+    allowed_columns: [target_id, plan_receive_time, customer_id, customer_no, customer_name, customer_dept, org_name, plan_receive_rmb, plan_receive_amount, is_inner_cus]
+    required_filters: []
+    joins: []
+    warnings: [Use for organization, department, or customer targets; not salesperson targets; receipt targets include internal customers.]
+
+  vk_dw.inventory_barcode_detail_dw:
+    domains: [inventory]
+    kind: current_snapshot
+    grain: one_current_inventory_barcode_record
+    primary_key: [id]
+    updated_at: gmt_modified
+    allowed_columns: [id, bar_code, status, goods_num, piece_num, goods_id, goods_no, goods_name, goods_region, goods_sku_id, attr_val, color_label, batch_no, cylinder_no, unit, is_ht, is_ready, ready_type, whse_id, whse_name, whse_type, whse_dept, whse_region, whse_org, is_missing, is_ccbs_whse, is_defective_whse, customer_dept, is_inner_cus, come_whse_time, estimate_receive_time, sale_time, currency_no, ddp_amount_rmb, ddp_amount]
+    required_filters:
+      - {column: status, op: in, value: [1, 2, 3]}
+    dataset_query_policies:
+      inventory: {mode: detail_only, time_requirement: forbidden}
+    joins:
+      - {target: vk_dwd.goods_detail_dwd, local: [goods_id], remote: [goods_id], cardinality: many_to_one, stage: after_fact_aggregation}
+      - {target: vk_dwd.whse_info_dwd, local: [whse_id], remote: [whse_id], cardinality: many_to_one, stage: after_fact_aggregation}
+    warnings:
+      - Department means whse_dept, not customer_dept.
+      - Unit-price columns are forbidden.
+      - The current physical table has no is_print column; do not expose or infer it from this snapshot.
+      - M and m are the same metre unit after lowercase normalization; y, kg, Pcs, and m must never be summed together.
+      - Original-currency DDP amount must be filtered or grouped by currency_no.
+
+  vk_dwd.inventory_cost_dwd:
+    domains: [inventory]
+    kind: monthly_snapshot
+    grain: one_month_end_warehouse_product_color_batch_record
+    primary_key: [id]
+    updated_at: gmt_modified
+    allowed_columns: [id, bill_date, goods_num, piece_num, unit, cost_amount_rmb, cost_amount, ddp_amount_rmb, ddp_amount, currency_no, exchange_rate, unclosed_time, unclosed_days, goods_id, goods_no, goods_name, goods_sku_id, attr_val, color_label, batch_no, is_ht, is_print, is_ready, ready_type, whse_id, whse_name, whse_type, whse_dept, whse_region, whse_org, org_id, org_name]
+    required_filters: []
+    dataset_query_policies:
+      inventory:
+        mode: detail_only
+        time_requirement: required
+        time_routes:
+          bill_date: {format: month, required_filters: []}
+    joins:
+      - {target: vk_dwd.goods_detail_dwd, local: [goods_id], remote: [goods_id], cardinality: many_to_one, stage: after_fact_aggregation}
+      - {target: vk_dwd.whse_info_dwd, local: [whse_id], remote: [whse_id], cardinality: many_to_one, stage: after_fact_aggregation}
+    warnings:
+      - Bind bill_date; negative piece_num can be valid accounting data.
+      - id is the physical unique key; month plus warehouse/product/color/batch is not unique because legitimate currency, accounting-organization, unit, and cost layers can coexist.
+      - whse_org is warehouse ownership while org_name is accounting organization; never silently merge them.
+      - unclosed_days is a month-end no-movement/no-transaction field, not strict physical warehouse age.
+
+  vk_dw.goods_turnover_basic_data_dw:
+    domains: [inventory]
+    kind: monthly_aggregate
+    grain: one_month_product_department_ccbs_currency_record
+    primary_key: [bill_date, goods_id, dept_name, is_ccbs_cus, currency_no]
+    updated_at: null
+    allowed_columns: [bill_date, dept_name, org_name, goods_id, goods_no, goods_name, is_ccbs_cus, is_ready, ready_type, currency_no, delivery_amount_rmb, delivery_amount, return_amount_rmb, return_amount, pur_delivery_rmb, pur_delivery_amount, cost_amount_rmb, cost_amount, ddp_amount_rmb, ddp_amount]
+    required_filters: []
+    dataset_query_policies:
+      inventory:
+        mode: detail_only
+        time_requirement: required
+        time_routes:
+          bill_date: {format: month, required_filters: []}
+    joins:
+      - {target: vk_dwd.goods_detail_dwd, local: [goods_id], remote: [goods_id], cardinality: many_to_one, stage: after_fact_aggregation}
+    warnings:
+      - Do not mix current inventory rows into turnover calculations.
+      - A month with delivery but zero inventory amount is not necessarily a complete accounting month.
+      - The current physical table has no complaint_amount_rmb or inventory_amount_rmb column; do not expose or infer either field.
+      - pur_delivery_rmb is delivery_amount_rmb minus return_amount_rmb and is the governed turnover denominator.
