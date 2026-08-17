@@ -1239,6 +1239,47 @@ def _filter_clause(
     raise QueryFailure("INVALID_PLAN", "指标定义包含不支持的过滤规则。")
 
 
+def _latest_snapshot_resolver_sql(
+    table: str,
+    time_field: str,
+    population_filters: Sequence[tuple[str, Mapping[str, Any]]],
+    params: list[Any],
+    *,
+    required_non_null: str | None = None,
+) -> str:
+    """Build the governed latest-snapshot resolver without widening its population.
+
+    A latest snapshot is global to the governed fact population, not to an
+    individual user filter or a metric's measure-eligibility predicate.  The
+    resolver therefore inherits only dataset-level required filters.  Preserve
+    the no-filter SQL shape so unrelated snapshot metrics retain their exact
+    historical query form and parameter sequence.
+    """
+
+    quoted_table = _quote_table(table)
+    quoted_time = _quote_identifier(time_field)
+    if not population_filters and required_non_null is None:
+        return f"SELECT MAX({quoted_time}) FROM {quoted_table}"
+    if not population_filters:
+        return (
+            f"SELECT MAX({quoted_time}) FROM {quoted_table} "
+            f"WHERE {_quote_identifier(required_non_null)} IS NOT NULL"
+        )
+
+    alias = "snapshot_f"
+    where = [
+        _filter_clause(column, spec, params, alias=alias)
+        for column, spec in population_filters
+    ]
+    if required_non_null is not None:
+        where.append(f"{_qualified_identifier(alias, required_non_null)} IS NOT NULL")
+    return (
+        f"SELECT MAX({_qualified_identifier(alias, time_field)}) "
+        f"FROM {quoted_table} AS {_quote_identifier(alias)} "
+        f"WHERE {' AND '.join(where)}"
+    )
+
+
 def _system_filter_record(
     dataset: str, column: str, spec: Mapping[str, Any], source: str
 ) -> dict[str, Any]:
@@ -1687,6 +1728,7 @@ def _build_metric_core(
     where: list[str] = []
     system_filters: list[dict[str, Any]] = []
     inherited_filters: dict[str, dict[str, Any]] = {}
+    snapshot_population_filters: list[tuple[str, Mapping[str, Any]]] = []
     dataset_required_filters = dataset.get("required_filters") or []
     if not isinstance(dataset_required_filters, list):
         raise QueryFailure("CONTRACT_UNAVAILABLE", "数据集固定过滤定义无效。")
@@ -1697,6 +1739,7 @@ def _build_metric_core(
         spec = {"op": str(dataset_spec.get("op", "eq")).lower(), "value": dataset_spec.get("value")}
         inherited_filters[column] = spec
         where.append(_filter_clause(column, spec, where_params, alias="f"))
+        snapshot_population_filters.append((column, spec))
         system_filters.append(_system_filter_record(table, column, spec, "dataset_required"))
     for column, spec in (metric.get("required_filters") or {}).items():
         _approved_column(column, base_allowed, base_blocked)
@@ -1782,17 +1825,20 @@ def _build_metric_core(
         elif time_policy in {"latest_snapshot", "latest_non_null_snapshot"} and time_field:
             _approved_column(time_field, base_allowed, base_blocked)
             quoted_time = _qualified_identifier("f", time_field)
-            quoted_table = _quote_table(table)
-            subquery_time = _quote_identifier(time_field)
             snapshot_offset = request.get("_snapshot_offset_months", 0)
             if not isinstance(snapshot_offset, int) or not 0 <= snapshot_offset <= 24:
                 raise QueryFailure("INVALID_PLAN", "快照比较月份偏移无效。")
             if snapshot_offset:
                 if dataset.get("kind") != "monthly_snapshot":
                     raise QueryFailure("INVALID_PLAN", "该数据集不支持按月快照比较。")
+                max_snapshot_sql = _latest_snapshot_resolver_sql(
+                    table,
+                    time_field,
+                    snapshot_population_filters,
+                    where_params,
+                )
                 where.append(
-                    f"{quoted_time} = DATE_FORMAT(DATE_SUB(STR_TO_DATE(CONCAT((SELECT MAX({subquery_time}) "
-                    f"FROM {quoted_table}), '-01'), '{_MYSQL_DAY_FORMAT}'), "
+                    f"{quoted_time} = DATE_FORMAT(DATE_SUB(STR_TO_DATE(CONCAT(({max_snapshot_sql}), '-01'), '{_MYSQL_DAY_FORMAT}'), "
                     f"INTERVAL %s MONTH), '{_MYSQL_MONTH_FORMAT}')"
                 )
                 where_params.append(snapshot_offset)
@@ -1801,16 +1847,28 @@ def _build_metric_core(
                 required_measure = _approved_column(
                     metric.get("snapshot_required_non_null"), base_allowed, base_blocked
                 )
+                max_snapshot_sql = _latest_snapshot_resolver_sql(
+                    table,
+                    time_field,
+                    snapshot_population_filters,
+                    where_params,
+                    required_non_null=required_measure,
+                )
                 where.append(
-                    f"{quoted_time} = (SELECT MAX({subquery_time}) FROM {quoted_table} "
-                    f"WHERE {_quote_identifier(required_measure)} IS NOT NULL)"
+                    f"{quoted_time} = ({max_snapshot_sql})"
                 )
                 applied_time = {
                     "source": "latest_non_null_snapshot",
                     "required_measure": required_measure,
                 }
             else:
-                where.append(f"{quoted_time} = (SELECT MAX({subquery_time}) FROM {quoted_table})")
+                max_snapshot_sql = _latest_snapshot_resolver_sql(
+                    table,
+                    time_field,
+                    snapshot_population_filters,
+                    where_params,
+                )
+                where.append(f"{quoted_time} = ({max_snapshot_sql})")
                 applied_time = {"source": "latest_snapshot"}
         elif time_policy == "current_snapshot":
             applied_time = {"source": "current_snapshot"}

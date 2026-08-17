@@ -1,4 +1,4 @@
-version: datasage-mini-customer-risk-semantics/v5
+version: datasage-mini-customer-risk-semantics/v6
 domain: customer_risk
 contract_role: plugin_physical_execution
 model_planner_contract: references/planner-contract.yaml
@@ -161,6 +161,9 @@ metrics:
       - id: customer-risk.formal-receivable-turnover.coverage
         mode: required_always
         text: "正式应收周转天数默认使用最近12个完整自然月，并要求连续13个月末净欠款快照；没有公司目标天数时，不与30天或其他假设目标比较。"
+      - id: customer-risk.formal-receivable-turnover.external-customer.scope
+        mode: required_always
+        text: "正式应收周转天数的月末净欠款和毛出库分母均固定排除内部客户。"
       - id: customer-risk.formal_receivable_turnover_days.legacy-note
         mode: contract_only
         text: "默认最近12个完整自然月并要求连续13个月末净欠款快照；没有公司目标天数，不得与30天或其他假设目标比较。"

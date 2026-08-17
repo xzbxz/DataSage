@@ -921,6 +921,306 @@ class BusinessContractTests(unittest.TestCase):
             self.assertNotIn("one by one", content)
             self.assertNotIn("must not drop or merge away", content)
 
+    def test_snapshot_population_resolver_and_formal_dso_scope_disclosure(
+        self,
+    ) -> None:
+        def run_query(
+            request: dict[str, object], rows: list[dict[str, object]]
+        ) -> tuple[dict[str, object], list[dict[str, object]]]:
+            calls: list[dict[str, object]] = []
+
+            def execute_query(sql, params, limit, **_kwargs):
+                calls.append({"sql": sql, "params": list(params), "limit": limit})
+                return rows, False, self._read_only_source_evidence()
+
+            with mock.patch.object(
+                tools,
+                "_execute_with_source",
+                side_effect=execute_query,
+            ):
+                payload = json.loads(tools.datasage_query({"requests": [request]}))
+            self.assertEqual("success", payload["status"])
+            self.assertEqual(1, len(calls))
+            return payload["results"][0], calls
+
+        def assert_disclosure_seals(query_result: dict[str, object]) -> None:
+            ledger = query_result["disclosure_ledger"]
+            self.assertIsInstance(ledger, list)
+            for disclosure in ledger:
+                canonical = json.dumps(
+                    {
+                        key: value
+                        for key, value in disclosure.items()
+                        if key != "disclosure_seal"
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                ).encode("utf-8")
+                self.assertEqual(
+                    "sha256_" + hashlib.sha256(canonical).hexdigest(),
+                    disclosure["disclosure_seal"],
+                )
+            ledger_canonical = json.dumps(
+                {
+                    "contract_version": "metric-disclosure-ledger/v1",
+                    "request_id": query_result["request_id"],
+                    "metric_ref": query_result["business_metric_ref"],
+                    "scope_fingerprint": query_result["scope_fingerprint"],
+                    "projection_fingerprint": query_result["projection_fingerprint"],
+                    "ledger": ledger,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+            self.assertEqual(
+                "sha256_" + hashlib.sha256(ledger_canonical).hexdigest(),
+                query_result["disclosure_ledger_seal"],
+            )
+
+        r2_request = {
+            "request_id": "r2_default",
+            "domain": "receivable",
+            "mode": "metric",
+            "purpose": "synthetic snapshot population test",
+            "metric": "current_debt_amount",
+            "dimensions": [],
+        }
+        r2_result, r2_calls = run_query(r2_request, [{"metric_value": "42.00"}])
+        self.assertIsInstance(r2_result["business_metric_ref"], str)
+        r2_sql, r2_params = r2_calls[0]["sql"], r2_calls[0]["params"]
+        self.assertIn("`f`.`is_inner_cus` = %s", r2_sql)
+        self.assertIn(
+            "FROM `vk_dw`.`customer_debt_bymonth_dw` AS `snapshot_f` "
+            "WHERE `snapshot_f`.`is_inner_cus` = %s",
+            r2_sql,
+        )
+        self.assertEqual(["n", "n", 101], r2_params)
+
+        r2_filtered_result, r2_filtered_calls = run_query(
+            {
+                **r2_request,
+                "request_id": "r2_user_filter",
+                "metric_filters": {"ha_customer": "n"},
+            },
+            [{"metric_value": "42.00"}],
+        )
+        self.assertEqual("success", r2_filtered_result["status"])
+        r2_filtered_sql = r2_filtered_calls[0]["sql"]
+        self.assertIn("`f`.`is_ha_cus` = %s", r2_filtered_sql)
+        self.assertNotIn("`snapshot_f`.`is_ha_cus`", r2_filtered_sql)
+        self.assertEqual(
+            ["n", "n", "n", 101],
+            r2_filtered_calls[0]["params"],
+        )
+
+        _, positive_calls = run_query(
+            {
+                **r2_request,
+                "request_id": "r2_positive",
+                "metric": "positive_debt_amount",
+            },
+            [{"metric_value": "42.00"}],
+        )
+        positive_sql, positive_params = (
+            positive_calls[0]["sql"],
+            positive_calls[0]["params"],
+        )
+        self.assertIn("`f`.`debt_amount_rmb` > %s", positive_sql)
+        self.assertNotIn("`snapshot_f`.`debt_amount_rmb`", positive_sql)
+        self.assertEqual(["n", 0, "n", 101], positive_params)
+
+        _, r2_offset_calls = run_query(
+            {
+                **r2_request,
+                "request_id": "r2_snapshot_offset",
+                "comparison": {"kind": "snapshot_months_before", "months": 2},
+            },
+            [
+                {
+                    "metric_value": "42.00",
+                    "comparison_value": "41.00",
+                    "delta_value": "1.00",
+                    "change_rate": "0.0243902439",
+                }
+            ],
+        )
+        r2_offset_sql, r2_offset_params = (
+            r2_offset_calls[0]["sql"],
+            r2_offset_calls[0]["params"],
+        )
+        self.assertEqual(2, r2_offset_sql.count("`snapshot_f`.`is_inner_cus` = %s"))
+        self.assertEqual(["n", "n", "n", "n", 2, 101], r2_offset_params)
+
+        _, r3_calls = run_query(
+            {
+                "request_id": "r3_latest_inventory",
+                "domain": "inventory",
+                "mode": "metric",
+                "purpose": "synthetic latest inventory regression",
+                "metric": "month_end_inventory_cost_rmb",
+                "dimensions": [],
+            },
+            [{"metric_value": "42.00"}],
+        )
+        r3_sql, r3_params = r3_calls[0]["sql"], r3_calls[0]["params"]
+        self.assertIn(
+            "(SELECT MAX(`bill_date`) FROM `vk_dwd`.`inventory_cost_dwd`)",
+            r3_sql,
+        )
+        self.assertNotIn("snapshot_f", r3_sql)
+        self.assertEqual([101], r3_params)
+
+        _, r3_non_null_calls = run_query(
+            {
+                "request_id": "r3_latest_non_null_inventory",
+                "domain": "inventory",
+                "mode": "metric",
+                "purpose": "synthetic latest non-null inventory regression",
+                "metric": "oldest_inventory_days",
+                "dimensions": [],
+            },
+            [{"metric_value": "42.00"}],
+        )
+        r3_non_null_sql = r3_non_null_calls[0]["sql"]
+        self.assertIn(
+            "(SELECT MAX(`bill_date`) FROM `vk_dwd`.`inventory_cost_dwd` "
+            "WHERE `unclosed_days` IS NOT NULL)",
+            r3_non_null_sql,
+        )
+        self.assertNotIn("snapshot_f", r3_non_null_sql)
+        self.assertEqual([101], r3_non_null_calls[0]["params"])
+
+        resolver_params: list[object] = []
+        resolver_sql = tools._latest_snapshot_resolver_sql(
+            "vk_dw.customer_debt_bymonth_dw",
+            "bill_date",
+            [("is_inner_cus", {"op": "eq", "value": "n"})],
+            resolver_params,
+            required_non_null="debt_amount_rmb",
+        )
+        self.assertEqual(
+            "SELECT MAX(`snapshot_f`.`bill_date`) "
+            "FROM `vk_dw`.`customer_debt_bymonth_dw` AS `snapshot_f` "
+            "WHERE `snapshot_f`.`is_inner_cus` = %s "
+            "AND `snapshot_f`.`debt_amount_rmb` IS NOT NULL",
+            resolver_sql,
+        )
+        self.assertEqual(["n"], resolver_params)
+        self.assertNotIn("`snapshot_f`.`is_ha_cus`", resolver_sql)
+        self.assertNotIn("`snapshot_f`.`debt_amount` > %s", resolver_sql)
+
+        formal_dso_disclosure_id = (
+            "customer-risk.formal-receivable-turnover.external-customer.scope"
+        )
+        formal_dso_text = "正式应收周转天数的月末净欠款和毛出库分母均固定排除内部客户。"
+        customer_risk_contract = yaml.safe_load(
+            (
+                PROFILE_ROOT
+                / "plugins/datasage-query/contracts/customer_risk-semantics.yaml"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            "datasage-mini-customer-risk-semantics/v6",
+            customer_risk_contract["version"],
+        )
+        formal_dso_declarations = customer_risk_contract["metrics"][
+            "formal_receivable_turnover_days"
+        ]["disclosures"]
+        self.assertIn(
+            {
+                "id": formal_dso_disclosure_id,
+                "mode": "required_always",
+                "text": formal_dso_text,
+            },
+            formal_dso_declarations,
+        )
+        self.assertNotIn("default_disclosures", customer_risk_contract)
+
+        dso_rows = [
+            {
+                "metric_value": "42.00",
+                "average_net_debt_rmb": "100.00",
+                "delivery_amount_rmb": "900.00",
+                "period_natural_days": 365,
+                "snapshot_month_count": 13,
+                "effective_month_count": 12,
+            }
+        ]
+        dso_request = {
+            "request_id": "r4_default",
+            "domain": "customer_risk",
+            "mode": "metric",
+            "purpose": "synthetic formal DSO disclosure test",
+            "metric": "formal_receivable_turnover_days",
+            "dimensions": [],
+        }
+        dso_result, dso_calls = run_query(dso_request, dso_rows)
+        dso_sql, dso_params = dso_calls[0]["sql"], dso_calls[0]["params"]
+        self.assertIn("`d`.`is_inner_cus` = %s", dso_sql)
+        self.assertIn("`s`.`bill_status` = %s", dso_sql)
+        self.assertIn("`s`.`is_inner_cus` = %s", dso_sql)
+        self.assertEqual("n", dso_params[0])
+        self.assertEqual(6, dso_params[5])
+        self.assertEqual("n", dso_params[6])
+        assert_disclosure_seals(dso_result)
+        dso_disclosures = {
+            item["disclosure_id"]: item for item in dso_result["disclosure_ledger"]
+        }
+        self.assertEqual(
+            {"mode": "required_always", "text": formal_dso_text, "applies": True},
+            {
+                key: dso_disclosures[formal_dso_disclosure_id][key]
+                for key in ("mode", "text", "applies")
+            },
+        )
+        dso_wire = tools._model_wire_result(dso_result)
+        self.assertEqual(dso_result["disclosure_ledger"], dso_wire["disclosure_ledger"])
+        self.assertEqual(
+            dso_result["disclosure_ledger_seal"],
+            dso_wire["disclosure_ledger_seal"],
+        )
+
+        for request in (
+            {
+                **dso_request,
+                "request_id": "r4_grouped",
+                "dimensions": ["department"],
+            },
+            {
+                **dso_request,
+                "request_id": "r4_filtered",
+                "metric_filters": {"department": "HCM"},
+            },
+        ):
+            result, _ = run_query(request, dso_rows)
+            disclosures = {
+                item["disclosure_id"]: item for item in result["disclosure_ledger"]
+            }
+            self.assertIs(disclosures[formal_dso_disclosure_id]["applies"], True)
+            assert_disclosure_seals(result)
+
+        delivery_receipt_result, _ = run_query(
+            {
+                "request_id": "delivery_receipt_comparison",
+                "domain": "customer_risk",
+                "mode": "metric",
+                "purpose": "synthetic comparison scope regression",
+                "metric": "delivery_receipt_comparison",
+                "dimensions": [],
+            },
+            [],
+        )
+        delivery_receipt_ids = {
+            item["disclosure_id"]
+            for item in delivery_receipt_result["disclosure_ledger"]
+        }
+        self.assertIn("customer-risk.delivery-receipt.scope-asymmetry", delivery_receipt_ids)
+        self.assertNotIn(formal_dso_disclosure_id, delivery_receipt_ids)
+
     def test_target_metric_ambiguity_requires_official_clarification(self) -> None:
         payload = json.loads(
             contracts.datasage_catalog(
