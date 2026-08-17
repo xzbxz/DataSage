@@ -24,6 +24,7 @@ _MODEL_PROJECTION_VERSION = "datasage-model-semantic-projection/v3"
 _CATALOG_VERSION = "datasage-metric-catalog/v1"
 _ANALYSIS_AFFORDANCES_VERSION = "datasage-analysis-affordances/v8"
 _CATALOG_PLANNING_GUIDANCE_VERSION = "datasage-catalog-planning-guidance/v1"
+_METRIC_SELECTION_BOUNDARY_VERSION = "datasage-metric-selection-boundary/v1"
 _CATALOG_PLANNING_GUIDANCE_KEYS = (
     "planning_rules",
     "answer_boundary",
@@ -1366,7 +1367,72 @@ def _catalog_expert_index(domain: str, planner: Mapping[str, Any]) -> dict[str, 
         "source_versions": _copy_guidance(planner.get("source_versions")),
         "metric_count": len(metrics),
         "metrics": metrics,
-        "next_step": "query_exact_default_lookup_or_load_selected_metric_detail",
+        "metric_selection_boundary": {
+            "version": _METRIC_SELECTION_BOUNDARY_VERSION,
+            "producer_scope": "candidate_index_only_no_match_classification",
+            "branches": {
+                "unique_compatible": {
+                    "condition": (
+                        "user wording and existing context leave one compatible "
+                        "returned metric"
+                    ),
+                    "next_step": (
+                        "select_that_returned_metric_then_query_exact_default_or_"
+                        "load_its_detail_as_needed"
+                    ),
+                },
+                "multiple_materially_distinct": {
+                    "condition": (
+                        "multiple materially distinct returned metrics remain "
+                        "compatible with the user request"
+                    ),
+                    "next_step": "call_official_clarify",
+                    "before_clarification_response": {
+                        "metric_detail_calls": 0,
+                        "datasage_query_calls": 0,
+                    },
+                },
+                "zero_compatible": {
+                    "condition": (
+                        "no returned metric in the current requested domain is "
+                        "compatible with the user request"
+                    ),
+                    "scope": "current_returned_domain_only",
+                    "next_step": (
+                        "report_domain_local_gap_or_call_official_clarify"
+                    ),
+                    "before_response": {
+                        "metric_detail_calls": 0,
+                        "datasage_query_calls": 0,
+                    },
+                    "cross_domain_check": {
+                        "allowed_only_when": (
+                            "user_semantics_explicitly_support_one_minimal_"
+                            "related_domain"
+                        ),
+                        "action": "load_only_that_related_domain_expert_index",
+                        "otherwise": (
+                            "report_domain_local_gap_or_call_official_clarify"
+                        ),
+                    },
+                    "forbidden": [
+                        "enumerate_all_domains",
+                        "claim_globally_unsupported",
+                    ],
+                },
+            },
+        },
+        "next_step": {
+            "unique_compatible": (
+                "select_returned_metric_then_query_exact_default_or_load_detail"
+            ),
+            "multiple_materially_distinct": (
+                "call_official_clarify_before_metric_detail_or_query"
+            ),
+            "zero_compatible": (
+                "report_domain_local_gap_or_clarify_without_detail_or_query"
+            ),
+        },
     }
 
 

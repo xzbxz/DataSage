@@ -9,6 +9,8 @@ import sys
 import types
 import unittest
 
+import yaml
+
 
 PROFILE_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = PROFILE_ROOT / "plugins" / "datasage-query"
@@ -469,6 +471,201 @@ class BusinessContractTests(unittest.TestCase):
             self.assertIn("自适应软预算", content)
             self.assertIn("不设固定查询、追问或轮数上限", content)
             self.assertNotIn("最多在首批结果暴露实质缺口时追加一次", content)
+
+    def test_target_metric_ambiguity_requires_official_clarification(self) -> None:
+        payload = json.loads(
+            contracts.datasage_catalog(
+                {"requests": [{"domain": "target", "view": "expert_index"}]}
+            )
+        )
+        self.assertEqual("success", payload["status"])
+        expert_index = payload["results"][0]
+        metric_codes = {metric["code"] for metric in expert_index["metrics"]}
+        completion_metrics = {
+            "delivery_target_completion",
+            "receipt_target_completion",
+        }
+        self.assertTrue(completion_metrics.issubset(metric_codes))
+
+        boundary = expert_index["metric_selection_boundary"]
+        branches = boundary["branches"]
+        self.assertEqual(
+            "candidate_index_only_no_match_classification",
+            boundary["producer_scope"],
+        )
+        self.assertEqual(
+            "call_official_clarify",
+            branches["multiple_materially_distinct"]["next_step"],
+        )
+        self.assertEqual(
+            {"metric_detail_calls": 0, "datasage_query_calls": 0},
+            branches["multiple_materially_distinct"][
+                "before_clarification_response"
+            ],
+        )
+        self.assertEqual(
+            "report_domain_local_gap_or_call_official_clarify",
+            branches["zero_compatible"]["next_step"],
+        )
+        zero_branch = branches["zero_compatible"]
+        self.assertEqual("current_returned_domain_only", zero_branch["scope"])
+        self.assertEqual(
+            {"metric_detail_calls": 0, "datasage_query_calls": 0},
+            zero_branch["before_response"],
+        )
+        self.assertEqual(
+            "user_semantics_explicitly_support_one_minimal_related_domain",
+            zero_branch["cross_domain_check"]["allowed_only_when"],
+        )
+        self.assertEqual(
+            "load_only_that_related_domain_expert_index",
+            zero_branch["cross_domain_check"]["action"],
+        )
+        self.assertEqual(
+            ["enumerate_all_domains", "claim_globally_unsupported"],
+            zero_branch["forbidden"],
+        )
+        self.assertIn("unique_compatible", expert_index["next_step"])
+        self.assertIn("multiple_materially_distinct", expert_index["next_step"])
+        self.assertIn("zero_compatible", expert_index["next_step"])
+        serialized_index = json.dumps(expert_index, ensure_ascii=False)
+        self.assertNotIn('"exact_match"', serialized_index)
+        self.assertNotIn('"ambiguity"', serialized_index)
+
+        activation = (
+            "user_explicitly_selected_both_or_original_question_explicitly_"
+            "requests_both"
+        )
+        for metric in sorted(completion_metrics):
+            detail = json.loads(
+                contracts.datasage_catalog(
+                    {"requests": [{"domain": "target", "metric": metric}]}
+                )
+            )
+            self.assertEqual("success", detail["status"], metric)
+            projected = detail["results"][0]
+            self.assertEqual(metric, projected["metric"]["code"])
+            self.assertNotIn(
+                "return_delivery_and_receipt_together",
+                json.dumps(detail, ensure_ascii=False),
+            )
+            guidance = projected["planning_guidance"]
+            clarify_rules = [
+                rule
+                for rule in guidance["planning_rules"]
+                if "Hermes 官方 clarify" in rule
+            ]
+            self.assertEqual(1, len(clarify_rules), metric)
+            self.assertIn(
+                "澄清答复前 metric detail 和 datasage_query 均为0",
+                clarify_rules[0],
+            )
+            self.assertIn("用户明确选择两者", clarify_rules[0])
+            exact_overview_policy = guidance["recipe_policy"][
+                "exact_overview_bundle"
+            ]
+            self.assertIn("仅在用户明确选择出库与收款两者", exact_overview_policy)
+            self.assertIn("原问题明确要求", exact_overview_policy)
+            recipes = guidance["recipes"]
+            overview = recipes["completion_overview"]
+            self.assertEqual("exact_overview_bundle", overview["kind"])
+            self.assertEqual(activation, overview["activation"])
+            self.assertEqual(
+                completion_metrics,
+                {request["metric"] for request in overview["requests"]},
+            )
+            dual_query_recipes = []
+            for recipe_name, recipe in recipes.items():
+                requests = (
+                    recipe.get("requests")
+                    if isinstance(recipe, dict)
+                    else None
+                )
+                if not isinstance(requests, list):
+                    continue
+                request_metrics = {
+                    request.get("metric")
+                    for request in requests
+                    if isinstance(request, dict)
+                }
+                if completion_metrics.issubset(request_metrics):
+                    dual_query_recipes.append(recipe_name)
+                    self.assertEqual(activation, recipe.get("activation"))
+            self.assertEqual(["completion_overview"], dual_query_recipes)
+
+        planner_path = (
+            PROFILE_ROOT / "skills/target-query/references/planner-contract.yaml"
+        )
+        semantics_path = (
+            PROFILE_ROOT
+            / "plugins/datasage-query/contracts/target-semantics.yaml"
+        )
+        planner = yaml.safe_load(planner_path.read_text(encoding="utf-8"))
+        semantics = yaml.safe_load(semantics_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            "clarify_before_metric_detail_and_query",
+            planner["defaults"]["ambiguous_target_type"],
+        )
+        self.assertEqual(
+            {"metric_detail_calls": 0, "datasage_query_calls": 0},
+            planner["defaults"]["ambiguous_target_pre_response"],
+        )
+        self.assertEqual(
+            activation,
+            planner["recipes"]["completion_overview"]["activation"],
+        )
+        self.assertEqual("plugin_physical_execution", semantics["contract_role"])
+        for session_policy_key in (
+            "ambiguous_target_type",
+            "ambiguous_target_pre_response",
+            "completion_overview_activation",
+        ):
+            self.assertNotIn(session_policy_key, semantics["defaults"])
+        semantics_recipe_status = semantics["analysis_recipes_status"]
+        self.assertEqual(
+            "reference_only_not_runtime_or_model_authority",
+            semantics_recipe_status["status"],
+        )
+        self.assertEqual(
+            "planner_contract",
+            semantics_recipe_status["authoritative_source"],
+        )
+        self.assertIs(semantics_recipe_status["runtime_authority"], False)
+        self.assertIs(semantics_recipe_status["user_intent_authority"], False)
+        self.assertNotIn(
+            "activation",
+            semantics["analysis_recipes"]["completion_overview"],
+        )
+        for content in (
+            planner_path.read_text(encoding="utf-8"),
+            semantics_path.read_text(encoding="utf-8"),
+        ):
+            self.assertNotIn("return_delivery_and_receipt_together", content)
+
+        main_skill = (PROFILE_ROOT / "skills/datasage/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        patterns = (
+            PROFILE_ROOT / "skills/datasage/datasage-query-patterns/SKILL.md"
+        ).read_text(encoding="utf-8")
+        normalized_main = " ".join(main_skill.split())
+        normalized_patterns = " ".join(patterns.split())
+        for normalized in (normalized_main, normalized_patterns):
+            self.assertIn("`metric_selection_boundary`", normalized)
+            self.assertIn("official Hermes `clarify`", normalized)
+            self.assertIn("`datasage_query`", normalized)
+        self.assertIn(
+            "metric-detail calls and `datasage_query` calls must both be zero",
+            normalized_main,
+        )
+        self.assertIn(
+            "zero metric-detail and `datasage_query` calls before the clarification response",
+            normalized_patterns,
+        )
+        for normalized in (normalized_main, normalized_patterns):
+            self.assertIn("domain-local", normalized)
+            self.assertIn("single minimal related domain", normalized)
+            self.assertIn("Never enumerate every domain", normalized)
 
     def test_delivery_planner_has_no_dev1_acceptance_orphan(self) -> None:
         for relative_path in (

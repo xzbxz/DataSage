@@ -22,7 +22,16 @@ When DataSage schemas are deferred, use the main Skill's `tool_search` ->
 ## Governed workflow
 
 1. Load `datasage_catalog` with `view: expert_index` for the domain to pick the
-   exact metric code.
+   exact metric code. Apply the main skill's `metric_selection_boundary`: one
+   compatible returned metric may proceed; multiple materially distinct
+   compatible metrics require the official Hermes `clarify` tool, with zero
+   metric-detail and `datasage_query` calls before the clarification response;
+   zero compatible metrics are a current-domain-only gap, with metric-detail
+   and query calls still zero. Inspect one other expert index only when the
+   user's semantics explicitly support that single minimal related domain;
+   otherwise give a domain-local gap or clarify. Never enumerate every domain,
+   claim global non-support from one index, or query all candidates as a
+   substitute for clarification.
 2. If the request needs dimensions/filters/ranking (not an exact default
    lookup), load metric detail for that code to confirm allowed dimensions
    and filter support.

@@ -20,7 +20,8 @@ defaults:
   max_business_dimensions: 5
   name_alignment: exact
   current_month_progress: full_month_target_vs_actual_to_date
-  ambiguous_target_type: return_delivery_and_receipt_together
+  ambiguous_target_type: clarify_before_metric_detail_and_query
+  ambiguous_target_pre_response: {metric_detail_calls: 0, datasage_query_calls: 0}
   trend_without_time: latest_6_natural_months_including_current
   mixed_past_current_future: monthly_breakdown_required
   missing_target_display: 未设置目标
@@ -47,7 +48,7 @@ metric_catalog:
 dimension_catalog: [salesperson, department, organization, customer]
 
 planning_rules:
-  - 用户只问“目标完成怎么样”而未说明出库或收款时，同时返回出库与收款目标完成，不猜测其中一个；两个请求分别使用 transaction_detail 总体账。
+  - 用户只问“目标完成怎么样/完成率”而未说明出库或收款时，先使用 Hermes 官方 clarify 让用户选择；澄清答复前 metric detail 和 datasage_query 均为0。仅当用户明确选择两者，或原问题明确要求“同时/两者/分别看出库和收款”时，才可查询双指标 overview；不得把批量查询两个候选当作澄清。
   - 完成率、实际和缺口直接使用 completion 指标一次返回，模型不分别查后拼接、相减或相除。
   - 业务维度仅受工具 schema 上限、指标 allowed_dimensions 与显式用户请求约束；当前与执行一致最多五个，不再设置模型侧两维补丁式上限。趋势通过 time_bucket=month 表达，月份不占业务维度。
   - 目标缺失、目标真实为零和目标金额含空值必须读取工具返回的 target_data_state 分别表达，不得互相替代。
@@ -68,11 +69,12 @@ planning_rules:
   - 为什么没完成先查目标完成事实，再把同期变化问题路由到出库或收款域；只描述共同出现的事实，不认定原因。
 
 recipe_policy:
-  exact_overview_bundle: 仅在用户只问“目标完成怎么样”且未说明出库或收款，也没有显式维度、趋势、排名、比较或原因诊断时使用。
+  exact_overview_bundle: 仅在用户明确选择出库与收款两者，或原问题明确要求同时/两者/分别查看出库和收款，且没有显式维度、趋势、排名、比较或原因诊断时使用。
   analysis_seed: 非约束规划提示；必须通过能力覆盖门，不授权未登记指标，并采用自适应软预算。仅当已返回证据仍存在可能实质改变结论的缺口时追加针对性查询；证据足够、边际信息价值低或受控能力不足时停止，不设固定查询、追问或轮数上限。
 recipes:
   completion_overview:
     kind: exact_overview_bundle
+    activation: user_explicitly_selected_both_or_original_question_explicitly_requests_both
     requests:
       - {metric: delivery_target_completion, attribution_mode: transaction_detail, dimensions: []}
       - {metric: receipt_target_completion, attribution_mode: transaction_detail, dimensions: []}

@@ -45,6 +45,19 @@ existing context transparently supports one interpretation. Catalog inspection
 may clarify choices but does not authorize a query while materially different
 metrics remain. Do not run source-exact discovery until one metric is selected.
 
+After `expert_index`, follow its `metric_selection_boundary`. If multiple
+materially distinct returned metrics remain compatible, call the official
+Hermes `clarify` tool directly. Before the user's clarification response,
+metric-detail calls and `datasage_query` calls must both be zero. Querying every
+candidate is not clarification. Query both target-completion metrics only when
+the user explicitly selects both or the original question explicitly asks for
+both. If no returned metric in the current requested domain is compatible,
+treat that only as a domain-local gap and keep metric-detail and
+`datasage_query` calls at zero. Check one other expert index only when the
+user's semantics explicitly support that single minimal related domain;
+otherwise report the domain-local gap or clarify. Never enumerate every domain
+or claim that the metric is globally unsupported from one domain's index.
+
 ### Plan
 
 Request the smallest sufficient evidence bundle, adapting breadth to the

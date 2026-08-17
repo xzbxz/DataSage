@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 from pathlib import Path
 import sys
@@ -12,11 +13,15 @@ import unittest
 from unittest import mock
 
 import yaml
+from tools import clarify_tool as _hermes_clarify_registration  # noqa: F401
+from tools import tool_search as hermes_tool_search
+from tools.registry import ToolRegistry, registry as hermes_registry
 
 
 PROFILE_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = PROFILE_ROOT / "plugins" / "datasage-query"
 PACKAGE_NAME = "_datasage_query_integration_tests"
+HERMES_CORE_TOOL_NAMES = hermes_tool_search._core_tool_names()
 
 
 def _install_test_package() -> None:
@@ -55,6 +60,7 @@ db_security = _load_module("db_security")
 runtime_health = _load_module("runtime_health")
 entitlements = _load_module("entitlements")
 skill_prompt = _load_module("skill_prompt")
+schemas = _load_module("schemas")
 
 
 class RuntimeBoundaryTests(unittest.TestCase):
@@ -182,7 +188,64 @@ class GitGovernedSkillTests(unittest.TestCase):
             "do not claim or imply that the result is truncated",
             normalized,
         )
+        self.assertIn("official Hermes `clarify`", normalized)
+        self.assertIn(
+            "metric-detail calls and `datasage_query` calls must both be zero",
+            normalized,
+        )
         self.assertIsNone(hook(platform="cli", is_first_turn=True))
+
+    def test_hermes_clarify_stays_direct_and_datasage_catalog_is_searchable(self):
+        self.assertIn("clarify", HERMES_CORE_TOOL_NAMES)
+        clarify_schema = hermes_registry.get_schema("clarify")
+        self.assertIsInstance(clarify_schema, dict)
+
+        isolated_registry = ToolRegistry()
+        isolated_registry.register(
+            name="datasage_catalog",
+            toolset="datasage-query",
+            schema=schemas.DATASAGE_CATALOG,
+            handler=lambda args, **kwargs: "{}",
+            description=schemas.DATASAGE_CATALOG["description"],
+        )
+        tool_defs = [
+            {"type": "function", "function": clarify_schema},
+            {"type": "function", "function": schemas.DATASAGE_CATALOG},
+        ]
+        config = hermes_tool_search.ToolSearchConfig(
+            enabled="on",
+            threshold_pct=5.0,
+            search_default_limit=5,
+            max_search_limit=20,
+            listing="off",
+        )
+        with mock.patch("tools.registry.registry", isolated_registry):
+            assembled = hermes_tool_search.assemble_tool_defs(
+                tool_defs,
+                context_length=128_000,
+                config=config,
+            )
+            search_result = json.loads(
+                hermes_tool_search.dispatch_tool_search(
+                    {"query": "datasage catalog"},
+                    current_tool_defs=tool_defs,
+                    config=config,
+                )
+            )
+
+        visible_names = {
+            tool["function"]["name"] for tool in assembled.tool_defs
+        }
+        self.assertTrue(assembled.activated)
+        self.assertIn("clarify", visible_names)
+        self.assertNotIn("datasage_catalog", visible_names)
+        self.assertTrue(
+            {"tool_search", "tool_describe", "tool_call"}.issubset(visible_names)
+        )
+        self.assertIn(
+            "datasage_catalog",
+            {match["name"] for match in search_result["matches"]},
+        )
 
 
 class ProductionSafetyTests(unittest.TestCase):
@@ -267,6 +330,13 @@ class DistributionBoundaryTests(unittest.TestCase):
         config = (PROFILE_ROOT / "config.yaml").read_text(encoding="utf-8")
         parsed_config = yaml.safe_load(config)
         self.assertIn("Intentional channel-security exception", config)
+        wecom_toolsets = parsed_config["platform_toolsets"]["wecom"]
+        self.assertIsInstance(wecom_toolsets, list)
+        self.assertEqual(
+            {"datasage-query", "clarify", "todo"},
+            set(wecom_toolsets),
+        )
+        self.assertEqual(3, len(wecom_toolsets))
         self.assertIn("skills:\n", config)
         self.assertIn("write_approval: true", config)
         approvals = parsed_config.get("approvals")

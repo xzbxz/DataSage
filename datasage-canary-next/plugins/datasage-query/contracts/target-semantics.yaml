@@ -17,7 +17,6 @@ defaults:
   name_alignment: exact
   current_month_progress: full_month_target_vs_actual_to_date
   future_period_behavior: target_only
-  ambiguous_target_type: return_delivery_and_receipt_together
   trend_without_time: latest_6_natural_months_including_current
   mixed_past_current_future: monthly_breakdown_required
   missing_target_display: 未设置目标
@@ -281,6 +280,8 @@ formula:
 analysis_recipes_status:
   status: reference_only_not_runtime_or_model_authority
   authoritative_source: planner_contract
+  runtime_authority: false
+  user_intent_authority: false
   rule: 本块仅保留发布维护比对；运行时不读取，合同服务不投影，不能作为固定配方或指标授权来源。
 
 analysis_recipes:
