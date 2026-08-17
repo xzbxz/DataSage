@@ -11,6 +11,8 @@ import types
 import unittest
 from unittest import mock
 
+import yaml
+
 
 PROFILE_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = PROFILE_ROOT / "plugins" / "datasage-query"
@@ -263,15 +265,22 @@ class DistributionBoundaryTests(unittest.TestCase):
 
     def test_wecom_narrow_surface_is_an_explicit_channel_exception(self):
         config = (PROFILE_ROOT / "config.yaml").read_text(encoding="utf-8")
+        parsed_config = yaml.safe_load(config)
         self.assertIn("Intentional channel-security exception", config)
         self.assertIn("skills:\n", config)
         self.assertIn("write_approval: true", config)
+        approvals = parsed_config.get("approvals")
+        self.assertIsInstance(approvals, dict)
+        self.assertEqual(
+            {"destructive_slash_confirm"},
+            set(approvals),
+        )
+        self.assertIs(approvals["destructive_slash_confirm"], False)
         for host_global_block in (
             "terminal:",
             "memory:",
             "sessions:",
             "streaming:",
-            "approvals:",
             "onboarding:",
             "compression:",
         ):
