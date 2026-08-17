@@ -18,6 +18,7 @@ package.__path__ = [str(PLUGIN_ROOT)]
 sys.modules[TEST_PACKAGE] = package
 
 contracts = importlib.import_module(f"{TEST_PACKAGE}.contracts")
+skill_prompt = importlib.import_module(f"{TEST_PACKAGE}.skill_prompt")
 tools = importlib.import_module(f"{TEST_PACKAGE}.tools")
 
 
@@ -89,6 +90,70 @@ class BusinessContractTests(unittest.TestCase):
             "`truncated: true` AND `data_state: truncated`",
             normalized,
         )
+
+    def test_complete_change_finalization_reports_noncausal_structural_contribution(
+        self,
+    ) -> None:
+        content = (PROFILE_ROOT / "skills/datasage/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        finalization = content.split("Finalization:", 1)[1].split(
+            "## Stop and failure behavior", 1
+        )[0]
+        contribution_rule = next(
+            paragraph
+            for paragraph in finalization.split("\n-")
+            if "`operation` is `complete_change_decomposition`" in " ".join(
+                paragraph.split()
+            )
+        )
+        normalized = " ".join(contribution_rule.split())
+
+        for required in (
+            "only when `operation` is `complete_change_decomposition` AND the returned "
+            "`change_reconciliation.status` is explicitly `reconciled`",
+            "a general `status: success` does not authorize it",
+            "“结构贡献” / “structural contribution”",
+            "strictly equivalent non-causal accounting term",
+            "returned overall delta",
+            "contribution amount for every returned partition",
+            "contribution rate only when the response returns that rate",
+            "cover all returned partitions",
+            "response's reconciliation basis",
+            "Never describe structural contribution as a cause, driver, or causal explanation",
+            "does not return a contribution rate, do not calculate or invent one",
+            "When the returned `change_reconciliation.status` is `not_reconciled`, "
+            "or when `change_reconciliation` or its status is missing",
+            "preserve the returned gap or local-result scope and never call it structural "
+            "contribution",
+        ):
+            self.assertIn(required, normalized)
+        self.assertNotIn(
+            "successful `complete_change_decomposition`",
+            normalized,
+        )
+
+        main_skill = skill_prompt.load_main_skill(PROFILE_ROOT)
+        hook = skill_prompt.build_wecom_skill_hook(main_skill)
+        projected = hook(platform="wecom", is_first_turn=True)
+        self.assertIsInstance(projected, dict)
+        context = projected["context"]
+        projected_normalized = " ".join(context.split())
+        self.assertIn('authority="git"', context)
+        self.assertIn('immutable="process"', context)
+        for required in (
+            "only when `operation` is `complete_change_decomposition` AND the returned "
+            "`change_reconciliation.status` is explicitly `reconciled`",
+            "a general `status: success` does not authorize it",
+            "contribution amount for every returned partition",
+            "contribution rate only when the response returns that rate",
+            "Never describe structural contribution as a cause, driver, or causal explanation",
+            "When the returned `change_reconciliation.status` is `not_reconciled`, "
+            "or when `change_reconciliation` or its status is missing",
+            "preserve the returned gap or local-result scope and never call it structural "
+            "contribution",
+        ):
+            self.assertIn(required, projected_normalized)
 
     def test_domain_analysis_seeds_use_an_adaptive_soft_budget(self) -> None:
         for domain in ("receipt", "receivable", "inventory", "target"):

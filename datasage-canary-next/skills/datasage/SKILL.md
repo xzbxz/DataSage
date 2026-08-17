@@ -212,6 +212,21 @@ Finalization:
   N is returned and that the source result was truncated; never imply a
   complete ranking. When `truncated` is not `true` AND `data_state` is not
   `truncated`, do not claim or imply that the result is truncated.
+- Authorize a structural-contribution conclusion only when `operation` is
+  `complete_change_decomposition` AND the returned
+  `change_reconciliation.status` is explicitly `reconciled`; a general
+  `status: success` does not authorize it. Then use “结构贡献” / “structural
+  contribution”, or a strictly equivalent non-causal accounting term, in the
+  final answer. Link the
+  returned overall delta to the contribution amount for every returned
+  partition and to its contribution rate only when the response returns that
+  rate; cover all returned partitions using the response's reconciliation
+  basis. Never describe structural contribution as a cause, driver, or causal
+  explanation. If the response does not return a contribution rate, do not
+  calculate or invent one. When the returned `change_reconciliation.status` is
+  `not_reconciled`, or when `change_reconciliation` or its status is missing,
+  preserve the returned gap or local-result scope and never call it structural
+  contribution.
 
 Evidence is local; caveats can't fix claims. Preserve returned meaning/scope/grain,
 freshness, completeness, reconciliation, and typed states; keep zero/empty/
