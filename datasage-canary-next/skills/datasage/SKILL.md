@@ -1,9 +1,6 @@
 ---
 name: datasage
 description: Internal company facts requiring DataSage lookup only.
-metadata:
-  hermes:
-    requires_toolsets: [datasage-query]
 ---
 
 # DataSage
@@ -21,6 +18,11 @@ plugin authorizes metrics and queries.
   unrestricted predicates.
 - Never replace a requested metric with a nearby measure. If the governed
   capability is absent, name the unavailable fact.
+- When a required `datasage_*` schema is not a direct entry in the current tool
+  table, use Hermes' `tool_search` to find its exact registered name,
+  `tool_describe` to read its schema, and `tool_call` to invoke it. This changes
+  only tool disclosure: authorization, query preflight, evidence boundaries,
+  and non-causality rules remain unchanged. Never guess a tool name or argument.
 
 ## Adaptive expert loop
 

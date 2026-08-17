@@ -2,9 +2,6 @@
 name: datasage-query-patterns
 description: >-
   Use for DataSage entity-filtered or ranked metric queries.
-metadata:
-  hermes:
-    requires_toolsets: [datasage-query]
 ---
 
 # DataSage Query Patterns
@@ -12,6 +9,9 @@ metadata:
 Business-query companion to the governed `datasage` skill. Use it only for
 entity-filtered, dimensional, or ranked requests; the main Skill remains the
 authority for planning and evidence boundaries.
+
+When DataSage schemas are deferred, use the main Skill's `tool_search` ->
+`tool_describe` -> `tool_call` bridge. Never guess a tool name or argument.
 
 ## When to use
 

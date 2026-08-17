@@ -22,14 +22,42 @@ tools = importlib.import_module(f"{TEST_PACKAGE}.tools")
 
 
 class BusinessContractTests(unittest.TestCase):
-    def test_all_datasage_skills_require_the_plugin_toolset(self) -> None:
+    def test_user_visible_datasage_skills_survive_tool_search_deferral(self) -> None:
         for relative_path in (
             "skills/datasage/SKILL.md",
             "skills/datasage/datasage-query-patterns/SKILL.md",
-            "skills/common-data-foundation/SKILL.md",
         ):
             content = (PROFILE_ROOT / relative_path).read_text(encoding="utf-8")
-            self.assertIn("requires_toolsets: [datasage-query]", content)
+            self.assertNotIn("requires_toolsets: [datasage-query]", content)
+
+        internal_foundation = (
+            PROFILE_ROOT / "skills/common-data-foundation/SKILL.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "requires_toolsets: [datasage-query]",
+            internal_foundation,
+        )
+
+    def test_user_visible_skills_declare_the_official_tool_search_bridge(self) -> None:
+        main_skill = (PROFILE_ROOT / "skills/datasage/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        companion = (
+            PROFILE_ROOT / "skills/datasage/datasage-query-patterns/SKILL.md"
+        ).read_text(encoding="utf-8")
+
+        for tool_name in ("`tool_search`", "`tool_describe`", "`tool_call`"):
+            self.assertIn(tool_name, main_skill)
+            self.assertIn(tool_name, companion)
+        for boundary in (
+            "authorization",
+            "query preflight",
+            "evidence boundaries",
+            "non-causality rules",
+        ):
+            self.assertIn(boundary, main_skill)
+        for content in (main_skill, companion):
+            self.assertIn("Never guess a tool name or argument", content)
 
     def test_top_n_truncation_guidance_depends_on_returned_state(self) -> None:
         content = (
