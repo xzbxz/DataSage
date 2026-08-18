@@ -3258,6 +3258,412 @@ class BusinessContractTests(unittest.TestCase):
         )
         self.assertNotIn("42.00", json.dumps(stale_payload))
 
+    def test_current_inventory_observation_date_is_same_query_and_fail_closed(
+        self,
+    ) -> None:
+        metric = "current_inventory_amount_rmb"
+        answer_contract = (
+            "当前库存观察日期是数据库查询日，仅表示该日查询时观察到的当前库存快照，"
+            "不代表源数据或 ETL 刷新时点。"
+        )
+        semantics = yaml.safe_load(
+            (PLUGIN_ROOT / "contracts" / "inventory-semantics.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        evidence_metrics = {
+            metric_code: definition.get("current_snapshot_evidence")
+            for metric_code, definition in semantics["metrics"].items()
+            if definition.get("current_snapshot_evidence") is not None
+        }
+        self.assertEqual(
+            {metric: "database_query_date_observation"},
+            evidence_metrics,
+        )
+        self.assertEqual(
+            [answer_contract],
+            semantics["metrics"][metric]["answer_contract"],
+        )
+
+        detail = json.loads(
+            contracts.datasage_catalog(
+                {"requests": [{"domain": "inventory", "metric": metric}]}
+            )
+        )
+        self.assertEqual("success", detail["status"])
+        self.assertEqual(
+            [answer_contract],
+            detail["results"][0]["metric"]["answer_contract"],
+        )
+        self.assertNotIn(
+            "database_query_date_observation",
+            json.dumps(detail, ensure_ascii=False),
+        )
+        current_receipt = str(detail["content_hash"])
+
+        def run_query(
+            request_id: str,
+            rows: list[dict[str, object]],
+            *,
+            requested_metric: str = metric,
+        ) -> tuple[dict[str, object], dict[str, object], list[str]]:
+            sql_calls: list[str] = []
+
+            def execute_query(sql, _params, _limit, **_kwargs):
+                sql_calls.append(sql)
+                return rows, False, self._read_only_source_evidence()
+
+            request = {
+                "request_id": request_id,
+                "domain": "inventory",
+                "mode": "metric",
+                "purpose": "synthetic current inventory observation date test",
+                "metric": requested_metric,
+                "dimensions": [],
+                "inventory_scope": "total",
+                "detail_receipt": self._metric_detail_receipt(
+                    "inventory", requested_metric
+                ),
+            }
+            with mock.patch.object(
+                tools,
+                "_execute_with_source",
+                side_effect=execute_query,
+            ):
+                payload = json.loads(tools.datasage_query({"requests": [request]}))
+            result = payload["results"][0] if payload.get("results") else payload
+            return payload, result, sql_calls
+
+        def assert_disclosure_seals(result: dict[str, object]) -> None:
+            ledger = result["disclosure_ledger"]
+            self.assertIsInstance(ledger, list)
+            for disclosure in ledger:
+                canonical = json.dumps(
+                    {
+                        key: value
+                        for key, value in disclosure.items()
+                        if key != "disclosure_seal"
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                ).encode("utf-8")
+                self.assertEqual(
+                    "sha256_" + hashlib.sha256(canonical).hexdigest(),
+                    disclosure["disclosure_seal"],
+                )
+            ledger_canonical = json.dumps(
+                {
+                    "contract_version": result["disclosure_contract_version"],
+                    "request_id": result["request_id"],
+                    "metric_ref": result["business_metric_ref"],
+                    "scope_fingerprint": result["scope_fingerprint"],
+                    "projection_fingerprint": result["projection_fingerprint"],
+                    "ledger": ledger,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+            self.assertEqual(
+                "sha256_" + hashlib.sha256(ledger_canonical).hexdigest(),
+                result["disclosure_ledger_seal"],
+            )
+
+        valid_period = {
+            "source": "current_snapshot",
+            "as_of_basis": "database_query_date_observation",
+            "as_of_date": "2026-08-18",
+            "resolution_state": "resolved",
+        }
+        complete_payload, complete_result, complete_calls = run_query(
+            "inventory_observation_complete",
+            [
+                {
+                    "metric_value": "100.00",
+                    tools._INTERNAL_MATCH_COUNT: 2,
+                    "missing_value_count": 0,
+                    "known_value_count": 2,
+                    "value_coverage_rate": "1.0000",
+                    "metric_data_state": "complete",
+                    tools._INTERNAL_AS_OF_DATE: date(2026, 8, 18),
+                }
+            ],
+        )
+        self.assertEqual(1, len(complete_calls))
+        self.assertIn("CURDATE() AS `__as_of_date`", complete_calls[0])
+        self.assertEqual("rows", complete_result["data_state"])
+        self.assertEqual(valid_period, complete_result["applied_time_range"])
+        complete_claim = complete_result["claim_ledger"][0]
+        self.assertEqual(valid_period, complete_claim["period"])
+        self.assertTrue(
+            tools.evidence.claim_is_valid_for_result(
+                complete_claim,
+                complete_result,
+            )
+        )
+        self.assertEqual(
+            "查询范围：截至 2026-08-18 查询时观察到的当前库存快照",
+            complete_payload["answer_scope_line"],
+        )
+        self.assertEqual(
+            valid_period,
+            tools._model_wire_result(complete_result)["applied_time_range"],
+        )
+        self.assertEqual(
+            ["observation"],
+            complete_payload["evidence_bundle"]["items"][0]["supports"],
+        )
+        assert_disclosure_seals(complete_result)
+
+        safe_wire = json.dumps(complete_payload, ensure_ascii=False)
+        for private_value in (
+            "__as_of_date",
+            "CURDATE",
+            "inventory_barcode_detail_dw",
+            "ddp_amount_rmb",
+        ):
+            self.assertNotIn(private_value, safe_wire)
+
+        incomplete_payload, incomplete_result, incomplete_calls = run_query(
+            "inventory_observation_incomplete",
+            [
+                {
+                    "metric_value": "80.00",
+                    tools._INTERNAL_MATCH_COUNT: 3,
+                    "missing_value_count": 1,
+                    "known_value_count": 2,
+                    "value_coverage_rate": "0.6667",
+                    "metric_data_state": "incomplete",
+                    tools._INTERNAL_AS_OF_DATE: datetime(
+                        2026, 8, 18, 13, 14, 15
+                    ),
+                }
+            ],
+        )
+        self.assertEqual(1, len(incomplete_calls))
+        self.assertEqual("incomplete", incomplete_result["data_state"])
+        incomplete_claim = incomplete_result["claim_ledger"][0]
+        self.assertEqual(valid_period, incomplete_claim["period"])
+        self.assertEqual("80.00", incomplete_claim["facts"]["metric_value"])
+        self.assertEqual(1, incomplete_claim["facts"]["missing_value_count"])
+        self.assertEqual(2, incomplete_claim["facts"]["known_value_count"])
+        self.assertEqual(
+            "0.6667", incomplete_claim["facts"]["value_coverage_rate"]
+        )
+        self.assertEqual("data_incomplete", incomplete_payload["evidence_bundle"]["evidence_gaps"][0]["reason"])
+        self.assertTrue(
+            tools.evidence.claim_is_valid_for_result(
+                incomplete_claim,
+                incomplete_result,
+            )
+        )
+        assert_disclosure_seals(incomplete_result)
+
+        _, zero_result, zero_calls = run_query(
+            "inventory_observation_zero",
+            [
+                {
+                    "metric_value": "0.00",
+                    tools._INTERNAL_MATCH_COUNT: 1,
+                    "missing_value_count": 0,
+                    "known_value_count": 1,
+                    "value_coverage_rate": "1.0000",
+                    "metric_data_state": "complete",
+                    tools._INTERNAL_AS_OF_DATE: "2026-08-18",
+                }
+            ],
+        )
+        self.assertEqual(1, len(zero_calls))
+        self.assertEqual("zero", zero_result["data_state"])
+        self.assertEqual("0.00", zero_result["claim_ledger"][0]["facts"]["metric_value"])
+        self.assertEqual(valid_period, zero_result["applied_time_range"])
+
+        _, empty_result, empty_calls = run_query(
+            "inventory_observation_empty",
+            [
+                {
+                    "metric_value": None,
+                    tools._INTERNAL_MATCH_COUNT: 0,
+                    "missing_value_count": None,
+                    "known_value_count": None,
+                    "value_coverage_rate": None,
+                    "metric_data_state": "missing",
+                    tools._INTERNAL_AS_OF_DATE: "2026-08-18",
+                }
+            ],
+        )
+        self.assertEqual(1, len(empty_calls))
+        self.assertEqual("empty", empty_result["data_state"])
+        self.assertEqual([], empty_result["claim_ledger"])
+        self.assertEqual(valid_period, empty_result["applied_time_range"])
+
+        undefined_cases = (
+            (
+                "missing",
+                {},
+                "as_of_date_unavailable",
+            ),
+            (
+                "null",
+                {tools._INTERNAL_AS_OF_DATE: None},
+                "as_of_date_unavailable",
+            ),
+            (
+                "empty_string",
+                {tools._INTERNAL_AS_OF_DATE: ""},
+                "as_of_date_unavailable",
+            ),
+            (
+                "malformed",
+                {tools._INTERNAL_AS_OF_DATE: "2026/08/18"},
+                "as_of_date_invalid",
+            ),
+        )
+        for case_name, date_fragment, resolution_state in undefined_cases:
+            with self.subTest(undefined_case=case_name):
+                payload, result, calls = run_query(
+                    f"inventory_observation_{case_name}",
+                    [
+                        {
+                            "metric_value": "42.00",
+                            tools._INTERNAL_MATCH_COUNT: 2,
+                            "missing_value_count": 1,
+                            "known_value_count": 1,
+                            "value_coverage_rate": "0.5000",
+                            "metric_data_state": "incomplete",
+                            **date_fragment,
+                        }
+                    ],
+                )
+                self.assertEqual(1, len(calls))
+                self.assertEqual("undefined", result["data_state"])
+                self.assertEqual(
+                    resolution_state,
+                    result["applied_time_range"]["resolution_state"],
+                )
+                self.assertEqual(
+                    "database_query_date_observation",
+                    result["applied_time_range"]["as_of_basis"],
+                )
+                claim = result["claim_ledger"][0]
+                self.assertEqual({"metric_value": None}, claim["facts"])
+                self.assertTrue(
+                    tools.evidence.claim_is_valid_for_result(claim, result)
+                )
+                serialized = json.dumps(payload, ensure_ascii=False)
+                self.assertNotIn("42.00", serialized)
+                self.assertNotIn("known_value_count", serialized)
+                self.assertNotIn("missing_value_count", serialized)
+                self.assertNotIn("value_coverage_rate", serialized)
+                self.assertNotIn("2026/08/18", serialized)
+
+        conflicting_payload, conflicting_result, conflicting_calls = run_query(
+            "inventory_observation_conflicting",
+            [
+                {
+                    "metric_value": "21.00",
+                    tools._INTERNAL_MATCH_COUNT: 1,
+                    "missing_value_count": 0,
+                    "known_value_count": 1,
+                    "value_coverage_rate": "1.0000",
+                    "metric_data_state": "complete",
+                    tools._INTERNAL_AS_OF_DATE: "2026-08-18",
+                },
+                {
+                    "metric_value": "22.00",
+                    tools._INTERNAL_MATCH_COUNT: 1,
+                    "missing_value_count": 0,
+                    "known_value_count": 1,
+                    "value_coverage_rate": "1.0000",
+                    "metric_data_state": "complete",
+                    tools._INTERNAL_AS_OF_DATE: "2026-08-19",
+                },
+            ],
+        )
+        self.assertEqual(1, len(conflicting_calls))
+        self.assertEqual("undefined", conflicting_result["data_state"])
+        self.assertEqual(
+            "as_of_date_conflicting",
+            conflicting_result["applied_time_range"]["resolution_state"],
+        )
+        self.assertEqual(
+            {"metric_value": None},
+            conflicting_result["claim_ledger"][0]["facts"],
+        )
+        self.assertNotIn("21.00", json.dumps(conflicting_payload))
+        self.assertNotIn("22.00", json.dumps(conflicting_payload))
+
+        no_rows_payload, no_rows_result, no_rows_calls = run_query(
+            "inventory_observation_no_rows",
+            [],
+        )
+        self.assertEqual(1, len(no_rows_calls))
+        self.assertEqual("undefined", no_rows_result["data_state"])
+        self.assertEqual(
+            "as_of_date_unavailable",
+            no_rows_result["applied_time_range"]["resolution_state"],
+        )
+        self.assertEqual(
+            {"metric_value": None},
+            no_rows_result["claim_ledger"][0]["facts"],
+        )
+        self.assertNotIn("__as_of_date", json.dumps(no_rows_payload))
+
+        other_payload, other_result, other_calls = run_query(
+            "inventory_other_current_snapshot_unchanged",
+            [{"metric_value": 3, tools._INTERNAL_MATCH_COUNT: 1}],
+            requested_metric="current_inventory_roll_count",
+        )
+        self.assertEqual(1, len(other_calls))
+        self.assertNotIn("__as_of_date", other_calls[0])
+        self.assertEqual(
+            {"source": "current_snapshot"},
+            other_result["applied_time_range"],
+        )
+        self.assertEqual("查询范围：当前业务快照", other_payload["answer_scope_line"])
+
+        stale_detail = json.loads(json.dumps(detail, ensure_ascii=False))
+        stale_detail.pop("content_hash")
+        stale_detail["results"][0]["metric"].pop("answer_contract")
+        stale_receipt = hashlib.sha256(
+            json.dumps(
+                stale_detail,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        self.assertNotEqual(current_receipt, stale_receipt)
+        stale_request = {
+            "request_id": "inventory_old_observation_contract_receipt",
+            "domain": "inventory",
+            "mode": "metric",
+            "purpose": "verify prior inventory detail receipt is invalid",
+            "metric": metric,
+            "dimensions": [],
+            "inventory_scope": "total",
+            "detail_receipt": stale_receipt,
+        }
+        with mock.patch.object(
+            tools,
+            "_execute_with_source",
+            side_effect=AssertionError("stale receipt must fail before SQL"),
+        ) as execute:
+            stale_payload = json.loads(
+                tools.runtime_guarded_datasage_query(
+                    {"requests": [stale_request]}
+                )
+            )
+        execute.assert_not_called()
+        self.assertEqual("failed", stale_payload["status"])
+        self.assertEqual(
+            "METRIC_DETAIL_RECEIPT_INVALID",
+            stale_payload["error"]["code"],
+        )
+
     def test_target_metric_ambiguity_requires_official_clarification(self) -> None:
         payload = json.loads(
             contracts.datasage_catalog(

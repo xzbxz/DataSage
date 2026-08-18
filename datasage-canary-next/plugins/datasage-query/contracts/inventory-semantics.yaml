@@ -189,11 +189,14 @@ metrics:
     completeness_measure: ddp_amount_rmb
     time_field: null
     time_policy: current_snapshot
+    current_snapshot_evidence: database_query_date_observation
     default_inventory_scope: total
     inventory_scope_filters: *current_inventory_scopes
     required_filters: {}
     allowed_dimensions: *current_dimensions
     answer_note: 当前金额是条码快照的人民币 DDP 估值；缺失金额按已知小计和覆盖率披露，不等同于月末正式核算成本。
+    answer_contract:
+      - 当前库存观察日期是数据库查询日，仅表示该日查询时观察到的当前库存快照，不代表源数据或 ETL 刷新时点。
   current_inventory_amount_original:
     disclosures:
       - *inventory_current_scope_total

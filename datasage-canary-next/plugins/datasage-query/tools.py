@@ -143,6 +143,8 @@ _INTERNAL_RESULT_FIELDS = {
     _INTERNAL_PARTITION_DELTA,
     _INTERNAL_PARTITION_ROW_COUNT,
 }
+_DATABASE_CURRENT_DATE_EVIDENCE = "database_current_date"
+_DATABASE_QUERY_DATE_OBSERVATION = "database_query_date_observation"
 _BUSINESS_TIME_ZONE = timezone(timedelta(hours=8))
 _DETAIL_RECEIPT = re.compile(r"^[0-9a-f]{64}$")
 _DETAIL_QUALIFIER_FIELDS = {
@@ -1979,9 +1981,20 @@ def _build_metric_core(
 
     time_policy = str(metric.get("time_policy") or "")
     current_snapshot_evidence = metric.get("current_snapshot_evidence")
-    if current_snapshot_evidence is not None and (
-        time_policy != "current_snapshot"
-        or current_snapshot_evidence != "database_current_date"
+    current_snapshot_evidence_supported = (
+        time_policy == "current_snapshot"
+        and (
+            current_snapshot_evidence == _DATABASE_CURRENT_DATE_EVIDENCE
+            or (
+                current_snapshot_evidence == _DATABASE_QUERY_DATE_OBSERVATION
+                and request.get("domain") == "inventory"
+                and request.get("metric") == "current_inventory_amount_rmb"
+            )
+        )
+    )
+    if (
+        current_snapshot_evidence is not None
+        and not current_snapshot_evidence_supported
     ):
         raise QueryFailure(
             "CONTRACT_UNAVAILABLE",
@@ -2150,7 +2163,10 @@ def _build_metric_core(
         isinstance(applied_time, Mapping)
         and applied_time.get("source") == "current_snapshot"
         and applied_time.get("current_snapshot_evidence")
-        == "database_current_date"
+        in {
+            _DATABASE_CURRENT_DATE_EVIDENCE,
+            _DATABASE_QUERY_DATE_OBSERVATION,
+        }
     ):
         evidence_columns.append(
             f"CURDATE() AS {_quote_identifier(_INTERNAL_AS_OF_DATE)}"
@@ -5775,6 +5791,13 @@ def _resolve_current_as_of_date_evidence(
             stage="result_validation",
         )
     public = dict(value)
+    as_of_basis = public.get("as_of_basis")
+    if as_of_basis not in {None, _DATABASE_QUERY_DATE_OBSERVATION}:
+        raise QueryFailure(
+            "CONTRACT_UNAVAILABLE",
+            "当前快照观察日期口径无效。",
+            stage="result_validation",
+        )
     dates: set[str] = set()
     missing = not rows
     invalid = False
@@ -5826,6 +5849,8 @@ def _scope_texts(value: Any) -> list[str]:
     source = value.get("source")
     as_of_date = value.get("as_of_date")
     if source == "current_snapshot" and isinstance(as_of_date, str):
+        if value.get("as_of_basis") == _DATABASE_QUERY_DATE_OBSERVATION:
+            return [f"截至 {as_of_date} 查询时观察到的当前库存快照"]
         return [f"截至 {as_of_date} 的当前业务快照"]
     snapshot_month = value.get("snapshot_month")
     if isinstance(snapshot_month, str):
@@ -7179,12 +7204,24 @@ def _run_one(
         )
         private_time_range = scope.get("time_range")
         applied_time_range = _public_time_range(private_time_range)
+        current_snapshot_evidence = (
+            private_time_range.get("current_snapshot_evidence")
+            if isinstance(private_time_range, Mapping)
+            else None
+        )
         requires_current_as_of_date = (
             isinstance(private_time_range, Mapping)
             and private_time_range.get("source") == "current_snapshot"
-            and private_time_range.get("current_snapshot_evidence")
-            == "database_current_date"
+            and current_snapshot_evidence
+            in {
+                _DATABASE_CURRENT_DATE_EVIDENCE,
+                _DATABASE_QUERY_DATE_OBSERVATION,
+            }
         )
+        if current_snapshot_evidence == _DATABASE_QUERY_DATE_OBSERVATION:
+            applied_time_range["as_of_basis"] = (
+                _DATABASE_QUERY_DATE_OBSERVATION
+            )
         current_stage = "business_sql"
         business_sql_attempted_count = 1
         executor = execute_query or _execute_with_source
