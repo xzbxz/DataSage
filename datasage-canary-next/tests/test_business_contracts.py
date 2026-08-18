@@ -161,6 +161,18 @@ class BusinessContractTests(unittest.TestCase):
             results,
             operation_partitions,
         )
+        for result in results:
+            for claim in result["claim_ledger"]:
+                claim.update(
+                    {
+                        "request_id": result["request_id"],
+                        "metric_ref": result["business_metric_ref"],
+                        "scope_fingerprint": result["scope_fingerprint"],
+                        "projection_fingerprint": result[
+                            "projection_fingerprint"
+                        ],
+                    }
+                )
         tools._seal_claim_ids(results)
         tools._seal_change_reconciliations(results)
         tools._finalize_complete_decomposition_outcomes(
@@ -694,7 +706,9 @@ class BusinessContractTests(unittest.TestCase):
                 )
             ledger_canonical = json.dumps(
                 {
-                    "contract_version": "metric-disclosure-ledger/v1",
+                    "contract_version": query_result[
+                        "disclosure_contract_version"
+                    ],
                     "request_id": query_result["request_id"],
                     "metric_ref": query_result["business_metric_ref"],
                     "scope_fingerprint": query_result["scope_fingerprint"],
@@ -715,14 +729,12 @@ class BusinessContractTests(unittest.TestCase):
         self.assertEqual(
             {
                 "receipt.domain.scope",
-                "receipt.domain.usage-scope",
                 "receipt.net.scope",
             },
             set(disclosures),
         )
         expected_disclosure_texts = {
             "receipt.domain.scope": "收款及退款域指标均包含内部客户并排除A状态。",
-            "receipt.domain.usage-scope": "用途以本次实际查询的用途分组或筛选范围为准。",
             "receipt.net.scope": (
                 "净收款为收款人民币金额减退款人民币金额；"
                 "收款和退款范围均包含内部客户并排除A状态。"
@@ -736,15 +748,7 @@ class BusinessContractTests(unittest.TestCase):
         self.assertIn("内部客户", domain_scope)
         self.assertIn("排除A状态", domain_scope)
         self.assertNotIn("本次实际筛选范围", domain_scope)
-        self.assertIn(
-            "本次实际查询的用途分组或筛选范围",
-            disclosures["receipt.domain.usage-scope"]["text"],
-        )
         self.assertEqual("required_always", disclosures["receipt.domain.scope"]["mode"])
-        self.assertEqual(
-            "required_when",
-            disclosures["receipt.domain.usage-scope"]["mode"],
-        )
         net_scope = disclosures["receipt.net.scope"]["text"]
         self.assertIn("收款人民币金额减退款人民币金额", net_scope)
         self.assertIn("内部客户", net_scope)
@@ -752,10 +756,13 @@ class BusinessContractTests(unittest.TestCase):
         self.assertEqual(
             {
                 "receipt.domain.scope": True,
-                "receipt.domain.usage-scope": False,
                 "receipt.net.scope": True,
             },
             {key: item["applies"] for key, item in disclosures.items()},
+        )
+        self.assertEqual(
+            "metric-disclosure-ledger-model-projection/v1",
+            result["disclosure_contract_version"],
         )
         assert_ledger_seals(result)
 
@@ -824,9 +831,9 @@ class BusinessContractTests(unittest.TestCase):
                 "metric_filters": {"currency": "CNY"},
             }
         )
-        self.assertIs(
-            unrelated_disclosures["receipt.domain.usage-scope"]["applies"],
-            False,
+        self.assertNotIn(
+            "receipt.domain.usage-scope",
+            unrelated_disclosures,
         )
 
         invalid_disclosure_conditions = (
@@ -1606,36 +1613,17 @@ class BusinessContractTests(unittest.TestCase):
             )
 
         def assert_tamper_is_fail_closed(
-            tampered_raw: dict[str, object], expected_reason: str
+            tampered_raw: dict[str, object],
         ) -> None:
             before_projection = json.loads(json.dumps(tampered_raw))
             projected = tools._model_wire_result(tampered_raw)
             self.assertEqual(before_projection, tampered_raw)
             self.assertEqual("undefined", projected["data_state"])
-            projected_facts = projected["claim_ledger"][0]["facts"]
-            self.assertNotIn("metric_value", projected_facts)
-            projected_attestation = projected_facts["calculation_attestation"]
-            self.assertEqual("undefined", projected_attestation["status"])
+            self.assertEqual([], projected["claim_ledger"])
+            self.assertEqual(0, projected["row_count"])
             self.assertEqual(
-                [expected_reason],
-                projected_attestation["undefined_reason_codes"],
-            )
-            self.assertEqual(
-                expected_attestation_seal(projected_attestation),
-                projected_attestation["attestation_seal"],
-            )
-            projected_claim_id, projected_claim_seal = (
-                tools.evidence._canonical_claim_identity(
-                    projected["claim_ledger"][0]
-                )
-            )
-            self.assertEqual(
-                projected_claim_id,
-                projected["claim_ledger"][0]["claim_id"],
-            )
-            self.assertEqual(
-                projected_claim_seal,
-                projected["claim_ledger"][0]["claim_seal"],
+                "EVIDENCE_INTEGRITY_INVALID",
+                projected["error"]["code"],
             )
             projected_disclosure_ids = {
                 item["disclosure_id"] for item in projected["disclosure_ledger"]
@@ -1659,7 +1647,6 @@ class BusinessContractTests(unittest.TestCase):
         )
         assert_tamper_is_fail_closed(
             claim_integrity_tamper,
-            "CLAIM_INTEGRITY_INVALID",
         )
 
         attestation_integrity_tamper = json.loads(json.dumps(dso_result))
@@ -1669,7 +1656,6 @@ class BusinessContractTests(unittest.TestCase):
         tools.evidence.seal_claim(attestation_integrity_tamper["claim_ledger"][0])
         assert_tamper_is_fail_closed(
             attestation_integrity_tamper,
-            "ATTESTATION_INTEGRITY_INVALID",
         )
 
         attestation_missing = json.loads(json.dumps(dso_result))
@@ -1679,7 +1665,6 @@ class BusinessContractTests(unittest.TestCase):
         tools.evidence.seal_claim(attestation_missing["claim_ledger"][0])
         assert_tamper_is_fail_closed(
             attestation_missing,
-            "ATTESTATION_MISSING",
         )
 
         attestation_semantic_tamper = json.loads(json.dumps(dso_result))
@@ -1695,7 +1680,6 @@ class BusinessContractTests(unittest.TestCase):
         )
         assert_tamper_is_fail_closed(
             attestation_semantic_tamper,
-            "ATTESTATION_INTEGRITY_INVALID",
         )
 
         ledger_seal_tamper = json.loads(json.dumps(dso_result))
@@ -1721,21 +1705,11 @@ class BusinessContractTests(unittest.TestCase):
         ledger_seal_tamper_wire = tools._model_wire_result(ledger_seal_tamper)
         self.assertEqual(ledger_seal_tamper_before, ledger_seal_tamper)
         self.assertEqual("undefined", ledger_seal_tamper_wire["data_state"])
-        ledger_seal_tamper_facts = ledger_seal_tamper_wire["claim_ledger"][0][
-            "facts"
-        ]
-        self.assertNotIn("metric_value", ledger_seal_tamper_facts)
-        ledger_seal_tamper_attestation = ledger_seal_tamper_facts[
-            "calculation_attestation"
-        ]
-        self.assertEqual("undefined", ledger_seal_tamper_attestation["status"])
+        self.assertEqual([], ledger_seal_tamper_wire["claim_ledger"])
+        self.assertEqual(0, ledger_seal_tamper_wire["row_count"])
         self.assertEqual(
-            ["ATTESTATION_INTEGRITY_INVALID"],
-            ledger_seal_tamper_attestation["undefined_reason_codes"],
-        )
-        self.assertEqual(
-            expected_attestation_seal(ledger_seal_tamper_attestation),
-            ledger_seal_tamper_attestation["attestation_seal"],
+            "EVIDENCE_INTEGRITY_INVALID",
+            ledger_seal_tamper_wire["error"]["code"],
         )
         self.assertEqual([], ledger_seal_tamper_wire["disclosure_ledger"])
         self.assertEqual(
@@ -1747,7 +1721,6 @@ class BusinessContractTests(unittest.TestCase):
             formal_dso_formula_text,
             json.dumps(ledger_seal_tamper_wire, ensure_ascii=False),
         )
-        assert_attestation_and_claim_seals(ledger_seal_tamper_wire)
 
         undefined_cases = (
             (
@@ -2034,6 +2007,15 @@ class BusinessContractTests(unittest.TestCase):
                     dso_rows,
                 )
             self.assertEqual(1, len(calls), case_name)
+            if mode == "invalid_item_seal":
+                self.assertEqual([], result["claim_ledger"], case_name)
+                self.assertEqual("undefined", result["data_state"], case_name)
+                self.assertEqual(
+                    "EVIDENCE_INTEGRITY_INVALID",
+                    result["error"]["code"],
+                    case_name,
+                )
+                continue
             case_attestation = assert_attestation_and_claim_seals(result)
             self.assertEqual("success", result["status"], case_name)
             self.assertIsNone(result["error"], case_name)
@@ -2368,6 +2350,188 @@ class BusinessContractTests(unittest.TestCase):
         self.assertEqual(3, public["full_partition_row_count"])
         self.assertEqual(1, public["returned_nonzero_contributor_count"])
         self.assertIn("driver_claim_ids", internal_reconciliation)
+
+    def test_model_wire_filters_unsealed_evidence_for_every_metric(self) -> None:
+        def seal_disclosure(item: dict[str, object]) -> None:
+            canonical = json.dumps(
+                {
+                    key: value
+                    for key, value in item.items()
+                    if key != "disclosure_seal"
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+            item["disclosure_seal"] = (
+                "sha256_" + hashlib.sha256(canonical).hexdigest()
+            )
+
+        def result_fixture() -> dict[str, object]:
+            result: dict[str, object] = {
+                "request_id": "ordinary_metric",
+                "status": "success",
+                "data_state": "complete",
+                "business_metric_ref": "delivery.delivery_amount",
+                "business_metric_label": "出库金额",
+                "scope_fingerprint": "scope_ordinary",
+                "projection_fingerprint": "projection_ordinary",
+                "row_count": 1,
+                "truncated": False,
+                "allowed_reasoning_topics": ["comparison"],
+            }
+            claim: dict[str, object] = {
+                "request_id": result["request_id"],
+                "metric_ref": result["business_metric_ref"],
+                "scope_fingerprint": result["scope_fingerprint"],
+                "projection_fingerprint": result["projection_fingerprint"],
+                "dimensions": [],
+                "facts": {"metric_value": "10.00"},
+                "states": {},
+                "source_truncated": False,
+                "allowed_relations": ["observation"],
+            }
+            tools.evidence.seal_claim(claim)
+            result["claim_ledger"] = [claim]
+            ledger: list[dict[str, object]] = []
+            for disclosure_id, applies in (
+                ("delivery.scope", True),
+                ("delivery.conditional-scope", False),
+            ):
+                item: dict[str, object] = {
+                    "disclosure_id": disclosure_id,
+                    "disclosure_seal": "unsealed",
+                    "contract_version": "metric-disclosure/v1",
+                    "request_id": result["request_id"],
+                    "metric_ref": result["business_metric_ref"],
+                    "scope_fingerprint": result["scope_fingerprint"],
+                    "projection_fingerprint": result[
+                        "projection_fingerprint"
+                    ],
+                    "mode": (
+                        "required_always" if applies else "required_when"
+                    ),
+                    "order": len(ledger),
+                    "text": f"synthetic {disclosure_id}",
+                    "applies": applies,
+                }
+                seal_disclosure(item)
+                ledger.append(item)
+            result["disclosure_contract_version"] = (
+                "metric-disclosure-ledger/v1"
+            )
+            result["disclosure_ledger"] = ledger
+            ledger_canonical = json.dumps(
+                {
+                    "contract_version": result[
+                        "disclosure_contract_version"
+                    ],
+                    "request_id": result["request_id"],
+                    "metric_ref": result["business_metric_ref"],
+                    "scope_fingerprint": result["scope_fingerprint"],
+                    "projection_fingerprint": result[
+                        "projection_fingerprint"
+                    ],
+                    "ledger": ledger,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+            result["disclosure_ledger_seal"] = (
+                "sha256_" + hashlib.sha256(ledger_canonical).hexdigest()
+            )
+            return result
+
+        valid = result_fixture()
+        valid_before = json.loads(json.dumps(valid))
+        projected = tools._model_wire_result(valid)
+        self.assertEqual(valid_before, valid)
+        self.assertEqual(valid["claim_ledger"], projected["claim_ledger"])
+        self.assertEqual("complete", projected["data_state"])
+        self.assertNotIn("error", projected)
+        self.assertEqual(
+            ["delivery.scope"],
+            [
+                item["disclosure_id"]
+                for item in projected["disclosure_ledger"]
+            ],
+        )
+        self.assertTrue(
+            all(item["applies"] is True for item in projected["disclosure_ledger"])
+        )
+        self.assertEqual(
+            "metric-disclosure-ledger-model-projection/v1",
+            projected["disclosure_contract_version"],
+        )
+        self.assertEqual(projected, tools._model_wire_result(projected))
+
+        tamper_cases = {
+            "value": lambda item: item["claim_ledger"][0]["facts"].__setitem__(
+                "metric_value", "999.00"
+            ),
+            "scope": lambda item: (
+                item["claim_ledger"][0].__setitem__(
+                    "scope_fingerprint", "scope_other"
+                ),
+                tools.evidence.seal_claim(item["claim_ledger"][0]),
+            ),
+            "truncated": lambda item: item.__setitem__("truncated", True),
+            "claim_seal": lambda item: item["claim_ledger"][0].__setitem__(
+                "claim_seal", "sha256_" + "0" * 64
+            ),
+            "claim_ledger_missing": lambda item: item.pop("claim_ledger"),
+        }
+        for label, mutate in tamper_cases.items():
+            tampered = result_fixture()
+            mutate(tampered)
+            before_projection = json.loads(json.dumps(tampered))
+            failed_closed = tools._model_wire_result(tampered)
+            self.assertEqual(before_projection, tampered, label)
+            self.assertEqual([], failed_closed["claim_ledger"], label)
+            self.assertEqual("undefined", failed_closed["data_state"], label)
+            self.assertEqual(0, failed_closed["row_count"], label)
+            self.assertEqual(
+                "EVIDENCE_INTEGRITY_INVALID",
+                failed_closed["error"]["code"],
+                label,
+            )
+            self.assertEqual([], failed_closed["allowed_reasoning_topics"], label)
+
+        partially_tampered = result_fixture()
+        second_claim = json.loads(
+            json.dumps(partially_tampered["claim_ledger"][0])
+        )
+        second_claim["dimensions"] = [{"label": "客户", "value": "B"}]
+        tools.evidence.seal_claim(second_claim)
+        partially_tampered["claim_ledger"].append(second_claim)
+        partially_tampered["row_count"] = 2
+        partially_tampered["claim_ledger"][0]["facts"]["metric_value"] = (
+            "999.00"
+        )
+        partial_wire = tools._model_wire_result(partially_tampered)
+        self.assertEqual([second_claim], partial_wire["claim_ledger"])
+        self.assertEqual("incomplete", partial_wire["data_state"])
+        self.assertEqual(1, partial_wire["row_count"])
+        self.assertEqual(
+            "EVIDENCE_INTEGRITY_INVALID",
+            partial_wire["error"]["code"],
+        )
+
+        disclosure_tamper = result_fixture()
+        disclosure_tamper["disclosure_ledger"][0]["disclosure_seal"] = (
+            "sha256_" + "0" * 64
+        )
+        disclosure_wire = tools._model_wire_result(disclosure_tamper)
+        self.assertEqual([], disclosure_wire["claim_ledger"])
+        self.assertEqual([], disclosure_wire["disclosure_ledger"])
+        self.assertEqual("undefined", disclosure_wire["data_state"])
+        self.assertEqual(
+            "EVIDENCE_INTEGRITY_INVALID",
+            disclosure_wire["error"]["code"],
+        )
 
     def test_shared_dimension_labels_are_business_specific(self) -> None:
         for domain in ("delivery", "customer_risk"):

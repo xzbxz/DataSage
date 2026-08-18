@@ -4368,39 +4368,42 @@ def _sealed_disclosure_ids(
     projection_fingerprint: str,
     ledger_contract_version: str = "metric-disclosure-ledger/v1",
 ) -> set[str]:
-    if not isinstance(ledger, list) or not isinstance(ledger_seal, str):
+    if not _disclosure_ledger_has_valid_seal(
+        ledger,
+        ledger_seal,
+        request_id=request_id,
+        metric_ref=metric_ref,
+        scope_fingerprint=scope_fingerprint,
+        projection_fingerprint=projection_fingerprint,
+        ledger_contract_version=ledger_contract_version,
+    ):
         return set()
     sealed_ids: set[str] = set()
     for disclosure in ledger:
-        if not isinstance(disclosure, Mapping):
-            return set()
-        expected_item_seal = "sha256_" + hashlib.sha256(
-            json.dumps(
-                {
-                    key: value
-                    for key, value in disclosure.items()
-                    if key != "disclosure_seal"
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-                default=str,
-            ).encode("utf-8")
-        ).hexdigest()
-        disclosure_id = disclosure.get("disclosure_id")
-        if (
-            disclosure.get("disclosure_seal") != expected_item_seal
-            or disclosure.get("applies") is not True
-            or not isinstance(disclosure_id, str)
-            or disclosure.get("contract_version") != "metric-disclosure/v1"
-            or disclosure.get("request_id") != request_id
-            or disclosure.get("metric_ref") != metric_ref
-            or disclosure.get("scope_fingerprint") != scope_fingerprint
-            or disclosure.get("projection_fingerprint")
-            != projection_fingerprint
+        if not _disclosure_is_valid_for_result(
+            disclosure,
+            request_id=request_id,
+            metric_ref=metric_ref,
+            scope_fingerprint=scope_fingerprint,
+            projection_fingerprint=projection_fingerprint,
         ):
             continue
-        sealed_ids.add(disclosure_id)
+        sealed_ids.add(disclosure["disclosure_id"])
+    return sealed_ids
+
+
+def _disclosure_ledger_has_valid_seal(
+    ledger: Any,
+    ledger_seal: Any,
+    *,
+    request_id: str,
+    metric_ref: str | None,
+    scope_fingerprint: str,
+    projection_fingerprint: str,
+    ledger_contract_version: str,
+) -> bool:
+    if not isinstance(ledger, list) or not isinstance(ledger_seal, str):
+        return False
     expected_ledger_seal = "sha256_" + hashlib.sha256(
         json.dumps(
             {
@@ -4417,7 +4420,43 @@ def _sealed_disclosure_ids(
             default=str,
         ).encode("utf-8")
     ).hexdigest()
-    return sealed_ids if ledger_seal == expected_ledger_seal else set()
+    return ledger_seal == expected_ledger_seal
+
+
+def _disclosure_is_valid_for_result(
+    disclosure: Any,
+    *,
+    request_id: str,
+    metric_ref: str | None,
+    scope_fingerprint: str,
+    projection_fingerprint: str,
+) -> bool:
+    if not isinstance(disclosure, Mapping):
+        return False
+    expected_item_seal = "sha256_" + hashlib.sha256(
+        json.dumps(
+            {
+                key: value
+                for key, value in disclosure.items()
+                if key != "disclosure_seal"
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    return (
+        disclosure.get("disclosure_seal") == expected_item_seal
+        and disclosure.get("applies") is True
+        and isinstance(disclosure.get("disclosure_id"), str)
+        and bool(disclosure.get("disclosure_id"))
+        and disclosure.get("contract_version") == "metric-disclosure/v1"
+        and disclosure.get("request_id") == request_id
+        and disclosure.get("metric_ref") == metric_ref
+        and disclosure.get("scope_fingerprint") == scope_fingerprint
+        and disclosure.get("projection_fingerprint") == projection_fingerprint
+    )
 
 
 def _formal_dso_calculation_attestation(
@@ -5755,6 +5794,10 @@ _FORMAL_DSO_PROJECTION_UNDEFINED_REASONS = {
 _MODEL_DISCLOSURE_PROJECTION_VERSION = (
     "metric-disclosure-ledger-model-projection/v1"
 )
+_MODEL_WIRE_EVIDENCE_INTEGRITY_ERROR = {
+    "code": "EVIDENCE_INTEGRITY_INVALID",
+    "message": "模型可见证据未通过完整性校验；未密封证据已被剔除。",
+}
 
 
 def _formal_dso_attestation_seal(attestation: Mapping[str, Any]) -> str:
@@ -5772,14 +5815,6 @@ def _formal_dso_attestation_seal(attestation: Mapping[str, Any]) -> str:
     return "sha256_" + hashlib.sha256(canonical).hexdigest()
 
 
-def _formal_dso_claim_is_valid(claim: Mapping[str, Any]) -> bool:
-    claim_id, claim_seal = evidence._canonical_claim_identity(claim)
-    return (
-        claim.get("claim_id") == claim_id
-        and claim.get("claim_seal") == claim_seal
-    )
-
-
 def _formal_dso_attestation_state(
     attestation: Any,
     *,
@@ -5795,7 +5830,7 @@ def _formal_dso_attestation_state(
         != _FORMAL_DSO_ATTESTATION_VERSION
         or attestation.get("attestation_seal")
         != _formal_dso_attestation_seal(attestation)
-        or not _formal_dso_claim_is_valid(claim)
+        or not evidence.claim_is_valid_for_result(claim, result)
         or attestation.get("request_id") != result.get("request_id")
         or attestation.get("request_id") != claim.get("request_id")
         or attestation.get("metric_ref") != result.get("business_metric_ref")
@@ -5863,25 +5898,6 @@ def _formal_dso_attestation_state(
     return "invalid"
 
 
-def _formal_dso_projection_attestation(
-    result: Mapping[str, Any],
-    reason: str,
-) -> dict[str, Any]:
-    attestation: dict[str, Any] = {
-        "contract_version": _FORMAL_DSO_ATTESTATION_VERSION,
-        "status": "undefined",
-        "guards": {},
-        "authorized_components": [],
-        "undefined_reason_codes": [reason],
-        "request_id": result.get("request_id"),
-        "metric_ref": result.get("business_metric_ref"),
-        "scope_fingerprint": result.get("scope_fingerprint"),
-        "projection_fingerprint": result.get("projection_fingerprint"),
-    }
-    attestation["attestation_seal"] = _formal_dso_attestation_seal(attestation)
-    return attestation
-
-
 def _reseal_model_disclosure_ledger(projected: dict[str, Any]) -> None:
     ledger = projected.get("disclosure_ledger")
     if not isinstance(ledger, list):
@@ -5906,6 +5922,128 @@ def _reseal_model_disclosure_ledger(projected: dict[str, Any]) -> None:
     projected["disclosure_ledger_seal"] = (
         "sha256_" + hashlib.sha256(canonical).hexdigest()
     )
+
+
+def _mark_model_wire_evidence_integrity_failure(
+    projected: dict[str, Any],
+) -> None:
+    claims = projected.get("claim_ledger")
+    visible_count = len(claims) if isinstance(claims, list) else 0
+    projected["data_state"] = "incomplete" if visible_count else "undefined"
+    projected["row_count"] = visible_count
+    projected["allowed_reasoning_topics"] = []
+    projected.pop("change_reconciliation", None)
+    projected.pop("target_gap_reconciliation", None)
+    projected["error"] = dict(_MODEL_WIRE_EVIDENCE_INTEGRITY_ERROR)
+
+
+def _filter_model_wire_evidence(projected: dict[str, Any]) -> None:
+    """Expose only sealed, result-bound claims and applicable disclosures."""
+
+    claims = projected.get("claim_ledger")
+    claim_ledger_present = "claim_ledger" in projected
+    if claim_ledger_present:
+        original_count = len(claims) if isinstance(claims, list) else 0
+        valid_claims = (
+            [
+                claim
+                for claim in claims
+                if isinstance(claim, Mapping)
+                and evidence.claim_is_valid_for_result(claim, projected)
+            ]
+            if isinstance(claims, list)
+            else []
+        )
+        row_count = projected.get("row_count")
+        claim_integrity_failed = (
+            not isinstance(claims, list)
+            or len(valid_claims) != original_count
+            or not isinstance(row_count, int)
+            or isinstance(row_count, bool)
+            or row_count != original_count
+        )
+        projected["claim_ledger"] = valid_claims
+        if claim_integrity_failed:
+            _mark_model_wire_evidence_integrity_failure(projected)
+    elif (
+        projected.get("status") == "success"
+        and isinstance(projected.get("row_count"), int)
+        and not isinstance(projected.get("row_count"), bool)
+        and projected["row_count"] > 0
+    ):
+        projected["claim_ledger"] = []
+        _mark_model_wire_evidence_integrity_failure(projected)
+
+    disclosure_fields = {
+        "disclosure_contract_version",
+        "disclosure_ledger",
+        "disclosure_ledger_seal",
+    }
+    present_disclosure_fields = disclosure_fields.intersection(projected)
+    if not present_disclosure_fields:
+        return
+
+    ledger = projected.get("disclosure_ledger")
+    contract_version = projected.get("disclosure_contract_version")
+    valid_contract_versions = {
+        "metric-disclosure-ledger/v1",
+        _MODEL_DISCLOSURE_PROJECTION_VERSION,
+    }
+    common_binding_valid = (
+        isinstance(projected.get("request_id"), str)
+        and bool(projected.get("request_id"))
+        and isinstance(projected.get("business_metric_ref"), str)
+        and bool(projected.get("business_metric_ref"))
+        and isinstance(projected.get("scope_fingerprint"), str)
+        and bool(projected.get("scope_fingerprint"))
+        and isinstance(projected.get("projection_fingerprint"), str)
+        and bool(projected.get("projection_fingerprint"))
+    )
+    ledger_sealed = (
+        present_disclosure_fields == disclosure_fields
+        and common_binding_valid
+        and contract_version in valid_contract_versions
+        and _disclosure_ledger_has_valid_seal(
+            ledger,
+            projected.get("disclosure_ledger_seal"),
+            request_id=projected["request_id"],
+            metric_ref=projected["business_metric_ref"],
+            scope_fingerprint=projected["scope_fingerprint"],
+            projection_fingerprint=projected["projection_fingerprint"],
+            ledger_contract_version=contract_version,
+        )
+    )
+    valid_disclosures: list[Mapping[str, Any]] = []
+    applicable_count = 0
+    if ledger_sealed and isinstance(ledger, list):
+        for item in ledger:
+            if not isinstance(item, Mapping) or item.get("applies") is not True:
+                continue
+            applicable_count += 1
+            if _disclosure_is_valid_for_result(
+                item,
+                request_id=projected["request_id"],
+                metric_ref=projected["business_metric_ref"],
+                scope_fingerprint=projected["scope_fingerprint"],
+                projection_fingerprint=projected["projection_fingerprint"],
+            ):
+                valid_disclosures.append(item)
+    disclosure_ids = [item["disclosure_id"] for item in valid_disclosures]
+    disclosure_integrity_failed = (
+        not ledger_sealed
+        or len(valid_disclosures) != applicable_count
+        or len(set(disclosure_ids)) != len(disclosure_ids)
+    )
+    projected["disclosure_ledger"] = valid_disclosures
+    if disclosure_integrity_failed:
+        projected["claim_ledger"] = []
+        _mark_model_wire_evidence_integrity_failure(projected)
+    if (
+        not ledger_sealed
+        or not isinstance(ledger, list)
+        or len(valid_disclosures) != len(ledger)
+    ):
+        _reseal_model_disclosure_ledger(projected)
 
 
 def _fail_closed_formal_dso_model_wire(projected: dict[str, Any]) -> None:
@@ -5945,12 +6083,11 @@ def _fail_closed_formal_dso_model_wire(projected: dict[str, Any]) -> None:
         projection_fingerprint=str(projected.get("projection_fingerprint")),
         ledger_contract_version=disclosure_contract_version,
     )
-    states: list[tuple[dict[str, Any], str, bool]] = []
+    states: list[tuple[dict[str, Any], str]] = []
     if isinstance(claims, list):
         for claim in claims:
             if not isinstance(claim, dict):
                 continue
-            claim_valid = _formal_dso_claim_is_valid(claim)
             facts = claim.get("facts")
             attestation = (
                 facts.get("calculation_attestation")
@@ -5966,40 +6103,25 @@ def _fail_closed_formal_dso_model_wire(projected: dict[str, Any]) -> None:
                         result=projected,
                         sealed_disclosure_ids=sealed_disclosure_ids,
                     ),
-                    claim_valid,
                 )
             )
-    if states and all(state == "verified" for _, state, _ in states):
+    if states and all(state == "verified" for _, state in states):
         return
 
     projected["data_state"] = "undefined"
-    for claim, state, claim_valid in states:
-        facts = claim.get("facts")
-        if not isinstance(facts, dict):
-            facts = {}
-            claim["facts"] = facts
-        if not claim_valid:
-            facts.clear()
-        else:
-            facts.pop("metric_value", None)
-        if state == "undefined" and claim_valid:
-            attestation = facts.get("calculation_attestation")
-        else:
-            reason = (
-                "CLAIM_INTEGRITY_INVALID"
-                if not claim_valid
-                else "FORMAL_DSO_BATCH_INCOMPLETE"
-                if state == "verified"
-                else "ATTESTATION_MISSING"
-                if not isinstance(facts.get("calculation_attestation"), Mapping)
-                else "ATTESTATION_INTEGRITY_INVALID"
-            )
-            attestation = _formal_dso_projection_attestation(
-                projected,
-                reason,
-            )
-        facts["calculation_attestation"] = attestation
-        evidence.seal_claim(claim)
+    if not states or any(state != "undefined" for _, state in states):
+        projected["claim_ledger"] = []
+        _mark_model_wire_evidence_integrity_failure(projected)
+    else:
+        for claim, _state in states:
+            facts = claim.get("facts")
+            if isinstance(facts, dict):
+                facts.pop("metric_value", None)
+            evidence.seal_claim(claim)
+        projected["row_count"] = len(states)
+        projected["allowed_reasoning_topics"] = []
+        projected.pop("change_reconciliation", None)
+        projected.pop("target_gap_reconciliation", None)
 
     if isinstance(ledger, list):
         projected["disclosure_ledger"] = [
@@ -6020,6 +6142,7 @@ def _model_wire_result(result: Mapping[str, Any]) -> dict[str, Any]:
         for field in _MODEL_WIRE_RESULT_FIELDS
         if field in result
     }
+    _filter_model_wire_evidence(projected)
     _fail_closed_formal_dso_model_wire(projected)
     if "change_reconciliation" in projected:
         projected["change_reconciliation"] = _model_wire_change_reconciliation(

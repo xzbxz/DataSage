@@ -444,6 +444,36 @@ def _claim_is_validly_sealed(claim: Mapping[str, Any]) -> bool:
     )
 
 
+def claim_is_valid_for_result(
+    claim: Mapping[str, Any],
+    result: Mapping[str, Any],
+) -> bool:
+    """Verify the sealed claim and every result binding exposed to the model."""
+
+    request_id = result.get("request_id")
+    metric_ref = result.get("business_metric_ref")
+    scope_fingerprint = result.get("scope_fingerprint")
+    projection_fingerprint = result.get("projection_fingerprint")
+    truncated = result.get("truncated")
+    return (
+        _claim_is_validly_sealed(claim)
+        and isinstance(request_id, str)
+        and bool(request_id)
+        and claim.get("request_id") == request_id
+        and isinstance(metric_ref, str)
+        and bool(metric_ref)
+        and claim.get("metric_ref") == metric_ref
+        and isinstance(scope_fingerprint, str)
+        and bool(scope_fingerprint)
+        and claim.get("scope_fingerprint") == scope_fingerprint
+        and isinstance(projection_fingerprint, str)
+        and bool(projection_fingerprint)
+        and claim.get("projection_fingerprint") == projection_fingerprint
+        and isinstance(truncated, bool)
+        and claim.get("source_truncated") is truncated
+    )
+
+
 def _has_only_sealed_claims(
     result: Mapping[str, Any],
     request_id: str,
@@ -461,29 +491,9 @@ def _has_only_sealed_claims(
         or result.get("request_id") != request_id
     ):
         return False
-    scope_fingerprint = result.get("scope_fingerprint")
-    projection_fingerprint = result.get("projection_fingerprint")
-    metric_ref = result.get("business_metric_ref")
     return all(
         isinstance(claim, Mapping)
-        and _claim_is_validly_sealed(claim)
-        and claim.get("request_id") == request_id
-        and (
-            not isinstance(scope_fingerprint, str)
-            or claim.get("scope_fingerprint") == scope_fingerprint
-        )
-        and (
-            not isinstance(projection_fingerprint, str)
-            or claim.get("projection_fingerprint") == projection_fingerprint
-        )
-        and (
-            not isinstance(metric_ref, str)
-            or claim.get("metric_ref") == metric_ref
-        )
-        and (
-            "source_truncated" not in claim
-            or claim.get("source_truncated") is result.get("truncated")
-        )
+        and claim_is_valid_for_result(claim, result)
         for claim in claims
     )
 
