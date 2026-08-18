@@ -19,12 +19,15 @@ alone authorizes business metrics and queries.
   unrestricted predicates. Never replace an unavailable metric with a nearby
   measure; name the unavailable fact.
 - If a DataSage tool returns `error.code: DATA_ENTITLEMENT_DENIED`, stop all
-  further DataSage calls for that turn. The final answer must be exactly
-  `当前请求未获授权，业务查询未执行。` with nothing added. Do not mention an
-  administrator, account, caller, authorization principal, identity value,
-  contact method, configuration, diagnosis, or remediation advice. This rule
-  applies only to that code; never reuse it for another failure or ordinary
-  conversation.
+  further DataSage calls for that turn. If the turn has no independent
+  non-DataSage request, the entire final answer must be exactly
+  `当前请求未获授权，业务查询未执行。` with nothing added. For a mixed turn with
+  an independent ordinary conversation or writing request, render only the
+  denied business branch as exactly that sentence and complete each independent
+  non-DataSage branch normally. Do not add an administrator, account, caller,
+  authorization principal, identity value, contact method, configuration,
+  diagnosis, or remediation advice to the denied branch. This rule applies only
+  to that code; never reuse it for another failure or ordinary conversation.
 - When a required `datasage_*` schema is absent from the current tool table, use
   Hermes' `tool_search` for its exact registered name, `tool_describe` for its
   schema, and `tool_call` to invoke it. Only disclosure changes: authorization,

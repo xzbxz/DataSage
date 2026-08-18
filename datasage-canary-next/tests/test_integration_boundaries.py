@@ -267,6 +267,111 @@ class StrictSessionIdentityTests(unittest.TestCase):
         ):
             self.assertNotIn(category.casefold(), message)
 
+    def test_official_plugin_entry_denies_before_business_and_database_sentinels(
+        self,
+    ):
+        manager = PluginManager()
+        isolated_registry = ToolRegistry()
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            empty_bundled = Path(raw_root) / "bundled-plugins"
+            empty_bundled.mkdir()
+            with (
+                mock.patch(
+                    "hermes_cli.plugins.get_bundled_plugins_dir",
+                    return_value=empty_bundled,
+                ),
+                mock.patch(
+                    "hermes_cli.plugins.get_hermes_home",
+                    return_value=PROFILE_ROOT,
+                ),
+                mock.patch.object(manager, "_scan_entry_points", return_value=[]),
+                mock.patch(
+                    "hermes_cli.plugins._get_enabled_plugins",
+                    return_value={"datasage-query"},
+                ),
+                mock.patch(
+                    "hermes_cli.plugins._get_disabled_plugins",
+                    return_value=set(),
+                ),
+                mock.patch("tools.registry.registry", isolated_registry),
+            ):
+                manager.discover_and_load()
+
+        loaded = manager._plugins["datasage-query"]
+        self.assertTrue(loaded.enabled)
+        self.assertIsNotNone(loaded.module)
+        session_context = types.SimpleNamespace(
+            session_context_engaged=lambda: False,
+        )
+        gateway = types.ModuleType("gateway")
+        gateway.session_context = session_context
+        policy = {
+            "data_entitlements": {
+                "enforcement": "enforce",
+                "default_effect": "deny",
+                "principals": [
+                    {
+                        "platform": "wecom",
+                        "user_id": "*",
+                        "tools": ["datasage_query"],
+                        "domains": ["delivery"],
+                        "metrics": {"delivery": ["delivery_amount"]},
+                        "allow_all_rows": True,
+                    }
+                ],
+            }
+        }
+        with (
+            mock.patch.dict(sys.modules, {"gateway": gateway}),
+            mock.patch.object(
+                loaded.module.entitlements.settings,
+                "profile_settings",
+                return_value=policy,
+            ),
+            mock.patch.object(
+                loaded.module.tools,
+                "_contracts",
+                side_effect=AssertionError("business handler reached"),
+            ) as business_sentinel,
+            mock.patch.object(
+                loaded.module.tools,
+                "_execute_with_source",
+                side_effect=AssertionError("database reached"),
+            ) as database_sentinel,
+        ):
+            payload = json.loads(
+                isolated_registry.dispatch(
+                    "datasage_query",
+                    {
+                        "requests": [
+                            {
+                                "request_id": "public_denial",
+                                "domain": "delivery",
+                                "mode": "metric",
+                                "purpose": "offline public entitlement denial",
+                                "metric": "delivery_amount",
+                                "dimensions": [],
+                            }
+                        ]
+                    },
+                )
+            )
+
+        self.assertEqual(
+            {
+                "status": "failed",
+                "error": {
+                    "code": "DATA_ENTITLEMENT_DENIED",
+                    "message": "当前请求未获授权，业务查询未执行。",
+                    "retryable": False,
+                },
+            },
+            payload,
+        )
+        business_sentinel.assert_not_called()
+        database_sentinel.assert_not_called()
+
     def test_unknown_session_context_version_fails_closed(self):
         session_context = types.SimpleNamespace(
             session_context_engaged=lambda: True,
@@ -314,6 +419,11 @@ class GitGovernedSkillTests(unittest.TestCase):
         self.assertIn("`error.code: DATA_ENTITLEMENT_DENIED`", normalized)
         self.assertIn("`当前请求未获授权，业务查询未执行。`", normalized)
         self.assertIn("stop all further DataSage calls for that turn", normalized)
+        self.assertIn("no independent non-DataSage request", normalized)
+        self.assertIn("the entire final answer must be exactly", normalized)
+        self.assertIn("For a mixed turn with", normalized)
+        self.assertIn("render only the denied business branch as exactly", normalized)
+        self.assertIn("complete each independent non-DataSage branch normally", normalized)
         self.assertIn("applies only to that code", normalized)
         self.assertIn(
             "never reuse it for another failure or ordinary conversation",
@@ -467,6 +577,11 @@ class GitGovernedSkillTests(unittest.TestCase):
                 "`error.code: DATA_ENTITLEMENT_DENIED`",
                 "`当前请求未获授权，业务查询未执行。`",
                 "stop all further DataSage calls for that turn",
+                "no independent non-DataSage request",
+                "the entire final answer must be exactly",
+                "For a mixed turn with",
+                "render only the denied business branch as exactly",
+                "complete each independent non-DataSage branch normally",
                 "applies only to that code",
                 "never reuse it for another failure or ordinary conversation",
             ):
