@@ -120,13 +120,22 @@ _ORDER_DELIVERY_ALIGNMENT_METRICS = {
 _INVENTORY_SCOPES = {"total", "on_hand", "available", "allocated", "in_transit"}
 _MAX_METRIC_FILTERS = 12
 _MAX_FILTER_VALUES = 50
+_SNAPSHOT_TIME_SOURCES = {
+    "latest_snapshot",
+    "latest_non_null_snapshot",
+    "latest_snapshot_offset",
+}
 _INTERNAL_MATCH_COUNT = "__matched_row_count"
+_INTERNAL_SNAPSHOT_MONTH = "__snapshot_month"
+_INTERNAL_COMPARISON_SNAPSHOT_MONTH = "__comparison_snapshot_month"
 _INTERNAL_PARTITION_CURRENT = "__full_partition_metric_value"
 _INTERNAL_PARTITION_COMPARISON = "__full_partition_comparison_value"
 _INTERNAL_PARTITION_DELTA = "__full_partition_delta_value"
 _INTERNAL_PARTITION_ROW_COUNT = "__full_partition_row_count"
 _INTERNAL_RESULT_FIELDS = {
     _INTERNAL_MATCH_COUNT,
+    _INTERNAL_SNAPSHOT_MONTH,
+    _INTERNAL_COMPARISON_SNAPSHOT_MONTH,
     _INTERNAL_PARTITION_CURRENT,
     _INTERNAL_PARTITION_COMPARISON,
     _INTERNAL_PARTITION_DELTA,
@@ -2110,6 +2119,15 @@ def _build_metric_core(
         f"{metric_sql} AS metric_value",
         f"COUNT(*) AS {_quote_identifier(_INTERNAL_MATCH_COUNT)}",
     ]
+    if (
+        isinstance(applied_time, Mapping)
+        and applied_time.get("source") in _SNAPSHOT_TIME_SOURCES
+        and isinstance(time_field, str)
+    ):
+        evidence_columns.append(
+            f"MAX({_qualified_identifier('f', time_field)}) "
+            f"AS {_quote_identifier(_INTERNAL_SNAPSHOT_MONTH)}"
+        )
     completeness_measure = metric.get("completeness_measure")
     if completeness_measure is not None:
         completeness_measure = _approved_column(completeness_measure, base_allowed, base_blocked)
@@ -2289,6 +2307,24 @@ def _build_comparison_metric_query(
         f"COALESCE(c.{_INTERNAL_MATCH_COUNT}, 0) + COALESCE(p.{_INTERNAL_MATCH_COUNT}, 0) "
         f"AS {_quote_identifier(_INTERNAL_MATCH_COUNT)}",
     ]
+    current_time = current_scope.get("time_range")
+    comparison_time = prior_scope.get("time_range")
+    if (
+        isinstance(current_time, Mapping)
+        and current_time.get("source") in _SNAPSHOT_TIME_SOURCES
+    ):
+        select.append(
+            f"c.{_quote_identifier(_INTERNAL_SNAPSHOT_MONTH)} "
+            f"AS {_quote_identifier(_INTERNAL_SNAPSHOT_MONTH)}"
+        )
+    if (
+        isinstance(comparison_time, Mapping)
+        and comparison_time.get("source") in _SNAPSHOT_TIME_SOURCES
+    ):
+        select.append(
+            f"p.{_quote_identifier(_INTERNAL_SNAPSHOT_MONTH)} "
+            f"AS {_quote_identifier(_INTERNAL_COMPARISON_SNAPSHOT_MONTH)}"
+        )
     row_select = ", ".join(select)
     row_source_sql = f"SELECT {row_select} {select_from}"
     embedded_partition_proof = dimensions and isinstance(
@@ -5537,10 +5573,8 @@ def _public_time_range(value: Any) -> dict[str, Any]:
             raise QueryFailure("CONTRACT_UNAVAILABLE", "查询时间范围来源无效。")
         return {"start": start, "end": end, "source": source}
     source = value.get("source")
-    if source in {"current_snapshot", "latest_snapshot"}:
+    if source in {"current_snapshot", "latest_snapshot", "latest_non_null_snapshot"}:
         return {"source": source}
-    if source == "latest_non_null_snapshot" and isinstance(value.get("required_measure"), str):
-        return {"source": source, "required_measure": value["required_measure"]}
     if source == "latest_complete_accounting_months" and isinstance(value.get("months"), int):
         return {"source": source, "months": value["months"]}
     if source == "latest_snapshot_offset" and isinstance(value.get("months_before"), int):
@@ -5553,6 +5587,93 @@ def _public_time_range(value: Any) -> dict[str, Any]:
     if nested:
         return nested
     raise QueryFailure("CONTRACT_UNAVAILABLE", "查询结果缺少明确的时间或快照范围。")
+
+
+def _normalized_snapshot_month(value: Any) -> str:
+    text = value.isoformat() if isinstance(value, (date, datetime)) else str(value)
+    try:
+        if re.fullmatch(r"\d{4}-\d{2}", text):
+            parsed = datetime.strptime(text, "%Y-%m")
+        else:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        raise QueryFailure(
+            "CONTRACT_UNAVAILABLE",
+            "业务快照月份证据无效。",
+            stage="result_validation",
+        )
+    return parsed.strftime("%Y-%m")
+
+
+def _resolve_snapshot_time_evidence(
+    value: Mapping[str, Any],
+    rows: Sequence[Mapping[str, Any]],
+    data_state: str,
+    *,
+    evidence_field: str = _INTERNAL_SNAPSHOT_MONTH,
+) -> tuple[dict[str, Any], str]:
+    """Bind model-visible snapshot scope to an internal same-query month."""
+
+    source = value.get("source")
+    if source in _SNAPSHOT_TIME_SOURCES:
+        observed_field = any(evidence_field in row for row in rows)
+        months: set[str] = set()
+        for row in rows:
+            raw_month = row.get(evidence_field)
+            if raw_month is None or raw_month == "":
+                continue
+            months.add(_normalized_snapshot_month(raw_month))
+        if len(months) > 1:
+            raise QueryFailure(
+                "CONTRACT_UNAVAILABLE",
+                "同一查询返回了不一致的业务快照月份。",
+                stage="result_validation",
+            )
+        public = {key: item for key, item in value.items() if key != "required_measure"}
+        if months:
+            public.update(
+                {
+                    "snapshot_month": next(iter(months)),
+                    "resolution_state": "resolved",
+                }
+            )
+            return public, data_state
+        if not rows:
+            public["resolution_state"] = "no_matching_data"
+            return public, data_state
+        if not observed_field:
+            public["resolution_state"] = "evidence_unavailable"
+            return public, data_state
+        if source == "latest_non_null_snapshot":
+            public["resolution_state"] = "required_value_unavailable"
+            return public, "undefined"
+        public["resolution_state"] = "no_snapshot_data"
+        return public, data_state
+
+    if "start" in value or "end" in value or source is not None:
+        return dict(value), data_state
+
+    resolved: dict[str, Any] = {}
+    resolved_state = data_state
+    for key, item in value.items():
+        if not isinstance(key, str) or not isinstance(item, Mapping):
+            raise QueryFailure(
+                "CONTRACT_UNAVAILABLE",
+                "查询时间范围结构无效。",
+                stage="result_validation",
+            )
+        field = (
+            _INTERNAL_COMPARISON_SNAPSHOT_MONTH
+            if key == "comparison"
+            else _INTERNAL_SNAPSHOT_MONTH
+        )
+        resolved[key], resolved_state = _resolve_snapshot_time_evidence(
+            item,
+            rows,
+            resolved_state,
+            evidence_field=field,
+        )
+    return resolved, resolved_state
 
 
 def _scope_texts(value: Any) -> list[str]:
@@ -5574,16 +5695,31 @@ def _scope_texts(value: Any) -> list[str]:
         except ValueError:
             return []
     source = value.get("source")
+    snapshot_month = value.get("snapshot_month")
+    if isinstance(snapshot_month, str):
+        if source == "latest_non_null_snapshot":
+            return [f"{snapshot_month} 最新有值业务快照"]
+        if source == "latest_snapshot_offset" and isinstance(
+            value.get("months_before"), int
+        ):
+            return [
+                f"{snapshot_month} 月末业务快照"
+                f"（距最新快照 {value['months_before']} 个月）"
+            ]
+        if source == "latest_snapshot":
+            return [f"{snapshot_month} 月末业务快照"]
     if source == "current_snapshot":
         return ["当前业务快照"]
     if source == "latest_snapshot":
-        return ["最新可用月末快照"]
+        return ["业务月末快照月份证据不可用"]
     if source == "latest_non_null_snapshot":
-        return ["最新有值快照"]
+        if value.get("resolution_state") == "required_value_unavailable":
+            return ["最新有值业务快照不可用"]
+        return ["最新有值业务快照月份证据不可用"]
     if source == "latest_complete_accounting_months" and isinstance(value.get("months"), int):
         return [f"最近 {value['months']} 个完整会计月"]
     if source == "latest_snapshot_offset" and isinstance(value.get("months_before"), int):
-        return [f"最新可用月末快照前 {value['months_before']} 个月"]
+        return [f"月末业务快照月份证据不可用（偏移 {value['months_before']} 个月）"]
     rendered: list[str] = []
     for nested in value.values():
         if not isinstance(nested, Mapping):
@@ -6851,6 +6987,11 @@ def _run_one(
                 complete_partition_proof_failure = proof_failure.code
         current_stage = "result_validation"
         public_rows, data_state = _evidence_rows_and_state(rows, truncated)
+        applied_time_range, data_state = _resolve_snapshot_time_evidence(
+            applied_time_range,
+            rows,
+            data_state,
+        )
         elapsed_ms = int((time.monotonic() - started) * 1000)
         metric_ref = _business_metric_ref(request)
         metric_label = _business_metric_label(scope, semantics)

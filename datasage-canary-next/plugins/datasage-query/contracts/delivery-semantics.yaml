@@ -1,4 +1,4 @@
-version: datasage-mini-delivery-semantics/v16
+version: datasage-mini-delivery-semantics/v17
 domain: delivery
 contract_role: plugin_physical_execution
 model_planner_contract: references/planner-contract.yaml
@@ -108,7 +108,7 @@ analysis_defaults:
   ranking_limit: 10
   change_observation_limit: 10
   comparison_kind: previous_period
-  disclosure: 回答必须说明工具返回的实际时间范围，以及与用户问题相关的出库或下单口径、仓库归因、原币分组和当前主数据补充；内部客户等固定执行过滤不主动披露。
+  disclosure: 回答必须说明工具返回的实际时间范围，以及与用户问题相关的出库或下单口径、仓库归因、原币分组和当前主数据补充，并披露固定排除内部客户。
 
 execution_policy:
   business_summary_mode: metric_only
@@ -795,6 +795,11 @@ actual_return_warehouse_overrides: &actual_return_warehouse_overrides
     columns: [is_defective]
     filter_column: is_defective
     answer_note: 商品或订单次品标志，不属于次品仓标志；净出库两侧分别按各自事实记录值聚合。
+
+default_disclosures:
+  - id: delivery.external-customer.scope
+    mode: required_always
+    text: "出库域指标固定排除内部客户。"
 
 metrics:
   warehouse_gross_delivery_amount:

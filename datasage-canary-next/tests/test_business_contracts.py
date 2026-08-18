@@ -2084,6 +2084,349 @@ class BusinessContractTests(unittest.TestCase):
             self.assertIn(required, normalized_hook)
         self.assertIsNone(hook(platform="cli", is_first_turn=True))
 
+    def test_delivery_internal_customer_exclusion_is_sealed_and_model_visible(
+        self,
+    ) -> None:
+        semantics = yaml.safe_load(
+            (
+                PLUGIN_ROOT / "contracts" / "delivery-semantics.yaml"
+            ).read_text(encoding="utf-8")
+        )
+        metrics = semantics["metrics"]
+
+        def excludes_internal_customer(metric_code: str) -> bool:
+            metric = metrics[metric_code]
+            fixed = (metric.get("required_filters") or {}).get("is_inner_cus")
+            if fixed == {"op": "eq", "value": "n"}:
+                return True
+            components = metric.get("components")
+            if isinstance(components, list) and components:
+                return all(
+                    excludes_internal_customer(component["metric"])
+                    for component in components
+                )
+            ratio = metric.get("ratio")
+            if isinstance(ratio, dict):
+                return all(
+                    excludes_internal_customer(ratio[key])
+                    for key in ("numerator", "denominator")
+                )
+            return False
+
+        self.assertTrue(metrics)
+        self.assertTrue(
+            all(excludes_internal_customer(code) for code in metrics),
+            "域级披露只能覆盖全部执行路径都固定排除内部客户的指标",
+        )
+        inherited = semantics["default_disclosures"]
+        self.assertEqual(
+            [
+                {
+                    "id": "delivery.external-customer.scope",
+                    "mode": "required_always",
+                    "text": "出库域指标固定排除内部客户。",
+                }
+            ],
+            inherited,
+        )
+
+        cases = (
+            ("delivery_amount", {"metric_value": "80.00"}),
+            (
+                "return_amount_rate",
+                {
+                    "metric_value": "0.2",
+                    "numerator_value": "20.00",
+                    "denominator_value": "100.00",
+                },
+            ),
+        )
+        for metric_code, row in cases:
+            with self.subTest(metric=metric_code):
+                request_id = f"delivery_external_scope_{metric_code}"
+                request = {
+                    "request_id": request_id,
+                    "domain": "delivery",
+                    "mode": "metric",
+                    "purpose": "synthetic external-customer scope test",
+                    "metric": metric_code,
+                    "dimensions": [],
+                    "calendar_month": "2026-07",
+                    "detail_receipt": self._metric_detail_receipt(
+                        "delivery", metric_code
+                    ),
+                }
+                calls: list[dict[str, object]] = []
+
+                def execute_query(sql, params, limit, **_kwargs):
+                    calls.append({"sql": sql, "params": params, "limit": limit})
+                    return (
+                        [{**row, tools._INTERNAL_MATCH_COUNT: 1}],
+                        False,
+                        self._read_only_source_evidence(),
+                    )
+
+                with mock.patch.object(
+                    tools,
+                    "_execute_with_source",
+                    side_effect=execute_query,
+                ):
+                    payload = json.loads(
+                        tools.datasage_query({"requests": [request]})
+                    )
+
+                self.assertEqual("success", payload["status"])
+                self.assertEqual(1, len(calls))
+                self.assertGreaterEqual(
+                    str(calls[0]["sql"]).count("`f`.`is_inner_cus` = %s"),
+                    2,
+                )
+                result = payload["results"][0]
+                disclosures = {
+                    item["disclosure_id"]: item
+                    for item in result["disclosure_ledger"]
+                }
+                scope = disclosures["delivery.external-customer.scope"]
+                self.assertIs(scope["applies"], True)
+                self.assertEqual("required_always", scope["mode"])
+                self.assertEqual("出库域指标固定排除内部客户。", scope["text"])
+                self.assertTrue(
+                    tools._disclosure_ledger_has_valid_seal(
+                        result["disclosure_ledger"],
+                        result["disclosure_ledger_seal"],
+                        request_id=result["request_id"],
+                        metric_ref=result["business_metric_ref"],
+                        scope_fingerprint=result["scope_fingerprint"],
+                        projection_fingerprint=result["projection_fingerprint"],
+                        ledger_contract_version=result[
+                            "disclosure_contract_version"
+                        ],
+                    )
+                )
+                model_text = json.dumps(result, ensure_ascii=False)
+                self.assertIn("排除内部客户", model_text)
+                self.assertNotIn("is_inner_cus", model_text)
+                self.assertNotIn("vk_dwd", model_text)
+
+    def test_snapshot_month_evidence_and_typed_states_are_model_safe(self) -> None:
+        def run_query(
+            request: dict[str, object],
+            rows: list[dict[str, object]],
+        ) -> tuple[dict[str, object], dict[str, object], str]:
+            request = {
+                **request,
+                "detail_receipt": self._metric_detail_receipt(
+                    str(request["domain"]),
+                    str(request["metric"]),
+                ),
+            }
+            calls: list[str] = []
+
+            def execute_query(sql, _params, _limit, **_kwargs):
+                calls.append(sql)
+                return rows, False, self._read_only_source_evidence()
+
+            with mock.patch.object(
+                tools,
+                "_execute_with_source",
+                side_effect=execute_query,
+            ):
+                payload = json.loads(tools.datasage_query({"requests": [request]}))
+            self.assertEqual(1, len(calls))
+            result = payload["results"][0] if payload["results"] else payload
+            return payload, result, calls[0]
+
+        latest_request = {
+            "request_id": "inventory_latest_month_evidence",
+            "domain": "inventory",
+            "mode": "metric",
+            "purpose": "synthetic actual snapshot month test",
+            "metric": "month_end_inventory_cost_rmb",
+            "dimensions": [],
+        }
+        latest_payload, latest_result, latest_sql = run_query(
+            latest_request,
+            [
+                {
+                    "metric_value": "42.00",
+                    tools._INTERNAL_MATCH_COUNT: 1,
+                    tools._INTERNAL_SNAPSHOT_MONTH: "2026-07",
+                }
+            ],
+        )
+        self.assertIn(
+            "MAX(`f`.`bill_date`) AS `__snapshot_month`",
+            latest_sql,
+        )
+        self.assertEqual(
+            {
+                "source": "latest_snapshot",
+                "snapshot_month": "2026-07",
+                "resolution_state": "resolved",
+            },
+            latest_result["applied_time_range"],
+        )
+        latest_claim = latest_result["claim_ledger"][0]
+        self.assertEqual(
+            latest_result["applied_time_range"],
+            latest_claim["period"],
+        )
+        self.assertTrue(
+            tools.evidence.claim_is_valid_for_result(latest_claim, latest_result)
+        )
+        self.assertEqual("查询范围：2026-07 月末业务快照", latest_payload["answer_scope_line"])
+        self.assertNotIn("__snapshot_month", json.dumps(latest_result))
+
+        non_null_payload, non_null_result, non_null_sql = run_query(
+            {
+                **latest_request,
+                "request_id": "inventory_latest_non_null_month_evidence",
+                "metric": "oldest_inventory_days",
+            },
+            [
+                {
+                    "metric_value": 120,
+                    tools._INTERNAL_MATCH_COUNT: 1,
+                    tools._INTERNAL_SNAPSHOT_MONTH: "2026-06-01",
+                }
+            ],
+        )
+        self.assertIn("`unclosed_days` IS NOT NULL", non_null_sql)
+        self.assertEqual(
+            {
+                "source": "latest_non_null_snapshot",
+                "snapshot_month": "2026-06",
+                "resolution_state": "resolved",
+            },
+            non_null_result["applied_time_range"],
+        )
+        safe_wire = json.dumps(non_null_payload, ensure_ascii=False)
+        self.assertNotIn("required_measure", safe_wire)
+        self.assertNotIn("unclosed_days", safe_wire)
+
+        explicit_payload, explicit_result, _ = run_query(
+            {
+                **latest_request,
+                "request_id": "inventory_explicit_month",
+                "calendar_month": "2026-05",
+            },
+            [{"metric_value": "12.00", tools._INTERNAL_MATCH_COUNT: 1}],
+        )
+        self.assertEqual("rows", explicit_result["data_state"])
+        self.assertEqual("explicit", explicit_result["applied_time_range"]["source"])
+        self.assertNotIn("resolution_state", explicit_result["applied_time_range"])
+        self.assertEqual("查询范围：2026-05 至 2026-05", explicit_payload["answer_scope_line"])
+
+        _, empty_latest, _ = run_query(
+            {
+                **latest_request,
+                "request_id": "inventory_latest_no_data",
+            },
+            [
+                {
+                    "metric_value": None,
+                    tools._INTERNAL_MATCH_COUNT: 0,
+                    tools._INTERNAL_SNAPSHOT_MONTH: None,
+                    "metric_data_state": "missing",
+                }
+            ],
+        )
+        self.assertEqual("empty", empty_latest["data_state"])
+        self.assertEqual(
+            "no_snapshot_data",
+            empty_latest["applied_time_range"]["resolution_state"],
+        )
+        self.assertEqual([], empty_latest["claim_ledger"])
+
+        required_empty_payload, required_empty, _ = run_query(
+            {
+                **latest_request,
+                "request_id": "inventory_required_value_empty",
+                "metric": "oldest_inventory_days",
+            },
+            [
+                {
+                    "metric_value": None,
+                    tools._INTERNAL_MATCH_COUNT: 0,
+                    tools._INTERNAL_SNAPSHOT_MONTH: None,
+                    "metric_data_state": "missing",
+                }
+            ],
+        )
+        self.assertEqual("undefined", required_empty["data_state"])
+        self.assertEqual(
+            "required_value_unavailable",
+            required_empty["applied_time_range"]["resolution_state"],
+        )
+        required_empty_wire = json.dumps(required_empty_payload, ensure_ascii=False)
+        self.assertNotIn("required_measure", required_empty_wire)
+        self.assertNotIn("unclosed_days", required_empty_wire)
+
+        comparison_payload, comparison_result, comparison_sql = run_query(
+            {
+                "request_id": "receivable_snapshot_comparison_months",
+                "domain": "receivable",
+                "mode": "metric",
+                "purpose": "synthetic snapshot comparison month test",
+                "metric": "current_debt_amount",
+                "dimensions": [],
+                "comparison": {"kind": "snapshot_months_before", "months": 2},
+            },
+            [
+                {
+                    "metric_value": "42.00",
+                    "comparison_value": "41.00",
+                    "delta_value": "1.00",
+                    "change_rate": "0.0243902439",
+                    tools._INTERNAL_MATCH_COUNT: 2,
+                    tools._INTERNAL_SNAPSHOT_MONTH: "2026-07",
+                    tools._INTERNAL_COMPARISON_SNAPSHOT_MONTH: "2026-05",
+                }
+            ],
+        )
+        self.assertIn("AS `__comparison_snapshot_month`", comparison_sql)
+        self.assertEqual(
+            "2026-07",
+            comparison_result["applied_time_range"]["current"]["snapshot_month"],
+        )
+        self.assertEqual(
+            "2026-05",
+            comparison_result["applied_time_range"]["comparison"]["snapshot_month"],
+        )
+        comparison_wire = json.dumps(comparison_payload, ensure_ascii=False)
+        self.assertNotIn("__snapshot_month", comparison_wire)
+        self.assertNotIn("bill_date", comparison_wire)
+
+        malformed_payload, malformed_result, _ = run_query(
+            {
+                **latest_request,
+                "request_id": "inventory_malformed_snapshot_evidence",
+            },
+            [
+                {
+                    "metric_value": "42.00",
+                    tools._INTERNAL_MATCH_COUNT: 1,
+                    tools._INTERNAL_SNAPSHOT_MONTH: "July 2026",
+                }
+            ],
+        )
+        self.assertEqual("failed", malformed_result["status"])
+        self.assertNotIn("July 2026", json.dumps(malformed_payload))
+        with self.assertRaises(tools.QueryFailure) as malformed_evidence:
+            tools._resolve_snapshot_time_evidence(
+                {"source": "latest_snapshot"},
+                [
+                    {
+                        tools._INTERNAL_SNAPSHOT_MONTH: "July 2026",
+                    }
+                ],
+                "rows",
+            )
+        self.assertEqual(
+            "CONTRACT_UNAVAILABLE",
+            malformed_evidence.exception.code,
+        )
+
     def test_target_metric_ambiguity_requires_official_clarification(self) -> None:
         payload = json.loads(
             contracts.datasage_catalog(
