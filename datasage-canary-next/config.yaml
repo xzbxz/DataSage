@@ -116,5 +116,10 @@ platforms:
         - new
         - help
         - status
+    home_channel:
+      platform: "wecom"
+      chat_id: "wo8gxKDAAA0e36LXk9vXJ_nmbnmE2gzg"
+      name: "wo8gxKDAAA0e36LXk9vXJ_nmbnmE2gzg"
+      user_id: "wo8gxKDAAA0e36LXk9vXJ_nmbnmE2gzg"
 approvals:
   destructive_slash_confirm: false
