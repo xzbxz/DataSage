@@ -1251,9 +1251,12 @@ class BusinessContractTests(unittest.TestCase):
                 "delivery_amount_rmb": "900.00",
                 "period_natural_days": 365,
                 "snapshot_month_count": 13,
-                "effective_month_count": 12,
+                # MySQL SUM(...) is normalized to a JSON-safe decimal string
+                # before the formal DSO attestation is built.
+                "effective_month_count": tools._json_value(Decimal("12")),
             }
         ]
+        self.assertIsInstance(dso_rows[0]["effective_month_count"], str)
         dso_request = {
             "request_id": "r4_default",
             "domain": "customer_risk",
@@ -1606,7 +1609,17 @@ class BusinessContractTests(unittest.TestCase):
             ),
             (
                 "effective_months_incomplete",
-                {**dso_rows[0], "effective_month_count": 11},
+                {**dso_rows[0], "effective_month_count": "11"},
+                "COMPLETE_12_EFFECTIVE_MONTHS",
+            ),
+            (
+                "effective_months_fractional",
+                {**dso_rows[0], "effective_month_count": "12.5"},
+                "COMPLETE_12_EFFECTIVE_MONTHS",
+            ),
+            (
+                "effective_months_boolean",
+                {**dso_rows[0], "effective_month_count": True},
                 "COMPLETE_12_EFFECTIVE_MONTHS",
             ),
         )

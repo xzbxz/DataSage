@@ -4279,6 +4279,7 @@ def _formal_dso_calculation_attestation(
             denominator_positive = Decimal(str(denominator)) > 0
         except (InvalidOperation, TypeError, ValueError):
             denominator_positive = False
+    effective_month_count = _finite_decimal(row.get("effective_month_count"))
     sealed_disclosures = _sealed_disclosure_ids(
         disclosure_ledger,
         disclosure_ledger_seal,
@@ -4299,7 +4300,7 @@ def _formal_dso_calculation_attestation(
         "period_matches_complete_window": period_days_match,
         "complete_12_natural_month_window": window_complete,
         "complete_13_month_end_snapshots": row.get("snapshot_month_count") == 13,
-        "complete_12_effective_months": row.get("effective_month_count") == 12,
+        "complete_12_effective_months": effective_month_count == Decimal(12),
         "coverage_disclosure_sealed": _FORMAL_DSO_COVERAGE_DISCLOSURE
         in sealed_disclosures,
         "formula_disclosure_sealed": _FORMAL_DSO_FORMULA_DISCLOSURE
