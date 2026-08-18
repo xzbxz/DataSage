@@ -2619,6 +2619,35 @@ class BusinessContractTests(unittest.TestCase):
                 self.assertNotIn("is_inner_cus", model_text)
                 self.assertNotIn("vk_dwd", model_text)
 
+    def test_delivery_time_range_defers_to_query_policy_authority(self) -> None:
+        delivery = yaml.safe_load(
+            (
+                PLUGIN_ROOT / "contracts" / "delivery-semantics.yaml"
+            ).read_text(encoding="utf-8")
+        )
+        policy = yaml.safe_load(
+            (PLUGIN_ROOT / "contracts" / "query-policy.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        rules = delivery["answer_rules"]
+        joined_rules = "\n".join(rules)
+        self.assertNotIn("不设置固定最大查询跨度", joined_rules)
+        self.assertNotIn("跨度较长”本身说成口径错误或拒绝理由", joined_rules)
+        governance_rule = next(
+            rule
+            for rule in rules
+            if "query-policy.governed_metric_time_range.max_days" in rule
+        )
+        self.assertIn("query-policy 的 wider_analysis 规则拆分", governance_rule)
+        self.assertIn("单一权威治理", governance_rule)
+        time_policy = policy["governed_metric_time_range"]
+        self.assertEqual(
+            "split_into_independently_bounded_periods",
+            time_policy["wider_analysis"],
+        )
+        self.assertNotIn(str(time_policy["max_days"]), governance_rule)
+
     def test_snapshot_month_evidence_and_typed_states_are_model_safe(self) -> None:
         def run_query(
             request: dict[str, object],
