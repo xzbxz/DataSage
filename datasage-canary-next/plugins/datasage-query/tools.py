@@ -4436,6 +4436,15 @@ _FORMAL_DSO_EXTERNAL_SCOPE_DISCLOSURE = (
 _FORMAL_DSO_FORMULA_DISCLOSURE = (
     "customer-risk.formal-receivable-turnover.formula"
 )
+_FORMAL_DSO_GROSS_DELIVERY_FACT = "same_period_gross_delivery_rmb"
+_FORMAL_DSO_ATTESTED_FACTS = (
+    "metric_value",
+    "average_net_debt_rmb",
+    _FORMAL_DSO_GROSS_DELIVERY_FACT,
+    "period_natural_days",
+    "snapshot_month_count",
+    "effective_month_count",
+)
 
 
 def _finite_decimal_present(value: Any) -> bool:
@@ -4597,7 +4606,7 @@ def _formal_dso_calculation_attestation(
     disclosure_ledger: Sequence[Mapping[str, Any]],
     disclosure_ledger_seal: str,
 ) -> dict[str, Any] | None:
-    """Seal component-presence guards for formal DSO without copying values."""
+    """Seal canonical public component values and guards for formal DSO."""
 
     if (
         request.get("domain") != "customer_risk"
@@ -4655,6 +4664,24 @@ def _formal_dso_calculation_attestation(
     reason_codes = [
         key.upper() for key, passed in guards.items() if passed is not True
     ]
+    component_values = (
+        {
+            "metric_value": _json_value(row.get("metric_value")),
+            "average_net_debt_rmb": _json_value(
+                row.get("average_net_debt_rmb")
+            ),
+            _FORMAL_DSO_GROSS_DELIVERY_FACT: _json_value(denominator),
+            "period_natural_days": _json_value(period_days),
+            "snapshot_month_count": _json_value(
+                row.get("snapshot_month_count")
+            ),
+            "effective_month_count": _json_value(
+                row.get("effective_month_count")
+            ),
+        }
+        if not reason_codes
+        else {}
+    )
     attestation: dict[str, Any] = {
         "contract_version": _FORMAL_DSO_ATTESTATION_VERSION,
         "status": "verified" if not reason_codes else "undefined",
@@ -4663,6 +4690,7 @@ def _formal_dso_calculation_attestation(
             [
                 "formal_receivable_turnover_value",
                 "average_net_debt",
+                "same_period_gross_delivery_amount",
                 "gross_delivery_denominator_semantics",
                 "period_natural_days",
                 "snapshot_month_count",
@@ -4671,6 +4699,7 @@ def _formal_dso_calculation_attestation(
             if not reason_codes
             else []
         ),
+        "component_values": component_values,
         "undefined_reason_codes": reason_codes,
         "request_id": str(request["request_id"]),
         "metric_ref": metric_ref,
@@ -4722,6 +4751,13 @@ def _attach_formal_dso_calculation_attestations(
         )
         facts = claim.get("facts")
         if attestation is not None and isinstance(facts, dict):
+            component_values = attestation.get("component_values")
+            if attestation.get("status") == "verified" and isinstance(
+                component_values,
+                Mapping,
+            ):
+                for fact_name in _FORMAL_DSO_ATTESTED_FACTS:
+                    facts[fact_name] = copy.deepcopy(component_values[fact_name])
             facts["calculation_attestation"] = attestation
 
 
@@ -6079,6 +6115,7 @@ _FORMAL_DSO_ATTESTATION_GUARDS = (
 _FORMAL_DSO_AUTHORIZED_COMPONENTS = (
     "formal_receivable_turnover_value",
     "average_net_debt",
+    "same_period_gross_delivery_amount",
     "gross_delivery_denominator_semantics",
     "period_natural_days",
     "snapshot_month_count",
@@ -6114,6 +6151,56 @@ def _formal_dso_attestation_seal(attestation: Mapping[str, Any]) -> str:
     return "sha256_" + hashlib.sha256(canonical).hexdigest()
 
 
+def _formal_dso_attested_components_are_valid(
+    component_values: Any,
+    *,
+    facts: Any,
+    applied_time_range: Any,
+) -> bool:
+    """Verify exact claim copies and formal-DSO component business ranges."""
+
+    if (
+        not isinstance(component_values, Mapping)
+        or set(component_values) != set(_FORMAL_DSO_ATTESTED_FACTS)
+        or not isinstance(facts, Mapping)
+        or any(
+            fact_name not in facts
+            or facts[fact_name] != component_values[fact_name]
+            for fact_name in _FORMAL_DSO_ATTESTED_FACTS
+        )
+        or not _finite_decimal_present(component_values.get("metric_value"))
+        or not _finite_decimal_present(
+            component_values.get("average_net_debt_rmb")
+        )
+    ):
+        return False
+
+    gross_delivery = _finite_decimal(
+        component_values.get(_FORMAL_DSO_GROSS_DELIVERY_FACT)
+    )
+    effective_month_count = _finite_decimal(
+        component_values.get("effective_month_count")
+    )
+    period_days = component_values.get("period_natural_days")
+    snapshot_month_count = component_values.get("snapshot_month_count")
+    complete_window, expected_period_days = _formal_dso_complete_window(
+        applied_time_range
+    )
+    return (
+        gross_delivery is not None
+        and gross_delivery > 0
+        and isinstance(period_days, int)
+        and not isinstance(period_days, bool)
+        and period_days > 0
+        and complete_window
+        and period_days == expected_period_days
+        and isinstance(snapshot_month_count, int)
+        and not isinstance(snapshot_month_count, bool)
+        and snapshot_month_count == 13
+        and effective_month_count == Decimal(12)
+    )
+
+
 def _formal_dso_attestation_state(
     attestation: Any,
     *,
@@ -6142,18 +6229,21 @@ def _formal_dso_attestation_state(
         != result.get("projection_fingerprint")
         or attestation.get("projection_fingerprint")
         != claim.get("projection_fingerprint")
+        or claim.get("period") != result.get("applied_time_range")
     ):
         return "invalid"
 
     status = attestation.get("status")
     guards = attestation.get("guards")
     components = attestation.get("authorized_components")
+    component_values = attestation.get("component_values")
     reasons = attestation.get("undefined_reason_codes")
     facts = claim.get("facts")
     if (
         status == "undefined"
         and guards == {}
         and components == []
+        and component_values == {}
         and isinstance(reasons, list)
         and len(reasons) == 1
         and reasons[0] in _FORMAL_DSO_PROJECTION_UNDEFINED_REASONS
@@ -6178,8 +6268,11 @@ def _formal_dso_attestation_state(
             all(guards.values())
             and tuple(components) == _FORMAL_DSO_AUTHORIZED_COMPONENTS
             and reasons == []
-            and isinstance(facts, Mapping)
-            and _finite_decimal_present(facts.get("metric_value"))
+            and _formal_dso_attested_components_are_valid(
+                component_values,
+                facts=facts,
+                applied_time_range=result.get("applied_time_range"),
+            )
             and required_disclosures.issubset(sealed_disclosure_ids)
         ):
             return "verified"
@@ -6192,6 +6285,7 @@ def _formal_dso_attestation_state(
             expected_reasons
             and reasons == expected_reasons
             and components == []
+            and component_values == {}
         ):
             return "undefined"
     return "invalid"

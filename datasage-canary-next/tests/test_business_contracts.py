@@ -1915,13 +1915,16 @@ class BusinessContractTests(unittest.TestCase):
         for proposition in (
             "正式应收周转天数",
             "未定义",
-            "平均净经营欠款",
+            "平均月末净经营欠款",
+            "同期毛出库额",
             "期间自然日数",
             "月末欠款快照月数",
             "有效出库月份数",
             "排除内部客户的双侧范围",
             "密封有效",
             "未定义而不是错误",
+            "typed undefined",
+            "称组成项完整",
         ):
             self.assertIn(proposition, answer_contract_text)
         self.assertNotIn(
@@ -1930,20 +1933,22 @@ class BusinessContractTests(unittest.TestCase):
         )
         formula_contract = answer_contract[1]
         for condition in (
+            "同一已验证密封 claim",
+            "同期毛出库额",
             "同一次 datasage_query",
             "formal-receivable-turnover-calculation-attestation/v1",
             "状态为 verified",
             "attestation_seal 与外层 claim_seal 均有效",
+            "组成项均存在、有效、密封且与本次范围绑定",
             "公式披露与双侧客户范围披露均适用且密封有效",
             "同一查询已密封的正式公式披露",
+            "同期毛出库额非正",
+            "必须保持 typed undefined",
+            "清除正式周转数值、公式与推理主题",
         ):
             self.assertIn(condition, formula_contract)
         self.assertIn(
             "attestation 缺失、无效或状态为 undefined 时",
-            formula_contract,
-        )
-        self.assertIn(
-            "不得依据本 catalog 合同直接陈述正式公式或正式周转数值",
             formula_contract,
         )
 
@@ -2034,12 +2039,31 @@ class BusinessContractTests(unittest.TestCase):
             [
                 "formal_receivable_turnover_value",
                 "average_net_debt",
+                "same_period_gross_delivery_amount",
                 "gross_delivery_denominator_semantics",
                 "period_natural_days",
                 "snapshot_month_count",
                 "effective_month_count",
             ],
             attestation["authorized_components"],
+        )
+        expected_component_values = {
+            "metric_value": "42.00",
+            "average_net_debt_rmb": "100.00",
+            "same_period_gross_delivery_rmb": "900.00",
+            "period_natural_days": 365,
+            "snapshot_month_count": 13,
+            "effective_month_count": "12",
+        }
+        self.assertEqual(
+            expected_component_values,
+            attestation["component_values"],
+        )
+        self.assertEqual(
+            "900.00",
+            dso_result["claim_ledger"][0]["facts"][
+                "same_period_gross_delivery_rmb"
+            ],
         )
         self.assertNotIn(
             "delivery_amount_rmb",
@@ -2050,6 +2074,7 @@ class BusinessContractTests(unittest.TestCase):
             {
                 "metric_value",
                 "average_net_debt_rmb",
+                "same_period_gross_delivery_rmb",
                 "period_natural_days",
                 "snapshot_month_count",
                 "effective_month_count",
@@ -2058,13 +2083,17 @@ class BusinessContractTests(unittest.TestCase):
             set(dso_facts),
         )
         serialized_attestation = json.dumps(attestation, ensure_ascii=False)
-        for private_value in ("42.00", "100.00", "900.00", "365"):
-            self.assertNotIn(private_value, serialized_attestation)
-        for implementation_token in ("SELECT ", "vk_dw", "vk_dwd", "`d`", "`s`"):
+        for implementation_token in (
+            "delivery_amount_rmb",
+            "SELECT ",
+            "vk_dw",
+            "vk_dwd",
+            "`d`",
+            "`s`",
+        ):
             self.assertNotIn(implementation_token, serialized_attestation)
         serialized_wire = json.dumps(dso_wire, ensure_ascii=False)
         for private_token in (
-            "900.00",
             "delivery_amount_rmb",
             "debt_amount_rmb",
             "is_inner_cus",
@@ -2075,6 +2104,8 @@ class BusinessContractTests(unittest.TestCase):
             " FROM ",
         ):
             self.assertNotIn(private_token, serialized_wire)
+        self.assertIn("900.00", serialized_wire)
+        self.assertIn("same_period_gross_delivery_rmb", serialized_wire)
 
         def assert_attestation_tamper_breaks_both_seals(
             label: str, mutate
@@ -2112,6 +2143,9 @@ class BusinessContractTests(unittest.TestCase):
             "authorized_components": lambda item: item[
                 "authorized_components"
             ].pop(),
+            "component_values": lambda item: item["component_values"].__setitem__(
+                "average_net_debt_rmb", "101.00"
+            ),
             "undefined_reason_codes": lambda item: item[
                 "undefined_reason_codes"
             ].append("TAMPERED"),
@@ -2144,6 +2178,7 @@ class BusinessContractTests(unittest.TestCase):
             self.assertEqual("undefined", projected["data_state"])
             self.assertEqual([], projected["claim_ledger"])
             self.assertEqual(0, projected["row_count"])
+            self.assertEqual([], projected["allowed_reasoning_topics"])
             self.assertEqual(
                 "EVIDENCE_INTEGRITY_INVALID",
                 projected["error"]["code"],
@@ -2205,6 +2240,59 @@ class BusinessContractTests(unittest.TestCase):
             attestation_semantic_tamper,
         )
 
+        component_replacements = {
+            "metric_value": "43.00",
+            "average_net_debt_rmb": "101.00",
+            "same_period_gross_delivery_rmb": "901.00",
+            "period_natural_days": 364,
+            "snapshot_month_count": 14,
+            "effective_month_count": "11",
+        }
+        for fact_name, replacement in component_replacements.items():
+            component_missing = json.loads(json.dumps(dso_result))
+            del component_missing["claim_ledger"][0]["facts"][fact_name]
+            tools.evidence.seal_claim(component_missing["claim_ledger"][0])
+            assert_tamper_is_fail_closed(component_missing)
+
+            component_replaced = json.loads(json.dumps(dso_result))
+            component_replaced["claim_ledger"][0]["facts"][
+                fact_name
+            ] = replacement
+            tools.evidence.seal_claim(component_replaced["claim_ledger"][0])
+            assert_tamper_is_fail_closed(component_replaced)
+
+        attestation_value_bare_tamper = json.loads(json.dumps(dso_result))
+        bare_tamper_claim = attestation_value_bare_tamper["claim_ledger"][0]
+        bare_tamper_claim["facts"]["calculation_attestation"][
+            "component_values"
+        ]["average_net_debt_rmb"] = "101.00"
+        tools.evidence.seal_claim(bare_tamper_claim)
+        assert_tamper_is_fail_closed(attestation_value_bare_tamper)
+
+        attestation_invalid_reseal = json.loads(json.dumps(dso_result))
+        invalid_reseal_claim = attestation_invalid_reseal["claim_ledger"][0]
+        invalid_reseal_attestation = invalid_reseal_claim["facts"][
+            "calculation_attestation"
+        ]
+        invalid_reseal_attestation["component_values"][
+            "same_period_gross_delivery_rmb"
+        ] = "-1"
+        invalid_reseal_claim["facts"]["same_period_gross_delivery_rmb"] = "-1"
+        invalid_reseal_attestation[
+            "attestation_seal"
+        ] = expected_attestation_seal(invalid_reseal_attestation)
+        tools.evidence.seal_claim(invalid_reseal_claim)
+        assert_tamper_is_fail_closed(attestation_invalid_reseal)
+
+        period_binding_tamper = json.loads(json.dumps(dso_result))
+        period_binding_tamper["claim_ledger"][0]["period"] = {
+            "source": "requested_period",
+            "start": "2023-02-01",
+            "end": "2024-01-31",
+        }
+        tools.evidence.seal_claim(period_binding_tamper["claim_ledger"][0])
+        assert_tamper_is_fail_closed(period_binding_tamper)
+
         ledger_seal_tamper = json.loads(json.dumps(dso_result))
         assert_attestation_and_claim_seals(ledger_seal_tamper)
         for disclosure in ledger_seal_tamper["disclosure_ledger"]:
@@ -2259,6 +2347,16 @@ class BusinessContractTests(unittest.TestCase):
             (
                 "missing_denominator",
                 {key: value for key, value in dso_rows[0].items() if key != "delivery_amount_rmb"},
+                "GROSS_DELIVERY_DENOMINATOR_PRESENT",
+            ),
+            (
+                "null_denominator",
+                {**dso_rows[0], "delivery_amount_rmb": None},
+                "GROSS_DELIVERY_DENOMINATOR_PRESENT",
+            ),
+            (
+                "non_finite_denominator",
+                {**dso_rows[0], "delivery_amount_rmb": "NaN"},
                 "GROSS_DELIVERY_DENOMINATOR_PRESENT",
             ),
             (
@@ -2327,12 +2425,19 @@ class BusinessContractTests(unittest.TestCase):
             self.assertEqual("undefined", result["data_state"], case_name)
             self.assertEqual("undefined", case_attestation["status"], case_name)
             self.assertEqual([], case_attestation["authorized_components"], case_name)
+            self.assertEqual({}, case_attestation["component_values"], case_name)
             self.assertIn(reason, case_attestation["undefined_reason_codes"], case_name)
             self.assertNotIn(
                 "metric_value",
                 result["claim_ledger"][0]["facts"],
                 case_name,
             )
+            self.assertNotIn(
+                "same_period_gross_delivery_rmb",
+                result["claim_ledger"][0]["facts"],
+                case_name,
+            )
+            self.assertEqual([], result["allowed_reasoning_topics"], case_name)
             case_disclosure_ids = {
                 item["disclosure_id"] for item in result["disclosure_ledger"]
             }
@@ -2564,6 +2669,52 @@ class BusinessContractTests(unittest.TestCase):
             }
             self.assertIs(disclosures[formal_dso_disclosure_id]["applies"], True)
             assert_disclosure_seals(result)
+
+        current_receipt = detail["content_hash"]
+        stale_detail = json.loads(json.dumps(detail, ensure_ascii=False))
+        stale_detail.pop("content_hash")
+        stale_detail["results"][0]["metric"]["answer_contract"][1] = (
+            "同时呈现已返回的平均净经营欠款、期间自然日数、月末欠款快照月数和有效出库月份数；"
+            "只有同一次 datasage_query 返回的 "
+            "formal-receivable-turnover-calculation-attestation/v1 状态为 verified、"
+            "attestation_seal 与外层 claim_seal 均有效，且公式披露与双侧客户范围披露"
+            "均适用且密封有效时，才可忠实呈现同一查询已密封的正式公式披露；"
+            "attestation 缺失、无效或状态为 undefined 时，不得依据本 catalog 合同直接陈述"
+            "正式公式或正式周转数值。"
+        )
+        stale_receipt = hashlib.sha256(
+            json.dumps(
+                stale_detail,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        self.assertNotEqual(current_receipt, stale_receipt)
+        stale_request = {
+            **dso_request,
+            "request_id": "formal_dso_old_component_contract_receipt",
+            "dimensions": ["department"],
+            "detail_receipt": stale_receipt,
+        }
+        with mock.patch.object(
+            tools.entities,
+            "prefetch_metric_entities",
+            side_effect=AssertionError("stale receipt must fail before entity work"),
+        ) as prefetch, mock.patch.object(
+            tools,
+            "_execute_with_source",
+            side_effect=AssertionError("stale receipt must fail before database"),
+        ) as execute:
+            stale_payload = json.loads(
+                tools.runtime_guarded_datasage_query({"requests": [stale_request]})
+            )
+        prefetch.assert_not_called()
+        execute.assert_not_called()
+        self.assertEqual("failed", stale_payload["status"])
+        self.assertEqual(
+            "METRIC_DETAIL_RECEIPT_INVALID", stale_payload["error"]["code"]
+        )
 
         delivery_receipt_result, _ = run_query(
             {
