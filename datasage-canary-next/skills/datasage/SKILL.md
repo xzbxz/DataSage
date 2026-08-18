@@ -79,6 +79,14 @@ unchanged into that query's `detail_receipt`. Preserve the same receipt on
 same-metric follow-ups and retries; load fresh detail instead of reusing it for
 another metric or domain.
 
+Apply `expert_index -> metric_detail -> query` per newly selected metric branch,
+not per turn. Run it for a new Hermes session, changed domain or metric, or no
+retained proof of selection plus successful detail. In the same Hermes session,
+reuse the prior successful detail receipt only for that metric while runtime
+accepts it. If rejected as stale or invalid, refresh only the selected detail;
+refresh `expert_index` only if selection becomes unsupported or ambiguous. A
+new turn alone never forces refresh.
+
 ### Plan and bind scope
 
 Request the smallest sufficient evidence bundle. Give independent requests
@@ -197,9 +205,13 @@ Finalization:
   `facts.net_change_contribution_rate`. A zero-delta partition or a claim
   without that relation is not a structural contributor and has no zero rate to
   fill. Never describe structural contribution as a cause, driver, or causal
-  explanation. Use each authorized returned decimal-string rate directly. It
-  is a signed dimensionless fraction: `1` means `100%`; negative values and
-  absolute values greater than `1` are valid. Preserve sign and value; for
+  explanation. When reporting “结构贡献” for this authorized reconciled
+  operation, state in the same paragraph or adjacent sentence:
+  “这是净变化的结构分解，不代表业务原因或驱动。” Outside that negated boundary,
+  never name a partition with 原因, 驱动, 导致, or causal equivalents. Use each
+  authorized returned decimal-string rate directly. It is a signed
+  dimensionless fraction: `1` means `100%`; negative values and absolute values
+  greater than `1` are valid. Preserve sign and value; for
   percentage display, multiply by 100 exactly once and use one consistent
   display precision across partitions. Preserve every nonzero direction: when
   a nonzero percentage would round to zero, show `0 < rate < threshold` for a

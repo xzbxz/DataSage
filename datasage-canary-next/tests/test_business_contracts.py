@@ -334,6 +334,11 @@ class BusinessContractTests(unittest.TestCase):
             "zero-delta partition or a claim without that relation is not a structural "
             "contributor and has no zero rate to fill",
             "Never describe structural contribution as a cause, driver, or causal explanation",
+            "When reporting “结构贡献” for this authorized reconciled operation",
+            "state in the same paragraph or adjacent sentence: "
+            "“这是净变化的结构分解，不代表业务原因或驱动。”",
+            "Outside that negated boundary, never name a partition with 原因, 驱动, "
+            "导致, or causal equivalents",
             "Use each authorized returned decimal-string rate directly",
             "signed dimensionless fraction: `1` means `100%`",
             "negative values and absolute values greater than `1` are valid",
@@ -378,6 +383,11 @@ class BusinessContractTests(unittest.TestCase):
             "zero-delta partition or a claim without that relation is not a structural "
             "contributor and has no zero rate to fill",
             "Never describe structural contribution as a cause, driver, or causal explanation",
+            "When reporting “结构贡献” for this authorized reconciled operation",
+            "state in the same paragraph or adjacent sentence: "
+            "“这是净变化的结构分解，不代表业务原因或驱动。”",
+            "Outside that negated boundary, never name a partition with 原因, 驱动, "
+            "导致, or causal equivalents",
             "Use each authorized returned decimal-string rate directly",
             "multiply by 100 exactly once",
             "show `0 < rate < threshold` for a positive rate or "
@@ -393,6 +403,107 @@ class BusinessContractTests(unittest.TestCase):
             "contribution",
         ):
             self.assertIn(required, projected_normalized)
+
+        governance_rule = content.split(
+            "The default governance path is", 1
+        )[1].split("### Plan and bind scope", 1)[0]
+        governance_normalized = " ".join(governance_rule.split())
+        for required in (
+            "Apply `expert_index -> metric_detail -> query` per newly selected metric "
+            "branch, not per turn",
+            "Run it for a new Hermes session, changed domain or metric, or no retained "
+            "proof of selection plus successful detail",
+            "In the same Hermes session, reuse the prior successful detail receipt only "
+            "for that metric while runtime accepts it",
+            "If rejected as stale or invalid, refresh only the selected detail",
+            "refresh `expert_index` only if selection becomes unsupported or ambiguous",
+            "A new turn alone never forces refresh",
+        ):
+            self.assertIn(required, governance_normalized)
+            self.assertIn(required, projected_normalized)
+
+        semantics = yaml.safe_load(
+            (PLUGIN_ROOT / "contracts" / "delivery-semantics.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        answer_contract_metrics = {
+            metric_code
+            for metric_code, definition in semantics["metrics"].items()
+            if definition.get("answer_contract") is not None
+        }
+        self.assertEqual({"delivery_amount"}, answer_contract_metrics)
+        expected_answer_contract = (
+            "仅当返回的是完整变化分解且状态已对账时，才可称为结构贡献；凡实际报告结构贡献，"
+            "必须在同段或紧邻句明确说明：这是净变化的结构分解，不代表业务原因或驱动。"
+            "除该否定边界外，不得用原因、驱动或导致命名任何分区。"
+        )
+        self.assertEqual(
+            [expected_answer_contract],
+            semantics["metrics"]["delivery_amount"]["answer_contract"],
+        )
+        serialized_semantics = json.dumps(semantics, ensure_ascii=False)
+        self.assertNotIn(
+            "“原因”只允许指向查询证实的客户、产品、业务员、部门或组织结构变化",
+            serialized_semantics,
+        )
+        self.assertIn(
+            "结构变化只能称为结构观察；完整对账授权时可称为结构贡献，"
+            "但均不得称为原因、驱动或导致",
+            serialized_semantics,
+        )
+
+        detail = json.loads(
+            contracts.datasage_catalog(
+                {
+                    "requests": [
+                        {"domain": "delivery", "metric": "delivery_amount"}
+                    ]
+                }
+            )
+        )
+        self.assertEqual("success", detail["status"])
+        self.assertEqual(
+            [expected_answer_contract],
+            detail["results"][0]["metric"]["answer_contract"],
+        )
+        current_receipt = detail.pop("content_hash")
+        stale_detail = json.loads(json.dumps(detail, ensure_ascii=False))
+        stale_detail["results"][0]["metric"].pop("answer_contract")
+        stale_receipt = hashlib.sha256(
+            json.dumps(
+                stale_detail,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        self.assertNotEqual(current_receipt, stale_receipt)
+        stale_request = {
+            "request_id": "delivery_old_answer_contract_receipt",
+            "domain": "delivery",
+            "mode": "metric",
+            "purpose": "verify prior delivery detail receipt is invalid",
+            "metric": "delivery_amount",
+            "dimensions": [],
+            "time_range": {"start": "2026-07-01", "end": "2026-08-01"},
+            "detail_receipt": stale_receipt,
+        }
+        with mock.patch.object(
+            tools,
+            "_execute_with_source",
+            side_effect=AssertionError("stale receipt must fail before database"),
+        ) as execute:
+            stale_result = json.loads(
+                tools.runtime_guarded_datasage_query(
+                    {"requests": [stale_request]}
+                )
+            )
+        execute.assert_not_called()
+        self.assertEqual("failed", stale_result["status"])
+        self.assertEqual(
+            "METRIC_DETAIL_RECEIPT_INVALID", stale_result["error"]["code"]
+        )
 
     def test_model_visible_contribution_rate_wire_contract_is_direct_use_only(
         self,

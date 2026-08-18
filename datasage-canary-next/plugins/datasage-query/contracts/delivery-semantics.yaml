@@ -1215,6 +1215,8 @@ metrics:
       [customer_mix, demand_timing, delivery_execution, external_event, product_mix, return_activity]
     dimension_overrides: *current_attribute_overrides
     answer_note: 默认出库金额为当期流量净出库；毛出库按 delivery_time，退货按 statement_time，结果允许为负数。
+    answer_contract:
+      - "仅当返回的是完整变化分解且状态已对账时，才可称为结构贡献；凡实际报告结构贡献，必须在同段或紧邻句明确说明：这是净变化的结构分解，不代表业务原因或驱动。除该否定边界外，不得用原因、驱动或导致命名任何分区。"
   delivery_amount_original:
     disclosures:
       - id: currency.original.no-cross-currency
@@ -1638,4 +1640,4 @@ analysis_boundaries:
   - 上述开放表示维度名称受控，不表示所有维度同时支持净出库。原条码和缸号仅支持显式毛出库；净出库请求不得降级。批次、条码和次品项可按两侧事实直接字段计算期间净流量。
   - 条码事实一行是一匹真实出库布，销售明细一行是商品色号明细；任何先一对多连接条码再汇总销售明细金额或数量的结果都不可信。
   - 仓库净出库只表达实际仓库出入流量，不提供按原出库仓的责任归因；用户要求原出库仓归因时不得查询，也不得用实际仓库净流量静默替代。
-  - “原因”只允许指向查询证实的客户、产品、业务员、部门或组织结构变化，不推断客户意图、市场原因或人员责任。
+  - 查询证实的客户、产品、业务员、部门或组织结构变化只能称为结构观察；完整对账授权时可称为结构贡献，但均不得称为原因、驱动或导致，也不得推断客户意图、市场原因或人员责任。
