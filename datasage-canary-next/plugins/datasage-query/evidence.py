@@ -25,6 +25,7 @@ _SEMANTIC_FINGERPRINT_PRESENTATION_KEYS = {
     "analysis_intent",
     "evidence_role",
     "decomposition_of_request_id",
+    "detail_receipt",
 }
 
 ANALYSIS_INTENTS = (

@@ -30,6 +30,17 @@ tools = importlib.import_module(f"{TEST_PACKAGE}.tools")
 
 class BusinessContractTests(unittest.TestCase):
     @staticmethod
+    def _metric_detail_receipt(domain: str, metric: str) -> str:
+        payload = json.loads(
+            contracts.datasage_catalog(
+                {"requests": [{"domain": domain, "metric": metric}]}
+            )
+        )
+        if payload.get("status") != "success":
+            raise AssertionError(payload)
+        return str(payload["content_hash"])
+
+    @staticmethod
     def _read_only_source_evidence() -> dict[str, object]:
         evidence: dict[str, object] = {
             "schema": "datasage-query-source-evidence/v1",
@@ -620,6 +631,9 @@ class BusinessContractTests(unittest.TestCase):
                                 "mode": "metric",
                                 "purpose": "synthetic contract test",
                                 "metric": "net_receipt_amount",
+                                "detail_receipt": self._metric_detail_receipt(
+                                    "receipt", "net_receipt_amount"
+                                ),
                                 "dimensions": [],
                                 "calendar_month": "2026-07",
                             }
@@ -629,6 +643,15 @@ class BusinessContractTests(unittest.TestCase):
             )
 
         self.assertEqual("success", query_payload["status"])
+        coverage_receipts = query_payload["evidence_bundle"][
+            "coverage_receipts"
+        ]["items"]
+        self.assertEqual(1, len(coverage_receipts))
+        self.assertEqual(["receipt_month"], coverage_receipts[0]["request_ids"])
+        self.assertNotIn(
+            self._metric_detail_receipt("receipt", "net_receipt_amount"),
+            json.dumps(query_payload, ensure_ascii=False),
+        )
         self.assertIn("2026-07-01", captured["params"])
         self.assertIn("2026-08-01", captured["params"])
         result = query_payload["results"][0]
@@ -739,6 +762,12 @@ class BusinessContractTests(unittest.TestCase):
         def run_receipt_case(
             request: dict[str, object],
         ) -> dict[str, dict[str, object]]:
+            request = {
+                **request,
+                "detail_receipt": self._metric_detail_receipt(
+                    str(request["domain"]), str(request["metric"])
+                ),
+            }
             with mock.patch.object(
                 tools,
                 "_execute_with_source",
@@ -921,12 +950,156 @@ class BusinessContractTests(unittest.TestCase):
             self.assertNotIn("one by one", content)
             self.assertNotIn("must not drop or merge away", content)
 
+    def test_runtime_metric_detail_receipt_gate_fails_closed_before_database(
+        self,
+    ) -> None:
+        def validate(request: dict[str, object]) -> dict[str, object]:
+            normalized = tools._validate_inventory_metric_scope(
+                tools._validate_delivery_metric_scope(
+                    tools._validate_request(request)
+                )
+            )
+            _, semantics = tools._contracts(str(normalized["domain"]))
+            return tools._validate_metric_detail_gate(normalized, semantics)
+
+        base = {
+            "request_id": "receipt_gate",
+            "domain": "receipt",
+            "mode": "metric",
+            "purpose": "offline metric-detail receipt gate test",
+            "metric": "net_receipt_amount",
+            "dimensions": [],
+        }
+        correct = self._metric_detail_receipt("receipt", "net_receipt_amount")
+
+        with self.assertRaises(tools.QueryFailure) as missing:
+            validate(base)
+        self.assertEqual("METRIC_DETAIL_REQUIRED", missing.exception.code)
+
+        wrong_metric_receipt = self._metric_detail_receipt(
+            "receipt", "receipt_amount"
+        )
+        with self.assertRaises(tools.QueryFailure) as wrong_metric:
+            validate({**base, "detail_receipt": wrong_metric_receipt})
+        self.assertEqual(
+            "METRIC_DETAIL_RECEIPT_INVALID", wrong_metric.exception.code
+        )
+
+        tampered = ("0" if correct[0] != "0" else "1") + correct[1:]
+        with self.assertRaises(tools.QueryFailure) as tampered_error:
+            validate({**base, "detail_receipt": tampered})
+        self.assertEqual(
+            "METRIC_DETAIL_RECEIPT_INVALID", tampered_error.exception.code
+        )
+
+        stale_current = "f" * 64 if correct != "f" * 64 else "e" * 64
+        with mock.patch.object(
+            tools,
+            "_current_metric_detail_receipt",
+            return_value=stale_current,
+        ):
+            with self.assertRaises(tools.QueryFailure) as expired:
+                validate({**base, "detail_receipt": correct})
+        self.assertEqual(
+            "METRIC_DETAIL_RECEIPT_INVALID", expired.exception.code
+        )
+
+        with self.assertRaises(tools.QueryFailure) as dimension_overreach:
+            validate(
+                {
+                    **base,
+                    "detail_receipt": correct,
+                    "dimensions": ["warehouse"],
+                }
+            )
+        self.assertEqual("UNSUPPORTED_DIMENSION", dimension_overreach.exception.code)
+
+        with self.assertRaises(tools.QueryFailure) as time_overreach:
+            validate(
+                {
+                    **base,
+                    "detail_receipt": correct,
+                    "time_range": {
+                        "start": "2020-01-01",
+                        "end": "2026-01-01",
+                    },
+                }
+            )
+        self.assertEqual("QUERY_RANGE_TOO_WIDE", time_overreach.exception.code)
+
+        exact_default = validate(
+            {
+                "request_id": "delivery_exact_default",
+                "domain": "delivery",
+                "mode": "metric",
+                "purpose": "offline exact-default exception test",
+                "metric": "delivery_amount",
+                "dimensions": [],
+            }
+        )
+        self.assertNotIn("detail_receipt", exact_default)
+
+        with mock.patch.object(
+            tools,
+            "_execute_with_source",
+            return_value=(
+                [{"metric_value": "42.00"}],
+                False,
+                self._read_only_source_evidence(),
+            ),
+        ):
+            exact_default_query = json.loads(
+                tools.datasage_query(
+                    {
+                        "requests": [
+                            {
+                                "request_id": "delivery_exact_default_query",
+                                "domain": "delivery",
+                                "mode": "metric",
+                                "purpose": "offline exact-default execution test",
+                                "metric": "delivery_amount",
+                                "dimensions": [],
+                            }
+                        ]
+                    }
+                )
+            )
+        self.assertEqual("success", exact_default_query["status"])
+        self.assertEqual(
+            "success", exact_default_query["results"][0]["status"]
+        )
+
+        self.assertIn("detail_receipt", schemas.REQUEST["properties"])
+        self.assertNotIn("detail_receipt", schemas.REQUEST["required"])
+        query_description = schemas.DATASAGE_QUERY["description"]
+        self.assertIn("content_hash", query_description)
+        self.assertIn("before any database access", query_description)
+
+        with mock.patch.object(
+            tools,
+            "_execute_with_source",
+            side_effect=AssertionError("database access must not occur"),
+        ):
+            runtime_failure = json.loads(
+                tools.runtime_guarded_datasage_query({"requests": [base]})
+            )
+        self.assertEqual("failed", runtime_failure["status"])
+        self.assertEqual(
+            "METRIC_DETAIL_REQUIRED", runtime_failure["error"]["code"]
+        )
+
     def test_snapshot_population_resolver_and_formal_dso_scope_disclosure(
         self,
     ) -> None:
         def run_query(
             request: dict[str, object], rows: list[dict[str, object]]
         ) -> tuple[dict[str, object], list[dict[str, object]]]:
+            request = {
+                **request,
+                "detail_receipt": self._metric_detail_receipt(
+                    str(request["domain"]), str(request["metric"])
+                ),
+            }
             calls: list[dict[str, object]] = []
 
             def execute_query(sql, params, limit, **_kwargs):

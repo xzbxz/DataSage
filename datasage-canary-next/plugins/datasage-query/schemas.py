@@ -68,6 +68,19 @@ REQUEST = {
                 "satisfies the role. The label itself never upgrades proof strength."
             ),
         },
+        "detail_receipt": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "description": (
+                "Opaque receipt copied unchanged from the content_hash of a successful, single-metric "
+                "datasage_catalog metric-detail response for this exact domain and metric. It is required "
+                "unless the selected metric explicitly supports an exact default lookup and this request "
+                "contains no explicit business qualifier. The query runtime revalidates the receipt against "
+                "the current catalog contract and the requested governed capabilities before any database access."
+            ),
+        },
         "attribution_mode": {
             "type": "string",
             "enum": ["transaction_detail", "salesperson_allocation"],
@@ -473,7 +486,9 @@ DATASAGE_QUERY = {
         "true and the request has no explicit business qualifier. Empty dimensions: [] does not count as a qualifier. "
         "If that flag is false or missing, or if calendar_month, "
         "time_range, dimensions, filters, an entity, comparison, decomposition, or ranking is explicit, load the "
-        "selected metric detail before calling datasage_query. The model-facing surface accepts no SQL, physical "
+        "selected metric detail before calling datasage_query and copy its content_hash into detail_receipt. The "
+        "runtime rejects a missing, stale, tampered, wrong-metric, or capability-incompatible receipt before any "
+        "database access. The model-facing surface accepts no SQL, physical "
         "tables, columns, joins, or formulas. Registered entity tokens may be "
         "provided as metric filters and are resolved deterministically inside the query. The response returns "
         "structured values, applied scope, data state, and evidence metadata for Hermes to analyze and summarize. "

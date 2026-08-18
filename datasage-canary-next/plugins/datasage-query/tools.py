@@ -8,6 +8,7 @@ boundary and returns structured evidence.
 from __future__ import annotations
 
 import copy
+import hmac
 import json
 import hashlib
 import importlib
@@ -40,7 +41,7 @@ from .db_security import (
     verify_mysql_source_identity,
     verify_mysql_tls,
 )
-from . import entities, evidence, settings
+from . import contracts, entities, evidence, settings
 
 
 logger = logging.getLogger(__name__)
@@ -95,6 +96,7 @@ _COMMON_REQUEST_FIELDS = {
 }
 _METRIC_REQUEST_FIELDS = _COMMON_REQUEST_FIELDS | {
     "metric",
+    "detail_receipt",
     "dimensions",
     "metric_filters",
     "time_bucket",
@@ -131,6 +133,23 @@ _INTERNAL_RESULT_FIELDS = {
     _INTERNAL_PARTITION_ROW_COUNT,
 }
 _BUSINESS_TIME_ZONE = timezone(timedelta(hours=8))
+_DETAIL_RECEIPT = re.compile(r"^[0-9a-f]{64}$")
+_DETAIL_QUALIFIER_FIELDS = {
+    "time_range",
+    "calendar_month",
+    "metric_filters",
+    "time_bucket",
+    "comparison",
+    "decomposition_of_request_id",
+    "complete_change_decomposition",
+    "complete_target_gap_decomposition",
+    "_target_gap_of_request_id",
+    "order_by",
+    "limit",
+    "attribution_mode",
+    "delivery_scope",
+    "inventory_scope",
+}
 _EVIDENCE_INTERPRETATION = (
     "查询结果只能直接证明返回的事实、对比和关联；对于为什么、驱动因素或原因分析，"
     "未被证据直接验证的原因必须标为可能、相关或未知/待验证，不得写成已确认因果。"
@@ -203,6 +222,164 @@ def _max_group_dimensions(metric: Mapping[str, Any]) -> int:
             "分析指标缺少有效的分组维度上限。",
         )
     return value
+
+
+def _has_explicit_detail_qualifier(request: Mapping[str, Any]) -> bool:
+    """Match the catalog's exact-default exception without reading prose."""
+
+    dimensions = request.get("dimensions")
+    if dimensions not in (None, []):
+        return True
+    return any(field in request for field in _DETAIL_QUALIFIER_FIELDS)
+
+
+def _metric_allowed_dimensions(
+    request: Mapping[str, Any], metric: Mapping[str, Any]
+) -> set[str]:
+    """Resolve the executable dimension capability for this metric path."""
+
+    allowed = metric.get("allowed_dimensions")
+    if isinstance(allowed, list) and all(isinstance(code, str) for code in allowed):
+        return set(allowed)
+    paths = metric.get("paths")
+    attribution_mode = request.get("attribution_mode")
+    path = paths.get(attribution_mode) if isinstance(paths, Mapping) else None
+    path_allowed = path.get("allowed_dimensions") if isinstance(path, Mapping) else None
+    if isinstance(path_allowed, list) and all(
+        isinstance(code, str) for code in path_allowed
+    ):
+        return set(path_allowed)
+    if allowed is None and paths is None:
+        return set()
+    raise QueryFailure(
+        "CONTRACT_UNAVAILABLE",
+        "指标维度能力合同无效。",
+        stage="contract_load",
+    )
+
+
+def _validate_detail_request_capabilities(
+    request: Mapping[str, Any], metric: Mapping[str, Any]
+) -> None:
+    """Fail before entity or business-data access when detail cannot authorize a request."""
+
+    requested_dimensions = request.get("dimensions") or []
+    requested_filters = request.get("metric_filters") or {}
+    if not isinstance(requested_dimensions, list) or any(
+        not isinstance(code, str) for code in requested_dimensions
+    ):
+        raise QueryFailure("INVALID_PLAN", "维度列表无效。")
+    if len(requested_dimensions) != len(set(requested_dimensions)):
+        raise QueryFailure("INVALID_PLAN", "维度列表无效。")
+    if len(requested_dimensions) > _max_group_dimensions(metric):
+        raise QueryFailure("INVALID_PLAN", "请求的分组维度数量超过该指标发布的上限。")
+    if not isinstance(requested_filters, Mapping):
+        raise QueryFailure("INVALID_PLAN", "过滤条件格式无效。")
+    allowed_dimensions = _metric_allowed_dimensions(request, metric)
+    if not {*requested_dimensions, *requested_filters}.issubset(allowed_dimensions):
+        raise QueryFailure(
+            "UNSUPPORTED_DIMENSION",
+            "该指标详情不支持请求中的某个维度或过滤条件。",
+            stage="input_validation",
+        )
+
+    decomposition = request.get("complete_change_decomposition")
+    if isinstance(decomposition, Mapping):
+        capability = metric.get("change_decomposition")
+        capability_dimensions = (
+            capability.get("dimensions")
+            if isinstance(capability, Mapping)
+            and capability.get("mode") == "additive_partition"
+            else None
+        )
+        if (
+            not isinstance(capability_dimensions, list)
+            or decomposition.get("dimension") not in capability_dimensions
+        ):
+            raise QueryFailure(
+                "UNSUPPORTED_CHANGE_DECOMPOSITION",
+                "该指标详情不支持请求中的完整变化分解。",
+                stage="input_validation",
+            )
+
+    try:
+        _validate_governed_request_time_range(request)
+    except QueryFailure as failure:
+        if failure.stage is None:
+            failure.stage = "input_validation"
+        raise
+
+
+def _current_metric_detail_receipt(domain: str, metric_code: str) -> str:
+    """Recompute the public metric-detail seal from current versioned contracts."""
+
+    payload = json.loads(
+        contracts.datasage_catalog(
+            {"requests": [{"domain": domain, "metric": metric_code}]}
+        )
+    )
+    receipt = payload.get("content_hash") if payload.get("status") == "success" else None
+    results = payload.get("results")
+    selected = results[0] if isinstance(results, list) and len(results) == 1 else None
+    selected_metric = selected.get("metric") if isinstance(selected, Mapping) else None
+    if (
+        not isinstance(receipt, str)
+        or _DETAIL_RECEIPT.fullmatch(receipt) is None
+        or not isinstance(selected, Mapping)
+        or selected.get("domain") != domain
+        or not isinstance(selected_metric, Mapping)
+        or selected_metric.get("code") != metric_code
+    ):
+        raise QueryFailure(
+            "CONTRACT_UNAVAILABLE",
+            "当前指标详情收据无法生成。",
+            stage="contract_load",
+        )
+    return receipt
+
+
+def _validate_metric_detail_gate(
+    request: Mapping[str, Any], semantics: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Enforce a current metric-detail receipt before any database preflight."""
+
+    metrics = semantics.get("metrics")
+    metric_code = request.get("metric")
+    metric = metrics.get(metric_code) if isinstance(metrics, Mapping) else None
+    if not isinstance(metric_code, str) or not isinstance(metric, Mapping):
+        raise QueryFailure("UNSUPPORTED_METRIC", "该指标尚未进入受控指标定义。")
+    _ensure_metric_available(metric)
+
+    supplied = request.get("detail_receipt")
+    exact_default = (
+        metric.get("exact_default_lookup_supported") is True
+        and not _has_explicit_detail_qualifier(request)
+    )
+    if supplied is None:
+        if not exact_default:
+            raise QueryFailure(
+                "METRIC_DETAIL_REQUIRED",
+                "该查询必须先加载当前指标详情并携带其 detail_receipt。",
+                stage="input_validation",
+            )
+    else:
+        if not isinstance(supplied, str) or _DETAIL_RECEIPT.fullmatch(supplied) is None:
+            raise QueryFailure(
+                "METRIC_DETAIL_RECEIPT_INVALID",
+                "detail_receipt 无效、已过期或与当前查询不匹配。",
+                stage="input_validation",
+            )
+        expected = _current_metric_detail_receipt(str(request.get("domain")), metric_code)
+        if not hmac.compare_digest(supplied, expected):
+            raise QueryFailure(
+                "METRIC_DETAIL_RECEIPT_INVALID",
+                "detail_receipt 无效、已过期或与当前查询不匹配。",
+                stage="input_validation",
+            )
+    _validate_detail_request_capabilities(request, metric)
+    normalized = dict(request)
+    normalized.pop("detail_receipt", None)
+    return normalized
 
 
 def _profile_root() -> Path:
@@ -6394,6 +6571,10 @@ def _prepare_one(
         datasets, semantics = _contracts(request["domain"])
     except QueryFailure as exc:
         raise _at_stage(exc, "contract_load")
+    try:
+        request = _validate_metric_detail_gate(request, semantics)
+    except QueryFailure as exc:
+        raise _at_stage(exc, "input_validation")
     resolved_entities: list[dict[str, Any]] = []
     if request["mode"] == "metric":
         def exact_lookup(sql: str, params: Sequence[Any], limit: int):
@@ -7359,9 +7540,11 @@ def runtime_guarded_datasage_query(
             [str(request_id) for request_id in request_ids],
         )
         for request in requests:
-            _validate_inventory_metric_scope(
+            normalized_request = _validate_inventory_metric_scope(
                 _validate_delivery_metric_scope(_validate_request(request))
             )
+            _, semantics = _contracts(str(normalized_request["domain"]))
+            _validate_metric_detail_gate(normalized_request, semantics)
         guarded_requests, guarded_operations = (
             _expand_complete_change_decompositions(requests)
         )
