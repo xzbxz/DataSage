@@ -49,9 +49,6 @@ distribution_owned:
 - plugins/datasage-query/e2e/canary_transcript_adapter.py
 - plugins/datasage-query/e2e/golden_expert_cases.json
 - plugins/datasage-query/e2e/golden_expert_scorer.py
-- plugins/datasage-query/e2e/hermes_replay_driver.py
-- plugins/datasage-query/e2e/live_fixture_materializer.py
-- plugins/datasage-query/e2e/trusted_replay_runner.py
 - plugins/datasage-query/entities.py
 - plugins/datasage-query/entitlements.py
 - plugins/datasage-query/evidence.py

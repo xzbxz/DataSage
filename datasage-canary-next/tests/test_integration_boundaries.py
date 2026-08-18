@@ -579,6 +579,30 @@ class ProductionSafetyTests(unittest.TestCase):
 
 
 class DistributionBoundaryTests(unittest.TestCase):
+    def test_distribution_excludes_private_replay_topology(self):
+        distribution = yaml.safe_load(
+            (PROFILE_ROOT / "distribution.yaml").read_text(encoding="utf-8")
+        )
+        owned = set(distribution["distribution_owned"])
+        retained_evaluation_assets = {
+            "plugins/datasage-query/e2e/canary_transcript_adapter.py",
+            "plugins/datasage-query/e2e/golden_expert_cases.json",
+            "plugins/datasage-query/e2e/golden_expert_scorer.py",
+        }
+        private_replay_assets = {
+            "plugins/datasage-query/e2e/hermes_replay_driver.py",
+            "plugins/datasage-query/e2e/live_fixture_materializer.py",
+            "plugins/datasage-query/e2e/trusted_replay_runner.py",
+        }
+
+        self.assertLessEqual(retained_evaluation_assets, owned)
+        self.assertTrue(private_replay_assets.isdisjoint(owned))
+        for relative in private_replay_assets:
+            self.assertFalse((PROFILE_ROOT / relative).exists(), relative)
+        for relative in owned:
+            path_parts = set(relative.split("/"))
+            self.assertTrue({"dsrt", ".release"}.isdisjoint(path_parts), relative)
+
     def test_current_distribution_restores_hermes_bundled_skill_seeding(self):
         distribution = (PROFILE_ROOT / "distribution.yaml").read_text(
             encoding="utf-8"
