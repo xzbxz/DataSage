@@ -26,6 +26,7 @@ contracts = importlib.import_module(f"{TEST_PACKAGE}.contracts")
 schemas = importlib.import_module(f"{TEST_PACKAGE}.schemas")
 skill_prompt = importlib.import_module(f"{TEST_PACKAGE}.skill_prompt")
 tools = importlib.import_module(f"{TEST_PACKAGE}.tools")
+runtime_health = importlib.import_module(f"{TEST_PACKAGE}.runtime_health")
 
 
 class BusinessContractTests(unittest.TestCase):
@@ -179,6 +180,54 @@ class BusinessContractTests(unittest.TestCase):
             results,
             operation_partitions,
         )
+        for result in results:
+            disclosure = {
+                "disclosure_id": "synthetic.scope",
+                "contract_version": "metric-disclosure/v1",
+                "request_id": result["request_id"],
+                "metric_ref": result["business_metric_ref"],
+                "scope_fingerprint": result["scope_fingerprint"],
+                "projection_fingerprint": result["projection_fingerprint"],
+                "mode": "required_always",
+                "order": 0,
+                "text": "synthetic governed scope",
+                "applies": True,
+            }
+            item_canonical = json.dumps(
+                disclosure,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+            disclosure["disclosure_seal"] = (
+                "sha256_" + hashlib.sha256(item_canonical).hexdigest()
+            )
+            result["disclosure_contract_version"] = (
+                "metric-disclosure-ledger/v1"
+            )
+            result["disclosure_ledger"] = [disclosure]
+            ledger_canonical = json.dumps(
+                {
+                    "contract_version": result[
+                        "disclosure_contract_version"
+                    ],
+                    "request_id": result["request_id"],
+                    "metric_ref": result["business_metric_ref"],
+                    "scope_fingerprint": result["scope_fingerprint"],
+                    "projection_fingerprint": result[
+                        "projection_fingerprint"
+                    ],
+                    "ledger": result["disclosure_ledger"],
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+            result["disclosure_ledger_seal"] = (
+                "sha256_" + hashlib.sha256(ledger_canonical).hexdigest()
+            )
         model_wire = [tools._model_wire_result(result) for result in results]
         return results, model_wire
 
@@ -1081,6 +1130,18 @@ class BusinessContractTests(unittest.TestCase):
         query_description = schemas.DATASAGE_QUERY["description"]
         self.assertIn("content_hash", query_description)
         self.assertIn("before any database access", query_description)
+        for skill_path in (
+            PROFILE_ROOT / "skills" / "datasage" / "SKILL.md",
+            PROFILE_ROOT
+            / "skills"
+            / "datasage"
+            / "datasage-query-patterns"
+            / "SKILL.md",
+        ):
+            skill_content = skill_path.read_text(encoding="utf-8")
+            self.assertIn("`content_hash`", skill_content)
+            self.assertIn("`detail_receipt`", skill_content)
+            self.assertIn("unchanged", skill_content)
 
         with mock.patch.object(
             tools,
@@ -1093,6 +1154,356 @@ class BusinessContractTests(unittest.TestCase):
         self.assertEqual("failed", runtime_failure["status"])
         self.assertEqual(
             "METRIC_DETAIL_REQUIRED", runtime_failure["error"]["code"]
+        )
+
+    def test_public_runtime_receipt_gate_covers_plan_batch_decomposition_and_wire(
+        self,
+    ) -> None:
+        receipt = self._metric_detail_receipt("receipt", "net_receipt_amount")
+        late_plan = {
+            "request_id": "late_plan",
+            "domain": "receipt",
+            "mode": "metric",
+            "purpose": "public pre-entity capability test",
+            "metric": "net_receipt_amount",
+            "detail_receipt": receipt,
+            "dimensions": [],
+            "metric_filters": {"customer": "X"},
+            "order_by": {"field": "metric_value", "direction": "desc"},
+        }
+        with (
+            mock.patch.object(
+                tools,
+                "_execute_with_source",
+                side_effect=AssertionError("entity/database access must not occur"),
+            ) as execute,
+            mock.patch.object(
+                runtime_health,
+                "query_readiness_status",
+                return_value={"ready": True},
+            ),
+        ):
+            late_failure = json.loads(
+                tools.runtime_guarded_datasage_query(
+                    {"requests": [late_plan]}
+                )
+            )
+        self.assertEqual("failed", late_failure["status"])
+        self.assertEqual("INVALID_PLAN", late_failure["error"]["code"])
+        execute.assert_not_called()
+
+        exact_default = {
+            "request_id": "batch_exact_default",
+            "domain": "delivery",
+            "mode": "metric",
+            "purpose": "public batch receipt test",
+            "metric": "delivery_amount",
+            "dimensions": [],
+        }
+        missing_receipt = {
+            "request_id": "batch_missing_receipt",
+            "domain": "receipt",
+            "mode": "metric",
+            "purpose": "public batch receipt test",
+            "metric": "net_receipt_amount",
+            "dimensions": [],
+        }
+        with mock.patch.object(
+            tools,
+            "_execute_with_source",
+            side_effect=AssertionError("batch validation must be DB-free"),
+        ) as execute:
+            batch_failure = json.loads(
+                tools.runtime_guarded_datasage_query(
+                    {"requests": [exact_default, missing_receipt]}
+                )
+            )
+        self.assertEqual("METRIC_DETAIL_REQUIRED", batch_failure["error"]["code"])
+        execute.assert_not_called()
+
+        decomposition = {
+            "request_id": "bad_decomposition_receipt",
+            "domain": "receipt",
+            "mode": "metric",
+            "purpose": "public decomposition receipt test",
+            "metric": "net_receipt_amount",
+            "detail_receipt": ("0" if receipt[0] != "0" else "1") + receipt[1:],
+            "time_range": {"start": "2026-01-01", "end": "2026-02-01"},
+            "complete_change_decomposition": {"dimension": "customer"},
+        }
+        with mock.patch.object(
+            tools,
+            "_execute_with_source",
+            side_effect=AssertionError("decomposition validation must be DB-free"),
+        ) as execute:
+            decomposition_failure = json.loads(
+                tools.runtime_guarded_datasage_query(
+                    {"requests": [decomposition]}
+                )
+            )
+        self.assertEqual(
+            "METRIC_DETAIL_RECEIPT_INVALID",
+            decomposition_failure["error"]["code"],
+        )
+        execute.assert_not_called()
+
+        wire_request = {
+            **exact_default,
+            "request_id": "receipt_non_leak",
+            "purpose": "public receipt non-leak test",
+        }
+        with (
+            mock.patch.object(
+                runtime_health,
+                "query_readiness_status",
+                return_value={"ready": True},
+            ),
+            mock.patch.object(
+                tools,
+                "_execute_with_source",
+                return_value=(
+                    [{"metric_value": "42.00"}],
+                    False,
+                    self._read_only_source_evidence(),
+                ),
+            ),
+        ):
+            without_receipt = json.loads(
+                tools.runtime_guarded_datasage_query(
+                    {"requests": [wire_request]}
+                )
+            )
+            delivery_receipt = self._metric_detail_receipt(
+                "delivery",
+                "delivery_amount",
+            )
+            with_receipt = json.loads(
+                tools.runtime_guarded_datasage_query(
+                    {
+                        "requests": [
+                            {**wire_request, "detail_receipt": delivery_receipt}
+                        ]
+                    }
+                )
+            )
+        self.assertEqual("success", without_receipt["status"])
+        self.assertEqual("success", with_receipt["status"])
+        self.assertEqual(
+            without_receipt["results"],
+            with_receipt["results"],
+        )
+        self.assertEqual(
+            without_receipt["evidence_bundle"],
+            with_receipt["evidence_bundle"],
+        )
+        self.assertNotIn(
+            delivery_receipt,
+            json.dumps(with_receipt, ensure_ascii=False),
+        )
+
+    def test_public_model_wire_and_bundle_fail_closed_together(self) -> None:
+        request = {
+            "request_id": "public_wire",
+            "domain": "delivery",
+            "mode": "metric",
+            "purpose": "public model wire integrity test",
+            "metric": "delivery_amount",
+            "dimensions": [],
+        }
+        source_evidence = self._read_only_source_evidence()
+
+        def run_public(
+            rows: list[dict[str, object]],
+        ) -> dict[str, object]:
+            with (
+                mock.patch.object(
+                    runtime_health,
+                    "query_readiness_status",
+                    return_value={"ready": True},
+                ),
+                mock.patch.object(
+                    tools,
+                    "_execute_with_source",
+                    return_value=(rows, False, source_evidence),
+                ),
+            ):
+                return json.loads(
+                    tools.runtime_guarded_datasage_query(
+                        {"requests": [request]}
+                    )
+                )
+
+        for label, rows, expected_state in (
+            ("zero", [{"metric_value": 0}], "zero"),
+            ("empty", [], "empty"),
+            ("undefined", [{"metric_value": None}], "undefined"),
+        ):
+            payload = run_public(rows)
+            result = payload["results"][0]
+            self.assertEqual("success", payload["status"], label)
+            self.assertEqual(expected_state, result["data_state"], label)
+            self.assertIsNone(result.get("error"), label)
+            self.assertTrue(
+                all(
+                    disclosure["applies"] is True
+                    for disclosure in result["disclosure_ledger"]
+                ),
+                label,
+            )
+
+        original_disclosure_ledger = tools._disclosure_ledger
+
+        def reseal_ledger(
+            ledger: list[dict[str, object]],
+            *,
+            request_id: str,
+            metric_ref: object,
+            scope_fingerprint: str,
+            projection_fingerprint: str,
+        ) -> str:
+            canonical = json.dumps(
+                {
+                    "contract_version": "metric-disclosure-ledger/v1",
+                    "request_id": request_id,
+                    "metric_ref": metric_ref,
+                    "scope_fingerprint": scope_fingerprint,
+                    "projection_fingerprint": projection_fingerprint,
+                    "ledger": ledger,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+            return "sha256_" + hashlib.sha256(canonical).hexdigest()
+
+        def ledger_with_valid_false(**kwargs: object):
+            ledger, _ = original_disclosure_ledger(**kwargs)
+            request_arg = kwargs["request"]
+            assert isinstance(request_arg, dict)
+            false_item: dict[str, object] = {
+                "disclosure_id": "synthetic.conditional-scope",
+                "contract_version": "metric-disclosure/v1",
+                "request_id": request_arg["request_id"],
+                "metric_ref": kwargs["metric_ref"],
+                "scope_fingerprint": kwargs["scope_fingerprint"],
+                "projection_fingerprint": kwargs["projection_fingerprint"],
+                "mode": "required_when",
+                "order": len(ledger),
+                "text": "synthetic non-applicable disclosure",
+                "applies": False,
+            }
+            canonical = json.dumps(
+                false_item,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+            false_item["disclosure_seal"] = (
+                "sha256_" + hashlib.sha256(canonical).hexdigest()
+            )
+            ledger.append(false_item)
+            return ledger, reseal_ledger(
+                ledger,
+                request_id=str(request_arg["request_id"]),
+                metric_ref=kwargs["metric_ref"],
+                scope_fingerprint=str(kwargs["scope_fingerprint"]),
+                projection_fingerprint=str(kwargs["projection_fingerprint"]),
+            )
+
+        with mock.patch.object(
+            tools,
+            "_disclosure_ledger",
+            side_effect=ledger_with_valid_false,
+        ):
+            valid_false = run_public([{"metric_value": "10.00"}])
+        valid_false_result = valid_false["results"][0]
+        self.assertIsNone(valid_false_result.get("error"))
+        self.assertNotIn(
+            "synthetic.conditional-scope",
+            {
+                item["disclosure_id"]
+                for item in valid_false_result["disclosure_ledger"]
+            },
+        )
+
+        def flipped_applicability(**kwargs: object):
+            ledger, _ = original_disclosure_ledger(**kwargs)
+            target = next(item for item in ledger if item["applies"] is True)
+            target["applies"] = False
+            request_arg = kwargs["request"]
+            assert isinstance(request_arg, dict)
+            return ledger, reseal_ledger(
+                ledger,
+                request_id=str(request_arg["request_id"]),
+                metric_ref=kwargs["metric_ref"],
+                scope_fingerprint=str(kwargs["scope_fingerprint"]),
+                projection_fingerprint=str(kwargs["projection_fingerprint"]),
+            )
+
+        with mock.patch.object(
+            tools,
+            "_disclosure_ledger",
+            side_effect=flipped_applicability,
+        ):
+            flipped = run_public([{"metric_value": "10.00"}])
+        flipped_result = flipped["results"][0]
+        self.assertEqual([], flipped_result["claim_ledger"])
+        self.assertEqual("undefined", flipped_result["data_state"])
+        self.assertEqual(
+            "EVIDENCE_INTEGRITY_INVALID",
+            flipped_result["error"]["code"],
+        )
+        flipped_item = flipped["evidence_bundle"]["items"][0]
+        self.assertEqual([], flipped_item["supports"])
+        self.assertNotEqual("complete", flipped_item["completeness"])
+
+        original_claim_ledger = tools._claim_ledger
+
+        def scope_mismatched_claim(*args: object, **kwargs: object):
+            claims = original_claim_ledger(*args, **kwargs)
+            claims[0]["scope_fingerprint"] = "scope_tampered"
+            tools.evidence.seal_claim(claims[0])
+            return claims
+
+        with mock.patch.object(
+            tools,
+            "_claim_ledger",
+            side_effect=scope_mismatched_claim,
+        ):
+            mismatched = run_public([{"metric_value": "10.00"}])
+        mismatched_result = mismatched["results"][0]
+        self.assertEqual([], mismatched_result["claim_ledger"])
+        self.assertEqual(
+            "EVIDENCE_INTEGRITY_INVALID",
+            mismatched_result["error"]["code"],
+        )
+        self.assertEqual(
+            [],
+            mismatched["evidence_bundle"]["items"][0]["supports"],
+        )
+        self.assertEqual(
+            [],
+            mismatched["evidence_bundle"]["coverage_receipts"]["items"],
+        )
+
+        with mock.patch.object(
+            tools,
+            "_evidence_rows_and_state",
+            return_value=([], "rows"),
+        ):
+            all_claims_lost = run_public([{"metric_value": "10.00"}])
+        lost_result = all_claims_lost["results"][0]
+        self.assertEqual([], lost_result["claim_ledger"])
+        self.assertEqual("undefined", lost_result["data_state"])
+        self.assertEqual(
+            "EVIDENCE_INTEGRITY_INVALID",
+            lost_result["error"]["code"],
+        )
+        self.assertEqual(
+            [],
+            all_claims_lost["evidence_bundle"]["items"][0]["supports"],
         )
 
     def test_snapshot_population_resolver_and_formal_dso_scope_disclosure(

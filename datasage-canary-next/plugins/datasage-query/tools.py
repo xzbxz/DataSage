@@ -2416,6 +2416,32 @@ def _metric_order_clause(request: Mapping[str, Any], dimension_outputs: Sequence
     return f" ORDER BY {_quote_identifier(str(field))} {direction.upper()}"
 
 
+def _metric_query_limit(request: Mapping[str, Any]) -> int:
+    """Validate and cap the public row limit without touching a data source."""
+
+    environment_cap = _bounded_int("max_rows", 100, 1, 100)
+    requested_limit = request.get("limit", environment_cap)
+    if not isinstance(requested_limit, int) or isinstance(requested_limit, bool):
+        raise QueryFailure("INVALID_INPUT", "limit 必须是整数。")
+    ranking_cap = 10 if request.get("order_by") is not None else environment_cap
+    return max(1, min(ranking_cap, environment_cap, requested_limit))
+
+
+def _validate_pre_entity_metric_plan(
+    request: Mapping[str, Any],
+    datasets_contract: Mapping[str, Any],
+    semantics: Mapping[str, Any],
+) -> None:
+    """Compile the governed plan before entity lookup so pure failures are DB-free."""
+
+    _build_metric_query(
+        request,
+        datasets_contract,
+        semantics,
+        _metric_query_limit(request),
+    )
+
+
 def _build_metric_query(
     request: Mapping[str, Any], datasets_contract: Mapping[str, Any], semantics: Mapping[str, Any], limit: int
 ) -> tuple[str, list[Any], dict[str, Any]]:
@@ -4459,7 +4485,7 @@ def _disclosure_ledger_has_valid_seal(
     return ledger_seal == expected_ledger_seal
 
 
-def _disclosure_is_valid_for_result(
+def _disclosure_item_is_valid_for_result(
     disclosure: Any,
     *,
     request_id: str,
@@ -4484,7 +4510,7 @@ def _disclosure_is_valid_for_result(
     ).hexdigest()
     return (
         disclosure.get("disclosure_seal") == expected_item_seal
-        and disclosure.get("applies") is True
+        and isinstance(disclosure.get("applies"), bool)
         and isinstance(disclosure.get("disclosure_id"), str)
         and bool(disclosure.get("disclosure_id"))
         and disclosure.get("contract_version") == "metric-disclosure/v1"
@@ -4492,6 +4518,28 @@ def _disclosure_is_valid_for_result(
         and disclosure.get("metric_ref") == metric_ref
         and disclosure.get("scope_fingerprint") == scope_fingerprint
         and disclosure.get("projection_fingerprint") == projection_fingerprint
+    )
+
+
+def _disclosure_is_valid_for_result(
+    disclosure: Any,
+    *,
+    request_id: str,
+    metric_ref: str | None,
+    scope_fingerprint: str,
+    projection_fingerprint: str,
+) -> bool:
+    """Accept only applicable items after the complete item has been verified."""
+
+    return (
+        _disclosure_item_is_valid_for_result(
+            disclosure,
+            request_id=request_id,
+            metric_ref=metric_ref,
+            scope_fingerprint=scope_fingerprint,
+            projection_fingerprint=projection_fingerprint,
+        )
+        and disclosure.get("applies") is True
     )
 
 
@@ -6091,22 +6139,43 @@ def _filter_model_wire_evidence(projected: dict[str, Any]) -> None:
             else []
         )
         row_count = projected.get("row_count")
+        data_state = projected.get("data_state")
+        truncated = projected.get("truncated")
+        success_shape_valid = True
+        if projected.get("status") == "success":
+            if data_state == "empty":
+                success_shape_valid = (
+                    original_count == 0
+                    and row_count == 0
+                    and truncated is False
+                )
+            else:
+                success_shape_valid = (
+                    data_state
+                    in {
+                        "complete",
+                        "rows",
+                        "zero",
+                        "undefined",
+                        "truncated",
+                        "incomplete",
+                    }
+                    and original_count > 0
+                    and isinstance(truncated, bool)
+                    and ((data_state == "truncated") is truncated)
+                )
         claim_integrity_failed = (
             not isinstance(claims, list)
             or len(valid_claims) != original_count
             or not isinstance(row_count, int)
             or isinstance(row_count, bool)
             or row_count != original_count
+            or not success_shape_valid
         )
         projected["claim_ledger"] = valid_claims
         if claim_integrity_failed:
             _mark_model_wire_evidence_integrity_failure(projected)
-    elif (
-        projected.get("status") == "success"
-        and isinstance(projected.get("row_count"), int)
-        and not isinstance(projected.get("row_count"), bool)
-        and projected["row_count"] > 0
-    ):
+    elif projected.get("status") == "success":
         projected["claim_ledger"] = []
         _mark_model_wire_evidence_integrity_failure(projected)
 
@@ -6117,6 +6186,11 @@ def _filter_model_wire_evidence(projected: dict[str, Any]) -> None:
     }
     present_disclosure_fields = disclosure_fields.intersection(projected)
     if not present_disclosure_fields:
+        if projected.get("status") == "success":
+            projected["disclosure_ledger"] = []
+            projected["claim_ledger"] = []
+            _mark_model_wire_evidence_integrity_failure(projected)
+            _reseal_model_disclosure_ledger(projected)
         return
 
     ledger = projected.get("disclosure_ledger")
@@ -6150,25 +6224,35 @@ def _filter_model_wire_evidence(projected: dict[str, Any]) -> None:
         )
     )
     valid_disclosures: list[Mapping[str, Any]] = []
-    applicable_count = 0
+    all_items_valid = False
+    all_disclosure_ids: list[str] = []
     if ledger_sealed and isinstance(ledger, list):
-        for item in ledger:
-            if not isinstance(item, Mapping) or item.get("applies") is not True:
-                continue
-            applicable_count += 1
-            if _disclosure_is_valid_for_result(
+        all_items_valid = all(
+            _disclosure_item_is_valid_for_result(
                 item,
                 request_id=projected["request_id"],
                 metric_ref=projected["business_metric_ref"],
                 scope_fingerprint=projected["scope_fingerprint"],
                 projection_fingerprint=projected["projection_fingerprint"],
+            )
+            for item in ledger
+        )
+        for item in ledger:
+            if isinstance(item, Mapping) and isinstance(
+                item.get("disclosure_id"),
+                str,
+            ):
+                all_disclosure_ids.append(item["disclosure_id"])
+            if (
+                all_items_valid
+                and isinstance(item, Mapping)
+                and item.get("applies") is True
             ):
                 valid_disclosures.append(item)
-    disclosure_ids = [item["disclosure_id"] for item in valid_disclosures]
     disclosure_integrity_failed = (
         not ledger_sealed
-        or len(valid_disclosures) != applicable_count
-        or len(set(disclosure_ids)) != len(disclosure_ids)
+        or not all_items_valid
+        or len(set(all_disclosure_ids)) != len(all_disclosure_ids)
     )
     projected["disclosure_ledger"] = valid_disclosures
     if disclosure_integrity_failed:
@@ -6285,6 +6369,49 @@ def _model_wire_result(result: Mapping[str, Any]) -> dict[str, Any]:
             projected["change_reconciliation"]
         )
     return projected
+
+
+def _model_wire_evidence_bundle_results(
+    raw_results: Sequence[Mapping[str, Any]],
+    public_results: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Bind bundle capability summaries to the evidence surviving projection."""
+
+    if len(raw_results) != len(public_results):
+        raise QueryFailure(
+            "INTERNAL_ERROR",
+            "模型证据投影数量不一致。",
+            stage="result_validation",
+        )
+    evidence_results: list[dict[str, Any]] = []
+    projected_state_fields = {
+        "request_id",
+        "status",
+        "data_state",
+        "business_metric_ref",
+        "scope_fingerprint",
+        "projection_fingerprint",
+        "claim_ledger",
+        "allowed_reasoning_topics",
+        "row_count",
+        "truncated",
+        "error",
+    }
+    for raw, public in zip(raw_results, public_results):
+        result = copy.deepcopy(dict(raw))
+        for field in projected_state_fields:
+            if field in public:
+                result[field] = copy.deepcopy(public[field])
+            else:
+                result.pop(field, None)
+        # Keep the private reconciliation representation only when the public
+        # projection retained the corresponding proof. Its canonical seal uses
+        # legacy internal field names that are renamed only for model display.
+        for proof_field in ("change_reconciliation", "target_gap_reconciliation"):
+            if proof_field not in public:
+                result.pop(proof_field, None)
+        evidence_results.append(result)
+    return evidence_results
 
 
 _MODEL_WIRE_OPTIONAL_METRIC_CONTEXT_FIELDS = {
@@ -6832,6 +6959,7 @@ def _prepare_one(
         raise _at_stage(exc, "contract_load")
     try:
         request = _validate_metric_detail_gate(request, semantics)
+        _validate_pre_entity_metric_plan(request, datasets, semantics)
     except QueryFailure as exc:
         raise _at_stage(exc, "input_validation")
     resolved_entities: list[dict[str, Any]] = []
@@ -6955,12 +7083,7 @@ def _run_one(
         semantics = prepared["semantics"]
         resolved_entities = list(prepared.get("resolved_entities") or [])
         current_stage = "query_planning"
-        environment_cap = _bounded_int("max_rows", 100, 1, 100)
-        requested_limit = request.get("limit", environment_cap)
-        if not isinstance(requested_limit, int):
-            raise QueryFailure("INVALID_INPUT", "limit 必须是整数。")
-        ranking_cap = 10 if request.get("order_by") is not None else environment_cap
-        limit = max(1, min(ranking_cap, environment_cap, requested_limit))
+        limit = _metric_query_limit(request)
         sql, params, scope = _build_metric_query(
             request, datasets, semantics, limit
         )
@@ -7670,12 +7793,19 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
             else "failed"
         )
         public_results = [_model_wire_result(result) for result in results]
+        evidence_results = _model_wire_evidence_bundle_results(
+            results,
+            public_results,
+        )
         payload = {
             "status": overall,
             "request_count": len(results),
             "answer_scope_line": _answer_scope_line(results),
             "metric_contexts": _model_wire_metric_contexts(results),
-            "evidence_bundle": evidence.build_evidence_bundle(requests, results),
+            "evidence_bundle": evidence.build_evidence_bundle(
+                requests,
+                evidence_results,
+            ),
             "results": public_results,
         }
         _attach_batch_source_evidence(payload, results)
@@ -7807,8 +7937,16 @@ def runtime_guarded_datasage_query(
             normalized_request = _validate_inventory_metric_scope(
                 _validate_delivery_metric_scope(_validate_request(request))
             )
-            _, semantics = _contracts(str(normalized_request["domain"]))
-            _validate_metric_detail_gate(normalized_request, semantics)
+            datasets, semantics = _contracts(str(normalized_request["domain"]))
+            normalized_request = _validate_metric_detail_gate(
+                normalized_request,
+                semantics,
+            )
+            _validate_pre_entity_metric_plan(
+                normalized_request,
+                datasets,
+                semantics,
+            )
         guarded_requests, guarded_operations = (
             _expand_complete_change_decompositions(requests)
         )
@@ -7893,13 +8031,18 @@ def runtime_guarded_datasage_query(
             len(results),
         )
         public_results = [_model_wire_result(result) for result in results]
+        evidence_results = _model_wire_evidence_bundle_results(
+            results,
+            public_results,
+        )
         payload = {
             "status": "failed",
             "request_count": len(results),
             "answer_scope_line": None,
             "metric_contexts": [],
             "evidence_bundle": evidence.build_evidence_bundle(
-                guarded_requests, results
+                guarded_requests,
+                evidence_results,
             ),
             "results": public_results,
         }

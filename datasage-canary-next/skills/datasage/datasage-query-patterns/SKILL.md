@@ -39,7 +39,11 @@ When DataSage schemas are deferred, use the main Skill's `tool_search` ->
    `time_range` are explicit, non-default qualifiers, just like dimensions,
    filters, entities, comparisons, decompositions, and rankings; any one of
    them requires selected metric detail first even when the exact-default flag
-   is true. An empty `dimensions: []` value is not a business qualifier.
+   is true. An empty `dimensions: []` value is not a business qualifier. After
+   a successful single-metric detail response, copy its `content_hash`
+   unchanged into the selected query's `detail_receipt`; preserve it only for
+   same-metric retries and follow-ups, and never reuse it across metric or
+   domain boundaries.
 3. Put an explicitly labeled entity token directly into `metric_filters`
    when the selected metric exposes that filter. Registered aliases resolve
    deterministically inside query preflight; do not pre-call
@@ -80,7 +84,7 @@ When DataSage schemas are deferred, use the main Skill's `tool_search` ->
 - The net delivery metric (`delivery_amount`) = 毛出库 − 同期退货; results
   may be negative. State this口径 when the user only said "出库金额".
 - Keep scope consistent across follow-ups: preserve metric, period, filters,
-  and dimensions in every re-query.
+  dimensions, and the matching `detail_receipt` in every re-query.
 - 毛出库 metrics (gross_delivery_amount, *_original) are fail-closed:
   `GROSS_SCOPE_REQUIRES_EXPLICIT_REQUEST` unless the request carries
   `delivery_scope: "explicit_gross"`; 净出库/退货 use `"default_net"` or omit.

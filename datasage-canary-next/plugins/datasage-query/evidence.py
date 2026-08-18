@@ -170,7 +170,7 @@ def _claim_relations(result: Mapping[str, Any]) -> set[str]:
     return {
         relation
         for claim in claims
-        if isinstance(claim, Mapping) and _claim_is_validly_sealed(claim)
+        if isinstance(claim, Mapping) and claim_is_valid_for_result(claim, result)
         for relation in _string_set(claim.get("allowed_relations"))
     }
 
@@ -235,6 +235,12 @@ def _completeness(result: Mapping[str, Any]) -> str:
 
 def _supports(result: Mapping[str, Any]) -> list[str]:
     if result.get("status") != "success":
+        return []
+    error = result.get("error")
+    if (
+        isinstance(error, Mapping)
+        and error.get("code") == "EVIDENCE_INTEGRITY_INVALID"
+    ):
         return []
     supported = _claim_relations(result)
     # Reconciliation, not a claim-supplied relation string, is the authority

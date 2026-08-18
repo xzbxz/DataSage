@@ -363,6 +363,7 @@ class GitGovernedSkillTests(unittest.TestCase):
                 is_first_turn=True,
             )[0]["context"]
             self.assertLess(len(expected), max_chars)
+            self.assertLess(len(expected), 16000)
 
             agent = _WeComTurnAgent()
             with (
@@ -406,6 +407,8 @@ class GitGovernedSkillTests(unittest.TestCase):
             normalized = " ".join(turn.plugin_user_context.split())
             for required in (
                 "`expert_index -> metric_detail -> query`",
+                "`content_hash`",
+                "`detail_receipt`",
                 "official Hermes `clarify`",
                 "typed `undefined`",
                 "ranked or Top-N result",

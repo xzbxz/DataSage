@@ -64,6 +64,10 @@ is false or missing, or if any qualifier exists. `calendar_month` and
 `time_range` are explicit qualifiers, as are dimensions, filters, entities,
 comparisons, decompositions, and rankings; empty `dimensions: []` is not. If a
 full catalog summary has zero or multiple matching defaults, clarify first.
+After a successful single-metric `metric_detail`, copy its `content_hash`
+unchanged into that query's `detail_receipt`. Preserve the same receipt on
+same-metric follow-ups and retries; load fresh detail instead of reusing it for
+another metric or domain.
 
 ### Plan and bind scope
 
@@ -98,8 +102,8 @@ label. A follow-up replacement changes only the binding named by the user.
 ### Query and investigate
 
 Send complete registered semantic requests. Every follow-up preserves metric,
-period, filters, dimensions, comparison, and entity scope. Purpose or desired
-scope is intent, not evidence.
+period, filters, dimensions, comparison, entity scope, and the matching
+`detail_receipt`. Purpose or desired scope is intent, not evidence.
 
 Interpret returned `evidence-bundle/v1` coverage, completeness, reconciliation,
 supported claim types, seals, limitations, and gaps. Do not reconstruct a
