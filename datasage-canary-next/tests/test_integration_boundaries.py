@@ -429,6 +429,21 @@ class GitGovernedSkillTests(unittest.TestCase):
             "never reuse it for another failure or ordinary conversation",
             normalized,
         )
+        for answer_hygiene_rule in (
+            "In a user-visible answer for a DataSage business branch",
+            "never name, cite, or reverse-announce",
+            "`detail_receipt`, `content_hash`",
+            "claim or disclosure seals",
+            "attestation schema IDs",
+            "model wire or payload, SQL, schemas, or physical fields",
+            "Keep required natural business disclosures, typed states, truncation, and reconciliation",
+            "A user-visible `metric_id` remains allowed for testing or clarification",
+            "Describe a successful `metric_detail` only as “所选指标详情已返回”",
+            "explicit completeness proof that is sealed and `applies: true`",
+            "do not affect independent ordinary chat",
+            "or the `DATA_ENTITLEMENT_DENIED` rule above",
+        ):
+            self.assertIn(answer_hygiene_rule, normalized)
         self.assertIn(
             "If `truncated: true` OR `data_state: truncated`",
             normalized,
@@ -584,6 +599,18 @@ class GitGovernedSkillTests(unittest.TestCase):
                 "complete each independent non-DataSage branch normally",
                 "applies only to that code",
                 "never reuse it for another failure or ordinary conversation",
+                "In a user-visible answer for a DataSage business branch",
+                "never name, cite, or reverse-announce",
+                "`detail_receipt`, `content_hash`",
+                "claim or disclosure seals",
+                "attestation schema IDs",
+                "model wire or payload, SQL, schemas, or physical fields",
+                "Keep required natural business disclosures, typed states, truncation, and reconciliation",
+                "A user-visible `metric_id` remains allowed for testing or clarification",
+                "Describe a successful `metric_detail` only as “所选指标详情已返回”",
+                "explicit completeness proof that is sealed and `applies: true`",
+                "do not affect independent ordinary chat",
+                "or the `DATA_ENTITLEMENT_DENIED` rule above",
             ):
                 self.assertIn(required, normalized)
 
