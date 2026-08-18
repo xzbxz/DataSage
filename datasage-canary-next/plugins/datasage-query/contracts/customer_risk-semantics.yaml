@@ -1,4 +1,4 @@
-version: datasage-mini-customer-risk-semantics/v6
+version: datasage-mini-customer-risk-semantics/v7
 domain: customer_risk
 contract_role: plugin_physical_execution
 model_planner_contract: references/planner-contract.yaml
@@ -164,11 +164,18 @@ metrics:
       - id: customer-risk.formal-receivable-turnover.external-customer.scope
         mode: required_always
         text: "正式应收周转天数的月末净欠款和毛出库分母均固定排除内部客户。"
+      - id: customer-risk.formal-receivable-turnover.formula
+        mode: required_always
+        text: "正式应收周转天数按平均月末净欠款除以同期毛出库金额，再乘期间自然日数计算。"
       - id: customer-risk.formal_receivable_turnover_days.legacy-note
         mode: contract_only
         text: "默认最近12个完整自然月并要求连续13个月末净欠款快照；没有公司目标天数，不得与30天或其他假设目标比较。"
     label: 正式应收周转天数
     business_definition: 在指定完整期间内，以平均净经营欠款与有效出库规模衡量的正式应收周转速度，结果按自然日表示。
+    answer_contract:
+      - "先呈现正式应收周转天数；若治理结果未定义，则忠实写为未定义而不是错误，不得自行补算。"
+      - "同时呈现已返回的平均净经营欠款、期间自然日数、月末欠款快照月数和有效出库月份数；只有公式披露与双侧客户范围披露均适用且密封有效时，才说明平均月末净欠款除以同期毛出库金额再乘期间自然日数的正式公式。"
+      - "月末净欠款与毛出库分母排除内部客户的双侧范围，只能按返回、适用且密封有效的披露说明。"
     unit: 自然日
     query_kind: formal_dso
     max_group_dimensions: 1

@@ -1124,6 +1124,24 @@ def _model_semantic_projection(
             ),
             "answer_note": answer_note,
         }
+        metric_answer_contract = definition.get("answer_contract")
+        if metric_answer_contract is not None:
+            if (
+                not isinstance(metric_answer_contract, list)
+                or not 1 <= len(metric_answer_contract) <= 12
+                or any(
+                    _safe_business_text(clause, physical_identifiers) is None
+                    for clause in metric_answer_contract
+                )
+                or len(set(metric_answer_contract)) != len(metric_answer_contract)
+            ):
+                raise ContractFailure(
+                    "CONTRACT_UNAVAILABLE",
+                    f"metric {code} has an invalid answer contract",
+                )
+            optional_metric_fields["answer_contract"] = [
+                str(clause).strip() for clause in metric_answer_contract
+            ]
         item.update(
             {
                 key: value

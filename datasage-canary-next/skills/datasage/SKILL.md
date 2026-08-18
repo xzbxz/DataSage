@@ -71,6 +71,11 @@ request a likely domain with `view: expert_index`; after selection, request
 only relevant detail. Do not probe every domain or default an unknown request
 to a convenient domain.
 
+Route an explicit request for formal receivable turnover days or formal DSO to
+the `customer_risk` expert index. A request for ordinary net debt, aging, or
+overdue receivables without that formal turnover meaning stays in the
+`receivable` domain; do not move it merely because both domains concern debt.
+
 Use a full catalog summary's unique exact governed default when it matches the
 user's wording and no explicit qualifier has higher priority; if zero or
 multiple governed defaults match, clarify before any `datasage_query`.
@@ -228,6 +233,25 @@ Finalization:
   only the returned ledger at finalization; never start another catalog, detail,
   or query call merely to restate a disclosure. Include unit and currency when
   returned and applicable. Raw JSON is not required.
+- For `formal_receivable_turnover_days`, follow the selected metric detail's
+  `answer_contract` only when the same returned claim contains a
+  `formal-receivable-turnover-calculation-attestation/v1` with `status:
+  verified`, a valid `attestation_seal`, and a valid enclosing `claim_seal`.
+  State the formal calculation formula only when that verified attestation
+  also confirms that both the formula disclosure and the two-sided
+  external-customer-scope disclosure are applicable and validly sealed.
+  Then present the returned formal turnover value, returned average net debt,
+  returned natural-day period, month-end snapshot count, and effective-month
+  count, and state the attested gross-delivery denominator meaning; preserve
+  the two-sided external-customer scope from every applicable sealed
+  disclosure. The attestation proves component participation and coverage, not
+  hidden values, so never invent a denominator amount. If the attestation is
+  missing, invalid, or `status: undefined`, preserve the exact returned typed
+  state and do not make a formal turnover numeric or component-formula
+  assertion. `undefined` or `partial` is a governed result state, not a tool
+  error: keep independently sealed non-formula facts and disclosures available
+  within their own bounds. Do not re-query merely to repair or restate this
+  finalization contract.
 - A new difference, ratio, share, or percentage requires a successful governed
   calculation with a `calculation_seal` bound to sealed operands; never derive
   one from visible values.

@@ -4141,6 +4141,244 @@ def _disclosure_ledger(
     return ledger, f"sha256_{ledger_seal}"
 
 
+_FORMAL_DSO_ATTESTATION_VERSION = (
+    "formal-receivable-turnover-calculation-attestation/v1"
+)
+_FORMAL_DSO_COVERAGE_DISCLOSURE = (
+    "customer-risk.formal-receivable-turnover.coverage"
+)
+_FORMAL_DSO_EXTERNAL_SCOPE_DISCLOSURE = (
+    "customer-risk.formal-receivable-turnover.external-customer.scope"
+)
+_FORMAL_DSO_FORMULA_DISCLOSURE = (
+    "customer-risk.formal-receivable-turnover.formula"
+)
+
+
+def _finite_decimal_present(value: Any) -> bool:
+    if value is None or isinstance(value, bool):
+        return False
+    try:
+        return Decimal(str(value)).is_finite()
+    except (InvalidOperation, TypeError, ValueError):
+        return False
+
+
+def _formal_dso_complete_window(value: Any) -> tuple[bool, int | None]:
+    if not isinstance(value, Mapping):
+        return False, None
+    try:
+        start = date.fromisoformat(str(value.get("start")))
+        end = date.fromisoformat(str(value.get("end")))
+    except (TypeError, ValueError):
+        return False, None
+    complete = (
+        start.day == 1
+        and end.day == 1
+        and (end.year - start.year) * 12 + end.month - start.month == 12
+    )
+    return complete, (end - start).days if complete else None
+
+
+def _sealed_disclosure_ids(
+    ledger: Any,
+    ledger_seal: Any,
+    *,
+    request_id: str,
+    metric_ref: str | None,
+    scope_fingerprint: str,
+    projection_fingerprint: str,
+) -> set[str]:
+    if not isinstance(ledger, list) or not isinstance(ledger_seal, str):
+        return set()
+    sealed_ids: set[str] = set()
+    for disclosure in ledger:
+        if not isinstance(disclosure, Mapping):
+            return set()
+        expected_item_seal = "sha256_" + hashlib.sha256(
+            json.dumps(
+                {
+                    key: value
+                    for key, value in disclosure.items()
+                    if key != "disclosure_seal"
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()
+        disclosure_id = disclosure.get("disclosure_id")
+        if (
+            disclosure.get("disclosure_seal") != expected_item_seal
+            or disclosure.get("applies") is not True
+            or not isinstance(disclosure_id, str)
+            or disclosure.get("contract_version") != "metric-disclosure/v1"
+            or disclosure.get("request_id") != request_id
+            or disclosure.get("metric_ref") != metric_ref
+            or disclosure.get("scope_fingerprint") != scope_fingerprint
+            or disclosure.get("projection_fingerprint")
+            != projection_fingerprint
+        ):
+            continue
+        sealed_ids.add(disclosure_id)
+    expected_ledger_seal = "sha256_" + hashlib.sha256(
+        json.dumps(
+            {
+                "contract_version": "metric-disclosure-ledger/v1",
+                "request_id": request_id,
+                "metric_ref": metric_ref,
+                "scope_fingerprint": scope_fingerprint,
+                "projection_fingerprint": projection_fingerprint,
+                "ledger": ledger,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    return sealed_ids if ledger_seal == expected_ledger_seal else set()
+
+
+def _formal_dso_calculation_attestation(
+    *,
+    request: Mapping[str, Any],
+    row: Mapping[str, Any],
+    applied_time_range: Mapping[str, Any],
+    metric_ref: str | None,
+    scope_fingerprint: str,
+    projection_fingerprint: str,
+    disclosure_ledger: Sequence[Mapping[str, Any]],
+    disclosure_ledger_seal: str,
+) -> dict[str, Any] | None:
+    """Seal component-presence guards for formal DSO without copying values."""
+
+    if (
+        request.get("domain") != "customer_risk"
+        or request.get("metric") != "formal_receivable_turnover_days"
+    ):
+        return None
+    window_complete, expected_period_days = _formal_dso_complete_window(
+        applied_time_range
+    )
+    period_days = row.get("period_natural_days")
+    period_days_match = (
+        isinstance(period_days, int)
+        and not isinstance(period_days, bool)
+        and expected_period_days is not None
+        and period_days == expected_period_days
+    )
+    denominator = row.get("delivery_amount_rmb")
+    denominator_present = _finite_decimal_present(denominator)
+    denominator_positive = False
+    if denominator_present:
+        try:
+            denominator_positive = Decimal(str(denominator)) > 0
+        except (InvalidOperation, TypeError, ValueError):
+            denominator_positive = False
+    sealed_disclosures = _sealed_disclosure_ids(
+        disclosure_ledger,
+        disclosure_ledger_seal,
+        request_id=str(request["request_id"]),
+        metric_ref=metric_ref,
+        scope_fingerprint=scope_fingerprint,
+        projection_fingerprint=projection_fingerprint,
+    )
+    guards = {
+        "metric_value_present": _finite_decimal_present(row.get("metric_value")),
+        "average_net_debt_present": _finite_decimal_present(
+            row.get("average_net_debt_rmb")
+        ),
+        "gross_delivery_denominator_present": denominator_present,
+        "gross_delivery_denominator_positive": denominator_positive,
+        "period_natural_days_present": isinstance(period_days, int)
+        and not isinstance(period_days, bool),
+        "period_matches_complete_window": period_days_match,
+        "complete_12_natural_month_window": window_complete,
+        "complete_13_month_end_snapshots": row.get("snapshot_month_count") == 13,
+        "complete_12_effective_months": row.get("effective_month_count") == 12,
+        "coverage_disclosure_sealed": _FORMAL_DSO_COVERAGE_DISCLOSURE
+        in sealed_disclosures,
+        "formula_disclosure_sealed": _FORMAL_DSO_FORMULA_DISCLOSURE
+        in sealed_disclosures,
+        "both_external_customer_scopes_disclosed": (
+            _FORMAL_DSO_EXTERNAL_SCOPE_DISCLOSURE in sealed_disclosures
+        ),
+    }
+    reason_codes = [
+        key.upper() for key, passed in guards.items() if passed is not True
+    ]
+    attestation: dict[str, Any] = {
+        "contract_version": _FORMAL_DSO_ATTESTATION_VERSION,
+        "status": "verified" if not reason_codes else "undefined",
+        "guards": guards,
+        "authorized_components": (
+            [
+                "formal_receivable_turnover_value",
+                "average_net_debt",
+                "gross_delivery_denominator_semantics",
+                "period_natural_days",
+                "snapshot_month_count",
+                "effective_month_count",
+            ]
+            if not reason_codes
+            else []
+        ),
+        "undefined_reason_codes": reason_codes,
+        "request_id": str(request["request_id"]),
+        "metric_ref": metric_ref,
+        "scope_fingerprint": scope_fingerprint,
+        "projection_fingerprint": projection_fingerprint,
+    }
+    canonical = json.dumps(
+        attestation,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    attestation["attestation_seal"] = (
+        "sha256_" + hashlib.sha256(canonical).hexdigest()
+    )
+    return attestation
+
+
+def _attach_formal_dso_calculation_attestations(
+    *,
+    request: Mapping[str, Any],
+    rows: Sequence[Mapping[str, Any]],
+    claims: Sequence[Mapping[str, Any]],
+    applied_time_range: Mapping[str, Any],
+    metric_ref: str | None,
+    scope_fingerprint: str,
+    projection_fingerprint: str,
+    disclosure_ledger: Sequence[Mapping[str, Any]],
+    disclosure_ledger_seal: str,
+) -> None:
+    if (
+        request.get("domain") != "customer_risk"
+        or request.get("metric") != "formal_receivable_turnover_days"
+    ):
+        return
+    for row, claim in zip(rows, claims):
+        if not isinstance(row, Mapping) or not isinstance(claim, dict):
+            continue
+        attestation = _formal_dso_calculation_attestation(
+            request=request,
+            row=row,
+            applied_time_range=applied_time_range,
+            metric_ref=metric_ref,
+            scope_fingerprint=scope_fingerprint,
+            projection_fingerprint=projection_fingerprint,
+            disclosure_ledger=disclosure_ledger,
+            disclosure_ledger_seal=disclosure_ledger_seal,
+        )
+        facts = claim.get("facts")
+        if attestation is not None and isinstance(facts, dict):
+            facts["calculation_attestation"] = attestation
+
+
 def _decomposition_context(
     prepared: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
@@ -6084,6 +6322,17 @@ def _run_one(
             inherited_disclosures=semantics.get("default_disclosures") or (),
             known_dimension_codes=set(domain_dimensions),
             inventory_scope=scope.get("inventory_scope"),
+        )
+        _attach_formal_dso_calculation_attestations(
+            request=request,
+            rows=public_rows,
+            claims=claim_ledger,
+            applied_time_range=applied_time_range,
+            metric_ref=metric_ref,
+            scope_fingerprint=scope_fingerprint,
+            projection_fingerprint=projection_fingerprint,
+            disclosure_ledger=disclosure_ledger,
+            disclosure_ledger_seal=disclosure_ledger_seal,
         )
         reasoning_topics = (
             _allowed_reasoning_topics(metric_definition)
