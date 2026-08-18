@@ -174,7 +174,7 @@ metrics:
     business_definition: 在指定完整期间内，以平均净经营欠款与有效出库规模衡量的正式应收周转速度，结果按自然日表示。
     answer_contract:
       - "先呈现正式应收周转天数；若治理结果未定义，则忠实写为未定义而不是错误，不得自行补算。"
-      - "同时呈现已返回的平均净经营欠款、期间自然日数、月末欠款快照月数和有效出库月份数；只有公式披露与双侧客户范围披露均适用且密封有效时，才说明平均月末净欠款除以同期毛出库金额再乘期间自然日数的正式公式。"
+      - "同时呈现已返回的平均净经营欠款、期间自然日数、月末欠款快照月数和有效出库月份数；只有同一次 datasage_query 返回的 formal-receivable-turnover-calculation-attestation/v1 状态为 verified、attestation_seal 与外层 claim_seal 均有效，且公式披露与双侧客户范围披露均适用且密封有效时，才可忠实呈现同一查询已密封的正式公式披露；attestation 缺失、无效或状态为 undefined 时，不得依据本 catalog 合同直接陈述正式公式或正式周转数值。"
       - "月末净欠款与毛出库分母排除内部客户的双侧范围，只能按返回、适用且密封有效的披露说明。"
     unit: 自然日
     query_kind: formal_dso

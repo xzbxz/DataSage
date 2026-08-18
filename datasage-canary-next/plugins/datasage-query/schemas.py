@@ -520,6 +520,10 @@ DATASAGE_QUERY = {
 DATASAGE_CATALOG = {
     "name": "datasage_catalog",
     "description": (
+        "Formal DSO/正式DSO: first `customer_risk` `expert_index`; never first inspect `receivable`. "
+        "Formal receivable turnover days/正式应收周转天数 has the same ownership: do not use a "
+        "receivable expert index or summary as a discovery detour. Ordinary net debt, aging, and overdue "
+        "receivables remain in `receivable`. "
         "Load the trusted DataSage metric catalog needed to plan an internal business-data query. "
         "Hermes chooses whether data is needed and which domains match the user's request; DataSage does not "
         "classify or control ordinary conversation. Request expert_index for the smallest metric-discovery surface, "
@@ -544,7 +548,16 @@ DATASAGE_CATALOG = {
                     "type": "object",
                     "additionalProperties": False,
                     "properties": {
-                        "domain": {"type": "string", "enum": DOMAINS},
+                        "domain": {
+                            "type": "string",
+                            "enum": DOMAINS,
+                            "description": (
+                                "Governed business domain. For formal DSO, formal receivable turnover days, "
+                                "正式DSO, or 正式应收周转天数, the first catalog request must be "
+                                "customer_risk with view=expert_index; do not first load receivable expert_index "
+                                "or its summary. Ordinary net debt, aging, and overdue receivables remain receivable."
+                            ),
+                        },
                         "metric": {
                             "type": "string",
                             "minLength": 1,

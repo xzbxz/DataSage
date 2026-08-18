@@ -193,6 +193,17 @@ class GitGovernedSkillTests(unittest.TestCase):
             "metric-detail calls and `datasage_query` calls must both be zero",
             normalized,
         )
+        self.assertIn("Before any `datasage_catalog` call", normalized)
+        self.assertIn(
+            "the first catalog request for that branch must be only "
+            "`{domain: customer_risk, view: expert_index}`",
+            normalized,
+        )
+        self.assertIn(
+            "Do not begin that formal-turnover branch with a `receivable` "
+            "expert index or summary as a discovery detour.",
+            normalized,
+        )
         self.assertIsNone(hook(platform="cli", is_first_turn=True))
 
     def test_hermes_clarify_stays_direct_and_datasage_catalog_is_searchable(self):
@@ -232,6 +243,19 @@ class GitGovernedSkillTests(unittest.TestCase):
                     config=config,
                 )
             )
+            formal_dso_search_result = json.loads(
+                hermes_tool_search.dispatch_tool_search(
+                    {"query": "formal DSO"},
+                    current_tool_defs=tool_defs,
+                    config=config,
+                )
+            )
+            catalog_description = json.loads(
+                hermes_tool_search.dispatch_tool_describe(
+                    {"name": "datasage_catalog"},
+                    current_tool_defs=tool_defs,
+                )
+            )
 
         visible_names = {
             tool["function"]["name"] for tool in assembled.tool_defs
@@ -245,6 +269,35 @@ class GitGovernedSkillTests(unittest.TestCase):
         self.assertIn(
             "datasage_catalog",
             {match["name"] for match in search_result["matches"]},
+        )
+        formal_dso_hits = {
+            match["name"]: match for match in formal_dso_search_result["matches"]
+        }
+        self.assertIn("datasage_catalog", formal_dso_hits)
+        self.assertIn(
+            "Formal DSO/正式DSO: first `customer_risk` `expert_index`; "
+            "never first inspect `receivable`.",
+            formal_dso_hits["datasage_catalog"]["description"],
+        )
+        self.assertEqual("datasage_catalog", catalog_description["name"])
+        self.assertIn(
+            "Formal receivable turnover days/正式应收周转天数 has the same ownership",
+            catalog_description["description"],
+        )
+        domain_description = catalog_description["parameters"]["properties"][
+            "requests"
+        ]["items"]["properties"]["domain"]["description"]
+        self.assertIn(
+            "the first catalog request must be customer_risk with view=expert_index",
+            domain_description,
+        )
+        self.assertIn(
+            "do not first load receivable expert_index or its summary",
+            domain_description,
+        )
+        self.assertIn(
+            "Ordinary net debt, aging, and overdue receivables remain receivable",
+            domain_description,
         )
 
 

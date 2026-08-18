@@ -71,10 +71,14 @@ request a likely domain with `view: expert_index`; after selection, request
 only relevant detail. Do not probe every domain or default an unknown request
 to a convenient domain.
 
-Route an explicit request for formal receivable turnover days or formal DSO to
-the `customer_risk` expert index. A request for ordinary net debt, aging, or
-overdue receivables without that formal turnover meaning stays in the
-`receivable` domain; do not move it merely because both domains concern debt.
+Before any `datasage_catalog` call, route an explicit request for formal
+receivable turnover days or formal DSO to the `customer_risk` expert index:
+the first catalog request for that branch must be only
+`{domain: customer_risk, view: expert_index}`. Do not begin that formal-turnover
+branch with a `receivable` expert index or summary as a discovery detour. A
+request for ordinary net debt, aging, or overdue receivables without that
+formal turnover meaning stays in the `receivable` domain; do not move it
+merely because both domains concern debt.
 
 Use a full catalog summary's unique exact governed default when it matches the
 user's wording and no explicit qualifier has higher priority; if zero or

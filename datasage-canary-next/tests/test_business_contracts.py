@@ -964,7 +964,9 @@ class BusinessContractTests(unittest.TestCase):
                 )
             ledger_canonical = json.dumps(
                 {
-                    "contract_version": "metric-disclosure-ledger/v1",
+                    "contract_version": query_result[
+                        "disclosure_contract_version"
+                    ],
                     "request_id": query_result["request_id"],
                     "metric_ref": query_result["business_metric_ref"],
                     "scope_fingerprint": query_result["scope_fingerprint"],
@@ -1023,6 +1025,9 @@ class BusinessContractTests(unittest.TestCase):
             "calculation_attestation",
             r2_result["claim_ledger"][0]["facts"],
         )
+        r2_before_projection = json.loads(json.dumps(r2_result))
+        self.assertEqual(r2_before_projection, tools._model_wire_result(r2_result))
+        self.assertEqual(r2_before_projection, r2_result)
         r2_sql, r2_params = r2_calls[0]["sql"], r2_calls[0]["params"]
         self.assertIn("`f`.`is_inner_cus` = %s", r2_sql)
         self.assertIn(
@@ -1208,7 +1213,6 @@ class BusinessContractTests(unittest.TestCase):
             "正式应收周转天数",
             "未定义",
             "平均净经营欠款",
-            "平均月末净欠款除以同期毛出库金额再乘期间自然日数",
             "期间自然日数",
             "月末欠款快照月数",
             "有效出库月份数",
@@ -1217,6 +1221,28 @@ class BusinessContractTests(unittest.TestCase):
             "未定义而不是错误",
         ):
             self.assertIn(proposition, answer_contract_text)
+        self.assertNotIn(
+            "平均月末净欠款除以同期毛出库金额再乘期间自然日数",
+            answer_contract_text,
+        )
+        formula_contract = answer_contract[1]
+        for condition in (
+            "同一次 datasage_query",
+            "formal-receivable-turnover-calculation-attestation/v1",
+            "状态为 verified",
+            "attestation_seal 与外层 claim_seal 均有效",
+            "公式披露与双侧客户范围披露均适用且密封有效",
+            "同一查询已密封的正式公式披露",
+        ):
+            self.assertIn(condition, formula_contract)
+        self.assertIn(
+            "attestation 缺失、无效或状态为 undefined 时",
+            formula_contract,
+        )
+        self.assertIn(
+            "不得依据本 catalog 合同直接陈述正式公式或正式周转数值",
+            formula_contract,
+        )
 
         dso_rows = [
             {
@@ -1236,7 +1262,33 @@ class BusinessContractTests(unittest.TestCase):
             "metric": "formal_receivable_turnover_days",
             "dimensions": [],
         }
-        dso_result, dso_calls = run_query(dso_request, dso_rows)
+        captured_dso_raw: list[dict[str, object]] = []
+        original_model_wire_result = tools._model_wire_result
+
+        def capture_dso_raw(result):
+            before_projection = json.loads(json.dumps(result))
+            projected = original_model_wire_result(result)
+            self.assertEqual(before_projection, result)
+            captured_dso_raw.append(before_projection)
+            return projected
+
+        with mock.patch.object(
+            tools,
+            "_model_wire_result",
+            side_effect=capture_dso_raw,
+        ):
+            dso_result, dso_calls = run_query(dso_request, dso_rows)
+        self.assertEqual(1, len(captured_dso_raw))
+        dso_raw = captured_dso_raw[0]
+        self.assertIn("rows", dso_raw)
+        self.assertEqual(
+            "verified",
+            dso_raw["claim_ledger"][0]["facts"]["calculation_attestation"][
+                "status"
+            ],
+        )
+        assert_disclosure_seals(dso_raw)
+        assert_attestation_and_claim_seals(dso_raw)
         dso_sql, dso_params = dso_calls[0]["sql"], dso_calls[0]["params"]
         self.assertIn("`d`.`is_inner_cus` = %s", dso_sql)
         self.assertIn("`s`.`bill_status` = %s", dso_sql)
@@ -1263,6 +1315,7 @@ class BusinessContractTests(unittest.TestCase):
             dso_result["disclosure_ledger_seal"],
             dso_wire["disclosure_ledger_seal"],
         )
+        self.assertEqual(dso_result, dso_wire)
         attestation = assert_attestation_and_claim_seals(dso_result)
         self.assertEqual(
             "formal-receivable-turnover-calculation-attestation/v1",
@@ -1376,6 +1429,150 @@ class BusinessContractTests(unittest.TestCase):
                 lambda item, key=guard: item["guards"].__setitem__(key, False),
             )
 
+        def assert_tamper_is_fail_closed(
+            tampered_raw: dict[str, object], expected_reason: str
+        ) -> None:
+            before_projection = json.loads(json.dumps(tampered_raw))
+            projected = tools._model_wire_result(tampered_raw)
+            self.assertEqual(before_projection, tampered_raw)
+            self.assertEqual("undefined", projected["data_state"])
+            projected_facts = projected["claim_ledger"][0]["facts"]
+            self.assertNotIn("metric_value", projected_facts)
+            projected_attestation = projected_facts["calculation_attestation"]
+            self.assertEqual("undefined", projected_attestation["status"])
+            self.assertEqual(
+                [expected_reason],
+                projected_attestation["undefined_reason_codes"],
+            )
+            self.assertEqual(
+                expected_attestation_seal(projected_attestation),
+                projected_attestation["attestation_seal"],
+            )
+            projected_claim_id, projected_claim_seal = (
+                tools.evidence._canonical_claim_identity(
+                    projected["claim_ledger"][0]
+                )
+            )
+            self.assertEqual(
+                projected_claim_id,
+                projected["claim_ledger"][0]["claim_id"],
+            )
+            self.assertEqual(
+                projected_claim_seal,
+                projected["claim_ledger"][0]["claim_seal"],
+            )
+            projected_disclosure_ids = {
+                item["disclosure_id"] for item in projected["disclosure_ledger"]
+            }
+            self.assertIn(formal_dso_coverage_id, projected_disclosure_ids)
+            self.assertIn(formal_dso_disclosure_id, projected_disclosure_ids)
+            self.assertNotIn(formal_dso_formula_id, projected_disclosure_ids)
+            self.assertEqual(
+                "metric-disclosure-ledger-model-projection/v1",
+                projected["disclosure_contract_version"],
+            )
+            assert_disclosure_seals(projected)
+            self.assertNotIn(
+                formal_dso_formula_text,
+                json.dumps(projected, ensure_ascii=False),
+            )
+
+        claim_integrity_tamper = json.loads(json.dumps(dso_result))
+        claim_integrity_tamper["claim_ledger"][0]["claim_seal"] = (
+            "sha256_" + "0" * 64
+        )
+        assert_tamper_is_fail_closed(
+            claim_integrity_tamper,
+            "CLAIM_INTEGRITY_INVALID",
+        )
+
+        attestation_integrity_tamper = json.loads(json.dumps(dso_result))
+        attestation_integrity_tamper["claim_ledger"][0]["facts"][
+            "calculation_attestation"
+        ]["status"] = "undefined"
+        tools.evidence.seal_claim(attestation_integrity_tamper["claim_ledger"][0])
+        assert_tamper_is_fail_closed(
+            attestation_integrity_tamper,
+            "ATTESTATION_INTEGRITY_INVALID",
+        )
+
+        attestation_missing = json.loads(json.dumps(dso_result))
+        del attestation_missing["claim_ledger"][0]["facts"][
+            "calculation_attestation"
+        ]
+        tools.evidence.seal_claim(attestation_missing["claim_ledger"][0])
+        assert_tamper_is_fail_closed(
+            attestation_missing,
+            "ATTESTATION_MISSING",
+        )
+
+        attestation_semantic_tamper = json.loads(json.dumps(dso_result))
+        semantic_attestation = attestation_semantic_tamper["claim_ledger"][0][
+            "facts"
+        ]["calculation_attestation"]
+        semantic_attestation["status"] = "partial"
+        semantic_attestation["attestation_seal"] = expected_attestation_seal(
+            semantic_attestation
+        )
+        tools.evidence.seal_claim(
+            attestation_semantic_tamper["claim_ledger"][0]
+        )
+        assert_tamper_is_fail_closed(
+            attestation_semantic_tamper,
+            "ATTESTATION_INTEGRITY_INVALID",
+        )
+
+        ledger_seal_tamper = json.loads(json.dumps(dso_result))
+        assert_attestation_and_claim_seals(ledger_seal_tamper)
+        for disclosure in ledger_seal_tamper["disclosure_ledger"]:
+            canonical = json.dumps(
+                {
+                    key: value
+                    for key, value in disclosure.items()
+                    if key != "disclosure_seal"
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+            self.assertEqual(
+                "sha256_" + hashlib.sha256(canonical).hexdigest(),
+                disclosure["disclosure_seal"],
+            )
+        ledger_seal_tamper["disclosure_ledger_seal"] = "sha256_" + "0" * 64
+        ledger_seal_tamper_before = json.loads(json.dumps(ledger_seal_tamper))
+        ledger_seal_tamper_wire = tools._model_wire_result(ledger_seal_tamper)
+        self.assertEqual(ledger_seal_tamper_before, ledger_seal_tamper)
+        self.assertEqual("undefined", ledger_seal_tamper_wire["data_state"])
+        ledger_seal_tamper_facts = ledger_seal_tamper_wire["claim_ledger"][0][
+            "facts"
+        ]
+        self.assertNotIn("metric_value", ledger_seal_tamper_facts)
+        ledger_seal_tamper_attestation = ledger_seal_tamper_facts[
+            "calculation_attestation"
+        ]
+        self.assertEqual("undefined", ledger_seal_tamper_attestation["status"])
+        self.assertEqual(
+            ["ATTESTATION_INTEGRITY_INVALID"],
+            ledger_seal_tamper_attestation["undefined_reason_codes"],
+        )
+        self.assertEqual(
+            expected_attestation_seal(ledger_seal_tamper_attestation),
+            ledger_seal_tamper_attestation["attestation_seal"],
+        )
+        self.assertEqual([], ledger_seal_tamper_wire["disclosure_ledger"])
+        self.assertEqual(
+            "metric-disclosure-ledger-model-projection/v1",
+            ledger_seal_tamper_wire["disclosure_contract_version"],
+        )
+        assert_disclosure_seals(ledger_seal_tamper_wire)
+        self.assertNotIn(
+            formal_dso_formula_text,
+            json.dumps(ledger_seal_tamper_wire, ensure_ascii=False),
+        )
+        assert_attestation_and_claim_seals(ledger_seal_tamper_wire)
+
         undefined_cases = (
             (
                 "missing_metric_value",
@@ -1414,17 +1611,100 @@ class BusinessContractTests(unittest.TestCase):
             ),
         )
         for case_name, row, reason in undefined_cases:
-            result, calls = run_query(
-                {**dso_request, "request_id": f"r4_{case_name}"},
-                [row],
+            captured_undefined_raw: list[dict[str, object]] = []
+
+            def capture_undefined_raw(raw_result):
+                before_projection = json.loads(json.dumps(raw_result))
+                projected = original_model_wire_result(raw_result)
+                self.assertEqual(before_projection, raw_result)
+                captured_undefined_raw.append(before_projection)
+                return projected
+
+            context = (
+                mock.patch.object(
+                    tools,
+                    "_model_wire_result",
+                    side_effect=capture_undefined_raw,
+                )
+                if case_name == "effective_months_incomplete"
+                else mock.patch.object(
+                    tools,
+                    "_model_wire_result",
+                    side_effect=original_model_wire_result,
+                )
             )
+            with context:
+                result, calls = run_query(
+                    {**dso_request, "request_id": f"r4_{case_name}"},
+                    [row],
+                )
             self.assertEqual(1, len(calls), case_name)
             case_attestation = assert_attestation_and_claim_seals(result)
             self.assertEqual("success", result["status"], case_name)
             self.assertIsNone(result["error"], case_name)
+            self.assertEqual("undefined", result["data_state"], case_name)
             self.assertEqual("undefined", case_attestation["status"], case_name)
             self.assertEqual([], case_attestation["authorized_components"], case_name)
             self.assertIn(reason, case_attestation["undefined_reason_codes"], case_name)
+            self.assertNotIn(
+                "metric_value",
+                result["claim_ledger"][0]["facts"],
+                case_name,
+            )
+            case_disclosure_ids = {
+                item["disclosure_id"] for item in result["disclosure_ledger"]
+            }
+            self.assertIn(formal_dso_coverage_id, case_disclosure_ids, case_name)
+            self.assertIn(formal_dso_disclosure_id, case_disclosure_ids, case_name)
+            self.assertNotIn(formal_dso_formula_id, case_disclosure_ids, case_name)
+            self.assertEqual(
+                "metric-disclosure-ledger-model-projection/v1",
+                result["disclosure_contract_version"],
+                case_name,
+            )
+            self.assertNotIn(
+                formal_dso_formula_text,
+                json.dumps(result, ensure_ascii=False),
+                case_name,
+            )
+            assert_disclosure_seals(result)
+            self.assertEqual(result, tools._model_wire_result(result), case_name)
+            if case_name == "effective_months_incomplete":
+                self.assertEqual(1, len(captured_undefined_raw))
+                raw_result = captured_undefined_raw[0]
+                raw_facts = raw_result["claim_ledger"][0]["facts"]
+                self.assertIn("metric_value", raw_facts)
+                self.assertEqual(
+                    "undefined",
+                    raw_facts["calculation_attestation"]["status"],
+                )
+                self.assertIn(
+                    formal_dso_formula_id,
+                    {
+                        item["disclosure_id"]
+                        for item in raw_result["disclosure_ledger"]
+                    },
+                )
+                self.assertEqual(
+                    "metric-disclosure-ledger/v1",
+                    raw_result["disclosure_contract_version"],
+                )
+                self.assertNotEqual(
+                    raw_result["disclosure_ledger_seal"],
+                    result["disclosure_ledger_seal"],
+                )
+                assert_disclosure_seals(raw_result)
+                assert_attestation_and_claim_seals(raw_result)
+                for retained_fact in (
+                    "average_net_debt_rmb",
+                    "period_natural_days",
+                    "snapshot_month_count",
+                    "effective_month_count",
+                ):
+                    self.assertIn(
+                        retained_fact,
+                        result["claim_ledger"][0]["facts"],
+                    )
 
         missing_period_result, missing_period_calls = run_query(
             {**dso_request, "request_id": "r4_missing_period_natural_days"},

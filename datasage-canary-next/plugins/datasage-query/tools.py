@@ -7,6 +7,7 @@ boundary and returns structured evidence.
 
 from __future__ import annotations
 
+import copy
 import json
 import hashlib
 import importlib
@@ -4188,6 +4189,7 @@ def _sealed_disclosure_ids(
     metric_ref: str | None,
     scope_fingerprint: str,
     projection_fingerprint: str,
+    ledger_contract_version: str = "metric-disclosure-ledger/v1",
 ) -> set[str]:
     if not isinstance(ledger, list) or not isinstance(ledger_seal, str):
         return set()
@@ -4225,7 +4227,7 @@ def _sealed_disclosure_ids(
     expected_ledger_seal = "sha256_" + hashlib.sha256(
         json.dumps(
             {
-                "contract_version": "metric-disclosure-ledger/v1",
+                "contract_version": ledger_contract_version,
                 "request_id": request_id,
                 "metric_ref": metric_ref,
                 "scope_fingerprint": scope_fingerprint,
@@ -5544,14 +5546,303 @@ def _model_wire_change_reconciliation(value: Any) -> Any:
     }
 
 
+_FORMAL_DSO_ATTESTATION_GUARDS = (
+    "metric_value_present",
+    "average_net_debt_present",
+    "gross_delivery_denominator_present",
+    "gross_delivery_denominator_positive",
+    "period_natural_days_present",
+    "period_matches_complete_window",
+    "complete_12_natural_month_window",
+    "complete_13_month_end_snapshots",
+    "complete_12_effective_months",
+    "coverage_disclosure_sealed",
+    "formula_disclosure_sealed",
+    "both_external_customer_scopes_disclosed",
+)
+_FORMAL_DSO_AUTHORIZED_COMPONENTS = (
+    "formal_receivable_turnover_value",
+    "average_net_debt",
+    "gross_delivery_denominator_semantics",
+    "period_natural_days",
+    "snapshot_month_count",
+    "effective_month_count",
+)
+_FORMAL_DSO_PROJECTION_UNDEFINED_REASONS = {
+    "ATTESTATION_MISSING",
+    "ATTESTATION_INTEGRITY_INVALID",
+    "CLAIM_INTEGRITY_INVALID",
+    "FORMAL_DSO_BATCH_INCOMPLETE",
+}
+_MODEL_DISCLOSURE_PROJECTION_VERSION = (
+    "metric-disclosure-ledger-model-projection/v1"
+)
+
+
+def _formal_dso_attestation_seal(attestation: Mapping[str, Any]) -> str:
+    canonical = json.dumps(
+        {
+            key: value
+            for key, value in attestation.items()
+            if key != "attestation_seal"
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return "sha256_" + hashlib.sha256(canonical).hexdigest()
+
+
+def _formal_dso_claim_is_valid(claim: Mapping[str, Any]) -> bool:
+    claim_id, claim_seal = evidence._canonical_claim_identity(claim)
+    return (
+        claim.get("claim_id") == claim_id
+        and claim.get("claim_seal") == claim_seal
+    )
+
+
+def _formal_dso_attestation_state(
+    attestation: Any,
+    *,
+    claim: Mapping[str, Any],
+    result: Mapping[str, Any],
+    sealed_disclosure_ids: set[str],
+) -> str:
+    """Return verified/undefined only for a complete sealed v1 statement."""
+
+    if (
+        not isinstance(attestation, Mapping)
+        or attestation.get("contract_version")
+        != _FORMAL_DSO_ATTESTATION_VERSION
+        or attestation.get("attestation_seal")
+        != _formal_dso_attestation_seal(attestation)
+        or not _formal_dso_claim_is_valid(claim)
+        or attestation.get("request_id") != result.get("request_id")
+        or attestation.get("request_id") != claim.get("request_id")
+        or attestation.get("metric_ref") != result.get("business_metric_ref")
+        or attestation.get("metric_ref") != claim.get("metric_ref")
+        or attestation.get("scope_fingerprint")
+        != result.get("scope_fingerprint")
+        or attestation.get("scope_fingerprint")
+        != claim.get("scope_fingerprint")
+        or attestation.get("projection_fingerprint")
+        != result.get("projection_fingerprint")
+        or attestation.get("projection_fingerprint")
+        != claim.get("projection_fingerprint")
+    ):
+        return "invalid"
+
+    status = attestation.get("status")
+    guards = attestation.get("guards")
+    components = attestation.get("authorized_components")
+    reasons = attestation.get("undefined_reason_codes")
+    facts = claim.get("facts")
+    if (
+        status == "undefined"
+        and guards == {}
+        and components == []
+        and isinstance(reasons, list)
+        and len(reasons) == 1
+        and reasons[0] in _FORMAL_DSO_PROJECTION_UNDEFINED_REASONS
+    ):
+        return "undefined"
+    if (
+        not isinstance(guards, Mapping)
+        or tuple(guards) != _FORMAL_DSO_ATTESTATION_GUARDS
+        or any(not isinstance(value, bool) for value in guards.values())
+        or not isinstance(components, list)
+        or not isinstance(reasons, list)
+        or any(not isinstance(reason, str) or not reason for reason in reasons)
+    ):
+        return "invalid"
+    if status == "verified":
+        required_disclosures = {
+            _FORMAL_DSO_COVERAGE_DISCLOSURE,
+            _FORMAL_DSO_EXTERNAL_SCOPE_DISCLOSURE,
+            _FORMAL_DSO_FORMULA_DISCLOSURE,
+        }
+        if (
+            all(guards.values())
+            and tuple(components) == _FORMAL_DSO_AUTHORIZED_COMPONENTS
+            and reasons == []
+            and isinstance(facts, Mapping)
+            and _finite_decimal_present(facts.get("metric_value"))
+            and required_disclosures.issubset(sealed_disclosure_ids)
+        ):
+            return "verified"
+        return "invalid"
+    if status == "undefined":
+        expected_reasons = [
+            key.upper() for key, passed in guards.items() if passed is not True
+        ]
+        if (
+            expected_reasons
+            and reasons == expected_reasons
+            and components == []
+        ):
+            return "undefined"
+    return "invalid"
+
+
+def _formal_dso_projection_attestation(
+    result: Mapping[str, Any],
+    reason: str,
+) -> dict[str, Any]:
+    attestation: dict[str, Any] = {
+        "contract_version": _FORMAL_DSO_ATTESTATION_VERSION,
+        "status": "undefined",
+        "guards": {},
+        "authorized_components": [],
+        "undefined_reason_codes": [reason],
+        "request_id": result.get("request_id"),
+        "metric_ref": result.get("business_metric_ref"),
+        "scope_fingerprint": result.get("scope_fingerprint"),
+        "projection_fingerprint": result.get("projection_fingerprint"),
+    }
+    attestation["attestation_seal"] = _formal_dso_attestation_seal(attestation)
+    return attestation
+
+
+def _reseal_model_disclosure_ledger(projected: dict[str, Any]) -> None:
+    ledger = projected.get("disclosure_ledger")
+    if not isinstance(ledger, list):
+        return
+    canonical = json.dumps(
+        {
+            "contract_version": _MODEL_DISCLOSURE_PROJECTION_VERSION,
+            "request_id": projected.get("request_id"),
+            "metric_ref": projected.get("business_metric_ref"),
+            "scope_fingerprint": projected.get("scope_fingerprint"),
+            "projection_fingerprint": projected.get("projection_fingerprint"),
+            "ledger": ledger,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    projected["disclosure_contract_version"] = (
+        _MODEL_DISCLOSURE_PROJECTION_VERSION
+    )
+    projected["disclosure_ledger_seal"] = (
+        "sha256_" + hashlib.sha256(canonical).hexdigest()
+    )
+
+
+def _fail_closed_formal_dso_model_wire(projected: dict[str, Any]) -> None:
+    claims = projected.get("claim_ledger")
+    ledger = projected.get("disclosure_ledger")
+    formal_disclosure_ids = {
+        _FORMAL_DSO_COVERAGE_DISCLOSURE,
+        _FORMAL_DSO_EXTERNAL_SCOPE_DISCLOSURE,
+        _FORMAL_DSO_FORMULA_DISCLOSURE,
+    }
+    has_formal_disclosure = isinstance(ledger, list) and any(
+        isinstance(item, Mapping)
+        and item.get("disclosure_id") in formal_disclosure_ids
+        for item in ledger
+    )
+    has_formal_attestation = isinstance(claims, list) and any(
+        isinstance(claim, Mapping)
+        and isinstance(claim.get("facts"), Mapping)
+        and isinstance(claim["facts"].get("calculation_attestation"), Mapping)
+        for claim in claims
+    )
+    if not has_formal_disclosure and not has_formal_attestation:
+        return
+
+    disclosure_contract_version = projected.get("disclosure_contract_version")
+    if disclosure_contract_version not in {
+        "metric-disclosure-ledger/v1",
+        _MODEL_DISCLOSURE_PROJECTION_VERSION,
+    }:
+        disclosure_contract_version = "invalid"
+    sealed_disclosure_ids = _sealed_disclosure_ids(
+        ledger,
+        projected.get("disclosure_ledger_seal"),
+        request_id=str(projected.get("request_id")),
+        metric_ref=projected.get("business_metric_ref"),
+        scope_fingerprint=str(projected.get("scope_fingerprint")),
+        projection_fingerprint=str(projected.get("projection_fingerprint")),
+        ledger_contract_version=disclosure_contract_version,
+    )
+    states: list[tuple[dict[str, Any], str, bool]] = []
+    if isinstance(claims, list):
+        for claim in claims:
+            if not isinstance(claim, dict):
+                continue
+            claim_valid = _formal_dso_claim_is_valid(claim)
+            facts = claim.get("facts")
+            attestation = (
+                facts.get("calculation_attestation")
+                if isinstance(facts, Mapping)
+                else None
+            )
+            states.append(
+                (
+                    claim,
+                    _formal_dso_attestation_state(
+                        attestation,
+                        claim=claim,
+                        result=projected,
+                        sealed_disclosure_ids=sealed_disclosure_ids,
+                    ),
+                    claim_valid,
+                )
+            )
+    if states and all(state == "verified" for _, state, _ in states):
+        return
+
+    projected["data_state"] = "undefined"
+    for claim, state, claim_valid in states:
+        facts = claim.get("facts")
+        if not isinstance(facts, dict):
+            facts = {}
+            claim["facts"] = facts
+        if not claim_valid:
+            facts.clear()
+        else:
+            facts.pop("metric_value", None)
+        if state == "undefined" and claim_valid:
+            attestation = facts.get("calculation_attestation")
+        else:
+            reason = (
+                "CLAIM_INTEGRITY_INVALID"
+                if not claim_valid
+                else "FORMAL_DSO_BATCH_INCOMPLETE"
+                if state == "verified"
+                else "ATTESTATION_MISSING"
+                if not isinstance(facts.get("calculation_attestation"), Mapping)
+                else "ATTESTATION_INTEGRITY_INVALID"
+            )
+            attestation = _formal_dso_projection_attestation(
+                projected,
+                reason,
+            )
+        facts["calculation_attestation"] = attestation
+        evidence.seal_claim(claim)
+
+    if isinstance(ledger, list):
+        projected["disclosure_ledger"] = [
+            item
+            for item in ledger
+            if isinstance(item, Mapping)
+            and item.get("disclosure_id") in sealed_disclosure_ids
+            and item.get("disclosure_id") != _FORMAL_DSO_FORMULA_DISCLOSURE
+        ]
+        _reseal_model_disclosure_ledger(projected)
+
+
 def _model_wire_result(result: Mapping[str, Any]) -> dict[str, Any]:
     """Project private execution state to the minimal model-visible result."""
 
     projected = {
-        field: result.get(field)
+        field: copy.deepcopy(result.get(field))
         for field in _MODEL_WIRE_RESULT_FIELDS
         if field in result
     }
+    _fail_closed_formal_dso_model_wire(projected)
     if "change_reconciliation" in projected:
         projected["change_reconciliation"] = _model_wire_change_reconciliation(
             projected["change_reconciliation"]
