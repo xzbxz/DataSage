@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date, datetime
 from decimal import Decimal
 import hashlib
 import json
@@ -2866,6 +2867,285 @@ class BusinessContractTests(unittest.TestCase):
             "CONTRACT_UNAVAILABLE",
             malformed_evidence.exception.code,
         )
+
+    def test_overdue_current_snapshot_as_of_date_is_same_query_and_fail_closed(
+        self,
+    ) -> None:
+        base_request = {
+            "domain": "receivable",
+            "mode": "metric",
+            "purpose": "synthetic current snapshot as-of date test",
+            "metric": "overdue_receivable_amount",
+            "dimensions": [],
+        }
+
+        def run_query(
+            request_id: str,
+            rows: list[dict[str, object]],
+            *,
+            metric: str = "overdue_receivable_amount",
+            detail_receipt: str | None = None,
+        ) -> tuple[dict[str, object], dict[str, object], list[str]]:
+            sql_calls: list[str] = []
+
+            def execute_query(sql, _params, _limit, **_kwargs):
+                sql_calls.append(sql)
+                return rows, False, self._read_only_source_evidence()
+
+            request = {
+                **base_request,
+                "request_id": request_id,
+                "metric": metric,
+                "detail_receipt": detail_receipt
+                or self._metric_detail_receipt("receivable", metric),
+            }
+            with mock.patch.object(
+                tools,
+                "_execute_with_source",
+                side_effect=execute_query,
+            ):
+                payload = json.loads(tools.datasage_query({"requests": [request]}))
+            result = payload["results"][0] if payload.get("results") else payload
+            return payload, result, sql_calls
+
+        semantics = yaml.safe_load(
+            (PLUGIN_ROOT / "contracts" / "receivable-semantics.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual("datasage-mini-receivable-semantics/v6", semantics["version"])
+        current_snapshot_evidence_metrics = {
+            metric_code
+            for metric_code, definition in semantics["metrics"].items()
+            if definition.get("current_snapshot_evidence") is not None
+        }
+        self.assertEqual(
+            {"overdue_receivable_amount"},
+            current_snapshot_evidence_metrics,
+        )
+        self.assertEqual(
+            "database_current_date",
+            semantics["metrics"]["overdue_receivable_amount"][
+                "current_snapshot_evidence"
+            ],
+        )
+        detail = json.loads(
+            contracts.datasage_catalog(
+                {
+                    "requests": [
+                        {
+                            "domain": "receivable",
+                            "metric": "overdue_receivable_amount",
+                        }
+                    ]
+                }
+            )
+        )
+        serialized_detail = json.dumps(detail, ensure_ascii=False)
+        self.assertNotIn("current_snapshot_evidence", serialized_detail)
+        self.assertNotIn("database_current_date", serialized_detail)
+
+        for index, raw_date in enumerate(
+            (date(2026, 8, 18), datetime(2026, 8, 18, 12, 30, 45))
+        ):
+            with self.subTest(valid_date_type=type(raw_date).__name__):
+                payload, result, sql_calls = run_query(
+                    f"overdue_valid_as_of_{index}",
+                    [
+                        {
+                            "metric_value": "42.00",
+                            tools._INTERNAL_MATCH_COUNT: 1,
+                            tools._INTERNAL_AS_OF_DATE: raw_date,
+                        }
+                    ],
+                )
+                self.assertEqual(1, len(sql_calls))
+                self.assertIn("CURDATE() AS `__as_of_date`", sql_calls[0])
+                self.assertEqual("success", result["status"])
+                self.assertEqual("rows", result["data_state"])
+                expected_period = {
+                    "source": "current_snapshot",
+                    "as_of_date": "2026-08-18",
+                    "resolution_state": "resolved",
+                }
+                self.assertEqual(expected_period, result["applied_time_range"])
+                self.assertEqual(expected_period, result["claim_ledger"][0]["period"])
+                self.assertTrue(
+                    tools.evidence.claim_is_valid_for_result(
+                        result["claim_ledger"][0], result
+                    )
+                )
+                self.assertEqual(
+                    "查询范围：截至 2026-08-18 的当前业务快照",
+                    payload["answer_scope_line"],
+                )
+                wire = json.dumps(payload, ensure_ascii=False)
+                self.assertNotIn("__as_of_date", wire)
+                self.assertNotIn("CURDATE", wire)
+                self.assertNotIn("receivable_bill_detail_dwd", wire)
+                self.assertNotIn("bill_time", wire)
+
+        _, zero_result, zero_calls = run_query(
+            "overdue_zero_as_of",
+            [
+                {
+                    "metric_value": "0.00",
+                    tools._INTERNAL_MATCH_COUNT: 1,
+                    tools._INTERNAL_AS_OF_DATE: "2026-08-18",
+                }
+            ],
+        )
+        self.assertEqual(1, len(zero_calls))
+        self.assertEqual("zero", zero_result["data_state"])
+        self.assertEqual(
+            "2026-08-18", zero_result["applied_time_range"]["as_of_date"]
+        )
+
+        _, empty_result, empty_calls = run_query(
+            "overdue_empty_as_of",
+            [
+                {
+                    "metric_value": None,
+                    tools._INTERNAL_MATCH_COUNT: 0,
+                    tools._INTERNAL_AS_OF_DATE: "2026-08-18",
+                }
+            ],
+        )
+        self.assertEqual(1, len(empty_calls))
+        self.assertEqual("empty", empty_result["data_state"])
+        self.assertEqual([], empty_result["claim_ledger"])
+        self.assertEqual(
+            "2026-08-18", empty_result["applied_time_range"]["as_of_date"]
+        )
+
+        undefined_cases = (
+            ("missing", {"metric_value": "42.00", tools._INTERNAL_MATCH_COUNT: 1}, "as_of_date_unavailable"),
+            ("null", {"metric_value": "42.00", tools._INTERNAL_MATCH_COUNT: 1, tools._INTERNAL_AS_OF_DATE: None}, "as_of_date_unavailable"),
+            ("empty_string", {"metric_value": "42.00", tools._INTERNAL_MATCH_COUNT: 1, tools._INTERNAL_AS_OF_DATE: ""}, "as_of_date_unavailable"),
+            ("malformed", {"metric_value": "42.00", tools._INTERNAL_MATCH_COUNT: 1, tools._INTERNAL_AS_OF_DATE: "2026/08/18"}, "as_of_date_invalid"),
+        )
+        for case_name, row, resolution_state in undefined_cases:
+            with self.subTest(undefined_case=case_name):
+                payload, result, sql_calls = run_query(
+                    f"overdue_{case_name}_as_of",
+                    [row],
+                )
+                self.assertEqual(1, len(sql_calls))
+                self.assertEqual("success", result["status"])
+                self.assertEqual("undefined", result["data_state"])
+                self.assertEqual(
+                    resolution_state,
+                    result["applied_time_range"]["resolution_state"],
+                )
+                self.assertEqual(1, len(result["claim_ledger"]))
+                claim = result["claim_ledger"][0]
+                self.assertIsNone(claim["facts"]["metric_value"])
+                self.assertTrue(tools.evidence.claim_is_valid_for_result(claim, result))
+                wire = json.dumps(payload, ensure_ascii=False)
+                self.assertNotIn("42.00", wire)
+                self.assertNotIn("2026/08/18", wire)
+
+        conflicting_payload, conflicting_result, conflicting_calls = run_query(
+            "overdue_conflicting_as_of",
+            [
+                {
+                    "metric_value": "21.00",
+                    tools._INTERNAL_MATCH_COUNT: 1,
+                    tools._INTERNAL_AS_OF_DATE: "2026-08-18",
+                },
+                {
+                    "metric_value": "21.00",
+                    tools._INTERNAL_MATCH_COUNT: 1,
+                    tools._INTERNAL_AS_OF_DATE: "2026-08-19",
+                },
+            ],
+        )
+        self.assertEqual(1, len(conflicting_calls))
+        self.assertEqual("undefined", conflicting_result["data_state"])
+        self.assertEqual(
+            "as_of_date_conflicting",
+            conflicting_result["applied_time_range"]["resolution_state"],
+        )
+        self.assertNotIn("21.00", json.dumps(conflicting_payload))
+
+        no_rows_payload, no_rows_result, no_rows_calls = run_query(
+            "overdue_no_rows_as_of",
+            [],
+        )
+        self.assertEqual(1, len(no_rows_calls))
+        self.assertEqual("undefined", no_rows_result["data_state"])
+        self.assertEqual(
+            "as_of_date_unavailable",
+            no_rows_result["applied_time_range"]["resolution_state"],
+        )
+        self.assertEqual(1, len(no_rows_result["claim_ledger"]))
+        self.assertIsNone(
+            no_rows_result["claim_ledger"][0]["facts"]["metric_value"]
+        )
+        self.assertNotIn("__as_of_date", json.dumps(no_rows_payload))
+
+        other_payload, other_result, other_calls = run_query(
+            "open_receivable_unchanged",
+            [{"metric_value": "12.00", tools._INTERNAL_MATCH_COUNT: 1}],
+            metric="open_receivable_amount",
+        )
+        self.assertEqual(1, len(other_calls))
+        self.assertNotIn("__as_of_date", other_calls[0])
+        self.assertEqual("rows", other_result["data_state"])
+        self.assertEqual(
+            {"source": "current_snapshot"}, other_result["applied_time_range"]
+        )
+        self.assertEqual("查询范围：当前业务快照", other_payload["answer_scope_line"])
+
+        current_catalog = json.loads(
+            contracts.datasage_catalog(
+                {
+                    "requests": [
+                        {
+                            "domain": "receivable",
+                            "metric": "overdue_receivable_amount",
+                        }
+                    ]
+                }
+            )
+        )
+        current_catalog.pop("content_hash")
+        stale_catalog = json.loads(
+            json.dumps(current_catalog, ensure_ascii=False).replace(
+                "截至数据库查询日，当前正数未结清应收中超过适用授信天数的部分按治理汇率折算后的人民币金额。",
+                "当前正数未结清应收中，超过适用授信天数的部分按治理汇率折算后的人民币金额。",
+            )
+        )
+        self.assertNotEqual(current_catalog, stale_catalog)
+        stale_receipt = hashlib.sha256(
+            json.dumps(
+                stale_catalog,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        stale_request = {
+            **base_request,
+            "request_id": "overdue_stale_receipt",
+            "detail_receipt": stale_receipt,
+        }
+        with mock.patch.object(
+            tools,
+            "_execute_with_source",
+            side_effect=AssertionError("stale receipt must fail before SQL"),
+        ) as execute:
+            stale_payload = json.loads(
+                tools.runtime_guarded_datasage_query(
+                    {"requests": [stale_request]}
+                )
+            )
+        execute.assert_not_called()
+        self.assertEqual("failed", stale_payload["status"])
+        self.assertEqual(
+            "METRIC_DETAIL_RECEIPT_INVALID", stale_payload["error"]["code"]
+        )
+        self.assertNotIn("42.00", json.dumps(stale_payload))
 
     def test_target_metric_ambiguity_requires_official_clarification(self) -> None:
         payload = json.loads(

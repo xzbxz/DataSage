@@ -128,6 +128,7 @@ _SNAPSHOT_TIME_SOURCES = {
 _INTERNAL_MATCH_COUNT = "__matched_row_count"
 _INTERNAL_SNAPSHOT_MONTH = "__snapshot_month"
 _INTERNAL_COMPARISON_SNAPSHOT_MONTH = "__comparison_snapshot_month"
+_INTERNAL_AS_OF_DATE = "__as_of_date"
 _INTERNAL_PARTITION_CURRENT = "__full_partition_metric_value"
 _INTERNAL_PARTITION_COMPARISON = "__full_partition_comparison_value"
 _INTERNAL_PARTITION_DELTA = "__full_partition_delta_value"
@@ -136,6 +137,7 @@ _INTERNAL_RESULT_FIELDS = {
     _INTERNAL_MATCH_COUNT,
     _INTERNAL_SNAPSHOT_MONTH,
     _INTERNAL_COMPARISON_SNAPSHOT_MONTH,
+    _INTERNAL_AS_OF_DATE,
     _INTERNAL_PARTITION_CURRENT,
     _INTERNAL_PARTITION_COMPARISON,
     _INTERNAL_PARTITION_DELTA,
@@ -1976,6 +1978,15 @@ def _build_metric_core(
             )
 
     time_policy = str(metric.get("time_policy") or "")
+    current_snapshot_evidence = metric.get("current_snapshot_evidence")
+    if current_snapshot_evidence is not None and (
+        time_policy != "current_snapshot"
+        or current_snapshot_evidence != "database_current_date"
+    ):
+        raise QueryFailure(
+            "CONTRACT_UNAVAILABLE",
+            "当前快照日期证据合同无效。",
+        )
     time_range = request.get("time_range")
     applied_time: dict[str, Any] | None = None
     if isinstance(time_range, dict):
@@ -2058,7 +2069,14 @@ def _build_metric_core(
                 where.append(f"{quoted_time} = ({max_snapshot_sql})")
                 applied_time = {"source": "latest_snapshot"}
         elif time_policy == "current_snapshot":
-            applied_time = {"source": "current_snapshot"}
+            applied_time = {
+                "source": "current_snapshot",
+                **(
+                    {"current_snapshot_evidence": current_snapshot_evidence}
+                    if current_snapshot_evidence is not None
+                    else {}
+                ),
+            }
         elif time_policy not in {"current_snapshot", ""}:
             raise QueryFailure("INVALID_PLAN", "该指标缺少必要时间范围。")
 
@@ -2127,6 +2145,15 @@ def _build_metric_core(
         evidence_columns.append(
             f"MAX({_qualified_identifier('f', time_field)}) "
             f"AS {_quote_identifier(_INTERNAL_SNAPSHOT_MONTH)}"
+        )
+    if (
+        isinstance(applied_time, Mapping)
+        and applied_time.get("source") == "current_snapshot"
+        and applied_time.get("current_snapshot_evidence")
+        == "database_current_date"
+    ):
+        evidence_columns.append(
+            f"CURDATE() AS {_quote_identifier(_INTERNAL_AS_OF_DATE)}"
         )
     completeness_measure = metric.get("completeness_measure")
     if completeness_measure is not None:
@@ -5724,6 +5751,60 @@ def _resolve_snapshot_time_evidence(
     return resolved, resolved_state
 
 
+def _normalized_as_of_date(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if not isinstance(value, str) or re.fullmatch(r"\d{4}-\d{2}-\d{2}", value) is None:
+        raise ValueError("invalid as-of date")
+    return date.fromisoformat(value).isoformat()
+
+
+def _resolve_current_as_of_date_evidence(
+    value: Mapping[str, Any],
+    rows: Sequence[Mapping[str, Any]],
+    data_state: str,
+) -> tuple[dict[str, Any], str, bool]:
+    """Bind one contract-selected current snapshot to its same-query date."""
+
+    if value.get("source") != "current_snapshot":
+        raise QueryFailure(
+            "CONTRACT_UNAVAILABLE",
+            "当前快照日期证据与时间范围不一致。",
+            stage="result_validation",
+        )
+    public = dict(value)
+    dates: set[str] = set()
+    missing = not rows
+    invalid = False
+    for row in rows:
+        raw_date = row.get(_INTERNAL_AS_OF_DATE)
+        if _INTERNAL_AS_OF_DATE not in row or raw_date is None or raw_date == "":
+            missing = True
+            continue
+        try:
+            dates.add(_normalized_as_of_date(raw_date))
+        except (TypeError, ValueError):
+            invalid = True
+    if invalid:
+        public["resolution_state"] = "as_of_date_invalid"
+        return public, "undefined", True
+    if len(dates) > 1:
+        public["resolution_state"] = "as_of_date_conflicting"
+        return public, "undefined", True
+    if missing or not dates:
+        public["resolution_state"] = "as_of_date_unavailable"
+        return public, "undefined", True
+    public.update(
+        {
+            "as_of_date": next(iter(dates)),
+            "resolution_state": "resolved",
+        }
+    )
+    return public, data_state, False
+
+
 def _scope_texts(value: Any) -> list[str]:
     """Render validated time metadata as business language, preserving order."""
     if not isinstance(value, Mapping):
@@ -5743,6 +5824,9 @@ def _scope_texts(value: Any) -> list[str]:
         except ValueError:
             return []
     source = value.get("source")
+    as_of_date = value.get("as_of_date")
+    if source == "current_snapshot" and isinstance(as_of_date, str):
+        return [f"截至 {as_of_date} 的当前业务快照"]
     snapshot_month = value.get("snapshot_month")
     if isinstance(snapshot_month, str):
         if source == "latest_non_null_snapshot":
@@ -5757,6 +5841,12 @@ def _scope_texts(value: Any) -> list[str]:
         if source == "latest_snapshot":
             return [f"{snapshot_month} 月末业务快照"]
     if source == "current_snapshot":
+        if value.get("resolution_state") in {
+            "as_of_date_unavailable",
+            "as_of_date_invalid",
+            "as_of_date_conflicting",
+        }:
+            return ["当前业务快照截至日期证据不可用"]
         return ["当前业务快照"]
     if source == "latest_snapshot":
         return ["业务月末快照月份证据不可用"]
@@ -7087,7 +7177,14 @@ def _run_one(
         sql, params, scope = _build_metric_query(
             request, datasets, semantics, limit
         )
-        applied_time_range = _public_time_range(scope.get("time_range"))
+        private_time_range = scope.get("time_range")
+        applied_time_range = _public_time_range(private_time_range)
+        requires_current_as_of_date = (
+            isinstance(private_time_range, Mapping)
+            and private_time_range.get("source") == "current_snapshot"
+            and private_time_range.get("current_snapshot_evidence")
+            == "database_current_date"
+        )
         current_stage = "business_sql"
         business_sql_attempted_count = 1
         executor = execute_query or _execute_with_source
@@ -7115,6 +7212,17 @@ def _run_one(
             rows,
             data_state,
         )
+        if requires_current_as_of_date:
+            applied_time_range, data_state, as_of_evidence_failed = (
+                _resolve_current_as_of_date_evidence(
+                    applied_time_range,
+                    rows,
+                    data_state,
+                )
+            )
+            if as_of_evidence_failed:
+                public_rows = [{"metric_value": None}]
+                truncated = False
         elapsed_ms = int((time.monotonic() - started) * 1000)
         metric_ref = _business_metric_ref(request)
         metric_label = _business_metric_label(scope, semantics)

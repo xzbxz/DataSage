@@ -795,12 +795,13 @@ metrics:
         mode: contract_only
         text: "逾期按客户、组织、币种授信天数逐笔判断；无授信或授信天数为空的明细不计入，需说明覆盖范围。"
     label: 逾期应收金额（人民币）
-    business_definition: 当前正数未结清应收中，超过适用授信天数的部分按治理汇率折算后的人民币金额。
+    business_definition: 截至数据库查询日，当前正数未结清应收中超过适用授信天数的部分按治理汇率折算后的人民币金额。
     unit: 人民币元
     table: vk_dwd.receivable_bill_detail_dwd
     aggregation: sum_product
     measure_columns: [detail_unsettled_amount, exchange_rate]
     time_policy: current_snapshot
+    current_snapshot_evidence: database_current_date
     required_filters: {bill_status: {op: ne, value: A}, detail_unsettled_amount: {op: gt, value: 0}}
     metric_join:
       <<: *credit_policy_join
