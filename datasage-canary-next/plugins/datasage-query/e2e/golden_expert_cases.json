@@ -1,7 +1,7 @@
 {
   "schema": "datasage-golden-expert-cases/v1",
   "suite": "digital-expert-kernel-stage1",
-  "minimum_case_count": 30,
+  "minimum_case_count": 31,
   "required_category_minimums": {
     "change_diagnosis": 5,
     "target_gap": 4,
@@ -10,7 +10,8 @@
     "top_n": 3,
     "partial_failure": 3,
     "permission_denied": 2,
-    "causal_boundary": 3
+    "causal_boundary": 3,
+    "unsupported_metric": 1
   },
   "cases": [
     {
@@ -94,6 +95,16 @@
       "allowed_conclusions": ["refuse_unavailable_capability", "disclose_data_limits"],
       "forbidden_conclusions": ["substitute_department_target", "invent_salesperson_target", "claim_success"],
       "evidence_requirements": {"required_receipts": ["catalog"], "minimum_successful_queries": 0, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": true, "required_error_codes": ["CAPABILITY_UNAVAILABLE"]}
+    },
+
+    {
+      "id": "unsupported_01_delivery_gross_profit", "category": "unsupported_metric", "conversation_id": "unsupported_01", "turn": 1,
+      "prompt": "公司本月出库毛利润是多少？如果出库域没有受治理的毛利润指标，就明确说明该域不支持；不要用净出库额或库存成本替代，也不要自行相减。",
+      "expected_plan": {"domains": ["delivery"], "metrics": [], "dimensions": [], "operations": ["capability_check"], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": ["delivery_amount", "current_inventory_amount_rmb"]},
+      "required_conclusions": ["report_domain_metric_gap", "state_no_substitution"],
+      "allowed_conclusions": ["report_domain_metric_gap", "state_no_substitution", "disclose_data_limits"],
+      "forbidden_conclusions": ["substitute_delivery_amount", "substitute_inventory_cost", "derive_unregistered_profit", "claim_global_unsupported", "invent_result"],
+      "evidence_requirements": {"required_receipts": ["catalog"], "minimum_successful_queries": 0, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": true, "required_error_codes": []}
     },
 
     {
