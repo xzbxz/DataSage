@@ -13,7 +13,10 @@ import unittest
 from unittest import mock
 
 import yaml
+from agent.turn_context import build_turn_context
+from hermes_cli.plugins import PluginManager
 from tools import clarify_tool as _hermes_clarify_registration  # noqa: F401
+from tools import hook_output_spill as hermes_hook_output_spill
 from tools import tool_search as hermes_tool_search
 from tools.registry import ToolRegistry, registry as hermes_registry
 
@@ -61,6 +64,98 @@ runtime_health = _load_module("runtime_health")
 entitlements = _load_module("entitlements")
 skill_prompt = _load_module("skill_prompt")
 schemas = _load_module("schemas")
+
+
+class _TurnTodoStore:
+    def has_items(self):
+        return True
+
+
+class _TurnGuardrails:
+    def reset_for_turn(self):
+        pass
+
+
+class _WeComTurnAgent:
+    """Small host double matching the public turn-context seam."""
+
+    def __init__(self):
+        self.session_id = "datasage-skill-spill-regression"
+        self.model = "test/model"
+        self.provider = "openrouter"
+        self.base_url = "https://example.invalid/v1"
+        self.api_key = "test-key"
+        self.api_mode = "chat_completions"
+        self.platform = "wecom"
+        self.quiet_mode = True
+        self.max_iterations = 90
+        self.tools = []
+        self.valid_tool_names = set()
+        self._skip_mcp_refresh = True
+        self.compression_enabled = False
+        self.context_compressor = types.SimpleNamespace(
+            protect_first_n=2,
+            protect_last_n=2,
+        )
+        self._cached_system_prompt = "SYSTEM"
+        self._memory_store = None
+        self._memory_manager = None
+        self._memory_nudge_interval = 0
+        self._turns_since_memory = 0
+        self._user_turn_count = 0
+        self._todo_store = _TurnTodoStore()
+        self._tool_guardrails = _TurnGuardrails()
+        self._compression_warning = None
+        self._interrupt_requested = False
+        self._memory_write_origin = "assistant_tool"
+        self._stream_context_scrubber = None
+        self._stream_think_scrubber = None
+        self.api_content_at_persist = "<unset>"
+
+    def _ensure_db_session(self):
+        pass
+
+    def _restore_primary_runtime(self):
+        pass
+
+    def _cleanup_dead_connections(self):
+        return False
+
+    def _emit_status(self, _message):
+        pass
+
+    def _replay_compression_warning(self):
+        pass
+
+    def _hydrate_todo_store(self, *_args, **_kwargs):
+        pass
+
+    def _safe_print(self, *_args, **_kwargs):
+        pass
+
+    def _persist_session(self, messages, _history=None):
+        self.api_content_at_persist = messages[-1].get("api_content")
+
+
+def _build_wecom_turn_context(agent):
+    return build_turn_context(
+        agent=agent,
+        user_message="hello",
+        system_message=None,
+        conversation_history=None,
+        task_id=None,
+        stream_callback=None,
+        persist_user_message=None,
+        restore_or_build_system_prompt=lambda *_args, **_kwargs: None,
+        install_safe_stdio=lambda: None,
+        sanitize_surrogates=lambda value: value,
+        summarize_user_message_for_log=lambda value: value,
+        set_session_context=lambda _session_id: None,
+        set_current_write_origin=lambda _origin: None,
+        ra=lambda: types.SimpleNamespace(
+            _set_interrupt=lambda *_args, **_kwargs: None
+        ),
+    )
 
 
 class RuntimeBoundaryTests(unittest.TestCase):
@@ -205,6 +300,119 @@ class GitGovernedSkillTests(unittest.TestCase):
             normalized,
         )
         self.assertIsNone(hook(platform="cli", is_first_turn=True))
+
+    def test_official_plugin_manager_turn_context_does_not_spill_main_skill(self):
+        profile_config = yaml.safe_load(
+            (PROFILE_ROOT / "config.yaml").read_text(encoding="utf-8")
+        )
+        max_chars = profile_config["hooks"]["output_spill"]["max_chars"]
+        manager = PluginManager()
+        isolated_registry = ToolRegistry()
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            temporary_root = Path(raw_root)
+            empty_bundled = temporary_root / "bundled-plugins"
+            empty_bundled.mkdir()
+            spill_root = temporary_root / "hook-output-spill"
+            spill_config = {
+                "enabled": True,
+                "max_chars": max_chars,
+                "preview_head": 500,
+                "preview_tail": 500,
+                "directory": str(spill_root),
+            }
+
+            with (
+                mock.patch(
+                    "hermes_cli.plugins.get_bundled_plugins_dir",
+                    return_value=empty_bundled,
+                ),
+                mock.patch(
+                    "hermes_cli.plugins.get_hermes_home",
+                    return_value=PROFILE_ROOT,
+                ),
+                mock.patch.object(manager, "_scan_entry_points", return_value=[]),
+                mock.patch(
+                    "hermes_cli.plugins._get_enabled_plugins",
+                    return_value={"datasage-query"},
+                ),
+                mock.patch(
+                    "hermes_cli.plugins._get_disabled_plugins",
+                    return_value=set(),
+                ),
+                mock.patch("tools.registry.registry", isolated_registry),
+            ):
+                manager.discover_and_load()
+
+            loaded = manager._plugins["datasage-query"]
+            self.assertTrue(loaded.enabled)
+            self.assertIsNone(loaded.error)
+            self.assertEqual(
+                {
+                    "datasage_catalog",
+                    "datasage_entity_resolve",
+                    "datasage_query",
+                    "datasage_reference",
+                },
+                manager._plugin_tool_names,
+            )
+
+            expected = manager.invoke_hook(
+                "pre_llm_call",
+                platform="wecom",
+                is_first_turn=True,
+            )[0]["context"]
+            self.assertLess(len(expected), max_chars)
+
+            agent = _WeComTurnAgent()
+            with (
+                mock.patch(
+                    "hermes_cli.lifecycle.invoke_hook",
+                    side_effect=manager.invoke_hook,
+                ),
+                mock.patch(
+                    "tools.hook_output_spill.get_spill_config",
+                    return_value=spill_config,
+                ),
+                mock.patch.object(
+                    hermes_hook_output_spill,
+                    "spill_if_oversized",
+                    wraps=hermes_hook_output_spill.spill_if_oversized,
+                ) as spill_if_oversized,
+                mock.patch(
+                    "agent.auxiliary_client.set_runtime_main",
+                    lambda *_args, **_kwargs: None,
+                ),
+            ):
+                turn = _build_wecom_turn_context(agent)
+
+            current_message = turn.messages[turn.current_turn_user_idx]
+            self.assertEqual(expected, turn.plugin_user_context)
+            self.assertEqual(
+                "hello\n\n" + expected,
+                current_message["api_content"],
+            )
+            self.assertEqual(
+                current_message["api_content"],
+                agent.api_content_at_persist,
+            )
+            spill_if_oversized.assert_called_once()
+            self.assertEqual(
+                max_chars,
+                spill_if_oversized.call_args.kwargs["config"]["max_chars"],
+            )
+            self.assertNotIn("[plugin hook output truncated", turn.plugin_user_context)
+            self.assertFalse(list(spill_root.rglob("*.txt")))
+            normalized = " ".join(turn.plugin_user_context.split())
+            for required in (
+                "`expert_index -> metric_detail -> query`",
+                "official Hermes `clarify`",
+                "typed `undefined`",
+                "ranked or Top-N result",
+                "Never describe structural contribution as a cause",
+                "For every sealed `disclosure_ledger` item",
+            ):
+                self.assertIn(required, normalized)
 
     def test_hermes_clarify_stays_direct_and_datasage_catalog_is_searchable(self):
         self.assertIn("clarify", HERMES_CORE_TOOL_NAMES)

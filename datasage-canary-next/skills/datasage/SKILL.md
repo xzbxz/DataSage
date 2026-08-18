@@ -4,323 +4,219 @@ description: Internal company facts requiring DataSage lookup only.
 ---
 
 # DataSage
-Add governed internal evidence to the normal Hermes reasoning loop. Hermes
-remains responsible for language understanding, planning, and explanation. The
-plugin authorizes metrics and queries.
 
-## Contract
+Add governed internal evidence to Hermes' normal reasoning loop. Hermes keeps
+language understanding, planning, memory, tools, and explanation; the plugin
+alone authorizes business metrics and queries.
 
-- Use DataSage only for branches that need new internal facts. Preserve ordinary
-  conversation, public or user-provided analysis, writing, and planning.
+## Boundaries
+
+- Use DataSage only when a branch needs new internal facts. Preserve ordinary
+  conversation and public or user-provided analysis, writing, and planning.
 - Let the plugin own catalog projection, semantic validation, deterministic
-  compilation, read-only execution, and typed evidence states.
+  compilation, read-only execution, permissions, and typed evidence states.
 - Never author or submit SQL, tables, joins, physical fields, formulas, or
-  unrestricted predicates.
-- Never replace a requested metric with a nearby measure. If the governed
-  capability is absent, name the unavailable fact.
-- When a required `datasage_*` schema is not a direct entry in the current tool
-  table, use Hermes' `tool_search` to find its exact registered name,
-  `tool_describe` to read its schema, and `tool_call` to invoke it. This changes
-  only tool disclosure: authorization, query preflight, evidence boundaries,
-  and non-causality rules remain unchanged. Never guess a tool name or argument.
+  unrestricted predicates. Never replace an unavailable metric with a nearby
+  measure; name the unavailable fact.
+- When a required `datasage_*` schema is absent from the current tool table, use
+  Hermes' `tool_search` for its exact registered name, `tool_describe` for its
+  schema, and `tool_call` to invoke it. Only disclosure changes: authorization,
+  query preflight, evidence boundaries, and non-causality rules do not.
+  Never guess a tool name or argument.
 
-## Adaptive expert loop
+## Governed expert loop
 
-Reason naturally. For internal-data work, **Frame -> Plan -> Query -> Answer**
-is a compact scaffold, not a router, mandatory sequence, or response template.
+Use **Frame -> Plan -> Query -> Answer** as a compact scaffold, not a router,
+mandatory sequence, or response template. Preserve independent sub-questions,
+corrections, comparisons, subject, time, grain, and scope. Ask only about an
+ambiguity that could materially change the evidence.
 
-### Frame
+### Select the governed metric
 
-Preserve every independent sub-question, correction, comparison, and requested
-scope. Identify the decision need, subject, time range, grain, and only those
-ambiguities that could materially alter the evidence. Do not squeeze a hybrid
-question into one intent.
-
-Ask a concise clarification when materially different valid interpretations
-remain and context cannot support a transparent assumption. Do not ask merely
-because several metrics or periods exist.
-
-Resolve metric or definition ambiguity before any `datasage_query`, unless
-existing context transparently supports one interpretation. Catalog inspection
-may clarify choices but does not authorize a query while materially different
-metrics remain. Do not run source-exact discovery until one metric is selected.
+Resolve definition ambiguity before any query. Inspect the smallest useful
+`datasage_catalog` surface: normally the likely domain's `expert_index`, then
+only the selected metric detail. Select only returned codes from returned
+labels and definitions; never invent or probe synonyms.
 
 After `expert_index`, follow its `metric_selection_boundary`. If multiple
 materially distinct returned metrics remain compatible, call the official
 Hermes `clarify` tool directly. Before the user's clarification response,
 metric-detail calls and `datasage_query` calls must both be zero. Querying every
 candidate is not clarification. Query both target-completion metrics only when
-the user explicitly selects both or the original question explicitly asks for
-both. If no returned metric in the current requested domain is compatible,
-treat that only as a domain-local gap and keep metric-detail and
-`datasage_query` calls at zero. Check one other expert index only when the
-user's semantics explicitly support that single minimal related domain;
-otherwise report the domain-local gap or clarify. Never enumerate every domain
-or claim that the metric is globally unsupported from one domain's index.
+the user selected both or originally asked for both. If none matches in the
+requested domain, treat that as a domain-local gap. Check one other expert
+index only when the user's semantics support that single minimal related
+domain; otherwise report the gap or clarify. Never enumerate every domain or
+infer global absence from one index.
 
-### Plan
+Before any `datasage_catalog` call, route formal receivable turnover days or
+formal DSO to the `customer_risk` expert index: the first catalog request for
+that branch must be only `{domain: customer_risk, view: expert_index}`. Do not
+begin that formal-turnover branch with a `receivable` expert index or summary as
+a discovery detour. A request for ordinary net debt, aging, or overdue
+receivables without that formal meaning stays in the `receivable` domain.
 
-Request the smallest sufficient evidence bundle, adapting breadth to the
-question. One exact metric may answer a lookup; diagnosis may need several
-independent metrics, comparisons, or decompositions. Give independent
-sub-questions distinct `request_id` values and batch compatible requests when
-useful.
+The default governance path is `expert_index -> metric_detail -> query`. A
+direct query is allowed only when `expert_index` identifies one unambiguous
+metric with `exact_default_lookup_supported: true` and the request has no
+explicit qualifier. Load detail if `requires_metric_detail: true`, if that flag
+is false or missing, or if any qualifier exists. `calendar_month` and
+`time_range` are explicit qualifiers, as are dimensions, filters, entities,
+comparisons, decompositions, and rankings; empty `dimensions: []` is not. If a
+full catalog summary has zero or multiple matching defaults, clarify first.
 
-Inspect the smallest useful `datasage_catalog` surface. For an unknown metric,
-request a likely domain with `view: expert_index`; after selection, request
-only relevant detail. Do not probe every domain or default an unknown request
-to a convenient domain.
+### Plan and bind scope
 
-Before any `datasage_catalog` call, route an explicit request for formal
-receivable turnover days or formal DSO to the `customer_risk` expert index:
-the first catalog request for that branch must be only
-`{domain: customer_risk, view: expert_index}`. Do not begin that formal-turnover
-branch with a `receivable` expert index or summary as a discovery detour. A
-request for ordinary net debt, aging, or overdue receivables without that
-formal turnover meaning stays in the `receivable` domain; do not move it
-merely because both domains concern debt.
+Request the smallest sufficient evidence bundle. Give independent requests
+unique `request_id` values and batch compatible requests. A scalar may answer a
+lookup; a comparison, ranking, structure analysis, or diagnosis can require
+more. Prefer one governed `complete_change_decomposition` for a contribution
+question over several truncated rankings. Use ranking (`order_by` plus `limit`)
+for largest/smallest questions and normally keep one ranking of at most 10 rows.
+Normally batch overall, comparison, and one targeted follow-up, but use no fixed
+metric, query, follow-up, or round count; depth follows material evidence gaps.
 
-Use a full catalog summary's unique exact governed default when it matches the
-user's wording and no explicit qualifier has higher priority; if zero or
-multiple governed defaults match, clarify before any `datasage_query`.
-
-The catalog is authoritative for metric codes. Select from returned business
-labels and definitions. On an unambiguous match, reuse that exact returned
-code; never invent or probe code synonyms. Otherwise keep the gap explicit.
-
-Query an exact governed default directly only when `expert_index` identifies
-one unambiguous metric with `exact_default_lookup_supported: true` AND the
-request has no explicit qualifier. Treat `calendar_month` and `time_range` as
-explicit, non-default qualifiers, as well as dimensions, filters, entities,
-comparisons, decompositions, and rankings. If `requires_metric_detail: true`,
-or `exact_default_lookup_supported` is false or missing, load the selected
-metric detail before `datasage_query`. Any explicit qualifier also makes the
-selected metric detail mandatory before query, even when
-`exact_default_lookup_supported: true`. An empty `dimensions: []` value is not
-a business qualifier.
-
-Analysis-class planning rules. For why/change/contribution questions
-("为什么变好", "为什么没达标", "主要来自哪"), prefer, in order: one
-`complete_change_decomposition` (a single governed reconciled request) over
-several truncated Top-N rankings; a scalar overall plus one comparison over
-duplicate same-scope lookups. A ranking request (`order_by` + `limit`) serves
-"who is largest/smallest/most" questions; use at most one ranking request per
-turn and keep its `limit` small (10 or fewer rows) — extra rows mostly
-duplicate evidence without changing the answer. Keep a batch to at most three
-requests: overall, comparison, then targeted follow-up only when the returned
-evidence leaves a material gap. These are priority guidance, not hard caps:
-a question that genuinely spans several independent sub-questions may still
-batch more requests, and each request must remain complete and well-scoped.
-
-Playbooks are optional. When one materially helps, use the bounded
-`datasage_reference` facade with `source_id: expert_playbooks` and one exact
-enumerated `section_id` such as `playbook.change_diagnosis`. The facade is
-available on WeCom and cannot read an arbitrary path.
-
-A playbook or `evidence_role` is not a recipe, router, stop condition, query
-right, or proof.
+Optional playbooks come only through `datasage_reference` with
+`source_id: expert_playbooks` and an exact allowed `section_id`. A playbook or
+`evidence_role` is not a router, query right, proof, or stop condition.
 
 Use `datasage_entity_resolve` only for entity search or when exact preflight
-cannot prove one compatible identity. Resolve again only when new user context
-or a newly returned ambiguity materially changes the candidate space and
-another resolution can change the result. Never repeat identical resolution
-input or candidates merely for confirmation; there is no fixed attempt count.
+cannot prove one identity. Repeat only if new context changes the candidates
+and could change the result; never repeat identical input for confirmation.
 
-Treat `source_exact` dimensions such as `organization` and `customer_region`
-as governed source labels, not entities. Never send unresolved free text in
-`metric_filters`, and do not route it through `datasage_entity_resolve`. First
-run a bounded dimension discovery at the same domain and period without that
-filter. Bind only a unique exact compatible candidate for which the returned
-evidence provides a transparent and auditable binding to the user's token;
-then retry the original operation with that exact returned label and preserve
-its metric, domain, period, dimensions, and other filters. Ask the user to
-clarify when there are multiple compatible candidates. Treat zero compatible
-candidates or a truncated discovery as unresolved and stop the dependent
-query. Stop discovery on its typed outcome and semantic fingerprint: do not
-repeat the same discovery, and use no fixed discovery count. Do not guess,
-fuzzy-match, translate, or remove the filter. An empty business result is not
-proof of a zero or proof that the unresolved free text was a valid source
-label.
+For `source_exact` dimensions such as `organization` and `customer_region`,
+never place unresolved free text in `metric_filters` or entity resolution.
+Make one bounded dimension discovery for the same domain, metric, and period
+without that filter. Bind only a unique exact returned compatible label with an
+auditable link to the user's token, then retry while preserving all other
+scope. Multiple candidates require clarification. Zero candidates or truncated
+discovery is terminal for that semantic fingerprint and dependent query. Do
+not widen time, search other dimensions, fuzzy-match, translate, guess, remove
+the filter, or repeat the discovery. Empty data proves neither zero nor a valid
+label. A follow-up replacement changes only the binding named by the user.
 
-Allow one completed bounded discovery per semantic fingerprint. Its terminal
-typed outcome governs that same dimension, domain, metric, and period; do not
-search additional dimensions or widen the period to rescue an unresolved
-token. Zero compatible candidates or a truncated discovery immediately stops
-the dependent query. Never submit the unresolved token in `metric_filters`.
-This is a per-fingerprint terminal rule, not a fixed catalog or discovery count
-for unrelated evidence needs.
+### Query and investigate
 
-On a follow-up that replaces a source-exact binding, replace only the binding
-named by the user and preserve every other exact token and query scope. Do not
-reinterpret an unchanged token merely because a new value was supplied for a
-different binding.
+Send complete registered semantic requests. Every follow-up preserves metric,
+period, filters, dimensions, comparison, and entity scope. Purpose or desired
+scope is intent, not evidence.
 
-### Query
+Interpret returned `evidence-bundle/v1` coverage, completeness, reconciliation,
+supported claim types, seals, limitations, and gaps. Do not reconstruct a
+stronger state from displayed rows. Inspect coverage receipts before a targeted
+follow-up. Do not re-query the same semantic fingerprint for confirmation once
+it supplies the needed proof or a typed terminal state. Stop when the requested
+depth is supported, uncertainty is bounded, or another query has low decision
+value.
 
-Send complete registered semantic requests with unique `request_id` values.
-Preserve metric, period, filters, dimensions, comparison, and entity scope in
-every follow-up. A request name, purpose, or desired scope states intent and
-does not constitute evidence.
+For causal wording, **observe before refuse**: verify each requested governed
+observation separately before judging the causal link. Until verified, call it
+a user-provided premise. Missing causal evidence blocks only causality, not
+supported descriptive branches. Co-movement, reconciliation, an accounting
+identity, or independent marginals never authorizes causality, overlap, or a
+preferred hypothesis. When a governed dimension category is named without an
+entity, query its supported decomposition or change view; report only returned
+observation or reconciled structure.
 
-Interpret the returned `evidence-bundle/v1`: coverage, completeness,
-reconciliation, supported claim types, limitations, and material gaps. Do not
-reconstruct a stronger state from displayed rows or treat every gap as a retry
-command. Inspect coverage receipts before a follow-up. Do not re-query the same
-semantic fingerprint merely for confirmation when it already supplies the
-required proof capability or a typed terminal state.
+## Answer contract
 
-Prefer a sufficient first batch. Add targeted evidence while a gap could
-materially change the answer. Stop when requested depth is supported, remaining
-uncertainty is bounded, or further querying has low decision value. Use no
-fixed metric, query, follow-up, or round count.
+Lead with the useful conclusion. Keep distinct: verified returned facts;
+user-provided premises; reconciled non-causal structural contribution;
+hypotheses; and causal conclusions, which require independent returned
+mechanism or identification evidence. Reconciliation applies only to returned
+rows. A truncated Top-N or manual sum cannot establish full reconciliation.
 
-For causal wording over requested internal facts, **observe before refuse**.
-Verify each requested governed observation with the smallest catalog surface
-and its governed query before judging the causal link. For example, verify a
-target gap and a product change as separate evidence branches when both are in
-the question. Until returned evidence confirms them, label each as a
-user-provided premise. Do not replace observation queries with an early causal
-refusal. Missing causal evidence blocks only the causal claim; it does not
-block supported target-gap, change, or other descriptive queries. Returned
-co-movement or reconciled structure may support observation or composition but
-does not authorize causality.
-
-When the user names a governed dimension category without a specific entity,
-query that dimension's governed decomposition or change view when the selected
-metric supports it. The missing entity name does not authorize skipping the
-descriptive branch. Report only the returned observation or reconciled
-structure; it does not authorize causality.
-
-### Answer
-
-Lead with the useful conclusion and adapt depth to the question. Keep these five
-evidence types distinct:
-
-1. **Verified fact** — directly returned evidence, including a governed
-   calculated metric.
-2. **User-provided premise** — attributed to the user; usable for scope or
-   conditional reasoning, but not independently verified.
-3. **Structural contribution** — a returned accounting contribution supported
-   by complete compatible reconciliation.
-4. **Hypothesis** — a plausible, neutral explanation not proved by current
-   evidence.
-5. **Causal conclusion** — requires independent returned mechanism or
-   identification evidence that distinguishes it from alternatives.
-
-Reconciliation authorizes structural contribution for returned rows only.
-Structural contribution is not causality and never authorizes a cause, main
-cause, or driver. An ordinary truncated Top-N, manual sum, or accounting
-identity does not establish reconciliation or complete-population detail.
-
-For an amount metric and delivery-producing order count, call the ratio only
-average returned amount per such order—not volume, quantity, price, unit price,
-or a volume-price effect. It cannot allocate contributions or favor an
-explanation.
-
-Independent marginals authorize separate within-dimension observations only;
-they do not show overlap, correspondence, or one business block. Similar shares
-cannot support a joint relationship or preferred hypothesis. Negative rows do
-not establish event counts, broad mechanisms, exclusions, or relative
-likelihoods.
+An amount divided by delivery-producing order count is only average returned
+amount per such order, never volume, quantity, price, unit price, or a
+volume-price effect. It does not allocate contributions. Judge norms only from
+returned benchmarks.
 
 Finalization:
 
 - When `answer_scope_line` is non-empty, faithfully state its actual returned
-  range; equivalent wording is allowed, but do not change the range. Raw JSON
-  is not required.
+  range; equivalent wording may not change it.
 - For every sealed `disclosure_ledger` item whose `applies` value is `true`,
   fully cover all of its independent business propositions. Natural rewording
-  and lossless merging of overlapping propositions are allowed, but do not omit,
-  change the meaning of, or broaden an inclusion, exclusion, definition, or
-  conditional scope to another request, metric, or domain. Semicolon-separated,
-  coordinated, and conditional clauses are not discardable background. Consume
-  only the returned ledger at finalization; never start another catalog, detail,
-  or query call merely to restate a disclosure. Include unit and currency when
-  returned and applicable. Raw JSON is not required.
+  and lossless merging of overlaps are allowed, but never omit, change, or
+  broaden an inclusion, exclusion, definition, or conditional scope to another
+  request, metric, or domain. Semicolon-separated, coordinated, and conditional
+  clauses remain material. Consume only the returned ledger; never start
+  another catalog, detail, or query call merely to restate a disclosure. State
+  returned applicable unit and currency. Raw JSON is unnecessary.
 - For `formal_receivable_turnover_days`, follow the selected metric detail's
   `answer_contract` only when the same returned claim contains a
   `formal-receivable-turnover-calculation-attestation/v1` with `status:
   verified`, a valid `attestation_seal`, and a valid enclosing `claim_seal`.
-  State the formal calculation formula only when that verified attestation
-  also confirms that both the formula disclosure and the two-sided
-  external-customer-scope disclosure are applicable and validly sealed.
-  Then present the returned formal turnover value, returned average net debt,
-  returned natural-day period, month-end snapshot count, and effective-month
-  count, and state the attested gross-delivery denominator meaning; preserve
-  the two-sided external-customer scope from every applicable sealed
-  disclosure. The attestation proves component participation and coverage, not
-  hidden values, so never invent a denominator amount. If the attestation is
-  missing, invalid, or `status: undefined`, preserve the exact returned typed
-  state and do not make a formal turnover numeric or component-formula
+  State the formal formula only if it confirms both the formula disclosure and
+  the two-sided external-customer-scope disclosure are applicable and validly
+  sealed. Then present the returned turnover value, average net debt,
+  natural-day period, month-end snapshot count, effective-month count, attested
+  denominator meaning, and every applicable sealed two-sided scope disclosure.
+  It proves participation and coverage, not hidden values: never invent a
+  denominator amount. If it is missing, invalid, or `status: undefined`, keep
+  the typed state and do not make a formal turnover numeric or component-formula
   assertion. `undefined` or `partial` is a governed result state, not a tool
-  error: keep independently sealed non-formula facts and disclosures available
-  within their own bounds. Do not re-query merely to repair or restate this
-  finalization contract.
-- A new difference, ratio, share, or percentage requires a successful governed
-  calculation with a `calculation_seal` bound to sealed operands; never derive
-  one from visible values.
-- A display-only unit conversion may use a fixed conversion factor only for one
-  returned value; preserve meaning, state the new unit, and create no new metric
+  error; retain independently sealed non-formula facts and disclosures within
+  their bounds. Do not re-query merely to repair or restate this finalization
+  contract.
+- A new difference, ratio, share, or percentage needs a successful governed
+  calculation whose `calculation_seal` covers sealed operands; never derive it
+  from displayed values. A fixed-factor display conversion may transform one
+  returned value only; preserve meaning, state the unit, and create no metric
   or relationship.
 - For every ranked or Top-N result, read the returned `datasage_query`
-  `truncated` and `data_state` fields before finalizing. If `truncated: true`
-  OR `data_state: truncated`, explicitly disclose that only the requested Top
-  N is returned and that the source result was truncated; never imply a
-  complete ranking. When `truncated` is not `true` AND `data_state` is not
-  `truncated`, do not claim or imply that the result is truncated.
-- Authorize a structural-contribution conclusion only when `operation` is
+  `truncated` and `data_state` fields before finalizing. If `truncated: true` OR
+  `data_state: truncated`, state that only the requested Top N is returned and
+  the source result was truncated; never imply a complete ranking. When
+  `truncated` is not `true` AND `data_state` is not `truncated`, do not claim or
+  imply that the result is truncated.
+- Authorize structural contribution only when `operation` is
   `complete_change_decomposition` AND the returned
-  `change_reconciliation.status` is explicitly `reconciled`; a general
-  `status: success` does not authorize it. Then use “结构贡献” / “structural
-  contribution”, or a strictly equivalent non-causal accounting term, in the
-  final answer. Link the
-  returned overall delta to the contribution amount for every returned
-  partition using only that partition's returned `delta_value`; cover all
-  returned partitions using the response's reconciliation basis. Call a
-  partition a structural contributor and report a rate only when that same
-  returned claim has `structural_contribution` in `allowed_relations` and its
-  valid seal covers a returned `facts.net_change_contribution_rate`. A
-  zero-delta partition or a claim without that relation is not a structural
-  contributor and has no zero rate to fill. Never describe structural
-  contribution as a cause, driver, or causal explanation. Use each authorized
-  returned decimal-string rate directly. It is a signed dimensionless fraction:
-  `1` means `100%`; negative values and absolute values greater than `1` are
-  valid. Preserve the sign and value; for percentage display, multiply by 100
-  exactly once and use one consistent display precision across partitions.
-  Preserve every nonzero direction: when a nonzero percentage would round to
-  zero at that precision, show `0 < rate < threshold` for a positive rate or
-  `-threshold < rate < 0` for a negative rate, where `threshold` is the smallest
-  positive percentage unit at the chosen precision; never show it as `0.00%` or
-  `-0.00%`. Never recompute a rate from visible amounts, scale it twice, take
-  its absolute value, clamp it, normalize partition rates to 100%, or force them
-  to sum to 100%. If the response does not return this field, do not calculate,
-  infer, or invent it; absence for a zero overall delta or zero partition delta
-  is not a zero rate. When the returned `change_reconciliation.status` is
-  `not_reconciled`, or when `change_reconciliation` or its status is missing,
-  preserve the returned gap or local-result scope and never call it structural
-  contribution.
+  `change_reconciliation.status` is explicitly `reconciled`; a general `status:
+  success` does not authorize it. Use “结构贡献” / “structural contribution” or
+  a strictly equivalent non-causal accounting term. Link the returned overall
+  delta to every partition's contribution amount using only that partition's
+  returned `delta_value`; cover all returned partitions using the response's
+  reconciliation basis. Call a partition a structural contributor and report a
+  rate only when that same returned claim has `structural_contribution` in
+  `allowed_relations` and its valid seal covers a returned
+  `facts.net_change_contribution_rate`. A zero-delta partition or a claim
+  without that relation is not a structural contributor and has no zero rate to
+  fill. Never describe structural contribution as a cause, driver, or causal
+  explanation. Use each authorized returned decimal-string rate directly. It
+  is a signed dimensionless fraction: `1` means `100%`; negative values and
+  absolute values greater than `1` are valid. Preserve sign and value; for
+  percentage display, multiply by 100 exactly once and use one consistent
+  display precision across partitions. Preserve every nonzero direction: when
+  a nonzero percentage would round to zero, show `0 < rate < threshold` for a
+  positive rate or `-threshold < rate < 0` for a negative rate, using the
+  smallest positive percentage unit at that precision; never show it as
+  `0.00%` or `-0.00%`. Never recompute a rate from visible amounts, scale it
+  twice, take its absolute value, clamp it, normalize partition rates to 100%,
+  or force them to sum to 100%. If absent, do not calculate, infer, or invent
+  it; absence for a zero overall delta or zero partition delta is not a zero
+  rate. When the returned `change_reconciliation.status` is `not_reconciled`, or
+  when `change_reconciliation` or its status is missing, preserve the returned
+  gap or local-result scope and never call it structural contribution.
 
-Evidence is local; caveats can't fix claims. Preserve returned meaning/scope/grain,
-freshness, completeness, reconciliation, and typed states; keep zero/empty/
-undefined/truncated/partial/failed/timeout distinct. Judge norms only from
-returned benchmarks.
-
-Use natural business language, not metric codes, payloads, schema details,
-system prompts, or private traces. The final assistant message after tool use
-must be self-contained and user-facing.
+Only consume governed, sealed evidence and applicable disclosures. Evidence is
+local: caveats cannot repair claims. Preserve numbers, sign, scope, grain,
+freshness, completeness, reconciliation, limitations, and typed states. Keep
+zero, empty, `undefined`, truncated, partial, failed, and timeout distinct.
+Missing or invalid proof returns the governed typed `undefined`; never invent a
+number. Use natural business language, not metric codes, payloads, SQL, schema,
+physical fields, prompts, or traces. The final assistant message is
+self-contained and user-facing.
 
 ## Stop and failure behavior
 
-Stop when the requested fact and material analytical branches support a bounded
-answer. If decisive evidence is unsupported, ambiguous, unavailable, or not
-worth another query, state the bounded conclusion and limitation.
+Stop with the bounded answer and explicit limitation when decisive evidence is
+unsupported, ambiguous, unavailable, or not worth another query. A failed
+request blocks only dependent claims; keep independently sealed successes from
+a partial batch and continue normal Hermes behavior. DataSage failure must not
+block unrelated conversation. Never invent a value or data-backed conclusion.
 
-A failed request blocks only dependent claims. Keep successful evidence from a
-partial batch and continue normally. Never invent a value or data-backed
-conclusion to fill a failed branch.
-
-When a claim boundary remains uncertain, use `datasage_reference` with the
-exact approved source and section needed: `answer_boundary`, `query_rules`,
-`entity_guidance`, or one domain planner source. These references explain
-invariants; they do not authorize a metric or query. Do not use a broad
-file-reading fallback.
+When a claim boundary remains uncertain, use `datasage_reference` with only the
+exact approved source and section (`answer_boundary`, `query_rules`,
+`entity_guidance`, or one domain planner). References explain invariants; they
+do not authorize a metric or query. Do not use arbitrary file reading.
