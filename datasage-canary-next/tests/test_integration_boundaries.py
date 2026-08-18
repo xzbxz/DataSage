@@ -227,6 +227,46 @@ class StrictSessionIdentityTests(unittest.TestCase):
                 entitlements._session_value("HERMES_SESSION_USER_ID"),
             )
 
+    def test_denial_payload_is_fixed_minimal_and_precedes_business_handler(self):
+        business_handler = mock.Mock(return_value='{"status":"success"}')
+        guarded = entitlements.guard("datasage_query", business_handler)
+
+        with mock.patch.object(entitlements, "authorized", return_value=False):
+            payload = json.loads(guarded({"requests": []}))
+
+        self.assertEqual(
+            {
+                "status": "failed",
+                "error": {
+                    "code": "DATA_ENTITLEMENT_DENIED",
+                    "message": "当前请求未获授权，业务查询未执行。",
+                    "retryable": False,
+                },
+            },
+            payload,
+        )
+        business_handler.assert_not_called()
+        message = payload["error"]["message"].casefold()
+        for category in (
+            "caller",
+            "administrator",
+            "admin",
+            "account",
+            "contact",
+            "config",
+            "identity",
+            "调用者",
+            "管理员",
+            "账号",
+            "联系",
+            "配置",
+            "身份值",
+            "授权主体",
+            "诊断",
+            "修复建议",
+        ):
+            self.assertNotIn(category.casefold(), message)
+
     def test_unknown_session_context_version_fails_closed(self):
         session_context = types.SimpleNamespace(
             session_context_engaged=lambda: True,
@@ -267,8 +307,18 @@ class GitGovernedSkillTests(unittest.TestCase):
         context = result["context"]
         normalized = " ".join(context.split())
 
+        self.assertLess(len(main_skill), 16000)
+        self.assertLess(len(context), 16000)
         self.assertIn('authority="git"', context)
         self.assertIn('immutable="process"', context)
+        self.assertIn("`error.code: DATA_ENTITLEMENT_DENIED`", normalized)
+        self.assertIn("`当前请求未获授权，业务查询未执行。`", normalized)
+        self.assertIn("stop all further DataSage calls for that turn", normalized)
+        self.assertIn("applies only to that code", normalized)
+        self.assertIn(
+            "never reuse it for another failure or ordinary conversation",
+            normalized,
+        )
         self.assertIn(
             "If `truncated: true` OR `data_state: truncated`",
             normalized,
@@ -414,6 +464,11 @@ class GitGovernedSkillTests(unittest.TestCase):
                 "ranked or Top-N result",
                 "Never describe structural contribution as a cause",
                 "For every sealed `disclosure_ledger` item",
+                "`error.code: DATA_ENTITLEMENT_DENIED`",
+                "`当前请求未获授权，业务查询未执行。`",
+                "stop all further DataSage calls for that turn",
+                "applies only to that code",
+                "never reuse it for another failure or ordinary conversation",
             ):
                 self.assertIn(required, normalized)
 

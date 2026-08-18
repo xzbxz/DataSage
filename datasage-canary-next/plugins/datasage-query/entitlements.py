@@ -35,6 +35,7 @@ SHARED_REFERENCE_SOURCES = frozenset(
 )
 ALL_REFERENCE_SOURCES = frozenset(REFERENCE_SOURCE_DOMAINS) | SHARED_REFERENCE_SOURCES
 DENIED_CODE = "DATA_ENTITLEMENT_DENIED"
+DENIED_MESSAGE = "当前请求未获授权，业务查询未执行。"
 _SCALAR_TYPES = (str, int, float, bool)
 _REPLAY_PLATFORM = "replay"
 _REPLAY_SOURCE = "datasage-trusted-replay"
@@ -84,10 +85,7 @@ def _deny() -> str:
             "status": "failed",
             "error": {
                 "code": DENIED_CODE,
-                "message": (
-                    "The current caller is not authorized for this DataSage "
-                    "operation or requested data scope."
-                ),
+                "message": DENIED_MESSAGE,
                 "retryable": False,
             },
         },
