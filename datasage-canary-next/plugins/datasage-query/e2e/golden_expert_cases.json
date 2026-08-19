@@ -3,7 +3,8 @@
   "suite": "digital-expert-kernel-stage1",
   "minimum_case_count": 31,
   "required_category_minimums": {
-    "change_diagnosis": 5,
+    "change_diagnosis": 3,
+    "capability_boundary": 2,
     "target_gap": 4,
     "ambiguity": 4,
     "multiturn": 6,
@@ -33,22 +34,22 @@
       "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage", "decomposition"], "minimum_successful_queries": 2, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": true, "must_not_query": false, "required_error_codes": []}
     },
     {
-      "id": "change_03_debt_snapshot", "category": "change_diagnosis", "conversation_id": "change_03", "turn": 1,
+      "id": "change_03_debt_snapshot", "category": "capability_boundary", "conversation_id": "change_03", "turn": 1,
       "prompt": "公司最新月末正欠款比三个月前高，按客户看变化，不能把欠款快照和应收发生额混为一谈。",
-      "expected_plan": {"domains": ["receivable"], "metrics": ["positive_debt_amount"], "dimensions": ["customer"], "operations": ["snapshot_months_before", "complete_change_decomposition"], "time_semantics": "latest_snapshot_vs_3_months_before", "context_action": "new", "must_not_metrics": ["receivable_occurrence_amount"]},
-      "required_conclusions": ["report_reconciled_structure", "disclose_snapshot_semantics", "state_noncausal"],
-      "allowed_conclusions": ["report_observed_change", "report_reconciled_structure", "disclose_snapshot_semantics", "state_noncausal"],
-      "forbidden_conclusions": ["equate_snapshot_with_flow", "claim_customer_caused_change", "invent_mechanism"],
-      "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage", "decomposition"], "minimum_successful_queries": 2, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": true, "must_not_query": false, "required_error_codes": []}
+      "expected_plan": {"domains": ["receivable"], "metrics": ["positive_debt_amount"], "dimensions": ["customer"], "operations": ["capability_check"], "time_semantics": "latest_snapshot_vs_3_months_before", "context_action": "new", "must_not_metrics": ["receivable_occurrence_amount", "current_debt_amount"]},
+      "required_conclusions": ["refuse_unavailable_capability", "disclose_snapshot_semantics", "state_no_substitution"],
+      "allowed_conclusions": ["refuse_unavailable_capability", "disclose_snapshot_semantics", "state_no_substitution", "state_noncausal", "disclose_data_limits"],
+      "forbidden_conclusions": ["report_observed_change", "report_reconciled_structure", "equate_snapshot_with_flow", "claim_customer_caused_change", "claim_unreconciled_contribution", "invent_mechanism", "invent_result"],
+      "evidence_requirements": {"required_receipts": ["catalog", "metric_detail"], "minimum_successful_queries": 0, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": true, "required_error_codes": []}
     },
     {
-      "id": "change_04_inventory_product", "category": "change_diagnosis", "conversation_id": "change_04", "turn": 1,
+      "id": "change_04_inventory_product", "category": "capability_boundary", "conversation_id": "change_04", "turn": 1,
       "prompt": "最新月末库存量较上月变化多少，按产品完整拆开；不要把当前库存和月末快照拼在一起。",
-      "expected_plan": {"domains": ["inventory"], "metrics": ["month_end_inventory_quantity"], "dimensions": ["product"], "operations": ["snapshot_months_before", "complete_change_decomposition"], "time_semantics": "latest_month_end_vs_1_month_before", "context_action": "new", "must_not_metrics": ["current_inventory_quantity"]},
-      "required_conclusions": ["report_reconciled_structure", "disclose_snapshot_semantics"],
-      "allowed_conclusions": ["report_observed_change", "report_reconciled_structure", "disclose_snapshot_semantics", "state_noncausal"],
-      "forbidden_conclusions": ["mix_current_and_month_end", "claim_product_caused_change", "claim_unreconciled_contribution"],
-      "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage", "decomposition"], "minimum_successful_queries": 2, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": true, "must_not_query": false, "required_error_codes": []}
+      "expected_plan": {"domains": ["inventory"], "metrics": ["month_end_inventory_quantity"], "dimensions": ["product"], "operations": ["capability_check"], "time_semantics": "latest_month_end_vs_1_month_before", "context_action": "new", "must_not_metrics": ["current_inventory_quantity", "month_end_inventory_cost_rmb"]},
+      "required_conclusions": ["refuse_unavailable_capability", "disclose_snapshot_semantics", "state_no_substitution"],
+      "allowed_conclusions": ["refuse_unavailable_capability", "disclose_snapshot_semantics", "state_no_substitution", "state_noncausal", "disclose_data_limits"],
+      "forbidden_conclusions": ["report_observed_change", "report_reconciled_structure", "mix_current_and_month_end", "claim_product_caused_change", "claim_unreconciled_contribution", "substitute_inventory_cost", "invent_result"],
+      "evidence_requirements": {"required_receipts": ["catalog", "metric_detail"], "minimum_successful_queries": 0, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": true, "required_error_codes": []}
     },
     {
       "id": "change_05_delivery_receipt", "category": "change_diagnosis", "conversation_id": "change_05", "turn": 1,

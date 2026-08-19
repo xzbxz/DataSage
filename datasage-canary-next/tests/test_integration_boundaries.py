@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 import os
@@ -1046,6 +1047,277 @@ class DistributionBoundaryTests(unittest.TestCase):
         self.assertIn(
             "final answer does not exactly match the governed denial text",
             failed_report["results"][0]["errors"],
+        )
+
+    def test_snapshot_capability_boundaries_require_bound_metric_detail(self):
+        def load_e2e_module(filename, module_name):
+            spec = importlib.util.spec_from_file_location(
+                module_name,
+                PLUGIN_ROOT / "e2e" / filename,
+            )
+            self.assertIsNotNone(spec)
+            self.assertIsNotNone(spec.loader)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+
+        scorer = load_e2e_module(
+            "golden_expert_scorer.py", "_datasage_golden_capability_scorer"
+        )
+        adapter = load_e2e_module(
+            "canary_transcript_adapter.py", "_datasage_capability_adapter"
+        )
+        contracts = _load_module("contracts")
+        suite = json.loads(
+            (PLUGIN_ROOT / "e2e" / "golden_expert_cases.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual([], scorer.validate_suite(suite))
+        self.assertEqual(3, suite["required_category_minimums"]["change_diagnosis"])
+        self.assertEqual(2, suite["required_category_minimums"]["capability_boundary"])
+        cases = {
+            item["id"]: item
+            for item in suite["cases"]
+            if item["id"] in {
+                "change_03_debt_snapshot",
+                "change_04_inventory_product",
+            }
+        }
+
+        def catalog_payload(request):
+            with mock.patch.dict(
+                os.environ, {"HERMES_HOME": str(PROFILE_ROOT)}
+            ):
+                return json.loads(
+                    contracts.datasage_catalog({"requests": [request]})
+                )
+
+        def catalog_call(requests, payload):
+            return {
+                "name": "datasage_catalog",
+                "arguments": {
+                    "requests": requests if isinstance(requests, list) else [requests]
+                },
+                "result": payload,
+            }
+
+        def catalog_calls(domain, metric):
+            index_request = {"domain": domain, "view": "expert_index"}
+            detail_request = {"domain": domain, "metric": metric}
+            return [
+                catalog_call(index_request, catalog_payload(index_request)),
+                catalog_call(detail_request, catalog_payload(detail_request)),
+            ]
+
+        def reseal(payload):
+            payload = copy.deepcopy(payload)
+            payload.pop("content_hash", None)
+            payload["content_hash"] = adapter._sha256(payload)
+            return payload
+
+        def observed(case, evidence):
+            return {
+                "plan": dict(case["expected_plan"]),
+                "conclusions": list(case["required_conclusions"]),
+                "evidence": evidence,
+            }
+
+        for case in cases.values():
+            with self.subTest(case=case["id"]):
+                self.assertEqual("capability_boundary", case["category"])
+                self.assertEqual([], case["evidence_requirements"]["required_error_codes"])
+                self.assertTrue(case["evidence_requirements"]["must_not_query"])
+                domain = case["expected_plan"]["domains"][0]
+                metric = case["expected_plan"]["metrics"][0]
+                calls = catalog_calls(domain, metric)
+                detail_request = calls[1]["arguments"]["requests"][0]
+                detail_payload = calls[1]["result"]
+                _plan, evidence = adapter._normalize(calls)
+                self.assertEqual(["catalog", "metric_detail"], evidence["receipts"])
+                self.assertEqual([], scorer._score_case(case, observed(case, evidence)))
+
+                _plan, index_only = adapter._normalize(calls[:1])
+                self.assertNotIn("metric_detail", index_only["receipts"])
+                self.assertIn(
+                    "required receipts missing ['metric_detail']",
+                    scorer._score_case(case, observed(case, index_only)),
+                )
+
+                stale_payload = catalog_payload(
+                    {"domain": "inventory", "metric": "month_end_inventory_cost_rmb"}
+                )
+                self.assertNotEqual(
+                    detail_payload["content_hash"], stale_payload["content_hash"]
+                )
+                invalid_hash_payloads = {}
+                for name in ("missing", "uppercase", "short", "wrong", "stale"):
+                    mutated = copy.deepcopy(detail_payload)
+                    if name == "missing":
+                        mutated.pop("content_hash")
+                    elif name == "uppercase":
+                        mutated["content_hash"] = mutated["content_hash"].upper()
+                    elif name == "short":
+                        mutated["content_hash"] = mutated["content_hash"][:-1]
+                    elif name == "wrong":
+                        first = "0" if mutated["content_hash"][0] != "0" else "1"
+                        mutated["content_hash"] = first + mutated["content_hash"][1:]
+                    else:
+                        mutated["content_hash"] = stale_payload["content_hash"]
+                    invalid_hash_payloads[name] = mutated
+
+                semantic_mutations = {}
+                for name in (
+                    "wrong_domain",
+                    "wrong_code",
+                    "wrong_level",
+                    "wrong_role",
+                    "wrong_version",
+                    "failed_status",
+                    "extra_top_level",
+                ):
+                    mutated = copy.deepcopy(detail_payload)
+                    if name == "wrong_domain":
+                        mutated["results"][0]["domain"] = "wrong_domain"
+                    elif name == "wrong_code":
+                        mutated["results"][0]["metric"]["code"] = "wrong_metric"
+                    elif name == "wrong_level":
+                        mutated["results"][0]["level"] = "expert_index"
+                    elif name == "wrong_role":
+                        mutated["contract_role"] = "wrong_role"
+                    elif name == "wrong_version":
+                        mutated["catalog_version"] = "datasage-metric-catalog/stale"
+                    elif name == "failed_status":
+                        mutated["status"] = "failed"
+                    else:
+                        mutated["unexpected"] = True
+                    semantic_mutations[name] = reseal(mutated)
+
+                invalid_payloads = {
+                    **invalid_hash_payloads,
+                    **semantic_mutations,
+                    "minimal_forgery": {
+                        "status": "success",
+                        "results": [
+                            {
+                                "domain": domain,
+                                "level": "metric",
+                                "metric": {"code": metric},
+                            }
+                        ],
+                    },
+                }
+                for name, invalid_payload in invalid_payloads.items():
+                    with self.subTest(case=case["id"], invalid_payload=name):
+                        wrong_calls = [
+                            calls[0],
+                            catalog_call(detail_request, invalid_payload),
+                        ]
+                        _plan, wrong_evidence = adapter._normalize(wrong_calls)
+                        self.assertNotIn(
+                            "metric_detail", wrong_evidence["receipts"]
+                        )
+
+                request_shape_mutations = {
+                    "extra_view": {**detail_request, "view": "expert_index"},
+                    "multi_request": [detail_request, detail_request],
+                }
+                for name, invalid_request in request_shape_mutations.items():
+                    with self.subTest(case=case["id"], invalid_request=name):
+                        wrong_calls = [
+                            calls[0],
+                            catalog_call(invalid_request, detail_payload),
+                        ]
+                        _plan, wrong_evidence = adapter._normalize(wrong_calls)
+                        self.assertNotIn(
+                            "metric_detail", wrong_evidence["receipts"]
+                        )
+
+                unsupported_query = {
+                    "name": "datasage_query",
+                    "arguments": {
+                        "requests": [
+                            {
+                                "request_id": "unsupported_complete_change",
+                                "domain": domain,
+                                "metric": metric,
+                                "comparison": {
+                                    "kind": "snapshot_months_before",
+                                    "months": 1,
+                                },
+                                "complete_change_decomposition": {
+                                    "dimension": case["expected_plan"]["dimensions"][0]
+                                },
+                            }
+                        ]
+                    },
+                    "result": {
+                        "status": "failed",
+                        "results": [
+                            {
+                                "request_id": "unsupported_complete_change",
+                                "status": "failed",
+                                "error": {
+                                    "code": "UNSUPPORTED_CHANGE_DECOMPOSITION"
+                                },
+                            }
+                        ],
+                    },
+                }
+                _plan, attempted = adapter._normalize(calls + [unsupported_query])
+                attempted_errors = scorer._score_case(
+                    case, observed(case, attempted)
+                )
+                self.assertIn(
+                    "a query was attempted although the case must fail before data access",
+                    attempted_errors,
+                )
+                unexpected_error = copy.deepcopy(evidence)
+                unexpected_error["error_codes"] = ["ANY_UNEXPECTED_ERROR"]
+                self.assertIn(
+                    "capability boundary error codes must be exactly []",
+                    scorer._score_case(
+                        case, observed(case, unexpected_error)
+                    ),
+                )
+
+        ordinary = next(
+            item for item in suite["cases"] if item["id"] == "ambiguity_01_sales_amount"
+        )
+        ordinary_calls = catalog_calls("delivery", "delivery_amount")
+        ordinary_calls.append(
+            {
+                "name": "datasage_query",
+                "arguments": {
+                    "requests": [
+                        {
+                            "request_id": "ordinary_delivery",
+                            "domain": "delivery",
+                            "metric": "delivery_amount",
+                        }
+                    ]
+                },
+                "result": {
+                    "status": "success",
+                    "results": [
+                        {
+                            "request_id": "ordinary_delivery",
+                            "status": "success",
+                            "truncated": False,
+                        }
+                    ],
+                    "evidence_bundle": {
+                        "coverage_receipts": {
+                            "items": [{"request_ids": ["ordinary_delivery"]}]
+                        }
+                    },
+                },
+            }
+        )
+        _plan, ordinary_evidence = adapter._normalize(ordinary_calls)
+        ordinary_evidence["error_codes"] = ["UNCHANGED_NON_BOUNDARY_ERROR"]
+        self.assertEqual(
+            [], scorer._score_case(ordinary, observed(ordinary, ordinary_evidence))
         )
 
     def test_distribution_excludes_private_replay_topology(self):

@@ -418,6 +418,8 @@ def _score_case(
         errors.append("change decomposition is not reconciled")
     if requirement["must_not_query"] and evidence.get("query_attempted") is not False:
         errors.append("a query was attempted although the case must fail before data access")
+    if case.get("category") == "capability_boundary" and evidence.get("error_codes") != []:
+        errors.append("capability boundary error codes must be exactly []")
     missing_codes = set(requirement["required_error_codes"]).difference(
         _list(evidence.get("error_codes"))
     )

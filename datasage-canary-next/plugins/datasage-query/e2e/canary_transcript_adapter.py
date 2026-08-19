@@ -364,6 +364,56 @@ def _result_error_codes(payload: dict[str, Any]) -> list[str]:
     return codes
 
 
+def _is_bound_metric_detail_catalog_call(
+    args: dict[str, Any], payload: dict[str, Any]
+) -> bool:
+    requests = args.get("requests")
+    results = payload.get("results")
+    content_hash = payload.get("content_hash")
+    if (
+        set(payload)
+        != {
+            "status",
+            "catalog_version",
+            "contract_role",
+            "query_policy",
+            "results",
+            "content_hash",
+        }
+        or payload.get("status") != "success"
+        or payload.get("catalog_version") != "datasage-metric-catalog/v1"
+        or payload.get("contract_role") != "governed_metric_catalog"
+        or not isinstance(payload.get("query_policy"), dict)
+        or not isinstance(content_hash, str)
+        or re.fullmatch(r"[0-9a-f]{64}", content_hash) is None
+        or content_hash
+        != _sha256({key: value for key, value in payload.items() if key != "content_hash"})
+        or not isinstance(requests, list)
+        or len(requests) != 1
+        or not isinstance(requests[0], dict)
+        or set(requests[0]) != {"domain", "metric"}
+        or not isinstance(results, list)
+        or len(results) != 1
+        or not isinstance(results[0], dict)
+    ):
+        return False
+    request = requests[0]
+    result = results[0]
+    domain = request.get("domain")
+    metric = request.get("metric")
+    projected_metric = result.get("metric")
+    return (
+        isinstance(domain, str)
+        and bool(domain)
+        and isinstance(metric, str)
+        and bool(metric)
+        and result.get("level") == "metric"
+        and result.get("domain") == domain
+        and isinstance(projected_metric, dict)
+        and projected_metric.get("code") == metric
+    )
+
+
 def _is_reconciled(value: Any) -> bool:
     if value is True:
         return True
@@ -417,6 +467,8 @@ def _normalize(
         payload = call["result"]
         if name == "datasage_catalog" and payload.get("status") == "success":
             _ordered_add(receipts, "catalog")
+            if _is_bound_metric_detail_catalog_call(args, payload):
+                _ordered_add(receipts, "metric_detail")
             for request in args.get("requests") or []:
                 if isinstance(request, dict):
                     _ordered_add(domains, request.get("domain"))
