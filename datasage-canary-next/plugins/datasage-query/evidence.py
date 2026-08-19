@@ -12,6 +12,7 @@ import hashlib
 import json
 import re
 from datetime import date
+from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping, Sequence
 
 
@@ -364,6 +365,149 @@ def _is_structural_claim(claim: Mapping[str, Any]) -> bool:
     return bool(relations & {"structural_contribution", "change_driver"})
 
 
+_COMPARISON_COMPLETENESS_COUNT_FIELDS = {
+    "current_missing_value_count",
+    "current_known_value_count",
+    "comparison_missing_value_count",
+    "comparison_known_value_count",
+}
+_COMPARISON_COMPLETENESS_STATE_FIELDS = {
+    "current_metric_data_state",
+    "comparison_metric_data_state",
+}
+_COMPLETENESS_PROOF_FIELDS = {
+    "policy",
+    "overall",
+    "partition_totals",
+    "returned_partition_totals",
+}
+
+
+def _exact_nonnegative_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    if (
+        not parsed.is_finite()
+        or parsed < 0
+        or parsed != parsed.to_integral_value()
+    ):
+        return None
+    return int(parsed)
+
+
+def _exact_completeness_counts(value: Any) -> dict[str, int] | None:
+    if not isinstance(value, Mapping) or set(value) != (
+        _COMPARISON_COMPLETENESS_COUNT_FIELDS
+    ):
+        return None
+    counts = {
+        field: _exact_nonnegative_int(value.get(field))
+        for field in _COMPARISON_COMPLETENESS_COUNT_FIELDS
+    }
+    if any(count is None for count in counts.values()):
+        return None
+    return {field: int(count) for field, count in counts.items()}
+
+
+def _claim_completeness_counts(claim: Mapping[str, Any]) -> dict[str, int] | None:
+    facts = claim.get("facts")
+    states = claim.get("states")
+    if not isinstance(facts, Mapping) or not isinstance(states, Mapping):
+        return None
+    counts = _exact_completeness_counts(
+        {
+            field: facts.get(field)
+            for field in _COMPARISON_COMPLETENESS_COUNT_FIELDS
+        }
+    )
+    if counts is None:
+        return None
+    if not _COMPARISON_COMPLETENESS_STATE_FIELDS <= set(states):
+        return None
+    for prefix in ("current", "comparison"):
+        missing = counts[f"{prefix}_missing_value_count"]
+        known = counts[f"{prefix}_known_value_count"]
+        state = str(states.get(f"{prefix}_metric_data_state") or "").casefold()
+        if state == "complete" and missing == 0 and known > 0:
+            continue
+        if state == "not_present" and missing == known == 0:
+            continue
+        return None
+    return counts
+
+
+def _structural_completeness_proof_is_valid(
+    reconciliation: Mapping[str, Any],
+    claims: Sequence[Mapping[str, Any]],
+    structural_claims: Sequence[Mapping[str, Any]],
+    *,
+    truncated: bool,
+) -> bool:
+    structural_claim_has_coverage = any(
+        (
+            isinstance(claim.get("facts"), Mapping)
+            and bool(
+                _COMPARISON_COMPLETENESS_COUNT_FIELDS
+                & set(claim["facts"])
+            )
+        )
+        or (
+            isinstance(claim.get("states"), Mapping)
+            and bool(
+                _COMPARISON_COMPLETENESS_STATE_FIELDS
+                & set(claim["states"])
+            )
+        )
+        for claim in structural_claims
+    )
+    receipt_has_coverage_policy = "completeness_proof" in reconciliation
+    if not structural_claim_has_coverage and not receipt_has_coverage_policy:
+        return True
+
+    proof = reconciliation.get("completeness_proof")
+    if (
+        not isinstance(proof, Mapping)
+        or set(proof) != _COMPLETENESS_PROOF_FIELDS
+        or proof.get("policy") != "exact_integer_counts_both_periods"
+    ):
+        return False
+    overall = _exact_completeness_counts(proof.get("overall"))
+    partition = _exact_completeness_counts(proof.get("partition_totals"))
+    returned = _exact_completeness_counts(proof.get("returned_partition_totals"))
+    claim_counts = [_claim_completeness_counts(claim) for claim in claims]
+    if (
+        overall is None
+        or partition is None
+        or returned is None
+        or any(counts is None for counts in claim_counts)
+        or overall != partition
+    ):
+        return False
+    for prefix in ("current", "comparison"):
+        if (
+            overall[f"{prefix}_missing_value_count"] != 0
+            or overall[f"{prefix}_known_value_count"] <= 0
+        ):
+            return False
+    expected_returned = {
+        field: sum(
+            counts[field]
+            for counts in claim_counts
+            if counts is not None
+        )
+        for field in _COMPARISON_COMPLETENESS_COUNT_FIELDS
+    }
+    if returned != expected_returned:
+        return False
+    if truncated:
+        return all(returned[field] <= partition[field] for field in returned)
+    return returned == partition
+
+
 def _reconciliation_is_valid(result: Mapping[str, Any]) -> bool:
     reconciliation = result.get("change_reconciliation")
     claims = result.get("claim_ledger")
@@ -404,6 +548,13 @@ def _reconciliation_is_valid(result: Mapping[str, Any]) -> bool:
             != "structural_not_causal"
         ):
             return False
+    if not _structural_completeness_proof_is_valid(
+        reconciliation,
+        claims,
+        structural_claims,
+        truncated=result.get("truncated") is True,
+    ):
+        return False
     scope_fingerprint = result.get("scope_fingerprint")
     if (
         isinstance(scope_fingerprint, str)

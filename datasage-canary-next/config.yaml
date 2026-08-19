@@ -10,12 +10,10 @@ platform_toolsets:
   cli:
     - hermes-cli
     - datasage-query
-  # Intentional channel-security exception: WeCom exposes only governed
-  # business tools plus clarification/todo; CLI retains ordinary Hermes tools.
+  # Preserve the standard Hermes host surface and add governed business tools.
   wecom:
+    - hermes-wecom
     - datasage-query
-    - clarify
-    - todo
   cron:
     - datasage-query
 privacy:

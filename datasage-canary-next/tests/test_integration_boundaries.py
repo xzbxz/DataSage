@@ -15,6 +15,7 @@ from unittest import mock
 import yaml
 from agent.turn_context import build_turn_context
 from hermes_cli.plugins import PluginManager
+from hermes_cli.tools_config import _get_platform_tools
 from tools import clarify_tool as _hermes_clarify_registration  # noqa: F401
 from tools import hook_output_spill as hermes_hook_output_spill
 from tools import tool_search as hermes_tool_search
@@ -733,72 +734,166 @@ class GitGovernedSkillTests(unittest.TestCase):
 
 
 class ProductionSafetyTests(unittest.TestCase):
-    @staticmethod
-    def _bool_setting(name: str, default: bool = False) -> bool:
-        return False
+    CANARY_POLICY = {
+        "production_mode": False,
+        "require_tls": False,
+        "canary_accept_existing_account": True,
+    }
 
-    def test_regular_marker_enables_production_without_release_manifest(self):
-        with tempfile.TemporaryDirectory() as raw_parent:
-            root = Path(raw_parent) / "datasage-canary-next"
-            root.mkdir()
-            (root / ".production-release").touch()
-            with mock.patch.object(
+    def test_explicit_canary_policy_allows_declared_canary_exceptions(self):
+        with (
+            mock.patch.object(
                 db_security.settings,
-                "get_bool",
-                side_effect=self._bool_setting,
-            ):
-                policy = db_security.mysql_tls_policy(profile_root=root)
+                "profile_settings",
+                return_value=dict(self.CANARY_POLICY),
+            ),
+            mock.patch.dict(os.environ, {}, clear=True),
+        ):
+            policy = db_security.mysql_tls_policy()
+            self.assertFalse(policy["production_mode"])
+            self.assertFalse(policy["tls_required"])
+            self.assertTrue(db_security.canary_existing_account_accepted())
+            self.assertEqual({"ssl_disabled": True}, db_security.mysql_tls_kwargs())
+
+    def test_path_names_evaluation_and_markers_have_no_policy_authority(self):
+        with tempfile.TemporaryDirectory() as raw_parent:
+            for name in ("datasage-canary-next", "production-copy"):
+                root = Path(raw_parent) / name
+                root.mkdir()
+                (root / "evaluation").mkdir()
+                (root / ".production-release").touch()
+                with mock.patch.object(
+                    db_security.settings,
+                    "profile_settings",
+                    return_value=dict(self.CANARY_POLICY),
+                ):
+                    policy = db_security.mysql_tls_policy(profile_root=root)
+                    self.assertFalse(policy["production_mode"])
+                    self.assertFalse(policy["tls_required"])
+                    self.assertTrue(
+                        db_security.canary_existing_account_accepted(
+                            profile_root=root
+                        )
+                    )
+
+    def test_production_policy_requires_tls_and_forbids_canary_account(self):
+        production = {
+            "production_mode": True,
+            "require_tls": False,
+            "canary_accept_existing_account": False,
+        }
+        with (
+            mock.patch.object(
+                db_security.settings,
+                "profile_settings",
+                return_value=production,
+            ),
+            mock.patch.dict(os.environ, {}, clear=True),
+        ):
+            policy = db_security.mysql_tls_policy()
             self.assertTrue(policy["production_mode"])
             self.assertTrue(policy["tls_required"])
-            self.assertFalse((root / ".release").exists())
-
-    def test_configured_production_mode_still_enables_tls(self):
-        with tempfile.TemporaryDirectory() as raw_parent:
-            root = Path(raw_parent) / "datasage-canary-next"
-            root.mkdir()
-
-            def configured(name: str, default: bool = False) -> bool:
-                return name == "production_mode"
-
-            with mock.patch.object(
-                db_security.settings,
-                "get_bool",
-                side_effect=configured,
-            ):
-                policy = db_security.mysql_tls_policy(profile_root=root)
-            self.assertTrue(policy["production_mode"])
-            self.assertTrue(policy["tls_required"])
-
-    def test_non_regular_marker_fails_closed(self):
-        with tempfile.TemporaryDirectory() as raw_parent:
-            root = Path(raw_parent) / "datasage-canary-next"
-            root.mkdir()
-            (root / ".production-release").mkdir()
             with self.assertRaises(db_security.DatabaseSecurityError) as captured:
-                db_security.mysql_tls_policy(profile_root=root)
+                db_security.mysql_tls_kwargs()
             self.assertEqual(
-                "DATABASE_PRODUCTION_MARKER_INVALID",
+                "DATABASE_TLS_CONFIGURATION_MISSING",
                 captured.exception.code,
             )
 
-    def test_marker_forbids_canary_existing_account_exception(self):
-        with tempfile.TemporaryDirectory() as raw_parent:
-            root = Path(raw_parent) / "datasage-canary-next"
-            root.mkdir()
-            (root / ".production-release").touch()
+        invalid_production = {
+            **production,
+            "canary_accept_existing_account": True,
+        }
+        with (
+            mock.patch.object(
+                db_security.settings,
+                "profile_settings",
+                return_value=invalid_production,
+            ),
+            self.assertRaises(db_security.DatabaseSecurityError) as captured,
+        ):
+            db_security.mysql_tls_policy()
+        self.assertEqual(
+            "DATABASE_CANARY_ACCOUNT_ACCEPTANCE_FORBIDDEN",
+            captured.exception.code,
+        )
+
+    def test_explicit_require_tls_is_enforced_outside_production(self):
+        configured = {
+            **self.CANARY_POLICY,
+            "require_tls": True,
+            "canary_accept_existing_account": False,
+        }
+        with mock.patch.object(
+            db_security.settings,
+            "profile_settings",
+            return_value=configured,
+        ):
+            self.assertTrue(db_security.mysql_tls_policy()["tls_required"])
+
+    def test_security_settings_missing_or_non_boolean_fail_closed(self):
+        for missing in db_security._DATABASE_SECURITY_BOOL_SETTINGS:
+            configured = dict(self.CANARY_POLICY)
+            configured.pop(missing)
             with (
+                self.subTest(missing=missing),
                 mock.patch.object(
                     db_security.settings,
-                    "get_bool",
-                    return_value=True,
+                    "profile_settings",
+                    return_value=configured,
                 ),
                 self.assertRaises(db_security.DatabaseSecurityError) as captured,
             ):
-                db_security.canary_existing_account_accepted(profile_root=root)
+                db_security.mysql_tls_policy()
             self.assertEqual(
-                "DATABASE_CANARY_ACCOUNT_ACCEPTANCE_FORBIDDEN",
+                "DATABASE_SECURITY_SETTING_MISSING",
                 captured.exception.code,
             )
+
+        for name in db_security._DATABASE_SECURITY_BOOL_SETTINGS:
+            for invalid in ("false", 0, 1, None):
+                configured = {**self.CANARY_POLICY, name: invalid}
+                with (
+                    self.subTest(name=name, invalid=invalid),
+                    mock.patch.object(
+                        db_security.settings,
+                        "profile_settings",
+                        return_value=configured,
+                    ),
+                    self.assertRaises(
+                        db_security.DatabaseSecurityError
+                    ) as captured,
+                ):
+                    db_security.mysql_tls_policy()
+                self.assertEqual(
+                    "DATABASE_SECURITY_SETTING_INVALID",
+                    captured.exception.code,
+                )
+
+    def test_database_policy_has_no_hidden_deployment_authority(self):
+        source = (PLUGIN_ROOT / "db_security.py").read_text(encoding="utf-8")
+        for forbidden in (
+            ".production-release",
+            '"evaluation"',
+            "_CANARY_PROFILE_NAMES",
+            "deployment_role",
+        ):
+            self.assertNotIn(forbidden, source)
+
+    def test_live_cache_key_preserves_invalid_security_value_types(self):
+        with mock.patch.object(
+            runtime_health.settings,
+            "profile_settings",
+            return_value=dict(self.CANARY_POLICY),
+        ):
+            valid_key = runtime_health._live_cache_key()
+        with mock.patch.object(
+            runtime_health.settings,
+            "profile_settings",
+            return_value={**self.CANARY_POLICY, "production_mode": "false"},
+        ):
+            invalid_key = runtime_health._live_cache_key()
+        self.assertNotEqual(valid_key, invalid_key)
 
 
 class DistributionBoundaryTests(unittest.TestCase):
@@ -834,17 +929,35 @@ class DistributionBoundaryTests(unittest.TestCase):
         self.assertNotIn("- .release", distribution)
         self.assertFalse((PROFILE_ROOT / ".no-bundled-skills").exists())
 
-    def test_wecom_narrow_surface_is_an_explicit_channel_exception(self):
+    def test_wecom_restores_official_host_surface_and_adds_datasage(self):
         config = (PROFILE_ROOT / "config.yaml").read_text(encoding="utf-8")
         parsed_config = yaml.safe_load(config)
-        self.assertIn("Intentional channel-security exception", config)
         wecom_toolsets = parsed_config["platform_toolsets"]["wecom"]
-        self.assertIsInstance(wecom_toolsets, list)
         self.assertEqual(
-            {"datasage-query", "clarify", "todo"},
-            set(wecom_toolsets),
+            ["hermes-wecom", "datasage-query"],
+            wecom_toolsets,
         )
-        self.assertEqual(3, len(wecom_toolsets))
+        resolved = set(
+            _get_platform_tools(
+                parsed_config,
+                "wecom",
+                include_default_mcp_servers=False,
+            )
+        )
+        host_only = set(
+            _get_platform_tools(
+                {"platform_toolsets": {"wecom": ["hermes-wecom"]}},
+                "wecom",
+                include_default_mcp_servers=False,
+            )
+        )
+        self.assertEqual(host_only | {"datasage-query"}, resolved)
+        self.assertNotIn("datasage-query", host_only)
+        self.assertTrue(
+            {"terminal", "file", "web", "memory", "skills"}.issubset(
+                resolved
+            )
+        )
         self.assertIn("skills:\n", config)
         self.assertIn("write_approval: true", config)
         approvals = parsed_config.get("approvals")

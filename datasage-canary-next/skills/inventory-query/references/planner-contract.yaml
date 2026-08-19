@@ -1,4 +1,4 @@
-version: datasage-mini-inventory-planner/v4
+version: datasage-mini-inventory-planner/v5
 domain: inventory
 audience: agent_planner
 purpose: 将当前库存、月末核算库存、未动销和周转问题映射为受控指标；不包含表名、字段名或 SQL。
@@ -73,6 +73,7 @@ planning_rules:
   - current_warehouse_age_days 是当前在仓最早入仓距今天数；oldest_inventory_days 是月末未动销/未成交天数，两者不是同一指标。
   - oldest_inventory_days 未指定月份时取最近有有效未动销数据的月末；显式月份无值时回答不可用，不得替换成其他月份。
   - inventory_turnover_days 默认最近 12 个完整核算月，一次返回成本主口径和 DDP 指导口径；不得拆成两个自行对齐的查询。
+  - 月末库存人民币核算成本的完整变化分解只使用最新快照与前一月快照；必须先取得 inventory 指标详情及 receipt，再按仓库或产品调用完整分解。
   - 周转天数不可定义时原样说明状态：全局月快照缺失、净出库不大于零、平均成本不大于零或平均 DDP 不大于零；不得输出负数、零或无穷大充当正常周转天数。
   - 只有命中精确概览条件时才使用固定概览包；诊断或开放问题由 Hermes 从已登记指标中选择能检验假设的最小证据。分析种子不是固定清单，不授权未登记指标，也不覆盖用户明确的指标、维度、筛选、时间或操作；不创建滞销阈值，也不自动做补货、清仓或责任判断。
 
@@ -112,10 +113,19 @@ recipes:
     dimensions: [product, warehouse, warehouse_department, warehouse_organization, ready_goods]
     comparison: previous_period
     default_limit: 10
+  governed_change_decomposition:
+    kind: analysis_seed
+    metric: month_end_inventory_cost_rmb
+    dimensions: [warehouse, product]
+    comparison: {kind: snapshot_months_before, months: 1}
+    request_shape: {domain: inventory, mode: metric, metric: month_end_inventory_cost_rmb, comparison: {kind: snapshot_months_before, months: 1}, complete_change_decomposition: {dimension: one_selected_dimension}}
+    governance_path: [expert_index, metric_detail_with_receipt, datasage_query]
+    relation: reconciled_change_only
   explain_change:
     kind: analysis_seed
-    first: change_observations
-    causal_status: unavailable_without_independent_evidence
+    request_policy: adaptive
+    first: governed_change_decomposition
+    fallback: change_observations
   inventory_age_evidence:
     kind: analysis_seed
     metrics: [current_warehouse_age_days, oldest_inventory_days]

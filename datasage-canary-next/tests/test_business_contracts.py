@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from datetime import date, datetime
 from decimal import Decimal
 import hashlib
@@ -187,6 +188,7 @@ class BusinessContractTests(unittest.TestCase):
         *,
         overall_triplet: tuple[str, str, str],
         partition_triplets: tuple[tuple[str, str, str], ...],
+        mismatch: str | None = None,
     ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
         capability = {
             "mode": "additive_partition",
@@ -252,6 +254,17 @@ class BusinessContractTests(unittest.TestCase):
                 ],
             },
         ]
+        if mismatch == "snapshot":
+            results[1]["_snapshot_group_marker"] = "different-snapshot"
+        elif mismatch == "scope":
+            results[1]["scope_fingerprint"] = "different-scope"
+        elif mismatch == "period":
+            results[1]["applied_time_range"] = {
+                "start": "different-start",
+                "end": "different-end",
+            }
+        elif mismatch is not None:
+            raise AssertionError(mismatch)
         operation_partitions = {"partition": "overall"}
         tools._authorize_change_decompositions(contexts, results)
         tools._tag_complete_decomposition_reconciliations(
@@ -326,6 +339,151 @@ class BusinessContractTests(unittest.TestCase):
             )
         model_wire = [tools._model_wire_result(result) for result in results]
         return results, model_wire
+
+    @classmethod
+    def _run_snapshot_change_operation(
+        cls,
+        *,
+        partition_truncated: bool = False,
+        inconsistent_partition_snapshot: bool = False,
+        coverage_case: str = "complete",
+    ) -> tuple[dict[str, object], dict[str, dict[str, object]], list[str]]:
+        source_evidence = cls._read_only_source_evidence()
+        sql_calls: list[str] = []
+        captured_raw: dict[str, dict[str, object]] = {}
+        dimension_rows = (
+            {"whse_id": "w1", "whse_name": "W1"},
+            {"whse_id": "w2", "whse_name": "W2"},
+        )
+
+        class Snapshot:
+            marker = "offline-snapshot-group"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def execute(self, sql, _params, _limit, **_kwargs):
+                sql_calls.append(sql)
+                partition = tools._INTERNAL_PARTITION_ROW_COUNT in sql
+                full_known = 3 if partition_truncated else 2
+                base = {
+                    tools._INTERNAL_MATCH_COUNT: full_known,
+                    tools._INTERNAL_SNAPSHOT_MONTH: "2026-07",
+                    tools._INTERNAL_COMPARISON_SNAPSHOT_MONTH: "2026-06",
+                    "current_missing_value_count": 0,
+                    "current_known_value_count": full_known,
+                    "comparison_missing_value_count": 0,
+                    "comparison_known_value_count": full_known,
+                    "current_metric_data_state": "complete",
+                    "comparison_metric_data_state": "complete",
+                }
+                if coverage_case == "missing":
+                    base.update(
+                        current_missing_value_count=full_known,
+                        current_known_value_count=0,
+                        current_metric_data_state="missing",
+                    )
+                elif coverage_case == "incomplete":
+                    base.update(
+                        current_missing_value_count=1,
+                        current_known_value_count=full_known - 1,
+                        current_metric_data_state="incomplete",
+                    )
+                elif coverage_case == "invalid":
+                    base["current_known_value_count"] = "1.5"
+                if not partition:
+                    return [
+                        {
+                            **base,
+                            "metric_value": "100",
+                            "comparison_value": "80",
+                            "delta_value": "20",
+                            "change_rate": "0.25",
+                        }
+                    ], False, source_evidence
+                triplets = (
+                    (("40", "30", "10"), ("30", "25", "5"))
+                    if partition_truncated
+                    else (("60", "50", "10"), ("40", "30", "10"))
+                )
+                rows = []
+                for index, (current, comparison, delta) in enumerate(triplets):
+                    row = {
+                        **base,
+                        **dimension_rows[index],
+                        "metric_value": current,
+                        "comparison_value": comparison,
+                        "delta_value": delta,
+                        "change_rate": "0",
+                    }
+                    if coverage_case == "complete":
+                        row.update(
+                            current_known_value_count=1,
+                            comparison_known_value_count=1,
+                        )
+                    elif coverage_case == "mismatch":
+                        row.update(
+                            current_known_value_count=2 if index == 0 else 1,
+                            comparison_known_value_count=1,
+                        )
+                    if partition_truncated:
+                        row.update(
+                            {
+                                tools._INTERNAL_PARTITION_CURRENT: "100",
+                                tools._INTERNAL_PARTITION_COMPARISON: "80",
+                                tools._INTERNAL_PARTITION_DELTA: "20",
+                                tools._INTERNAL_PARTITION_ROW_COUNT: 3,
+                            }
+                        )
+                        if coverage_case != "proof_missing":
+                            row.update(
+                                {
+                                    tools._INTERNAL_PARTITION_CURRENT_MISSING: 0,
+                                    tools._INTERNAL_PARTITION_CURRENT_KNOWN: 3,
+                                    tools._INTERNAL_PARTITION_COMPARISON_MISSING: 0,
+                                    tools._INTERNAL_PARTITION_COMPARISON_KNOWN: 3,
+                                }
+                            )
+                    rows.append(row)
+                if inconsistent_partition_snapshot:
+                    rows[1][tools._INTERNAL_SNAPSHOT_MONTH] = "2026-08"
+                return rows, partition_truncated, source_evidence
+
+        original_projection = tools._model_wire_result
+
+        def capture_projection(result):
+            captured_raw.setdefault(str(result.get("request_id")), result)
+            return original_projection(result)
+
+        request = {
+            "request_id": "inventory_snapshot_partition",
+            "domain": "inventory",
+            "mode": "metric",
+            "purpose": "offline snapshot decomposition proof",
+            "metric": "month_end_inventory_cost_rmb",
+            "detail_receipt": cls._metric_detail_receipt(
+                "inventory", "month_end_inventory_cost_rmb"
+            ),
+            "comparison": {"kind": "snapshot_months_before", "months": 1},
+            "complete_change_decomposition": {"dimension": "warehouse"},
+        }
+        with (
+            mock.patch.object(
+                tools,
+                "_consistent_snapshot_executor",
+                side_effect=lambda **_kwargs: Snapshot(),
+            ),
+            mock.patch.object(
+                tools,
+                "_model_wire_result",
+                side_effect=capture_projection,
+            ),
+        ):
+            payload = json.loads(tools.datasage_query({"requests": [request]}))
+        return payload, captured_raw, sql_calls
 
     @classmethod
     def _synthetic_target_gap_inputs(
@@ -870,6 +1028,365 @@ class BusinessContractTests(unittest.TestCase):
         self.assertEqual(
             "complete_change_decomposition",
             wire_reconciliation["operation"],
+        )
+
+    def test_snapshot_change_metrics_compile_and_project_exact_capabilities(self) -> None:
+        domain = "inventory"
+        metric = "month_end_inventory_cost_rmb"
+        dimensions = ("warehouse", "product")
+        detail = json.loads(
+            contracts.datasage_catalog(
+                {"requests": [{"domain": domain, "metric": metric}]}
+            )
+        )["results"][0]
+        self.assertEqual(
+            "datasage-mini-inventory-semantics/v8",
+            detail["source_versions"]["semantics"],
+        )
+        self.assertEqual(
+            list(dimensions),
+            detail["metric"]["change_decomposition_dimensions"],
+        )
+        operation = detail["analysis_affordances"][
+            "selected_metric_change_planning"
+        ]["complete_change_decomposition"]
+        self.assertIn(
+            "reconciled_decomposition",
+            operation["evidence_shape_separation"],
+        )
+        request = {
+            "request_id": "inventory_compile_partition",
+            "domain": domain,
+            "mode": "metric",
+            "purpose": "offline snapshot compile proof",
+            "metric": metric,
+            "detail_receipt": self._metric_detail_receipt(domain, metric),
+            "comparison": {"kind": "snapshot_months_before", "months": 1},
+            "complete_change_decomposition": {"dimension": dimensions[0]},
+        }
+        expanded, links = tools._expand_complete_change_decompositions([request])
+        self.assertEqual(2, len(expanded))
+        self.assertEqual({request["request_id"]}, set(links))
+        scopes = []
+        for expanded_request in expanded:
+            normalized = tools._validate_request(expanded_request)
+            datasets, semantics = tools._contracts(domain)
+            normalized = tools._validate_metric_detail_gate(normalized, semantics)
+            tools._validate_pre_entity_metric_plan(
+                normalized, datasets, semantics
+            )
+            sql, _params, scope = tools._build_metric_query(
+                normalized,
+                datasets,
+                semantics,
+                tools._metric_query_limit(normalized),
+            )
+            self.assertIn("current_known_value_count", sql)
+            self.assertNotIn("value_coverage_rate AS", sql)
+            scopes.append(scope["time_range"])
+        self.assertEqual(scopes[0], scopes[1])
+        self.assertEqual("latest_snapshot", scopes[0]["current"]["source"])
+        self.assertEqual(
+            {"source": "latest_snapshot_offset", "months_before": 1},
+            scopes[0]["comparison"],
+        )
+
+        receivable = yaml.safe_load(
+            (PLUGIN_ROOT / "contracts" / "receivable-semantics.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual("datasage-mini-receivable-semantics/v6", receivable["version"])
+        for code in ("positive_debt_amount", "overdue_receivable_amount"):
+            self.assertNotIn("change_decomposition", receivable["metrics"][code])
+
+    def test_snapshot_complete_executor_reconciles_and_fails_closed(self) -> None:
+        payload, raw, sql_calls = self._run_snapshot_change_operation()
+        partition_id = "inventory_snapshot_partition"
+        partition = raw[partition_id]
+        self.assertEqual("success", payload["status"])
+        self.assertEqual(2, len(sql_calls))
+        self.assertEqual(
+            "reconciled", tools.evidence._reconciliation_status(partition)
+        )
+        self.assertEqual(
+            {
+                "current_missing_value_count": 0,
+                "current_known_value_count": 2,
+                "comparison_missing_value_count": 0,
+                "comparison_known_value_count": 2,
+            },
+            partition["change_reconciliation"]["completeness_proof"]["overall"],
+        )
+        self.assertTrue(
+            all(
+                tools.evidence.claim_is_valid_for_result(claim, partition)
+                and claim["relation_semantics"]["structural_contribution"]
+                == "structural_not_causal"
+                and "value_coverage_rate" not in claim["facts"]
+                for claim in partition["claim_ledger"]
+            )
+        )
+        self.assertIn("structural_contribution", tools.evidence._supports(partition))
+        bundle = next(
+            item
+            for item in payload["evidence_bundle"]["items"]
+            if item["request_id"] == partition_id
+        )
+        self.assertIn("structural_contribution", bundle["supports"])
+
+        truncated_payload, truncated_raw, _calls = self._run_snapshot_change_operation(
+            partition_truncated=True,
+        )
+        truncated = truncated_raw[partition_id]
+        self.assertEqual("success", truncated_payload["status"])
+        self.assertEqual(
+            "same_statement_window_full_partition",
+            truncated["change_reconciliation"]["proof_mode"],
+        )
+        self.assertFalse(
+            truncated["change_reconciliation"][
+                "complete_population_claims_returned"
+            ]
+        )
+        self.assertEqual(
+            "reconciled", tools.evidence._reconciliation_status(truncated)
+        )
+        self.assertEqual(
+            3,
+            truncated["change_reconciliation"]["completeness_proof"][
+                "partition_totals"
+            ]["current_known_value_count"],
+        )
+
+        invalid_payload, invalid_raw, _calls = self._run_snapshot_change_operation(
+            inconsistent_partition_snapshot=True,
+        )
+        invalid = invalid_raw[partition_id]
+        self.assertEqual("failed", invalid_payload["status"])
+        self.assertEqual(
+            "DATABASE_IDENTITY_CHANGED", invalid_payload["error"]["code"]
+        )
+        self.assertEqual("CONTRACT_UNAVAILABLE", invalid["error"]["code"])
+        self.assertEqual(
+            "not_reconciled", invalid["change_reconciliation"]["status"]
+        )
+        self.assertNotIn(
+            "structural_contribution", tools.evidence._supports(invalid)
+        )
+
+        expected_coverage_reasons = {
+            "missing": "DATA_COVERAGE_INCOMPLETE",
+            "incomplete": "DATA_COVERAGE_INCOMPLETE",
+            "invalid": "DATA_COVERAGE_PROOF_INVALID",
+            "mismatch": "DATA_COVERAGE_PROOF_MISMATCH",
+        }
+        for coverage_case, reason in expected_coverage_reasons.items():
+            with self.subTest(coverage_case=coverage_case):
+                case_payload, case_raw, _calls = self._run_snapshot_change_operation(
+                    coverage_case=coverage_case,
+                )
+                result = case_raw[partition_id]
+                self.assertEqual("success", case_payload["status"])
+                self.assertEqual(
+                    {
+                        "status": "not_reconciled",
+                        "operation": "complete_change_decomposition",
+                        "reason_code": reason,
+                        "overall_request_id": result["change_reconciliation"][
+                            "overall_request_id"
+                        ],
+                    },
+                    result["change_reconciliation"],
+                )
+                self.assertNotIn(
+                    "structural_contribution", tools.evidence._supports(result)
+                )
+
+        proof_payload, proof_raw, _calls = self._run_snapshot_change_operation(
+            partition_truncated=True,
+            coverage_case="proof_missing",
+        )
+        self.assertEqual("success", proof_payload["status"])
+        self.assertEqual(
+            "DATA_COVERAGE_PROOF_UNAVAILABLE",
+            proof_raw[partition_id]["change_reconciliation"]["reason_code"],
+        )
+
+        for mismatch in ("snapshot", "scope", "period"):
+            with self.subTest(mismatch=mismatch):
+                results, _wire = self._run_synthetic_change_pipeline(
+                    overall_triplet=("100", "80", "20"),
+                    partition_triplets=(("60", "50", "10"), ("40", "30", "10")),
+                    mismatch=mismatch,
+                )
+                partition = results[1]
+                self.assertEqual(
+                    "not_reconciled", partition["change_reconciliation"]["status"]
+                )
+                self.assertNotIn(
+                    "structural_contribution", tools.evidence._supports(partition)
+                )
+
+        flow_snapshot = {
+            "request_id": "invalid_flow_snapshot",
+            "domain": "receipt",
+            "mode": "metric",
+            "purpose": "invalid snapshot operation must fail before database access",
+            "metric": "net_receipt_amount",
+            "detail_receipt": self._metric_detail_receipt(
+                "receipt", "net_receipt_amount"
+            ),
+            "comparison": {"kind": "snapshot_months_before", "months": 1},
+            "complete_change_decomposition": {"dimension": "customer"},
+        }
+        with (
+            mock.patch.object(
+                tools,
+                "_execute_with_source",
+                side_effect=AssertionError("business database must not be accessed"),
+            ) as execute,
+            mock.patch.object(
+                tools,
+                "_consistent_snapshot_executor",
+                side_effect=AssertionError("snapshot executor must not start"),
+            ) as snapshot,
+        ):
+            failure = json.loads(
+                tools.runtime_guarded_datasage_query({"requests": [flow_snapshot]})
+            )
+        self.assertEqual("INVALID_PLAN", failure["error"]["code"])
+        execute.assert_not_called()
+        snapshot.assert_not_called()
+
+    def test_model_wire_rejects_invalid_structural_reconciliation(self) -> None:
+        results, _wire = self._run_synthetic_change_pipeline(
+            overall_triplet=("100", "80", "20"),
+            partition_triplets=(("60", "50", "10"), ("40", "30", "10")),
+        )
+        valid = results[1]
+        projected = tools._model_wire_result(valid)
+        self.assertNotIn("error", projected)
+        self.assertIn("structural_contributor_claim_ids", projected["change_reconciliation"])
+
+        tampered_id = copy.deepcopy(valid)
+        tampered_id["change_reconciliation"]["reconciliation_id"] = "tampered"
+        tampered_projection = tools._model_wire_result(tampered_id)
+        self.assertEqual([], tampered_projection["claim_ledger"])
+        self.assertEqual(
+            "EVIDENCE_INTEGRITY_INVALID", tampered_projection["error"]["code"]
+        )
+
+        tampered_reference = copy.deepcopy(valid)
+        tampered_reference["change_reconciliation"]["driver_claim_ids"] = [
+            "claim_not_in_partition"
+        ]
+        tools.evidence.seal_reconciliation(
+            tampered_reference["change_reconciliation"]
+        )
+        reference_projection = tools._model_wire_result(tampered_reference)
+        self.assertEqual([], reference_projection["claim_ledger"])
+        self.assertEqual(
+            "EVIDENCE_INTEGRITY_INVALID", reference_projection["error"]["code"]
+        )
+
+        missing = copy.deepcopy(valid)
+        missing.pop("change_reconciliation")
+        missing_projection = tools._model_wire_result(missing)
+        self.assertEqual([], missing_projection["claim_ledger"])
+        self.assertEqual(
+            "EVIDENCE_INTEGRITY_INVALID", missing_projection["error"]["code"]
+        )
+
+        _payload, inventory_raw, _calls = self._run_snapshot_change_operation()
+        inventory_valid = inventory_raw["inventory_snapshot_partition"]
+        inventory_projection = tools._model_wire_result(inventory_valid)
+        self.assertIsNone(inventory_projection.get("error"))
+
+        invalid_coverage_receipts = []
+        without_coverage_proof = copy.deepcopy(inventory_valid)
+        without_coverage_proof["change_reconciliation"].pop(
+            "completeness_proof"
+        )
+        invalid_coverage_receipts.append(without_coverage_proof)
+
+        mismatched_coverage = copy.deepcopy(inventory_valid)
+        mismatched_coverage["change_reconciliation"]["completeness_proof"][
+            "overall"
+        ]["current_known_value_count"] = 999
+        invalid_coverage_receipts.append(mismatched_coverage)
+
+        extra_coverage_field = copy.deepcopy(inventory_valid)
+        extra_coverage_field["change_reconciliation"]["completeness_proof"][
+            "unexpected"
+        ] = True
+        invalid_coverage_receipts.append(extra_coverage_field)
+
+        invalid_coverage_type = copy.deepcopy(inventory_valid)
+        invalid_coverage_type["change_reconciliation"]["completeness_proof"][
+            "partition_totals"
+        ]["comparison_known_value_count"] = "1.5"
+        invalid_coverage_receipts.append(invalid_coverage_type)
+
+        for invalid_coverage in invalid_coverage_receipts:
+            tools.evidence.seal_reconciliation(
+                invalid_coverage["change_reconciliation"]
+            )
+            invalid_projection = tools._model_wire_result(invalid_coverage)
+            self.assertEqual([], invalid_projection["claim_ledger"])
+            self.assertEqual(
+                "EVIDENCE_INTEGRITY_INVALID",
+                invalid_projection["error"]["code"],
+            )
+
+        _payload, truncated_raw, _calls = self._run_snapshot_change_operation(
+            partition_truncated=True,
+        )
+        truncated_projection = tools._model_wire_result(
+            truncated_raw["inventory_snapshot_partition"]
+        )
+        self.assertIsNone(truncated_projection.get("error"))
+        self.assertEqual(
+            "reconciled",
+            truncated_projection["change_reconciliation"]["status"],
+        )
+
+        mismatch_results, _wire = self._run_synthetic_change_pipeline(
+            overall_triplet=("100", "80", "20"),
+            partition_triplets=(("60", "50", "10"), ("30", "20", "10")),
+        )
+        not_reconciled = tools._model_wire_result(mismatch_results[1])
+        self.assertNotIn("error", not_reconciled)
+        self.assertEqual(
+            "not_reconciled", not_reconciled["change_reconciliation"]["status"]
+        )
+        self.assertEqual(
+            "complete_change_decomposition",
+            not_reconciled["change_reconciliation"]["operation"],
+        )
+
+        ordinary = tools._model_wire_result(results[0])
+        self.assertNotIn("error", ordinary)
+        self.assertNotIn("change_reconciliation", ordinary)
+        self.assertIn("period_comparison", ordinary["claim_ledger"][0]["allowed_relations"])
+
+        facts = {
+            "metric_value": "1",
+            "comparison_value": "0",
+            "delta_value": "1",
+        }
+        self.assertFalse(
+            tools._comparison_is_complete(facts, {"target_data_state": "not_present"})
+        )
+        facts.update(
+            current_missing_value_count=0,
+            current_known_value_count=0,
+        )
+        self.assertTrue(
+            tools._comparison_is_complete(
+                facts,
+                {"current_metric_data_state": "not_present"},
+            )
         )
 
     def test_analytical_metrics_do_not_publish_generic_change_ranking(self) -> None:

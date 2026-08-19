@@ -7,7 +7,6 @@ import json
 import os
 from pathlib import Path
 import re
-import stat
 from typing import Any
 import uuid
 
@@ -34,106 +33,69 @@ _SOURCE_GRANT_POLICIES = {
     "strict_object_read_only",
     "user_accepted_canary_existing_account",
 }
-_CANARY_PROFILE_NAMES = {
-    "datasage-canary-next",
-    "datasage-canary-v012-dev1",
-}
+_DATABASE_SECURITY_BOOL_SETTINGS = (
+    "production_mode",
+    "require_tls",
+    "canary_accept_existing_account",
+)
 
 
-def _profile_deployment_role(profile_root: Path) -> str:
-    """Classify committed source, explicitly named Canary, or production."""
-    if (profile_root / "evaluation").is_dir():
-        return "source"
-    if profile_root.name.casefold() in _CANARY_PROFILE_NAMES:
-        return "canary"
-    return "production"
+def _database_security_policy() -> dict[str, bool]:
+    """Load the complete Git-tracked database security policy or fail closed."""
 
-
-def _production_marker_present(profile_root: Path) -> bool:
-    """Treat an independent, safe marker file as the production signal.
-
-    Git is the profile version authority.  The marker therefore carries no
-    release-manifest identity; its presence only opts into the stricter
-    transport and account policy below.
-    """
-
-    marker_path = profile_root / ".production-release"
-    try:
-        details = marker_path.lstat()
-    except FileNotFoundError:
-        return False
-    except OSError as exc:
+    configured = settings.profile_settings()
+    if not isinstance(configured, dict):
+        configured = {}
+    missing = [
+        name for name in _DATABASE_SECURITY_BOOL_SETTINGS if name not in configured
+    ]
+    if missing:
         raise DatabaseSecurityError(
-            "DATABASE_PRODUCTION_MARKER_INVALID",
-            "生产标记不可安全检查。",
-        ) from exc
-    is_reparse = bool(
-        getattr(details, "st_file_attributes", 0)
-        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
-    )
-    if (
-        stat.S_ISLNK(details.st_mode)
-        or is_reparse
-        or not stat.S_ISREG(details.st_mode)
-    ):
-        raise DatabaseSecurityError(
-            "DATABASE_PRODUCTION_MARKER_INVALID",
-            "生产标记必须是独立的普通文件，且不能是链接或重解析点。",
+            "DATABASE_SECURITY_SETTING_MISSING",
+            "数据库安全设置缺失。",
         )
-    return True
+    invalid = [
+        name
+        for name in _DATABASE_SECURITY_BOOL_SETTINGS
+        if not isinstance(configured.get(name), bool)
+    ]
+    if invalid:
+        raise DatabaseSecurityError(
+            "DATABASE_SECURITY_SETTING_INVALID",
+            "数据库安全设置必须使用布尔值。",
+        )
+    policy = {
+        name: configured[name] for name in _DATABASE_SECURITY_BOOL_SETTINGS
+    }
+    if policy["production_mode"] and policy["canary_accept_existing_account"]:
+        raise DatabaseSecurityError(
+            "DATABASE_CANARY_ACCOUNT_ACCEPTANCE_FORBIDDEN",
+            "生产模式禁止 Canary 现有账号例外。",
+        )
+    return policy
 
 
 def canary_existing_account_accepted(
     *,
     profile_root: Path | None = None,
 ) -> bool:
-    """Honor the profile-owned existing-account policy on Canary only."""
+    """Honor only the complete Git-tracked Profile security policy."""
 
-    if not settings.get_bool("canary_accept_existing_account", False):
-        return False
-    profile_root = profile_root or Path(__file__).resolve().parents[2]
-    deployment_role = _profile_deployment_role(profile_root)
-    # A source checkout can carry the install-time Canary setting, but source
-    # validation must still exercise the strict object-level read-only path.
-    if deployment_role == "source":
-        return False
-    production_marker = _production_marker_present(profile_root)
-    configured_production = settings.get_bool("production_mode", False)
-    if (
-        deployment_role != "canary"
-        or production_marker
-        or configured_production
-    ):
-        raise DatabaseSecurityError(
-            "DATABASE_CANARY_ACCOUNT_ACCEPTANCE_FORBIDDEN",
-            "The existing-account exception is limited to a non-production "
-            "DataSage Canary profile.",
-        )
-    return True
+    del profile_root
+    return _database_security_policy()["canary_accept_existing_account"]
 
 
 def mysql_tls_policy(
     *,
     profile_root: Path | None = None,
 ) -> dict[str, Any]:
-    """Resolve the explicit transport policy without hiding plaintext use."""
-    profile_root = profile_root or Path(__file__).resolve().parents[2]
-    deployment_role = _profile_deployment_role(profile_root)
-    production_marker = _production_marker_present(profile_root)
-    if deployment_role == "production" and not production_marker:
-        raise DatabaseSecurityError(
-            "DATABASE_PRODUCTION_MARKER_MISSING",
-            "正式 Profile 必须由生产安装流程写入 .production-release。",
-        )
-    configured_production_mode = settings.get_bool(
-        "production_mode",
-        False,
-    )
-    production_mode = production_marker or configured_production_mode
-    requested_tls = settings.get_bool("require_tls", False)
-    tls_required = production_mode or requested_tls
+    """Resolve transport only from the complete Git-tracked Profile policy."""
+
+    del profile_root
+    policy = _database_security_policy()
+    production_mode = policy["production_mode"]
+    tls_required = production_mode or policy["require_tls"]
     return {
-        "deployment_role": deployment_role,
         "production_mode": production_mode,
         "tls_required": tls_required,
         "tls_configured": bool(
@@ -151,11 +113,6 @@ def mysql_tls_kwargs() -> dict[str, Any]:
             raise DatabaseSecurityError(
                 "DATABASE_TLS_CONFIGURATION_MISSING",
                 "当前模式要求数据库 TLS，必须配置 DATA_QUERY_MYSQL_SSL_CA。",
-            )
-        if policy["deployment_role"] not in {"source", "canary"}:
-            raise DatabaseSecurityError(
-                "DATABASE_PLAINTEXT_PROFILE_FORBIDDEN",
-                "明文数据库连接只允许显式命名的非生产 Canary Profile。",
             )
         return {"ssl_disabled": True}
     ca_path = Path(ca_value).expanduser().resolve()

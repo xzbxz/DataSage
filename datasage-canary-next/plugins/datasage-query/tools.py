@@ -133,6 +133,14 @@ _INTERNAL_PARTITION_CURRENT = "__full_partition_metric_value"
 _INTERNAL_PARTITION_COMPARISON = "__full_partition_comparison_value"
 _INTERNAL_PARTITION_DELTA = "__full_partition_delta_value"
 _INTERNAL_PARTITION_ROW_COUNT = "__full_partition_row_count"
+_INTERNAL_PARTITION_CURRENT_MISSING = "__full_partition_current_missing_value_count"
+_INTERNAL_PARTITION_CURRENT_KNOWN = "__full_partition_current_known_value_count"
+_INTERNAL_PARTITION_COMPARISON_MISSING = (
+    "__full_partition_comparison_missing_value_count"
+)
+_INTERNAL_PARTITION_COMPARISON_KNOWN = (
+    "__full_partition_comparison_known_value_count"
+)
 _INTERNAL_RESULT_FIELDS = {
     _INTERNAL_MATCH_COUNT,
     _INTERNAL_SNAPSHOT_MONTH,
@@ -142,6 +150,10 @@ _INTERNAL_RESULT_FIELDS = {
     _INTERNAL_PARTITION_COMPARISON,
     _INTERNAL_PARTITION_DELTA,
     _INTERNAL_PARTITION_ROW_COUNT,
+    _INTERNAL_PARTITION_CURRENT_MISSING,
+    _INTERNAL_PARTITION_CURRENT_KNOWN,
+    _INTERNAL_PARTITION_COMPARISON_MISSING,
+    _INTERNAL_PARTITION_COMPARISON_KNOWN,
 }
 _DATABASE_CURRENT_DATE_EVIDENCE = "database_current_date"
 _DATABASE_QUERY_DATE_OBSERVATION = "database_query_date_observation"
@@ -1067,12 +1079,20 @@ def _validate_request(request: Any) -> dict[str, Any]:
             request["comparison"] = {"kind": "previous_period"}
         elif (
             not isinstance(comparison, Mapping)
-            or set(comparison) != {"kind"}
-            or comparison.get("kind") != "previous_period"
+            or (
+                comparison.get("kind") == "previous_period"
+                and set(comparison) != {"kind"}
+            )
+            or (
+                comparison.get("kind") == "snapshot_months_before"
+                and set(comparison) != {"kind", "months"}
+            )
+            or comparison.get("kind")
+            not in {"previous_period", "snapshot_months_before"}
         ):
             raise QueryFailure(
                 "INVALID_INPUT",
-                "complete_change_decomposition only supports previous_period comparison.",
+                "complete_change_decomposition only supports previous_period or snapshot_months_before comparison.",
             )
     complete_target_gap = request.get("complete_target_gap_decomposition")
     if complete_target_gap is not None:
@@ -2350,6 +2370,23 @@ def _build_comparison_metric_query(
         f"COALESCE(c.{_INTERNAL_MATCH_COUNT}, 0) + COALESCE(p.{_INTERNAL_MATCH_COUNT}, 0) "
         f"AS {_quote_identifier(_INTERNAL_MATCH_COUNT)}",
     ]
+    change_decomposition = metric.get("change_decomposition")
+    requires_completeness_proof = (
+        isinstance(metric.get("completeness_measure"), str)
+        and isinstance(change_decomposition, Mapping)
+        and change_decomposition.get("mode") == "additive_partition"
+    )
+    if requires_completeness_proof:
+        select.extend(
+            [
+                "COALESCE(c.missing_value_count, 0) AS current_missing_value_count",
+                "COALESCE(c.known_value_count, 0) AS current_known_value_count",
+                "COALESCE(p.missing_value_count, 0) AS comparison_missing_value_count",
+                "COALESCE(p.known_value_count, 0) AS comparison_known_value_count",
+                "COALESCE(c.metric_data_state, 'not_present') AS current_metric_data_state",
+                "COALESCE(p.metric_data_state, 'not_present') AS comparison_metric_data_state",
+            ]
+        )
     current_time = current_scope.get("time_range")
     comparison_time = prior_scope.get("time_range")
     if (
@@ -2374,8 +2411,7 @@ def _build_comparison_metric_query(
         request.get("decomposition_of_request_id"), str
     )
     if embedded_partition_proof:
-        sql = (
-            f"{ctes}SELECT partition_rows.*, "
+        proof_select = (
             "SUM(partition_rows.metric_value) OVER () AS "
             f"{_quote_identifier(_INTERNAL_PARTITION_CURRENT)}, "
             "SUM(partition_rows.comparison_value) OVER () AS "
@@ -2383,7 +2419,22 @@ def _build_comparison_metric_query(
             "SUM(partition_rows.delta_value) OVER () AS "
             f"{_quote_identifier(_INTERNAL_PARTITION_DELTA)}, "
             "COUNT(*) OVER () AS "
-            f"{_quote_identifier(_INTERNAL_PARTITION_ROW_COUNT)} "
+            f"{_quote_identifier(_INTERNAL_PARTITION_ROW_COUNT)}"
+        )
+        if requires_completeness_proof:
+            proof_select += (
+                ", SUM(partition_rows.current_missing_value_count) OVER () AS "
+                f"{_quote_identifier(_INTERNAL_PARTITION_CURRENT_MISSING)}, "
+                "SUM(partition_rows.current_known_value_count) OVER () AS "
+                f"{_quote_identifier(_INTERNAL_PARTITION_CURRENT_KNOWN)}, "
+                "SUM(partition_rows.comparison_missing_value_count) OVER () AS "
+                f"{_quote_identifier(_INTERNAL_PARTITION_COMPARISON_MISSING)}, "
+                "SUM(partition_rows.comparison_known_value_count) OVER () AS "
+                f"{_quote_identifier(_INTERNAL_PARTITION_COMPARISON_KNOWN)}"
+            )
+        sql = (
+            f"{ctes}SELECT partition_rows.*, "
+            f"{proof_select} "
             f"FROM ({row_source_sql}) AS partition_rows"
         )
     else:
@@ -2435,6 +2486,7 @@ def _build_comparison_metric_query(
     if embedded_partition_proof:
         scope["embedded_complete_partition_proof"] = {
             "version": "same-statement-window-partition-proof/v1",
+            "requires_completeness_proof": requires_completeness_proof,
         }
     return sql, [*current_params, *prior_params, limit + 1], scope
 
@@ -3602,6 +3654,10 @@ _PUBLIC_FACT_FIELDS = {
     "known_value_count",
     "missing_value_count",
     "value_coverage_rate",
+    "current_known_value_count",
+    "current_missing_value_count",
+    "comparison_known_value_count",
+    "comparison_missing_value_count",
     "cost_turnover_days",
     "ddp_turnover_days",
     "avg_inventory_cost_rmb",
@@ -3617,6 +3673,8 @@ _PUBLIC_FACT_FIELDS = {
 }
 _PUBLIC_STATE_FIELDS = {
     "metric_data_state",
+    "current_metric_data_state",
+    "comparison_metric_data_state",
     "target_data_state",
     "actual_data_state",
     "period_state",
@@ -3937,11 +3995,19 @@ def _finite_decimal(value: Any) -> Decimal | None:
     return parsed if parsed.is_finite() else None
 
 
+def _exact_nonnegative_int(value: Any) -> int | None:
+    parsed = _finite_decimal(value)
+    if parsed is None or parsed < 0 or parsed != parsed.to_integral_value():
+        return None
+    return int(parsed)
+
+
 def _validated_embedded_partition_proof(
     rows: Sequence[Mapping[str, Any]],
     *,
     truncated: bool,
     returned_row_count: int,
+    requires_completeness_proof: bool = False,
 ) -> dict[str, Any]:
     if not truncated or not rows or any(not isinstance(row, Mapping) for row in rows):
         raise QueryFailure(
@@ -4000,13 +4066,35 @@ def _validated_embedded_partition_proof(
             "完整分区聚合证明与返回分区不一致。",
             stage="result_validation",
         )
-    return {
+    proof = {
         "version": "same-statement-window-partition-proof/v1",
         "metric_value": _json_value(current),
         "comparison_value": _json_value(comparison),
         "delta_value": _json_value(delta),
         "full_partition_row_count": full_count,
     }
+    if requires_completeness_proof:
+        coverage_fields = {
+            _INTERNAL_PARTITION_CURRENT_MISSING: "current_missing_value_count",
+            _INTERNAL_PARTITION_CURRENT_KNOWN: "current_known_value_count",
+            _INTERNAL_PARTITION_COMPARISON_MISSING: (
+                "comparison_missing_value_count"
+            ),
+            _INTERNAL_PARTITION_COMPARISON_KNOWN: "comparison_known_value_count",
+        }
+        for internal_field, public_field in coverage_fields.items():
+            count = _exact_nonnegative_int(first.get(internal_field))
+            if count is None or any(
+                _exact_nonnegative_int(row.get(internal_field)) != count
+                for row in rows[1:]
+            ):
+                raise QueryFailure(
+                    "PARTITION_PROOF_INVALID",
+                    "完整分区覆盖计数证明缺失、无效或不一致。",
+                    stage="result_validation",
+                )
+            proof[public_field] = count
+    return proof
 
 
 def _comparison_is_complete(
@@ -4026,10 +4114,29 @@ def _comparison_is_complete(
         "non_empty",
         "valid",
     }
+    coverage_absence_fields = {
+        "current_metric_data_state": (
+            "current_missing_value_count",
+            "current_known_value_count",
+        ),
+        "comparison_metric_data_state": (
+            "comparison_missing_value_count",
+            "comparison_known_value_count",
+        ),
+    }
     return (
         values[2] == values[0] - values[1]
         and all(
-        str(value).casefold() in complete_states for value in states.values()
+            str(value).casefold() in complete_states
+            or (
+                key in coverage_absence_fields
+                and str(value).casefold() == "not_present"
+                and all(
+                    _exact_nonnegative_int(facts.get(field)) == 0
+                    for field in coverage_absence_fields[key]
+                )
+            )
+            for key, value in states.items()
         )
     )
 
@@ -4786,6 +4893,11 @@ def _decomposition_context(
         "request": request,
         "dimensions": list(dimensions) if isinstance(dimensions, list) else [],
         "capability": dict(capability),
+        "requires_completeness_proof": (
+            isinstance(metric.get("completeness_measure"), str)
+            and isinstance(capability, Mapping)
+            and capability.get("mode") == "additive_partition"
+        ),
     }
 
 
@@ -4807,6 +4919,67 @@ def _claim_triplet(claim: Mapping[str, Any]) -> tuple[Decimal, Decimal, Decimal]
     ):
         return None
     return current, comparison, delta
+
+
+_COMPARISON_COMPLETENESS_COUNT_FIELDS = (
+    "current_missing_value_count",
+    "current_known_value_count",
+    "comparison_missing_value_count",
+    "comparison_known_value_count",
+)
+
+
+def _comparison_completeness_evidence(
+    claim: Mapping[str, Any],
+    *,
+    allow_not_present: bool,
+) -> tuple[str, dict[str, int] | None]:
+    facts = claim.get("facts")
+    states = claim.get("states")
+    if not isinstance(facts, Mapping) or not isinstance(states, Mapping):
+        return "unavailable", None
+    counts = {
+        field: _exact_nonnegative_int(facts.get(field))
+        for field in _COMPARISON_COMPLETENESS_COUNT_FIELDS
+    }
+    if any(value is None for value in counts.values()):
+        return "invalid", None
+    normalized_counts = {field: int(value) for field, value in counts.items()}
+    for prefix in ("current", "comparison"):
+        state = str(states.get(f"{prefix}_metric_data_state") or "").casefold()
+        missing = normalized_counts[f"{prefix}_missing_value_count"]
+        known = normalized_counts[f"{prefix}_known_value_count"]
+        if state == "complete" and missing == 0 and known > 0:
+            continue
+        if allow_not_present and state == "not_present" and missing == known == 0:
+            continue
+        if state in {"missing", "incomplete"}:
+            return "incomplete", normalized_counts
+        return "invalid", normalized_counts
+    return "complete", normalized_counts
+
+
+def _summed_completeness_counts(
+    evidence_items: Sequence[Mapping[str, int]],
+) -> dict[str, int]:
+    return {
+        field: sum(item[field] for item in evidence_items)
+        for field in _COMPARISON_COMPLETENESS_COUNT_FIELDS
+    }
+
+
+def _partition_proof_completeness_counts(
+    proof: Mapping[str, Any] | None,
+) -> dict[str, int] | None:
+    if not isinstance(proof, Mapping):
+        return None
+    counts = {
+        field: _exact_nonnegative_int(proof.get(field))
+        for field in _COMPARISON_COMPLETENESS_COUNT_FIELDS
+    }
+    if any(value is None for value in counts.values()):
+        return None
+    return {field: int(value) for field, value in counts.items()}
 
 
 def _reasoning_evidence_eligible(claim: Mapping[str, Any]) -> bool:
@@ -4852,6 +5025,9 @@ def _authorize_change_decompositions(
         driver_dimensions = context.get("dimensions")
         capability = context.get("capability")
         overall_capability = overall_context.get("capability")
+        requires_completeness_proof = (
+            context.get("requires_completeness_proof") is True
+        )
         allowed_dimensions = (
             capability.get("dimensions")
             if isinstance(capability, Mapping)
@@ -4867,6 +5043,8 @@ def _authorize_change_decompositions(
             or not isinstance(capability, Mapping)
             or capability.get("mode") != "additive_partition"
             or capability != overall_capability
+            or requires_completeness_proof
+            != (overall_context.get("requires_completeness_proof") is True)
             or not isinstance(allowed_dimensions, list)
             or driver_dimensions[0] not in allowed_dimensions
         ):
@@ -4930,6 +5108,11 @@ def _authorize_change_decompositions(
             and isinstance(proof_row_count, int)
             and isinstance(driver_claims, list)
             and proof_row_count > len(driver_claims)
+            and (
+                not requires_completeness_proof
+                or _partition_proof_completeness_counts(partition_proof)
+                is not None
+            )
         )
         if bounded_partition and not bounded_proof_valid:
             continue
@@ -4956,6 +5139,47 @@ def _authorize_change_decompositions(
             )
         ):
             continue
+        completeness_reconciliation: dict[str, Any] | None = None
+        if requires_completeness_proof:
+            overall_coverage_status, overall_coverage = (
+                _comparison_completeness_evidence(
+                    overall_claims[0],
+                    allow_not_present=False,
+                )
+            )
+            driver_coverage = [
+                _comparison_completeness_evidence(
+                    claim,
+                    allow_not_present=True,
+                )
+                for claim in driver_claims
+            ]
+            if (
+                overall_coverage_status != "complete"
+                or overall_coverage is None
+                or any(status != "complete" or counts is None for status, counts in driver_coverage)
+            ):
+                continue
+            returned_coverage = _summed_completeness_counts(
+                [
+                    counts
+                    for _status, counts in driver_coverage
+                    if counts is not None
+                ]
+            )
+            partition_coverage = (
+                _partition_proof_completeness_counts(partition_proof)
+                if bounded_proof_valid
+                else returned_coverage
+            )
+            if partition_coverage != overall_coverage:
+                continue
+            completeness_reconciliation = {
+                "policy": "exact_integer_counts_both_periods",
+                "overall": overall_coverage,
+                "partition_totals": partition_coverage,
+                "returned_partition_totals": returned_coverage,
+            }
         overall_triplet = _claim_triplet(overall_claims[0])
         driver_triplets = [_claim_triplet(claim) for claim in driver_claims]
         if overall_triplet is None or any(item is None for item in driver_triplets):
@@ -5050,6 +5274,10 @@ def _authorize_change_decompositions(
                 else "exact_three_column_additive_partition"
             ),
         }
+        if completeness_reconciliation is not None:
+            driver["_change_reconciliation_pending"][
+                "completeness_proof"
+            ] = completeness_reconciliation
 
 
 def _seal_claim_ids(results: Sequence[Mapping[str, Any]]) -> None:
@@ -5139,6 +5367,8 @@ def _seal_change_reconciliations(results: Sequence[Mapping[str, Any]]) -> None:
 def _complete_decomposition_failure_reason(
     overall: Mapping[str, Any] | None,
     partition: Mapping[str, Any],
+    *,
+    requires_completeness_proof: bool = False,
 ) -> str:
     partition_error = partition.get("error")
     if isinstance(partition_error, Mapping) and partition_error.get("code") == (
@@ -5169,6 +5399,56 @@ def _complete_decomposition_failure_reason(
         return "SCOPE_MISMATCH"
     overall_claims = overall.get("claim_ledger")
     partition_claims = partition.get("claim_ledger")
+    if requires_completeness_proof:
+        if not isinstance(overall_claims, list) or len(overall_claims) != 1:
+            return "DATA_COVERAGE_PROOF_UNAVAILABLE"
+        overall_status, overall_coverage = _comparison_completeness_evidence(
+            overall_claims[0],
+            allow_not_present=False,
+        )
+        if overall_status == "incomplete":
+            return "DATA_COVERAGE_INCOMPLETE"
+        if overall_status != "complete" or overall_coverage is None:
+            return "DATA_COVERAGE_PROOF_INVALID"
+        if not isinstance(partition_claims, list) or not partition_claims:
+            return "DATA_COVERAGE_PROOF_UNAVAILABLE"
+        partition_coverage_items = [
+            _comparison_completeness_evidence(
+                claim,
+                allow_not_present=True,
+            )
+            for claim in partition_claims
+        ]
+        if any(status == "incomplete" for status, _counts in partition_coverage_items):
+            return "DATA_COVERAGE_INCOMPLETE"
+        if any(
+            status != "complete" or counts is None
+            for status, counts in partition_coverage_items
+        ):
+            return "DATA_COVERAGE_PROOF_INVALID"
+        returned_coverage = _summed_completeness_counts(
+            [
+                counts
+                for _status, counts in partition_coverage_items
+                if counts is not None
+            ]
+        )
+        if partition.get("truncated") is True:
+            partition_proof = partition.get("complete_partition_proof")
+            if not isinstance(partition_proof, Mapping) or any(
+                field not in partition_proof
+                for field in _COMPARISON_COMPLETENESS_COUNT_FIELDS
+            ):
+                return "DATA_COVERAGE_PROOF_UNAVAILABLE"
+            partition_coverage = _partition_proof_completeness_counts(
+                partition_proof
+            )
+            if partition_coverage is None:
+                return "DATA_COVERAGE_PROOF_INVALID"
+        else:
+            partition_coverage = returned_coverage
+        if partition_coverage != overall_coverage:
+            return "DATA_COVERAGE_PROOF_MISMATCH"
     if partition.get("truncated") is True:
         if partition.get("complete_partition_proof_failure") is not None:
             return "PARTITION_PROOF_UNAVAILABLE"
@@ -5235,6 +5515,7 @@ def _complete_decomposition_failure_reason(
 def _finalize_complete_decomposition_outcomes(
     results: Sequence[Mapping[str, Any]],
     operation_partitions: Mapping[str, str],
+    contexts: Sequence[Mapping[str, Any] | None] = (),
 ) -> None:
     """Expose a typed fail-closed outcome only for the new explicit operation."""
 
@@ -5242,6 +5523,13 @@ def _finalize_complete_decomposition_outcomes(
         str(result.get("request_id")): result
         for result in results
         if isinstance(result, dict) and isinstance(result.get("request_id"), str)
+    }
+    context_by_id = {
+        str(context["request"]["request_id"]): context
+        for context in contexts
+        if isinstance(context, Mapping)
+        and isinstance(context.get("request"), Mapping)
+        and isinstance(context["request"].get("request_id"), str)
     }
     for partition_id, overall_id in operation_partitions.items():
         partition = result_by_id.get(partition_id)
@@ -5259,6 +5547,12 @@ def _finalize_complete_decomposition_outcomes(
             "reason_code": _complete_decomposition_failure_reason(
                 result_by_id.get(overall_id),
                 partition,
+                requires_completeness_proof=(
+                    context_by_id.get(partition_id, {}).get(
+                        "requires_completeness_proof"
+                    )
+                    is True
+                ),
             ),
             "overall_request_id": overall_id,
         }
@@ -6573,6 +6867,30 @@ def _fail_closed_formal_dso_model_wire(projected: dict[str, Any]) -> None:
         _reseal_model_disclosure_ledger(projected)
 
 
+def _fail_closed_structural_model_wire(projected: dict[str, Any]) -> None:
+    """Reject structural claims whose raw-key reconciliation is not valid."""
+
+    claims = projected.get("claim_ledger")
+    has_structural_claim = isinstance(claims, list) and any(
+        isinstance(claim, Mapping)
+        and "structural_contribution" in claim.get("allowed_relations", [])
+        for claim in claims
+    )
+    reconciliation = projected.get("change_reconciliation")
+    invalid_reconciled_receipt = (
+        isinstance(reconciliation, Mapping)
+        and reconciliation.get("status") == "reconciled"
+        and evidence._reconciliation_status(projected)
+        == "invalid_reconciliation"
+    )
+    if (
+        has_structural_claim
+        and "structural_contribution" not in evidence._supports(projected)
+    ) or invalid_reconciled_receipt:
+        projected["claim_ledger"] = []
+        _mark_model_wire_evidence_integrity_failure(projected)
+
+
 def _model_wire_result(result: Mapping[str, Any]) -> dict[str, Any]:
     """Project private execution state to the minimal model-visible result."""
 
@@ -6583,6 +6901,7 @@ def _model_wire_result(result: Mapping[str, Any]) -> dict[str, Any]:
     }
     _filter_model_wire_evidence(projected)
     _fail_closed_formal_dso_model_wire(projected)
+    _fail_closed_structural_model_wire(projected)
     if "change_reconciliation" in projected:
         projected["change_reconciliation"] = _model_wire_change_reconciliation(
             projected["change_reconciliation"]
@@ -7612,6 +7931,9 @@ def _run_one(
                     rows,
                     truncated=truncated,
                     returned_row_count=len(rows),
+                    requires_completeness_proof=(
+                        proof_plan.get("requires_completeness_proof") is True
+                    ),
                 )
             except QueryFailure as proof_failure:
                 complete_partition_proof_failure = proof_failure.code
@@ -8288,6 +8610,7 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
         _finalize_complete_decomposition_outcomes(
             results,
             operation_partitions,
+            prepared_contexts,
         )
         _finalize_target_gap_decompositions(
             prepared_contexts,

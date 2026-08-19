@@ -116,6 +116,9 @@ def _live_cache_key() -> str:
         "DATA_QUERY_MYSQL_PASSWORD",
         "DATA_QUERY_MYSQL_SSL_CA",
     )
+    configured = settings.profile_settings()
+    if not isinstance(configured, dict):
+        configured = {}
     payload = json.dumps(
         {
             "connection": {
@@ -123,15 +126,14 @@ def _live_cache_key() -> str:
                 for name in connection_names
             },
             "policy": {
-                "production_mode": settings.get_bool(
-                    "production_mode",
-                    False,
+                # Preserve raw security values in the cache key. Strict policy
+                # validation happens before query I/O; coercing "false" to
+                # False here could otherwise reuse evidence from valid config.
+                "production_mode": configured.get("production_mode"),
+                "canary_accept_existing_account": configured.get(
+                    "canary_accept_existing_account"
                 ),
-                "canary_accept_existing_account": settings.get_bool(
-                    "canary_accept_existing_account",
-                    False,
-                ),
-                "require_tls": settings.get_bool("require_tls", False),
+                "require_tls": configured.get("require_tls"),
                 "mysql_allowed_grant_scopes": settings.get_list(
                     "mysql_allowed_grant_scopes"
                 ),

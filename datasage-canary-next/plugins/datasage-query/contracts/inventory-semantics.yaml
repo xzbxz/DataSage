@@ -1,4 +1,4 @@
-version: datasage-mini-inventory-semantics/v7
+version: datasage-mini-inventory-semantics/v8
 domain: inventory
 contract_role: plugin_physical_execution
 model_planner_contract: references/planner-contract.yaml
@@ -310,6 +310,9 @@ metrics:
     time_granularity: month
     required_filters: {}
     allowed_dimensions: *month_end_dimensions
+    change_decomposition:
+      mode: additive_partition
+      dimensions: [warehouse, product]
     answer_note: 月末金额使用人民币核算成本，不与当前条码快照的 DDP 估值直接作差。
   month_end_inventory_cost_original:
     disclosures: []
@@ -459,9 +462,15 @@ analysis_recipes:
     comparison: {kind: previous_period}
     default_limit: 10
     interpretation: 排名和分组差异只是未完全分解的结构 observations；不得称为驱动、贡献或原因，未展示分组也不代表没有变化。
+  governed_change_decomposition:
+    metric: month_end_inventory_cost_rmb
+    dimensions: [warehouse, product]
+    comparison: {kind: snapshot_months_before, months: 1}
+    operation: complete_change_decomposition
+    relation: reconciled_change_only
   explain_change:
-    first: change_observations
-    causal_status: unavailable_without_independent_evidence
+    first: governed_change_decomposition
+    fallback: change_observations
     output: 只报告已验证的产品、仓库或组织结构观察；原因必须有独立证据，否则明确为当前数据无法验证。
   inventory_age_evidence:
     requests: [current_warehouse_age_days, oldest_inventory_days]
