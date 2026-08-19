@@ -31,6 +31,25 @@ REVIEW_SCHEMA = "datasage-review-assertion/v2"
 WATERMARK_SCHEMA = "datasage-replay-watermark/v1"
 LIVE_WATERMARK_SCHEMA = "datasage-replay-watermark/v2-live-fixture"
 CONTEXT_FINGERPRINT_SCHEMA = "datasage-context-binding-fingerprint/v1"
+MODEL_SOURCE_REFERENCE_SCHEMA = "datasage-query-model-source-reference/v1"
+LEGACY_SOURCE_EVIDENCE_SCHEMA = "datasage-query-source-evidence/v1"
+LEGACY_SOURCE_EVIDENCE_FIELDS = {
+    "schema",
+    "identity_sha256",
+    "connection_verified",
+    "transport_mode",
+    "transport_policy_verified",
+    "grant_policy",
+    "grants_verified",
+    "read_only",
+    "source_commitment_sha256",
+    "security_evidence_sha256",
+}
+LEGACY_SOURCE_GRANT_POLICIES = {
+    "strict_object_read_only",
+    "user_accepted_canary_existing_account",
+}
+LEGACY_SOURCE_SECURITY_DOMAIN = b"datasage-query-source-evidence/v1\x00"
 PUBLIC_TOOLS = {
     "datasage_catalog",
     "datasage_entity_resolve",
@@ -53,6 +72,55 @@ def _canonical(value: Any) -> bytes:
 def _sha256(value: Any) -> str:
     payload = value.encode("utf-8") if isinstance(value, str) else _canonical(value)
     return hashlib.sha256(payload).hexdigest()
+
+
+def _business_database_source_digest(reference: Any) -> str:
+    """Resolve only the governed public wrapper or the exact legacy evidence schema."""
+
+    if not isinstance(reference, dict):
+        raise ValueError("business database source reference must be an object")
+    schema = reference.get("schema")
+    if schema == MODEL_SOURCE_REFERENCE_SCHEMA:
+        if set(reference) != {"schema", "source_ref_sha256"}:
+            raise ValueError("model source reference fields are invalid")
+        digest = reference.get("source_ref_sha256")
+        if (
+            not isinstance(digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        ):
+            raise ValueError("model source reference digest is invalid")
+        return digest
+    if schema == LEGACY_SOURCE_EVIDENCE_SCHEMA:
+        is_digest = lambda value: (
+            isinstance(value, str)
+            and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+        )
+        if (
+            set(reference) != LEGACY_SOURCE_EVIDENCE_FIELDS
+            or not is_digest(reference.get("identity_sha256"))
+            or reference.get("connection_verified") is not True
+            or reference.get("transport_mode") not in {"tls", "plaintext"}
+            or reference.get("transport_policy_verified") is not True
+            or reference.get("grant_policy")
+            not in LEGACY_SOURCE_GRANT_POLICIES
+            or reference.get("grants_verified") is not True
+            or reference.get("read_only") is not True
+            or not is_digest(reference.get("source_commitment_sha256"))
+            or not is_digest(reference.get("security_evidence_sha256"))
+        ):
+            raise ValueError("legacy source evidence fields are invalid")
+        sealed = {
+            key: value
+            for key, value in reference.items()
+            if key != "security_evidence_sha256"
+        }
+        expected_seal = hashlib.sha256(
+            LEGACY_SOURCE_SECURITY_DOMAIN + _canonical(sealed)
+        ).hexdigest()
+        if reference["security_evidence_sha256"] != expected_seal:
+            raise ValueError("legacy source evidence seal is invalid")
+        return _sha256(reference)
+    raise ValueError("business database source reference schema is invalid")
 
 
 def _write_json_atomic(path: Path, value: Any) -> None:
@@ -365,11 +433,13 @@ def _normalize(
         elif name == "datasage_query":
             if expected_business_database_ref_sha256 is not None:
                 reference = payload.get("source_evidence_ref")
-                if (
-                    not isinstance(reference, dict)
-                    or _sha256(reference)
-                    != expected_business_database_ref_sha256
-                ):
+                try:
+                    source_digest = _business_database_source_digest(reference)
+                except ValueError as exc:
+                    raise ValueError(
+                        "live fixture business database source binding changed"
+                    ) from exc
+                if source_digest != expected_business_database_ref_sha256:
                     raise ValueError(
                         "live fixture business database source binding changed"
                     )

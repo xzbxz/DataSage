@@ -6045,7 +6045,17 @@ def _attach_batch_source_evidence(
 ) -> None:
     reference = _batch_source_evidence_ref(results)
     if reference is not None:
-        payload["source_evidence_ref"] = reference
+        canonical = json.dumps(
+            reference,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+        payload["source_evidence_ref"] = {
+            "schema": "datasage-query-model-source-reference/v1",
+            "source_ref_sha256": hashlib.sha256(canonical).hexdigest(),
+        }
 
 
 _MODEL_WIRE_RESULT_FIELDS = (
@@ -6908,12 +6918,31 @@ def _calculation_operand(
             "计算只接受一个未截断的标量 claim。",
         )
     claim = claims[0]
+    if not evidence.claim_is_valid_for_result(claim, result):
+        raise QueryFailure(
+            "CALCULATION_SOURCE_INTEGRITY_INVALID",
+            "计算引用的查询证据未通过完整性校验。",
+        )
+    projected_result = _model_wire_result(result)
+    projected_claims = projected_result.get("claim_ledger")
+    if (
+        projected_result.get("status") != "success"
+        or not isinstance(projected_claims, list)
+        or len(projected_claims) != 1
+        or projected_claims[0] != claim
+    ):
+        raise QueryFailure(
+            "CALCULATION_SOURCE_INTEGRITY_INVALID",
+            "计算引用的查询证据未通过模型边界完整性校验。",
+        )
+    claim = projected_claims[0]
     dimensions = claim.get("dimensions")
     scope_entities = claim.get("scope_entities")
     period = claim.get("period")
     facts = claim.get("facts")
     unit = claim.get("unit")
     claim_id = claim.get("claim_id")
+    claim_seal = claim.get("claim_seal")
     scope_fingerprint = claim.get("scope_fingerprint")
     projection_fingerprint = claim.get("projection_fingerprint")
     calculation_scope = result.get("_calculation_scope")
@@ -6926,6 +6955,7 @@ def _calculation_operand(
         not isinstance(period, Mapping)
         or not isinstance(facts, Mapping)
         or not isinstance(claim_id, str)
+        or not isinstance(claim_seal, str)
         or not isinstance(unit, str)
         or not unit
     ):
@@ -6968,6 +6998,7 @@ def _calculation_operand(
     return {
         "request_id": request_id,
         "claim_id": claim_id,
+        "claim_seal": claim_seal,
         "metric_ref": claim.get("metric_ref"),
         "value": value,
         "unit": unit,
@@ -7088,6 +7119,7 @@ def _build_governed_calculations(
                 {
                     "request_id": operand["request_id"],
                     "claim_id": operand["claim_id"],
+                    "claim_seal": operand["claim_seal"],
                     "metric_ref": operand["metric_ref"],
                     "value": _json_value(operand["value"]),
                     "unit": operand["unit"],
@@ -7139,6 +7171,253 @@ def _build_governed_calculations(
         except QueryFailure as failure:
             derived.append(_calculation_failure(calculation, failure))
     return derived
+
+
+def _calculation_has_valid_seal(calculation: Mapping[str, Any]) -> bool:
+    seal = calculation.get("calculation_seal")
+    if not isinstance(seal, str):
+        return False
+    canonical = json.dumps(
+        {
+            key: value
+            for key, value in calculation.items()
+            if key != "calculation_seal"
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return seal == "sha256_" + hashlib.sha256(canonical).hexdigest()
+
+
+def _model_wire_calculation_integrity_failure(
+    calculation: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Keep a typed failure while removing every dependent evidence field."""
+
+    return {
+        "calculation_id": calculation.get("calculation_id"),
+        "operation": calculation.get("operation"),
+        "status": "failed",
+        "error": {
+            "code": "CALCULATION_SOURCE_INTEGRITY_INVALID",
+            "message": "计算引用的查询证据未通过完整性校验。",
+            "retryable": False,
+        },
+    }
+
+
+_MODEL_WIRE_CALCULATION_FIELDS = (
+    "calculation_id",
+    "operation",
+    "status",
+    "allowed_relations",
+    "relation_semantics",
+    "operands",
+    "value",
+    "unit",
+    "scope_compatibility",
+    "limitations",
+    "error",
+)
+_MODEL_WIRE_CALCULATION_OPERAND_FIELDS = (
+    "request_id",
+    "claim_id",
+    "metric_ref",
+    "value",
+    "unit",
+    "period",
+    "scope_entities",
+    "scope_fingerprint",
+    "projection_fingerprint",
+    "metric_basis_fingerprint",
+    "filter_fingerprint",
+    "claim_seal",
+)
+_MODEL_WIRE_CALCULATION_ERROR_FIELDS = (
+    "code",
+    "message",
+    "retryable",
+    "max_retry_attempts",
+    "retry_advice",
+    "retry_after_seconds",
+)
+_MODEL_WIRE_SCOPE_COMPATIBILITY_FIELDS = (
+    "rule",
+    "same_metric_basis",
+    "same_filter_scope",
+    "period_relation",
+    "same_period",
+    "numerator_strict_subset_of_denominator",
+    "subset_dimensions",
+    "same_unit",
+    "scalar_untruncated_operands",
+)
+
+
+def _model_wire_calculation_projection(
+    calculation: Mapping[str, Any],
+    *,
+    seal_success: bool,
+) -> dict[str, Any]:
+    """Project only answer-contract fields, including nested calculation objects."""
+
+    projected: dict[str, Any] = {}
+    for field in _MODEL_WIRE_CALCULATION_FIELDS:
+        if field not in calculation:
+            continue
+        value = calculation[field]
+        if field == "operands":
+            if isinstance(value, list):
+                projected[field] = [
+                    {
+                        key: copy.deepcopy(operand[key])
+                        for key in _MODEL_WIRE_CALCULATION_OPERAND_FIELDS
+                        if key in operand
+                    }
+                    for operand in value
+                    if isinstance(operand, Mapping)
+                ]
+            continue
+        if field == "error":
+            if value is None:
+                projected[field] = None
+            elif isinstance(value, Mapping):
+                projected[field] = {
+                    key: copy.deepcopy(value[key])
+                    for key in _MODEL_WIRE_CALCULATION_ERROR_FIELDS
+                    if key in value
+                }
+            continue
+        if field == "relation_semantics":
+            if isinstance(value, Mapping) and "derived_observation" in value:
+                projected[field] = {
+                    "derived_observation": copy.deepcopy(
+                        value["derived_observation"]
+                    )
+                }
+            continue
+        if field == "scope_compatibility":
+            if isinstance(value, Mapping):
+                projected[field] = {
+                    key: copy.deepcopy(value[key])
+                    for key in _MODEL_WIRE_SCOPE_COMPATIBILITY_FIELDS
+                    if key in value
+                }
+            continue
+        projected[field] = copy.deepcopy(value)
+    if seal_success:
+        canonical = json.dumps(
+            projected,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+        projected["calculation_seal"] = (
+            "sha256_" + hashlib.sha256(canonical).hexdigest()
+        )
+    return projected
+
+
+def _model_wire_calculations(
+    calculations: Sequence[Mapping[str, Any]],
+    public_results: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Expose calculations only while every sealed source claim remains visible."""
+
+    visible_claims: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for result in public_results:
+        request_id = result.get("request_id")
+        claims = result.get("claim_ledger")
+        if (
+            result.get("status") != "success"
+            or not isinstance(request_id, str)
+            or not isinstance(claims, list)
+        ):
+            continue
+        for claim in claims:
+            if (
+                not isinstance(claim, Mapping)
+                or not evidence.claim_is_valid_for_result(claim, result)
+            ):
+                continue
+            claim_id = claim.get("claim_id")
+            if isinstance(claim_id, str):
+                visible_claims[(request_id, claim_id)] = claim
+
+    projected: list[dict[str, Any]] = []
+    for calculation in calculations:
+        if calculation.get("status") != "success":
+            error = calculation.get("error")
+            if (
+                isinstance(error, Mapping)
+                and error.get("code") == "CALCULATION_SOURCE_INTEGRITY_INVALID"
+            ):
+                projected.append(
+                    _model_wire_calculation_integrity_failure(calculation)
+                )
+                continue
+            projected.append(
+                _model_wire_calculation_projection(
+                    calculation,
+                    seal_success=False,
+                )
+            )
+            continue
+
+        operands = calculation.get("operands")
+        if (
+            not _calculation_has_valid_seal(calculation)
+            or not isinstance(operands, list)
+            or len(operands) != 2
+        ):
+            projected.append(
+                _model_wire_calculation_integrity_failure(calculation)
+            )
+            continue
+        valid = True
+        for operand in operands:
+            if not isinstance(operand, Mapping):
+                valid = False
+                break
+            request_id = operand.get("request_id")
+            claim_id = operand.get("claim_id")
+            claim = (
+                visible_claims.get((request_id, claim_id))
+                if isinstance(request_id, str) and isinstance(claim_id, str)
+                else None
+            )
+            facts = claim.get("facts") if isinstance(claim, Mapping) else None
+            if (
+                not isinstance(claim, Mapping)
+                or not isinstance(facts, Mapping)
+                or operand.get("claim_seal") != claim.get("claim_seal")
+                or operand.get("metric_ref") != claim.get("metric_ref")
+                or operand.get("value") != facts.get("metric_value")
+                or operand.get("unit") != claim.get("unit")
+                or operand.get("period") != claim.get("period")
+                or operand.get("scope_entities") != claim.get("scope_entities")
+                or operand.get("scope_fingerprint")
+                != claim.get("scope_fingerprint")
+                or operand.get("projection_fingerprint")
+                != claim.get("projection_fingerprint")
+            ):
+                valid = False
+                break
+        if valid:
+            projected.append(
+                _model_wire_calculation_projection(
+                    calculation,
+                    seal_success=True,
+                )
+            )
+        else:
+            projected.append(
+                _model_wire_calculation_integrity_failure(calculation)
+            )
+    return projected
 
 
 def _prepare_one(
@@ -8032,6 +8311,10 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
             else "failed"
         )
         public_results = [_model_wire_result(result) for result in results]
+        public_calculation_results = _model_wire_calculations(
+            calculation_results,
+            public_results,
+        )
         evidence_results = _model_wire_evidence_bundle_results(
             results,
             public_results,
@@ -8049,8 +8332,8 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
         }
         _attach_batch_source_evidence(payload, results)
         if calculations:
-            payload["calculation_count"] = len(calculation_results)
-            payload["calculations"] = calculation_results
+            payload["calculation_count"] = len(public_calculation_results)
+            payload["calculations"] = public_calculation_results
         encoded_size = len(
             json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         )
@@ -8270,6 +8553,10 @@ def runtime_guarded_datasage_query(
             len(results),
         )
         public_results = [_model_wire_result(result) for result in results]
+        public_calculation_results = _model_wire_calculations(
+            calculation_results,
+            public_results,
+        )
         evidence_results = _model_wire_evidence_bundle_results(
             results,
             public_results,
@@ -8286,8 +8573,8 @@ def runtime_guarded_datasage_query(
             "results": public_results,
         }
         if calculations:
-            payload["calculation_count"] = len(calculation_results)
-            payload["calculations"] = calculation_results
+            payload["calculation_count"] = len(public_calculation_results)
+            payload["calculations"] = public_calculation_results
     except QueryFailure as failure:
         payload = {
             "status": "failed",

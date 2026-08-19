@@ -1,4 +1,4 @@
-version: datasage-mini-target-planner/v7
+version: datasage-mini-target-planner/v8
 domain: target
 audience: agent_planner
 purpose: 将出库或收款目标、净实际、缺口、完成率和分摊业绩映射为受控指标；不包含拆分表或物理实现。
@@ -50,7 +50,7 @@ dimension_catalog: [salesperson, department, organization, customer]
 planning_rules:
   - 用户只问“目标完成怎么样/完成率”而未说明出库或收款时，先使用 Hermes 官方 clarify 让用户选择；澄清答复前 metric detail 和 datasage_query 均为0。仅当用户明确选择两者，或原问题明确要求“同时/两者/分别看出库和收款”时，才可查询双指标 overview；不得把批量查询两个候选当作澄清。
   - 完成率、实际和缺口直接使用 completion 指标一次返回，模型不分别查后拼接、相减或相除。
-  - 业务维度仅受工具 schema 上限、指标 allowed_dimensions 与显式用户请求约束；当前与执行一致最多五个，不再设置模型侧两维补丁式上限。趋势通过 time_bucket=month 表达，月份不占业务维度。
+  - 目标域全局最多五个业务维度，并同时受所选 metric detail 的 max_group_dimensions、allowed_dimensions 与显式用户请求约束；两个 completion 指标依各自 metric detail 最多两个业务维度。趋势通过 time_bucket=month 表达，月份不占业务维度。
   - 目标缺失、目标真实为零和目标金额含空值必须读取工具返回的 target_data_state 分别表达，不得互相替代。
   - 目标为零时完成率为 null；有实际但没有目标时不称为超额完成；有目标但没有实际时实际为零、完成率为零。
   - 本月按完整月目标对比截至当前的累计实际，不按日折算目标，不计算理论进度。
@@ -84,6 +84,13 @@ recipes:
   gap_attention: {kind: analysis_seed, order_by: {field: gap_amount_rmb, direction: desc}}
   entity_target_card: {kind: analysis_seed, outputs: [target_amount_rmb, actual_amount_rmb, gap_amount_rmb, completion_rate]}
   allocated_performance: {kind: analysis_seed, metrics: [allocated_net_delivery_amount, allocated_net_receipt_amount]}
+  complete_target_gap_decomposition:
+    kind: analysis_seed
+    activation: user_needs_the_complete_additive_target_actual_and_gap_structure_and_selected_metric_detail_advertises_the_operation
+    request_shape: {complete_target_gap_decomposition: {dimension: one_advertised_target_gap_dimension}}
+    acceptance: returned_target_gap_reconciliation_status_reconciled
+    allowed_conclusion: additive_target_actual_and_gap_composition_only_not_completion_rate_aggregation_or_causality
+    failure_fallback: preserve_returned_local_facts_gaps_and_typed_states_without_a_complete_composition_claim
   completion_change_handoff:
     kind: analysis_seed
     plan: query_completion_then_route_same_period_change_capability
@@ -97,4 +104,5 @@ answer_boundary:
   - 根据 period_state、target_data_state 和 actual_data_state 区分未开始、无目标、零目标、目标不完整和无实际。
   - target_data_state=missing 时写“未设置目标”，不得把数值占位零解释为真实零目标。
   - 不支持业务员×客户或产品目标完成；可以提供边界清晰的替代证据，但不创建不存在的目标。
+  - 只有 complete_target_gap_decomposition 的返回对账结果明确为 reconciled 时，才能把目标、实际和缺口称为完整加法结构；完成率不可相加，该结构不代表原因或驱动。未对账或回执缺失时只保留返回的局部事实、缺口和 typed state，不得声称完整结构。
   - 不展示物理拆分表名称，不做绩效裁定或资源分配。

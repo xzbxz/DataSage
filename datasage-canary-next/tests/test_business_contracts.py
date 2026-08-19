@@ -28,6 +28,9 @@ schemas = importlib.import_module(f"{TEST_PACKAGE}.schemas")
 skill_prompt = importlib.import_module(f"{TEST_PACKAGE}.skill_prompt")
 tools = importlib.import_module(f"{TEST_PACKAGE}.tools")
 runtime_health = importlib.import_module(f"{TEST_PACKAGE}.runtime_health")
+canary_transcript_adapter = importlib.import_module(
+    f"{TEST_PACKAGE}.e2e.canary_transcript_adapter"
+)
 
 
 class BusinessContractTests(unittest.TestCase):
@@ -65,6 +68,98 @@ class BusinessContractTests(unittest.TestCase):
             b"datasage-query-source-evidence/v1\x00" + canonical
         ).hexdigest()
         return evidence
+
+    @staticmethod
+    def _scalar_calculation_result(
+        request_id: str,
+        value: str,
+        *,
+        period: tuple[str, str],
+        filter_scope: dict[str, object] | None = None,
+        share_partition_dimensions: tuple[str, ...] = (),
+    ) -> dict[str, object]:
+        metric_ref = "metric_calculation_fixture"
+        scope_fingerprint = f"scope_{request_id}"
+        projection_fingerprint = f"projection_{request_id}"
+        applied_time_range = {"start": period[0], "end": period[1]}
+        claim: dict[str, object] = {
+            "request_id": request_id,
+            "metric_ref": metric_ref,
+            "metric_label": "计算测试指标",
+            "dimensions": [],
+            "scope_entities": [],
+            "period": applied_time_range,
+            "scope_fingerprint": scope_fingerprint,
+            "projection_fingerprint": projection_fingerprint,
+            "unit": "人民币元",
+            "currency": "CNY",
+            "facts": {"metric_value": value},
+            "states": {},
+            "source_truncated": False,
+            "allowed_relations": ["observation"],
+        }
+        tools.evidence.seal_claim(claim)
+        disclosure: dict[str, object] = {
+            "disclosure_id": "synthetic.calculation-scope",
+            "contract_version": "metric-disclosure/v1",
+            "request_id": request_id,
+            "metric_ref": metric_ref,
+            "scope_fingerprint": scope_fingerprint,
+            "projection_fingerprint": projection_fingerprint,
+            "mode": "required_always",
+            "order": 0,
+            "text": "synthetic governed calculation scope",
+            "applies": True,
+        }
+        disclosure_canonical = json.dumps(
+            disclosure,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+        disclosure["disclosure_seal"] = (
+            "sha256_" + hashlib.sha256(disclosure_canonical).hexdigest()
+        )
+        ledger = [disclosure]
+        ledger_canonical = json.dumps(
+            {
+                "contract_version": "metric-disclosure-ledger/v1",
+                "request_id": request_id,
+                "metric_ref": metric_ref,
+                "scope_fingerprint": scope_fingerprint,
+                "projection_fingerprint": projection_fingerprint,
+                "ledger": ledger,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+        return {
+            "request_id": request_id,
+            "status": "success",
+            "data_state": "rows",
+            "business_metric_ref": metric_ref,
+            "business_metric_label": "计算测试指标",
+            "scope_fingerprint": scope_fingerprint,
+            "projection_fingerprint": projection_fingerprint,
+            "claim_ledger": [claim],
+            "disclosure_contract_version": "metric-disclosure-ledger/v1",
+            "disclosure_ledger": ledger,
+            "disclosure_ledger_seal": (
+                "sha256_" + hashlib.sha256(ledger_canonical).hexdigest()
+            ),
+            "row_count": 1,
+            "truncated": False,
+            "applied_time_range": applied_time_range,
+            "_calculation_scope": {
+                "version": "governed-calculation-scope/v1",
+                "metric_basis_fingerprint": "basis_calculation_fixture",
+                "filter_scope": dict(filter_scope or {}),
+                "share_partition_dimensions": list(share_partition_dimensions),
+            },
+        }
 
     @staticmethod
     def _comparison_claim(
@@ -231,6 +326,113 @@ class BusinessContractTests(unittest.TestCase):
             )
         model_wire = [tools._model_wire_result(result) for result in results]
         return results, model_wire
+
+    @classmethod
+    def _synthetic_target_gap_inputs(
+        cls,
+        *,
+        target_data_state: str = "set",
+        period_state: str = "current",
+        partition_truncated: bool = False,
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, str]]:
+        raw_request = {
+            "request_id": "target_gap_partition",
+            "domain": "target",
+            "mode": "metric",
+            "purpose": "offline target gap reconciliation proof",
+            "metric": "delivery_target_completion",
+            "attribution_mode": "transaction_detail",
+            "time_range": {"start": "2026-08-01", "end": "2026-09-01"},
+            "detail_receipt": cls._metric_detail_receipt(
+                "target", "delivery_target_completion"
+            ),
+            "complete_target_gap_decomposition": {"dimension": "department"},
+        }
+        expanded, operation_partitions = (
+            tools._expand_complete_target_gap_decompositions([raw_request])
+        )
+        overall_request, partition_request = expanded
+        tools._validate_target_gap_decomposition_capability(
+            {
+                "request": overall_request,
+                "semantics": tools._read_yaml(
+                    "plugins/datasage-query/contracts/target-semantics.yaml"
+                ),
+            },
+            "department",
+        )
+        contexts = [{"request": request} for request in expanded]
+        if target_data_state == "set":
+            amount_rows = (
+                (("300", "240", "60", "0.8"),),
+                (("100", "90", "10", "0.9"), ("200", "150", "50", "0.75")),
+            )
+        elif target_data_state == "missing":
+            amount_rows = ((("0", "0", "0", None),), (("0", "0", "0", None),))
+        elif target_data_state == "incomplete":
+            amount_rows = (
+                (("300", "240", None, None),),
+                (("300", "240", None, None),),
+            )
+        else:
+            amount_rows = (
+                (("300", None, None, None),),
+                (("300", None, None, None),),
+            )
+        shared = {
+            "status": "success",
+            "data_state": "complete",
+            "_snapshot_group_marker": "target-gap-snapshot",
+            "scope_fingerprint": "target-gap-scope",
+            "business_metric_ref": "delivery_target_completion",
+            "business_metric_unit": "比例",
+            "applied_time_range": {"start": "2026-08-01", "end": "2026-09-01"},
+        }
+        results: list[dict[str, object]] = []
+        for index, (request, rows) in enumerate(zip(expanded, amount_rows)):
+            claims: list[dict[str, object]] = []
+            for row_index, (target, actual, gap, completion) in enumerate(rows):
+                claim = {
+                    "request_id": request["request_id"],
+                    "metric_ref": "delivery_target_completion",
+                    "dimensions": (
+                        []
+                        if index == 0
+                        else [{"code": "department", "value": f"dept-{row_index}"}]
+                    ),
+                    "scope_fingerprint": "target-gap-scope",
+                    "projection_fingerprint": f"target-gap-projection-{index}",
+                    "source_truncated": False,
+                    "allowed_relations": ["target_status"],
+                    "facts": {
+                        "target_amount_rmb": target,
+                        "actual_amount_rmb": actual,
+                        "gap_amount_rmb": gap,
+                        "completion_rate": completion,
+                        "metric_value": completion,
+                    },
+                    "states": {
+                        "target_data_state": target_data_state,
+                        "period_state": period_state,
+                        "actual_data_state": "set",
+                    },
+                }
+                tools.evidence.seal_claim(claim)
+                claims.append(claim)
+            results.append(
+                {
+                    **shared,
+                    "request_id": request["request_id"],
+                    "projection_fingerprint": f"target-gap-projection-{index}",
+                    "claim_ledger": claims,
+                    "row_count": len(claims),
+                    "truncated": partition_truncated if index == 1 else False,
+                    "data_state": (
+                        "truncated" if index == 1 and partition_truncated else "complete"
+                    ),
+                }
+            )
+        return contexts, results, operation_partitions
 
     def test_user_visible_datasage_skills_survive_tool_search_deferral(self) -> None:
         for relative_path in (
@@ -669,6 +871,189 @@ class BusinessContractTests(unittest.TestCase):
             "complete_change_decomposition",
             wire_reconciliation["operation"],
         )
+
+    def test_analytical_metrics_do_not_publish_generic_change_ranking(self) -> None:
+        analytical_metrics = {
+            "inventory": ("inventory_turnover_days",),
+            "target": ("delivery_target_completion", "receipt_target_completion"),
+            "customer_risk": (
+                "average_settlement_days",
+                "delivery_receipt_comparison",
+                "formal_receivable_turnover_days",
+                "maximum_settlement_days",
+                "settlement_days_distribution",
+            ),
+        }
+        self.assertEqual(8, sum(map(len, analytical_metrics.values())))
+        for domain, metric_codes in analytical_metrics.items():
+            for metric_code in metric_codes:
+                payload = json.loads(
+                    contracts.datasage_catalog(
+                        {"requests": [{"domain": domain, "metric": metric_code}]}
+                    )
+                )
+                self.assertEqual("success", payload["status"], metric_code)
+                detail = payload["results"][0]
+                self.assertIs(detail["metric"]["supports_generic_comparison"], False)
+                self.assertNotIn(
+                    "change_extreme_ranking",
+                    detail["analysis_affordances"]["selected_metric_change_planning"],
+                )
+
+    def test_target_dimension_limits_preserve_global_and_metric_arity(self) -> None:
+        semantics = yaml.safe_load(
+            (PLUGIN_ROOT / "contracts" / "target-semantics.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        planner = yaml.safe_load(
+            (
+                PROFILE_ROOT
+                / "skills"
+                / "target-query"
+                / "references"
+                / "planner-contract.yaml"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(5, semantics["defaults"]["max_business_dimensions"])
+        self.assertEqual(5, planner["defaults"]["max_business_dimensions"])
+        expected = {
+            "delivery_target_amount": 3,
+            "receipt_target_amount": 3,
+            "delivery_target_completion": 2,
+            "receipt_target_completion": 2,
+        }
+        for metric_code, limit in expected.items():
+            payload = json.loads(
+                contracts.datasage_catalog(
+                    {"requests": [{"domain": "target", "metric": metric_code}]}
+                )
+            )
+            self.assertEqual(limit, payload["results"][0]["metric"]["max_group_dimensions"])
+
+    def test_target_gap_operation_is_projected_from_versioned_contract(self) -> None:
+        expected = {
+            "operation": "complete_target_gap_decomposition",
+            "dimensions": ["customer", "department", "organization"],
+            "required_attribution_mode": "transaction_detail",
+        }
+        for metric_code in ("delivery_target_completion", "receipt_target_completion"):
+            payload = json.loads(
+                contracts.datasage_catalog(
+                    {"requests": [{"domain": "target", "metric": metric_code}]}
+                )
+            )
+            detail = payload["results"][0]
+            self.assertEqual(expected, detail["metric"]["target_gap_decomposition"])
+            self.assertEqual(
+                "datasage-target-gap-decomposition/v1",
+                detail["source_versions"]["target_gap_decomposition"],
+            )
+            self.assertIn(
+                "complete_target_gap_decomposition",
+                detail["analysis_affordances"]["selected_metric_target_gap_planning"],
+            )
+
+    def test_target_gap_executor_reconciles_three_amounts_in_one_scope(self) -> None:
+        contexts, results, operations = self._synthetic_target_gap_inputs()
+        tools._finalize_target_gap_decompositions(contexts, results, operations)
+        overall, partition = results
+        receipt = partition["target_gap_reconciliation"]
+        self.assertEqual("reconciled", receipt["status"])
+        self.assertEqual(
+            ("300", "240", "60"),
+            tuple(
+                receipt[key]
+                for key in (
+                    "partition_target_sum_rmb",
+                    "partition_actual_sum_rmb",
+                    "partition_gap_sum_rmb",
+                )
+            ),
+        )
+        self.assertEqual(
+            overall["_snapshot_group_marker"], partition["_snapshot_group_marker"]
+        )
+        self.assertEqual(overall["scope_fingerprint"], partition["scope_fingerprint"])
+        self.assertEqual(overall["applied_time_range"], partition["applied_time_range"])
+        self.assertFalse(receipt["completion_rate_aggregated"])
+        self.assertFalse(receipt["causal_attribution_authorized"])
+        self.assertTrue(tools.evidence._target_gap_reconciliation_is_valid(partition))
+        self.assertIn("target_gap_composition", tools.evidence._supports(partition))
+
+    def test_target_gap_truncation_returns_typed_not_reconciled(self) -> None:
+        contexts, results, operations = self._synthetic_target_gap_inputs(
+            partition_truncated=True
+        )
+        tools._finalize_target_gap_decompositions(contexts, results, operations)
+        partition = results[1]
+        self.assertEqual("truncated", partition["data_state"])
+        self.assertEqual(
+            {
+                "status": "not_reconciled",
+                "operation": "complete_target_gap_decomposition",
+                "reason_code": "PARTITION_PROOF_UNAVAILABLE",
+                "overall_request_id": operations["target_gap_partition"],
+                "causal_attribution_authorized": False,
+            },
+            partition["target_gap_reconciliation"],
+        )
+        self.assertNotIn("target_gap_composition", tools.evidence._supports(partition))
+
+    def test_target_gap_identity_mismatch_fails_closed(self) -> None:
+        for mismatch in ("snapshot", "scope", "period"):
+            with self.subTest(mismatch=mismatch):
+                contexts, results, operations = self._synthetic_target_gap_inputs()
+                if mismatch == "snapshot":
+                    results[1]["_snapshot_group_marker"] = "different-snapshot"
+                    expected_reason = "SNAPSHOT_CONSISTENCY_UNPROVEN"
+                elif mismatch == "scope":
+                    results[1]["scope_fingerprint"] = "different-scope"
+                    expected_reason = "SCOPE_MISMATCH"
+                else:
+                    results[1]["applied_time_range"] = {
+                        "start": "2026-07-01",
+                        "end": "2026-08-01",
+                    }
+                    expected_reason = "SCOPE_MISMATCH"
+                tools._finalize_target_gap_decompositions(
+                    contexts, results, operations
+                )
+                receipt = results[1]["target_gap_reconciliation"]
+                self.assertEqual("not_reconciled", receipt["status"])
+                self.assertEqual(expected_reason, receipt["reason_code"])
+                self.assertNotIn(
+                    "target_gap_composition", tools.evidence._supports(results[1])
+                )
+
+    def test_target_gap_invalid_target_states_return_typed_failure(self) -> None:
+        for target_state in ("missing", "incomplete", "not_set_for_future"):
+            with self.subTest(target_state=target_state):
+                contexts, results, operations = self._synthetic_target_gap_inputs(
+                    target_data_state=target_state,
+                    period_state=(
+                        "not_started"
+                        if target_state == "not_set_for_future"
+                        else "current"
+                    ),
+                )
+                tools._finalize_target_gap_decompositions(
+                    contexts, results, operations
+                )
+                partition = results[1]
+                receipt = partition["target_gap_reconciliation"]
+                self.assertEqual("not_reconciled", receipt["status"])
+                self.assertEqual("TARGET_STATE_INCOMPLETE", receipt["reason_code"])
+                self.assertTrue(
+                    all(
+                        claim["states"]["target_data_state"] == target_state
+                        for result in results
+                        for claim in result["claim_ledger"]
+                    )
+                )
+                self.assertNotIn(
+                    "target_gap_composition", tools.evidence._supports(partition)
+                )
 
     def test_domain_analysis_seeds_use_an_adaptive_soft_budget(self) -> None:
         for domain in ("receipt", "receivable", "inventory", "target"):
@@ -4262,6 +4647,532 @@ class BusinessContractTests(unittest.TestCase):
         self.assertEqual(
             "EVIDENCE_INTEGRITY_INVALID",
             disclosure_wire["error"]["code"],
+        )
+
+    def test_governed_calculation_rejects_forged_claim_seal(self) -> None:
+        left = self._scalar_calculation_result(
+            "left",
+            "12.00",
+            period=("2026-02-01", "2026-03-01"),
+        )
+        right = self._scalar_calculation_result(
+            "right",
+            "10.00",
+            period=("2026-01-01", "2026-02-01"),
+        )
+        left["claim_ledger"][0]["claim_seal"] = "sha256_" + "0" * 64
+        right["claim_ledger"][0]["claim_seal"] = "sha256_" + "1" * 64
+
+        calculation = tools._build_governed_calculations(
+            [
+                {
+                    "calculation_id": "delta",
+                    "operation": "difference",
+                    "left_request_id": "left",
+                    "right_request_id": "right",
+                }
+            ],
+            [left, right],
+        )[0]
+
+        self.assertEqual("failed", calculation["status"])
+        self.assertEqual(
+            "CALCULATION_SOURCE_INTEGRITY_INVALID",
+            calculation["error"]["code"],
+        )
+        self.assertNotIn("calculation_seal", calculation)
+        public_results = [
+            tools._model_wire_result(left),
+            tools._model_wire_result(right),
+        ]
+        projected = tools._model_wire_calculations(
+            [calculation],
+            public_results,
+        )
+        self.assertEqual(1, len(projected))
+        self.assertEqual("failed", projected[0]["status"])
+        self.assertEqual(
+            "CALCULATION_SOURCE_INTEGRITY_INVALID",
+            projected[0]["error"]["code"],
+        )
+        self.assertNotIn("operands", projected[0])
+        self.assertNotIn("calculation_seal", projected[0])
+
+    def test_governed_calculation_rejects_resealed_result_binding_mismatch(
+        self,
+    ) -> None:
+        left = self._scalar_calculation_result(
+            "left",
+            "12.00",
+            period=("2026-02-01", "2026-03-01"),
+        )
+        right = self._scalar_calculation_result(
+            "right",
+            "10.00",
+            period=("2026-01-01", "2026-02-01"),
+        )
+        left_claim = left["claim_ledger"][0]
+        left_claim["scope_fingerprint"] = "scope_other"
+        tools.evidence.seal_claim(left_claim)
+
+        calculation = tools._build_governed_calculations(
+            [
+                {
+                    "calculation_id": "delta",
+                    "operation": "difference",
+                    "left_request_id": "left",
+                    "right_request_id": "right",
+                }
+            ],
+            [left, right],
+        )[0]
+
+        self.assertEqual("failed", calculation["status"])
+        self.assertEqual(
+            "CALCULATION_SOURCE_INTEGRITY_INVALID",
+            calculation["error"]["code"],
+        )
+        self.assertNotIn("calculation_seal", calculation)
+
+    def test_model_wire_replaces_calculation_when_one_operand_loses_integrity(
+        self,
+    ) -> None:
+        left = self._scalar_calculation_result(
+            "left",
+            "12.00",
+            period=("2026-02-01", "2026-03-01"),
+        )
+        right = self._scalar_calculation_result(
+            "right",
+            "10.00",
+            period=("2026-01-01", "2026-02-01"),
+        )
+        calculation = tools._build_governed_calculations(
+            [
+                {
+                    "calculation_id": "delta",
+                    "operation": "difference",
+                    "left_request_id": "left",
+                    "right_request_id": "right",
+                }
+            ],
+            [left, right],
+        )[0]
+        self.assertEqual("success", calculation["status"])
+
+        right["claim_ledger"][0]["facts"]["metric_value"] = "999.00"
+        public_results = [
+            tools._model_wire_result(left),
+            tools._model_wire_result(right),
+        ]
+        self.assertEqual([], public_results[1]["claim_ledger"])
+        projected = tools._model_wire_calculations(
+            [calculation],
+            public_results,
+        )
+        self.assertEqual(1, len(projected))
+        self.assertEqual("failed", projected[0]["status"])
+        self.assertEqual(
+            "CALCULATION_SOURCE_INTEGRITY_INVALID",
+            projected[0]["error"]["code"],
+        )
+        self.assertNotIn("operands", projected[0])
+        self.assertNotIn("calculation_seal", projected[0])
+
+    def test_public_query_redacts_calculation_when_one_operand_is_invalid(
+        self,
+    ) -> None:
+        detail_receipt = self._metric_detail_receipt(
+            "delivery",
+            "delivery_amount",
+        )
+        requests = [
+            {
+                "request_id": "left",
+                "domain": "delivery",
+                "mode": "metric",
+                "purpose": "calculation integrity integration test",
+                "metric": "delivery_amount",
+                "detail_receipt": detail_receipt,
+                "dimensions": [],
+                "time_range": {
+                    "start": "2026-02-01",
+                    "end": "2026-03-01",
+                },
+            },
+            {
+                "request_id": "right",
+                "domain": "delivery",
+                "mode": "metric",
+                "purpose": "calculation integrity integration test",
+                "metric": "delivery_amount",
+                "detail_receipt": detail_receipt,
+                "dimensions": [],
+                "time_range": {
+                    "start": "2026-01-01",
+                    "end": "2026-02-01",
+                },
+            },
+        ]
+        calculations = [
+            {
+                "calculation_id": "delta",
+                "operation": "difference",
+                "left_request_id": "left",
+                "right_request_id": "right",
+            }
+        ]
+        original_seal_claim_ids = tools._seal_claim_ids
+
+        def seal_then_tamper(results: list[dict[str, object]]) -> None:
+            original_seal_claim_ids(results)
+            results[0]["claim_ledger"][0]["claim_seal"] = (
+                "sha256_" + "0" * 64
+            )
+
+        with (
+            mock.patch.object(
+                runtime_health,
+                "query_readiness_status",
+                return_value={"ready": True},
+            ),
+            mock.patch.object(
+                tools,
+                "_execute_with_source",
+                side_effect=[
+                    (
+                        [{"metric_value": "12.00"}],
+                        False,
+                        self._read_only_source_evidence(),
+                    ),
+                    (
+                        [{"metric_value": "10.00"}],
+                        False,
+                        self._read_only_source_evidence(),
+                    ),
+                ],
+            ),
+            mock.patch.object(
+                tools,
+                "_seal_claim_ids",
+                side_effect=seal_then_tamper,
+            ),
+        ):
+            payload = json.loads(
+                tools.runtime_guarded_datasage_query(
+                    {
+                        "requests": requests,
+                        "calculations": calculations,
+                    }
+                )
+            )
+
+        self.assertEqual("partial", payload["status"])
+        self.assertEqual(1, payload["calculation_count"])
+        self.assertEqual("failed", payload["calculations"][0]["status"])
+        self.assertEqual(
+            "CALCULATION_SOURCE_INTEGRITY_INVALID",
+            payload["calculations"][0]["error"]["code"],
+        )
+        self.assertNotIn("operands", payload["calculations"][0])
+        self.assertEqual([], payload["results"][0]["claim_ledger"])
+        self.assertEqual(
+            "EVIDENCE_INTEGRITY_INVALID",
+            payload["results"][0]["error"]["code"],
+        )
+        self.assertNotIn("calculation_seal", json.dumps(payload))
+        source_reference = payload["source_evidence_ref"]
+        self.assertEqual(
+            {
+                "schema",
+                "source_ref_sha256",
+            },
+            set(source_reference),
+        )
+        self.assertEqual(
+            "datasage-query-model-source-reference/v1",
+            source_reference["schema"],
+        )
+        self.assertRegex(
+            source_reference["source_ref_sha256"],
+            r"^[0-9a-f]{64}$",
+        )
+        serialized_source_reference = json.dumps(source_reference)
+        for private_field in (
+            "identity_sha256",
+            "transport_mode",
+            "grant_policy",
+            "read_only",
+            "source_commitment_sha256",
+            "security_evidence_sha256",
+        ):
+            self.assertNotIn(private_field, serialized_source_reference)
+
+    def test_governed_calculation_normal_path_remains_sealed_and_visible(
+        self,
+    ) -> None:
+        left = self._scalar_calculation_result(
+            "left",
+            "12.00",
+            period=("2026-02-01", "2026-03-01"),
+        )
+        right = self._scalar_calculation_result(
+            "right",
+            "10.00",
+            period=("2026-01-01", "2026-02-01"),
+        )
+        share_numerator = self._scalar_calculation_result(
+            "share_numerator",
+            "2.00",
+            period=("2026-02-01", "2026-03-01"),
+            filter_scope={"customer": "A"},
+            share_partition_dimensions=("customer",),
+        )
+        share_denominator = self._scalar_calculation_result(
+            "share_denominator",
+            "10.00",
+            period=("2026-02-01", "2026-03-01"),
+            share_partition_dimensions=("customer",),
+        )
+        calculations = tools._build_governed_calculations(
+            [
+                {
+                    "calculation_id": "delta",
+                    "operation": "difference",
+                    "left_request_id": "left",
+                    "right_request_id": "right",
+                },
+                {
+                    "calculation_id": "ratio",
+                    "operation": "ratio",
+                    "left_request_id": "left",
+                    "right_request_id": "right",
+                },
+                {
+                    "calculation_id": "share",
+                    "operation": "share",
+                    "left_request_id": "share_numerator",
+                    "right_request_id": "share_denominator",
+                },
+            ],
+            [left, right, share_numerator, share_denominator],
+        )
+        public_results = [
+            tools._model_wire_result(left),
+            tools._model_wire_result(right),
+            tools._model_wire_result(share_numerator),
+            tools._model_wire_result(share_denominator),
+        ]
+        projected = tools._model_wire_calculations(
+            calculations,
+            public_results,
+        )
+
+        self.assertEqual(
+            ["success", "success", "success"],
+            [calculation["status"] for calculation in calculations],
+        )
+        self.assertEqual(
+            ["2.00", "1.2", "0.2"],
+            [calculation["value"] for calculation in calculations],
+        )
+        self.assertTrue(
+            all(
+                tools._calculation_has_valid_seal(calculation)
+                for calculation in calculations
+            )
+        )
+        self.assertEqual(calculations, projected)
+        for calculation in projected:
+            for operand in calculation["operands"]:
+                self.assertRegex(
+                    operand["claim_seal"],
+                    r"^sha256_[0-9a-f]{64}$",
+                )
+
+    def test_canary_source_reference_digest_supports_new_and_legacy_formats(
+        self,
+    ) -> None:
+        digest = "a" * 64
+        public_reference = {
+            "schema": "datasage-query-model-source-reference/v1",
+            "source_ref_sha256": digest,
+        }
+        self.assertEqual(
+            digest,
+            canary_transcript_adapter._business_database_source_digest(
+                public_reference
+            ),
+        )
+
+        legacy_reference = self._read_only_source_evidence()
+        self.assertEqual(
+            canary_transcript_adapter._sha256(legacy_reference),
+            canary_transcript_adapter._business_database_source_digest(
+                legacy_reference
+            ),
+        )
+
+        legacy_tamper_cases: dict[str, object] = {}
+        extra_field = json.loads(json.dumps(legacy_reference))
+        extra_field["private_source"] = "must-not-be-accepted"
+        legacy_tamper_cases["extra_field"] = extra_field
+        missing_field = json.loads(json.dumps(legacy_reference))
+        missing_field.pop("identity_sha256")
+        legacy_tamper_cases["missing_field"] = missing_field
+        wrong_seal = json.loads(json.dumps(legacy_reference))
+        wrong_seal["security_evidence_sha256"] = "0" * 64
+        legacy_tamper_cases["wrong_seal"] = wrong_seal
+        wrong_digest_type = json.loads(json.dumps(legacy_reference))
+        wrong_digest_type["identity_sha256"] = 1
+        legacy_tamper_cases["wrong_digest_type"] = wrong_digest_type
+        wrong_boolean_type = json.loads(json.dumps(legacy_reference))
+        wrong_boolean_type["connection_verified"] = 1
+        legacy_tamper_cases["wrong_boolean_type"] = wrong_boolean_type
+        wrong_transport = json.loads(json.dumps(legacy_reference))
+        wrong_transport["transport_mode"] = "ssh"
+        legacy_tamper_cases["wrong_transport"] = wrong_transport
+        wrong_grant = json.loads(json.dumps(legacy_reference))
+        wrong_grant["grant_policy"] = "all_privileges"
+        legacy_tamper_cases["wrong_grant"] = wrong_grant
+        writable = json.loads(json.dumps(legacy_reference))
+        writable["read_only"] = False
+        legacy_tamper_cases["writable"] = writable
+        for label, reference in legacy_tamper_cases.items():
+            with self.subTest(legacy_case=label):
+                with self.assertRaises(ValueError):
+                    canary_transcript_adapter._business_database_source_digest(
+                        reference
+                    )
+
+        malformed_references = (
+            None,
+            {"schema": "unknown", "source_ref_sha256": digest},
+            {
+                "schema": "datasage-query-model-source-reference/v1",
+                "source_ref_sha256": digest.upper(),
+            },
+            {
+                "schema": "datasage-query-model-source-reference/v1",
+                "source_ref_sha256": digest,
+                "private_source": "must-not-be-accepted",
+            },
+        )
+        for reference in malformed_references:
+            with self.subTest(reference=reference):
+                with self.assertRaises(ValueError):
+                    canary_transcript_adapter._business_database_source_digest(
+                        reference
+                    )
+
+    def test_model_wire_calculations_remove_unregistered_fields(self) -> None:
+        left = self._scalar_calculation_result(
+            "left",
+            "12.00",
+            period=("2026-02-01", "2026-03-01"),
+        )
+        right = self._scalar_calculation_result(
+            "right",
+            "10.00",
+            period=("2026-01-01", "2026-02-01"),
+        )
+        success = tools._build_governed_calculations(
+            [
+                {
+                    "calculation_id": "delta",
+                    "operation": "difference",
+                    "left_request_id": "left",
+                    "right_request_id": "right",
+                }
+            ],
+            [left, right],
+        )[0]
+        success["private_sql"] = "SELECT secret FROM private_table"
+        success["operands"][0]["private_physical_field"] = "customer_name"
+        success["relation_semantics"]["private_reasoning"] = "secret"
+        success["scope_compatibility"]["private_scope"] = "secret"
+        success_body = {
+            key: value
+            for key, value in success.items()
+            if key != "calculation_seal"
+        }
+        success["calculation_seal"] = "sha256_" + hashlib.sha256(
+            json.dumps(
+                success_body,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()
+
+        public_results = [
+            tools._model_wire_result(left),
+            tools._model_wire_result(right),
+        ]
+        projected_success = tools._model_wire_calculations(
+            [success],
+            public_results,
+        )[0]
+        self.assertEqual("success", projected_success["status"])
+        self.assertTrue(tools._calculation_has_valid_seal(projected_success))
+        serialized_success = json.dumps(projected_success, ensure_ascii=False)
+        for private_value in (
+            "private_sql",
+            "private_table",
+            "private_physical_field",
+            "customer_name",
+            "private_reasoning",
+            "private_scope",
+        ):
+            self.assertNotIn(private_value, serialized_success)
+
+        ordinary_failure = tools._calculation_failure(
+            {
+                "calculation_id": "ratio",
+                "operation": "ratio",
+                "left_request_id": "left",
+                "right_request_id": "right",
+            },
+            tools.QueryFailure("CALCULATION_ZERO_DENOMINATOR", "不能除以零。"),
+        )
+        ordinary_failure["private_sql"] = "SELECT secret"
+        ordinary_failure["operands"][0]["private_operand"] = "secret"
+        ordinary_failure["error"]["private_trace"] = "secret"
+        projected_failure = tools._model_wire_calculations(
+            [ordinary_failure],
+            public_results,
+        )[0]
+        self.assertEqual("failed", projected_failure["status"])
+        self.assertNotIn(
+            "private",
+            json.dumps(projected_failure, ensure_ascii=False),
+        )
+
+        integrity_failure = {
+            **ordinary_failure,
+            "error": {
+                "code": "CALCULATION_SOURCE_INTEGRITY_INVALID",
+                "message": "forged internal detail",
+                "private_trace": "secret",
+            },
+        }
+        projected_integrity = tools._model_wire_calculations(
+            [integrity_failure],
+            public_results,
+        )[0]
+        self.assertEqual(
+            {
+                "calculation_id",
+                "operation",
+                "status",
+                "error",
+            },
+            set(projected_integrity),
+        )
+        self.assertNotIn(
+            "private",
+            json.dumps(projected_integrity, ensure_ascii=False),
         )
 
     def test_shared_dimension_labels_are_business_specific(self) -> None:

@@ -89,14 +89,14 @@ new turn alone never forces refresh.
 
 ### Plan and bind scope
 
-Request the smallest sufficient evidence bundle. Give independent requests
-unique `request_id` values and batch compatible requests. A scalar may answer a
-lookup; a comparison, ranking, structure analysis, or diagnosis can require
-more. Prefer one governed `complete_change_decomposition` for a contribution
-question over several truncated rankings. Use ranking (`order_by` plus `limit`)
-for largest/smallest questions and normally keep one ranking of at most 10 rows.
-Normally batch overall, comparison, and one targeted follow-up, but use no fixed
-metric, query, follow-up, or round count; depth follows material evidence gaps.
+Request the smallest sufficient bundle; give independent requests unique IDs and
+batch compatible requests. Prefer governed `complete_change_decomposition` to
+truncated rankings for contribution; for extrema use `order_by` plus `limit`,
+normally at most 10 rows. Use `complete_target_gap_decomposition` only as detail
+advertises. Only a returned reconciled target-gap receipt authorizes additive
+target/actual/gap composition—never completion-rate aggregation or causality;
+otherwise keep local facts, gaps, typed states, and no complete-composition claim.
+Use no fixed metric, query, follow-up, or round count; follow material evidence gaps.
 
 Optional playbooks come only through `datasage_reference` with
 `source_id: expert_playbooks` and an exact allowed `section_id`. A playbook or
@@ -224,7 +224,6 @@ Finalization:
   rate. When the returned `change_reconciliation.status` is `not_reconciled`, or
   when `change_reconciliation` or its status is missing, preserve the returned
   gap or local-result scope and never call it structural contribution.
-
 Only consume governed, sealed evidence and applicable disclosures. Evidence is
 local: caveats cannot repair claims. Preserve numbers, sign, scope, grain,
 freshness, completeness, reconciliation, limitations, and typed states. Keep

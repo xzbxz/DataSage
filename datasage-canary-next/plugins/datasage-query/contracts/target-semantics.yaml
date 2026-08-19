@@ -1,4 +1,4 @@
-version: datasage-mini-target-semantics/v11
+version: datasage-mini-target-semantics/v12
 domain: target
 contract_role: plugin_physical_execution
 model_planner_contract: references/planner-contract.yaml
@@ -316,7 +316,8 @@ analysis_boundaries:
   - 目标缺失、目标真实为零和目标行存在空金额是三种不同状态；目标含空金额时完成率和缺口不可用。
   - 有实际但没有目标时保留实际、目标显示零、完成率为空，不得称为超额完成；有目标但没有实际时实际为零、完成率为零、缺口等于目标。
   - 目标显示零只是缺失目标行的数值占位；当 target_data_state=missing 时业务回答必须写“未设置目标”，不得写成真实零目标。
-  - 业务维度仅受工具 schema 上限、指标 allowed_dimensions 与显式用户请求约束；当前与执行一致最多五个，不再设置模型侧两维补丁式上限。月度趋势由 time_bucket=month 表达并按月份升序，月份不占业务维度。
+  - 目标域全局最多五个业务维度，并同时受指标 allowed_dimensions、max_group_dimensions 与显式用户请求约束；两个 completion 指标依各自 metric detail 最多两个业务维度。月度趋势由 time_bucket=month 表达并按月份升序，月份不占业务维度。
+  - complete_target_gap_decomposition 仅适用于其独立合同登记的完成率指标、transaction_detail 归属和维度；只有返回 target_gap_reconciliation.status 为 reconciled 才能称为目标、实际和缺口的完整加法结构，完成率不可相加，该结构不代表业务原因或驱动。
   - 业务员分摊目标没有客户维度，目标来源也没有产品目标；业务员×客户和产品目标完成请求必须失败关闭，不得用实际值伪造目标。
   - 完成率排名将无有效完成率的对象置于有效值之后；高完成率降序、低完成率升序、缺口按金额降序。
   - 部门与组织使用精确名称对齐，不做模糊归并；无法对齐的目标或实际保留为独立对象。

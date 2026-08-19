@@ -159,7 +159,7 @@ def _build_wecom_turn_context(agent):
 
 
 class RuntimeBoundaryTests(unittest.TestCase):
-    def test_runtime_gate_has_no_dsrt_release_or_subprocess_prerequisite(self):
+    def test_runtime_path_gate_has_no_private_runtime_prerequisite(self):
         source = (PLUGIN_ROOT / "runtime_health.py").read_text(encoding="utf-8")
         for forbidden in (
             "subprocess",
@@ -173,12 +173,35 @@ class RuntimeBoundaryTests(unittest.TestCase):
 
         status = runtime_health.runtime_identity_status(profile_root=PROFILE_ROOT)
         self.assertTrue(status["ready"])
+        self.assertEqual("profile_path_integrity", status["state"])
+        self.assertTrue(status["path_integrity_verified"])
+        self.assertEqual(
+            {
+                "available": False,
+                "commit": None,
+                "tree": None,
+                "reason_code": "GIT_BINDING_UNAVAILABLE",
+            },
+            status["git_binding"],
+        )
         self.assertEqual("hermes_managed", status["runtime"])
 
-        missing = PROFILE_ROOT / "does-not-exist"
-        self.assertFalse(
-            runtime_health.runtime_identity_status(profile_root=missing)["ready"]
+        ordinary_directory = PROFILE_ROOT / "plugins"
+        ordinary_status = runtime_health.runtime_identity_status(
+            profile_root=ordinary_directory
         )
+        self.assertTrue(ordinary_status["ready"])
+        self.assertEqual("profile_path_integrity", ordinary_status["state"])
+        self.assertNotEqual("git_managed_profile", ordinary_status["state"])
+        self.assertFalse(ordinary_status["git_binding"]["available"])
+
+        missing = PROFILE_ROOT / "does-not-exist"
+        missing_status = runtime_health.runtime_identity_status(
+            profile_root=missing
+        )
+        self.assertFalse(missing_status["ready"])
+        self.assertFalse(missing_status["path_integrity_verified"])
+        self.assertFalse(missing_status["git_binding"]["available"])
 
     def test_plugin_registration_has_no_startup_health_io(self):
         source = (PLUGIN_ROOT / "__init__.py").read_text(encoding="utf-8")

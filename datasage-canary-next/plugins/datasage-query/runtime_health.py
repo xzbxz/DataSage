@@ -58,13 +58,21 @@ def _is_reparse(path: Path) -> bool:
 
 
 def runtime_identity_status(*, profile_root: Path | None = None) -> dict[str, Any]:
-    """Verify only that the Git-managed DataSage profile root is safe.
+    """Verify only that the DataSage profile root path is safe.
 
     Hermes owns active-profile and runtime selection. Historical release
     manifests, imported-Hermes paths, and private launcher layouts are not
-    DataSage runtime prerequisites. The database transport/grant/account gates
-    below remain fail-closed.
+    DataSage runtime prerequisites. This bounded check cannot prove a Git
+    commit/tree binding and reports that limitation explicitly. The database
+    transport/grant/account gates below remain fail-closed.
     """
+
+    git_binding = {
+        "available": False,
+        "commit": None,
+        "tree": None,
+        "reason_code": "GIT_BINDING_UNAVAILABLE",
+    }
 
     candidate = _profile_root() if profile_root is None else Path(profile_root)
     try:
@@ -79,16 +87,20 @@ def runtime_identity_status(*, profile_root: Path | None = None) -> dict[str, An
         )
         return {
             "ready": False,
-            "state": "git_managed_profile",
+            "state": "profile_path_integrity",
             "reason_code": reason,
+            "path_integrity_verified": False,
+            "git_binding": git_binding,
             "identity_override": False,
             "runtime": "hermes_managed",
         }
 
     return {
         "ready": True,
-        "state": "git_managed_profile",
+        "state": "profile_path_integrity",
         "reason_code": None,
+        "path_integrity_verified": True,
+        "git_binding": git_binding,
         "identity_override": False,
         "runtime": "hermes_managed",
     }

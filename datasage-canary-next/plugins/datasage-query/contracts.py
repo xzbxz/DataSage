@@ -20,7 +20,7 @@ _DOMAIN_FOLDERS = {
     "customer_risk": "customer-risk-query",
     "inventory": "inventory-query",
 }
-_MODEL_PROJECTION_VERSION = "datasage-model-semantic-projection/v3"
+_MODEL_PROJECTION_VERSION = "datasage-model-semantic-projection/v4"
 _CATALOG_VERSION = "datasage-metric-catalog/v1"
 _ANALYSIS_AFFORDANCES_VERSION = "datasage-analysis-affordances/v8"
 _CATALOG_PLANNING_GUIDANCE_VERSION = "datasage-catalog-planning-guidance/v1"
@@ -1003,6 +1003,66 @@ def _validate_customer_risk_recipe_requests(
                 )
 
 
+def _target_gap_decomposition_projection(
+    domain: str,
+    semantics: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Load the existing executor-owned target-gap capability for model projection."""
+
+    if domain != "target":
+        return None
+    reference = semantics.get("target_gap_decomposition_contract")
+    if reference != "contracts/target-gap-decomposition.yaml":
+        raise ContractFailure(
+            "CONTRACT_UNAVAILABLE",
+            "target gap decomposition contract reference is invalid",
+        )
+    contract = _read_yaml(f"plugins/datasage-query/{reference}")
+    applicability = contract.get("applicability")
+    receipt = contract.get("receipt")
+    rollout = contract.get("rollout")
+    if (
+        contract.get("version") != "datasage-target-gap-decomposition/v1"
+        or contract.get("status") != "active"
+        or not isinstance(applicability, Mapping)
+        or not isinstance(receipt, Mapping)
+        or not isinstance(rollout, Mapping)
+        or rollout.get("status") != "active"
+        or rollout.get("model_visible_operation") is not True
+        or receipt.get("operation") != "complete_target_gap_decomposition"
+    ):
+        raise ContractFailure(
+            "CONTRACT_UNAVAILABLE",
+            "target gap decomposition capability is not active",
+        )
+    metric_codes = applicability.get("metrics")
+    dimensions = applicability.get("dimensions")
+    attribution_mode = applicability.get("attribution_mode")
+    if (
+        not isinstance(metric_codes, list)
+        or not metric_codes
+        or any(not isinstance(value, str) for value in metric_codes)
+        or len(set(metric_codes)) != len(metric_codes)
+        or not isinstance(dimensions, list)
+        or not dimensions
+        or any(not isinstance(value, str) for value in dimensions)
+        or len(set(dimensions)) != len(dimensions)
+        or not isinstance(attribution_mode, str)
+        or not attribution_mode
+    ):
+        raise ContractFailure(
+            "CONTRACT_UNAVAILABLE",
+            "target gap decomposition applicability is invalid",
+        )
+    return {
+        "version": contract.get("version"),
+        "operation": receipt["operation"],
+        "metrics": list(metric_codes),
+        "dimensions": list(dimensions),
+        "required_attribution_mode": attribution_mode,
+    }
+
+
 def _model_semantic_projection(
     domain: str,
     planner: Mapping[str, Any],
@@ -1016,6 +1076,9 @@ def _model_semantic_projection(
         raise ContractFailure("CONTRACT_UNAVAILABLE", "domain semantic catalog is incomplete")
 
     physical_identifiers = _physical_identifiers(semantics) - _business_tokens(semantics)
+    target_gap_decomposition = _target_gap_decomposition_projection(
+        domain, semantics
+    )
     projected_metrics: list[dict[str, Any]] = []
     blocked_metric_codes: set[str] = set()
     known_dimensions = {str(code) for code in dimensions}
@@ -1100,6 +1163,7 @@ def _model_semantic_projection(
                 "exact_default_lookup_supported"
             )
             is True,
+            "supports_generic_comparison": definition.get("query_kind") is None,
         }
         if change_decomposition_dimensions:
             item["change_decomposition_dimensions"] = (
@@ -1164,6 +1228,29 @@ def _model_semantic_projection(
             )
         if by_attribution:
             item["dimensions_by_attribution_mode"] = by_attribution
+        if (
+            target_gap_decomposition is not None
+            and code in target_gap_decomposition["metrics"]
+        ):
+            required_mode = target_gap_decomposition[
+                "required_attribution_mode"
+            ]
+            target_gap_dimensions = target_gap_decomposition["dimensions"]
+            if (
+                definition.get("query_kind") != "target_completion"
+                or required_mode not in by_attribution
+                or not set(target_gap_dimensions)
+                <= set(by_attribution[required_mode])
+            ):
+                raise ContractFailure(
+                    "CONTRACT_UNAVAILABLE",
+                    f"metric {code} cannot execute the target gap decomposition contract",
+                )
+            item["target_gap_decomposition"] = {
+                "operation": target_gap_decomposition["operation"],
+                "dimensions": list(target_gap_dimensions),
+                "required_attribution_mode": required_mode,
+            }
         scopes = definition.get("inventory_scope_filters")
         if isinstance(scopes, Mapping):
             item["available_inventory_scopes"] = sorted(str(scope) for scope in scopes)
@@ -1241,13 +1328,18 @@ def _model_semantic_projection(
     compressed_metrics, allowed_dimension_sets = (
         _compress_metric_dimension_sets(projected_metrics)
     )
+    source_versions = {
+        "planner": planner.get("version"),
+        "semantics": semantics.get("version"),
+    }
+    if target_gap_decomposition is not None:
+        source_versions["target_gap_decomposition"] = (
+            target_gap_decomposition["version"]
+        )
     projection = {
         "version": _MODEL_PROJECTION_VERSION,
         "domain": domain,
-        "source_versions": {
-            "planner": planner.get("version"),
-            "semantics": semantics.get("version"),
-        },
+        "source_versions": source_versions,
         "guidance": guidance,
         "metrics": compressed_metrics,
         "allowed_dimension_sets": allowed_dimension_sets,
@@ -1568,6 +1660,14 @@ def _analysis_affordances(
                 "availability": "only_when_metric_detail_and_returned_reconciliation_both_authorize_it",
             }
         )
+    if any(item.get("target_gap_decomposition") for item in metrics):
+        capabilities.append(
+            {
+                "code": "reconciled_target_gap_decomposition",
+                "proof_capability": "additive_target_actual_and_gap_composition",
+                "availability": "only_when_metric_detail_advertises_the_operation_and_returned_target_gap_reconciliation_is_reconciled",
+            }
+        )
     if any(item.get("reasoning_topics") for item in metrics):
         capabilities.append(
             {
@@ -1652,7 +1752,9 @@ def _analysis_affordances(
             "contract_role": "non_binding_request_shape_guidance",
             "metric_code": metric_code,
             "execution_authority": "none",
-            "change_extreme_ranking": {
+        }
+        if selected_metric.get("supports_generic_comparison") is True:
+            change_planning["change_extreme_ranking"] = {
                 "availability": "requires_a_returned_compatible_comparison_and_one_dimension_from_metric_allowed_dimensions",
                 "largest_decline": {
                     "order_by": {"field": "delta_value", "direction": "asc"}
@@ -1663,8 +1765,7 @@ def _analysis_affordances(
                 "global_extreme_claim": "requires_returned_governed_ordering_matching_the_requested_delta_direction",
                 "truncated_result": "may_support_the_returned_ranked_top_when_governed_ordering_matches_but_never_a_complete_population_or_contribution_sum",
                 "mismatched_ordering": "never_claim_a_change_extreme_from_a_truncated_result_when_the_returned_ordering_does_not_match",
-            },
-        }
+            }
         if selected_metric.get("change_decomposition_dimensions"):
             change_planning["complete_change_decomposition"] = {
                 "availability": "only_for_a_dimension_listed_in_metric_change_decomposition_dimensions",
@@ -1736,6 +1837,25 @@ def _analysis_affordances(
                 "allowed_conclusion": "returned_governed_dimension_structural_contribution_only_never_complete_hidden_tail_detail_or_causality",
             }
         affordances["selected_metric_change_planning"] = change_planning
+        target_gap = selected_metric.get("target_gap_decomposition")
+        if isinstance(target_gap, Mapping):
+            affordances["selected_metric_target_gap_planning"] = {
+                "contract_role": "non_binding_request_shape_guidance",
+                "metric_code": metric_code,
+                "execution_authority": "none",
+                "complete_target_gap_decomposition": {
+                    "availability": "only_for_a_dimension_listed_in_metric_target_gap_decomposition_dimensions_and_the_required_attribution_mode",
+                    "model_facing_request_shape": {
+                        "complete_target_gap_decomposition": {
+                            "dimension": "one_code_from_metric_target_gap_decomposition_dimensions"
+                        }
+                    },
+                    "acceptance": "returned_target_gap_reconciliation_operation_matches_and_status_is_reconciled",
+                    "allowed_conclusion": "returned_additive_target_actual_and_gap_composition_only_completion_rate_is_not_additive_and_causality_is_never_authorized",
+                    "failure_fallback": "when_reconciliation_is_not_reconciled_or_missing_preserve_returned_local_facts_gaps_and_typed_states_without_a_complete_composition_claim",
+                    "planning_effect": "failure_is_local_and_does_not_block_other_independently_governed_evidence",
+                },
+            }
     _assert_business_safe_tree(
         affordances,
         context=f"domain {domain} analysis affordances",
