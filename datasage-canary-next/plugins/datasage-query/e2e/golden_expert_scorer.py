@@ -20,7 +20,7 @@ from typing import Any
 
 
 HERE = Path(__file__).resolve().parent
-SCHEMA = "datasage-golden-expert-cases/v1"
+SCHEMA = "datasage-golden-expert-cases/v2"
 CANDIDATE_SCHEMA = "datasage-golden-expert-candidate/v1"
 REPORT_SCHEMA = "datasage-golden-expert-report/v1"
 PLAN_LIST_FIELDS = ("domains", "metrics", "dimensions", "operations")
@@ -211,9 +211,14 @@ def validate_suite(suite: Any) -> list[str]:
         "expected_plan", "required_conclusions", "allowed_conclusions",
         "forbidden_conclusions", "evidence_requirements",
     }
+    optional_keys = {"expected_final_answer_sha256"}
     for index, case in enumerate(cases):
         where = f"cases[{index}]"
-        if not isinstance(case, dict) or set(case) != required_keys:
+        if (
+            not isinstance(case, dict)
+            or not required_keys.issubset(case)
+            or set(case).difference(required_keys | optional_keys)
+        ):
             errors.append(f"{where} has invalid keys")
             continue
         case_id = case.get("id")
@@ -228,6 +233,23 @@ def validate_suite(suite: Any) -> list[str]:
             errors.append(f"{where}.category is invalid")
         else:
             categories[category] += 1
+        expected_final_answer_sha256 = case.get("expected_final_answer_sha256")
+        if category == "permission_denied":
+            if (
+                not isinstance(expected_final_answer_sha256, str)
+                or len(expected_final_answer_sha256) != 64
+                or any(
+                    char not in "0123456789abcdef"
+                    for char in expected_final_answer_sha256
+                )
+            ):
+                errors.append(
+                    f"{where}.expected_final_answer_sha256 is required for permission_denied"
+                )
+        elif expected_final_answer_sha256 is not None:
+            errors.append(
+                f"{where}.expected_final_answer_sha256 is only allowed for permission_denied"
+            )
         if not isinstance(conversation, str) or not conversation:
             errors.append(f"{where}.conversation_id is invalid")
         elif not isinstance(turn, int) or turn < 1:
@@ -304,7 +326,11 @@ def _binding_shape_valid(value: Any, *, live_fixture: bool, name: str) -> bool:
 
 
 def _score_case(
-    case: dict[str, Any], observed: Any, *, live_fixture: bool = False
+    case: dict[str, Any],
+    observed: Any,
+    *,
+    live_fixture: bool = False,
+    final_answer_sha256: str | None = None,
 ) -> list[str]:
     if not isinstance(observed, dict):
         return ["candidate case must be an object"]
@@ -363,6 +389,12 @@ def _score_case(
     forbidden = set(conclusions).intersection(case["forbidden_conclusions"])
     if forbidden:
         errors.append(f"forbidden conclusions present {sorted(forbidden)!r}")
+    expected_final_answer_sha256 = case.get("expected_final_answer_sha256")
+    if (
+        expected_final_answer_sha256 is not None
+        and final_answer_sha256 != expected_final_answer_sha256
+    ):
+        errors.append("final answer does not exactly match the governed denial text")
 
     requirement = case["evidence_requirements"]
     evidence = observed.get("evidence")
@@ -436,6 +468,7 @@ def score(suite: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
         previous_session[conversation] = session_id
 
     receipt_turns = candidate["canary_receipt"]["turns"]
+    receipt_by_id = {turn["test_id"]: turn for turn in receipt_turns}
     live_ids = {
         turn["test_id"]
         for turn in receipt_turns
@@ -449,6 +482,7 @@ def score(suite: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
             case,
             by_id[case["id"]],
             live_fixture=case["id"] in live_ids,
+            final_answer_sha256=receipt_by_id[case["id"]]["final_answer_sha256"],
         )
         errors.extend(context_errors[case["id"]])
         passed = not errors
