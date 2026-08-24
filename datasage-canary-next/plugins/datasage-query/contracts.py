@@ -63,6 +63,26 @@ _MODEL_GUIDANCE_KEYS = (
     "answer_boundary",
     "answer_contract",
 )
+
+
+def metric_comparison_kinds(definition: Mapping[str, Any]) -> list[str]:
+    """Return only comparison kinds accepted by the metric execution path."""
+
+    if definition.get("query_kind") is not None:
+        return []
+    time_policy = definition.get("time_policy")
+    time_field = definition.get("time_field")
+    if time_policy == "latest_snapshot" and isinstance(time_field, str) and time_field:
+        return ["snapshot_months_before"]
+    if time_policy not in {
+        None,
+        "",
+        "current_snapshot",
+        "latest_snapshot",
+        "latest_non_null_snapshot",
+    }:
+        return ["previous_period"]
+    return []
 _QUERY_POLICY_PATH = (
     "plugins/datasage-query/contracts/query-policy.yaml"
 )
@@ -1152,6 +1172,7 @@ def _model_semantic_projection(
                 "CONTRACT_UNAVAILABLE",
                 f"metric {code} lacks a safe business label or definition",
             )
+        comparison_kinds = metric_comparison_kinds(definition)
         item: dict[str, Any] = {
             "code": code,
             "label": label,
@@ -1165,7 +1186,8 @@ def _model_semantic_projection(
                 "exact_default_lookup_supported"
             )
             is True,
-            "supports_generic_comparison": definition.get("query_kind") is None,
+            "comparison_kinds": comparison_kinds,
+            "supports_generic_comparison": bool(comparison_kinds),
         }
         if change_decomposition_dimensions:
             item["change_decomposition_dimensions"] = (
@@ -1467,6 +1489,7 @@ def _catalog_expert_index(domain: str, planner: Mapping[str, Any]) -> dict[str, 
                 "default_inventory_scope",
                 "exact_default_lookup_supported",
                 "max_group_dimensions",
+                "comparison_kinds",
             )
             if raw.get(key) is not None
         }
@@ -1477,7 +1500,7 @@ def _catalog_expert_index(domain: str, planner: Mapping[str, Any]) -> dict[str, 
             raw.get("change_decomposition_dimensions")
         )
         operations = ["direct_fact"]
-        if raw.get("supports_generic_comparison") is True:
+        if raw.get("comparison_kinds"):
             operations.append("returned_comparison")
         if item["supports_dimensions"]:
             operations.append("dimension_breakdown")
@@ -1771,7 +1794,7 @@ def _analysis_affordances(
             "metric_code": metric_code,
             "execution_authority": "none",
         }
-        if selected_metric.get("supports_generic_comparison") is True:
+        if selected_metric.get("comparison_kinds"):
             change_planning["change_extreme_ranking"] = {
                 "availability": "requires_a_returned_compatible_comparison_and_one_dimension_from_metric_allowed_dimensions",
                 "largest_decline": {
@@ -1981,6 +2004,7 @@ def _catalog_performance_scorecard() -> dict[str, Any]:
             "CONTRACT_UNAVAILABLE", "performance scorecard bundle is invalid"
         )
     metric_details: list[dict[str, Any]] = []
+    recommended_bundle: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for item in raw_bundle:
         if not isinstance(item, Mapping):
@@ -2006,18 +2030,33 @@ def _catalog_performance_scorecard() -> dict[str, Any]:
         seen.add(identity)
         planner = _domain_contract(str(domain), "planner")["planner"]
         detail = _catalog_metric_detail(str(domain), metric, planner)
+        detail_receipt = _catalog_metric_detail_receipt(detail)
+        query_template = _copy_guidance(template)
+        query_template["detail_receipt"] = detail_receipt
+        recommended_bundle.append(
+            {
+                "lens": item.get("lens"),
+                "time_binding": item.get("time_binding"),
+                "request_template": query_template,
+            }
+        )
         metric_details.append(
             {
                 "lens": item.get("lens"),
                 "time_binding": item.get("time_binding"),
-                "request_template": _copy_guidance(template),
                 "detail": detail,
-                "detail_receipt": _catalog_metric_detail_receipt(detail),
+                "detail_receipt": detail_receipt,
             }
         )
+    recipe = {
+        key: _copy_guidance(value)
+        for key, value in manifest.items()
+        if key != "recommended_bundle"
+    }
     return {
         "level": "performance_scorecard",
-        "recipe": manifest,
+        "recipe": recipe,
+        "recommended_bundle": recommended_bundle,
         "metric_count": len(metric_details),
         "metric_details": metric_details,
     }

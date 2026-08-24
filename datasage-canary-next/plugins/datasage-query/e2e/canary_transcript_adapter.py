@@ -370,24 +370,25 @@ def _is_bound_metric_detail_catalog_call(
     requests = args.get("requests")
     results = payload.get("results")
     content_hash = payload.get("content_hash")
-    if (
-        set(payload)
-        != {
-            "status",
-            "catalog_version",
-            "contract_role",
-            "query_policy",
-            "results",
-            "content_hash",
-        }
-        or payload.get("status") != "success"
+    model_wire_version = payload.get("model_wire_version")
+    raw_keys = {
+        "status",
+        "catalog_version",
+        "contract_role",
+        "query_policy",
+        "results",
+        "content_hash",
+    }
+    compact_keys = raw_keys | {"model_wire_version"}
+    if "dimension_value_policies" in payload:
+        compact_keys.add("dimension_value_policies")
+    common_invalid = (
+        payload.get("status") != "success"
         or payload.get("catalog_version") != "datasage-metric-catalog/v1"
         or payload.get("contract_role") != "governed_metric_catalog"
         or not isinstance(payload.get("query_policy"), dict)
         or not isinstance(content_hash, str)
         or re.fullmatch(r"[0-9a-f]{64}", content_hash) is None
-        or content_hash
-        != _sha256({key: value for key, value in payload.items() if key != "content_hash"})
         or not isinstance(requests, list)
         or len(requests) != 1
         or not isinstance(requests[0], dict)
@@ -395,7 +396,28 @@ def _is_bound_metric_detail_catalog_call(
         or not isinstance(results, list)
         or len(results) != 1
         or not isinstance(results[0], dict)
-    ):
+    )
+    if common_invalid:
+        return False
+    if model_wire_version is None:
+        if (
+            set(payload) != raw_keys
+            or content_hash
+            != _sha256(
+                {key: value for key, value in payload.items() if key != "content_hash"}
+            )
+        ):
+            return False
+    elif model_wire_version == "datasage-catalog-model-wire/v2":
+        if set(payload) != compact_keys:
+            return False
+        detail_receipt = results[0].get("detail_receipt")
+        if (
+            not isinstance(detail_receipt, str)
+            or re.fullmatch(r"[0-9a-f]{64}", detail_receipt) is None
+        ):
+            return False
+    else:
         return False
     request = requests[0]
     result = results[0]
@@ -563,10 +585,21 @@ def _normalize(
             })
             bundle = payload.get("evidence_bundle")
             if isinstance(bundle, dict):
-                coverage = bundle.get("coverage_receipts")
-                items = coverage.get("items") if isinstance(coverage, dict) else None
-                if isinstance(items, list) and items:
-                    for item in items:
+                if payload.get("model_wire_version") == "datasage-query-model-wire/v2":
+                    items = bundle.get("items")
+                    if isinstance(items, list):
+                        for item in items:
+                            if (
+                                isinstance(item, dict)
+                                and item.get("status") == "success"
+                                and isinstance(item.get("request_id"), str)
+                                and item["request_id"]
+                            ):
+                                coverage_ids.add(item["request_id"])
+                else:
+                    coverage = bundle.get("coverage_receipts")
+                    items = coverage.get("items") if isinstance(coverage, dict) else None
+                    for item in items if isinstance(items, list) else []:
                         if not isinstance(item, dict):
                             continue
                         for request_id in item.get("request_ids") or []:

@@ -66,9 +66,14 @@ cannot repair an earlier unsupported assertion.
 - Include every disclosure whose `applies` value is true. State the actual
   returned time range for each numeric claim, and state unit and currency when
   returned and applicable; requested or default scope is not a substitute.
-- A new difference, ratio, share, or percentage must come from a successful
+- A new governed metric or business relationship must come from a successful
   governed calculation whose `calculation_seal` binds sealed operand claims and
-  compatible scope. Do not derive it from visible values.
+  compatible scope.
+- Transparent display-level arithmetic on returned values, including a
+  difference, ratio, share, or percentage, is allowed only when the operands
+  have compatible meaning, scope, period, grain, unit, and currency. State the
+  operands and formula, label the result as a derived observation, and do not
+  present it as a registered metric, structural contribution, or causal proof.
 - A display-only conversion of one returned value is allowed when it uses a
   fixed conversion factor, preserves the returned meaning, and does not create
   a new metric or relationship. State the displayed unit.

@@ -2304,6 +2304,8 @@ def _build_comparison_metric_query(
     if not isinstance(comparison, dict) or request.get("time_bucket") is not None:
         raise QueryFailure("INVALID_PLAN", "期间比较不能与时间分组同时使用。")
     kind = comparison.get("kind")
+    if kind not in contracts.metric_comparison_kinds(metric):
+        raise QueryFailure("INVALID_PLAN", "该指标不支持请求中的比较类型。")
     current_request = dict(request)
     prior_request = dict(request)
     current_request.pop("comparison", None)
@@ -2392,13 +2394,26 @@ def _build_comparison_metric_query(
         output_dimensions = []
         ctes = f"WITH current_period AS ({current_sql}), comparison_period AS ({prior_sql}) "
         select_from = "FROM current_period AS c CROSS JOIN comparison_period AS p"
+    if metric.get("ratio") is not None:
+        comparison_values = [
+            "c.metric_value AS metric_value",
+            "p.metric_value AS comparison_value",
+            "CASE WHEN c.metric_value IS NOT NULL AND p.metric_value IS NOT NULL "
+            "THEN c.metric_value - p.metric_value ELSE NULL END AS delta_value",
+            "CASE WHEN c.metric_value IS NOT NULL AND p.metric_value > 0 THEN "
+            "(c.metric_value - p.metric_value) / p.metric_value ELSE NULL END AS change_rate",
+        ]
+    else:
+        comparison_values = [
+            "COALESCE(c.metric_value, 0) AS metric_value",
+            "COALESCE(p.metric_value, 0) AS comparison_value",
+            "COALESCE(c.metric_value, 0) - COALESCE(p.metric_value, 0) AS delta_value",
+            "CASE WHEN COALESCE(p.metric_value, 0) > 0 THEN "
+            "(COALESCE(c.metric_value, 0) - p.metric_value) / p.metric_value ELSE NULL END AS change_rate",
+        ]
     select = [
         *output_dimensions,
-        "COALESCE(c.metric_value, 0) AS metric_value",
-        "COALESCE(p.metric_value, 0) AS comparison_value",
-        "COALESCE(c.metric_value, 0) - COALESCE(p.metric_value, 0) AS delta_value",
-        "CASE WHEN COALESCE(p.metric_value, 0) > 0 THEN "
-        "(COALESCE(c.metric_value, 0) - p.metric_value) / p.metric_value ELSE NULL END AS change_rate",
+        *comparison_values,
         f"COALESCE(c.{_INTERNAL_MATCH_COUNT}, 0) + COALESCE(p.{_INTERNAL_MATCH_COUNT}, 0) "
         f"AS {_quote_identifier(_INTERNAL_MATCH_COUNT)}",
     ]

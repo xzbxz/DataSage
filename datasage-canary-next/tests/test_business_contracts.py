@@ -833,6 +833,152 @@ class BusinessContractTests(unittest.TestCase):
             wire_reconciliation["operation"],
         )
 
+    def test_catalog_comparison_capabilities_match_the_runtime(self) -> None:
+        cases = (
+            ("delivery", "delivery_amount", ["previous_period"]),
+            (
+                "inventory",
+                "month_end_inventory_cost_rmb",
+                ["snapshot_months_before"],
+            ),
+            ("inventory", "current_inventory_amount_rmb", []),
+            ("receivable", "open_receivable_amount", []),
+            ("target", "delivery_target_completion", []),
+        )
+        for domain, metric, expected in cases:
+            with self.subTest(domain=domain, metric=metric):
+                detail = json.loads(
+                    contracts.datasage_catalog(
+                        {"requests": [{"domain": domain, "metric": metric}]}
+                    )
+                )["results"][0]
+                self.assertEqual(expected, detail["metric"]["comparison_kinds"])
+                self.assertIs(
+                    detail["metric"]["supports_generic_comparison"],
+                    bool(expected),
+                )
+                planning = detail["analysis_affordances"][
+                    "selected_metric_change_planning"
+                ]
+                self.assertEqual(
+                    bool(expected), "change_extreme_ranking" in planning
+                )
+
+        index = json.loads(
+            contracts.datasage_catalog(
+                {"requests": [{"domain": "inventory", "view": "expert_index"}]}
+            )
+        )["results"][0]
+        by_code = {item["code"]: item for item in index["metrics"]}
+        self.assertEqual(
+            ["snapshot_months_before"],
+            by_code["month_end_inventory_cost_rmb"]["comparison_kinds"],
+        )
+        self.assertEqual(
+            [], by_code["current_inventory_amount_rmb"]["comparison_kinds"]
+        )
+
+        unsupported = {
+            "request_id": "current_snapshot_previous_period",
+            "domain": "inventory",
+            "mode": "metric",
+            "purpose": "offline exact comparison capability proof",
+            "metric": "current_inventory_amount_rmb",
+            "dimensions": [],
+            "inventory_scope": "total",
+            "detail_receipt": self._metric_detail_receipt(
+                "inventory", "current_inventory_amount_rmb"
+            ),
+            "time_range": {"start": "2026-06-01", "end": "2026-07-01"},
+            "comparison": {"kind": "previous_period"},
+        }
+        normalized = tools._validate_request(unsupported)
+        datasets, semantics = tools._contracts("inventory")
+        normalized = tools._validate_metric_detail_gate(normalized, semantics)
+        with self.assertRaises(tools.QueryFailure) as failure:
+            tools._validate_pre_entity_metric_plan(
+                normalized, datasets, semantics
+            )
+        self.assertEqual("INVALID_PLAN", failure.exception.code)
+
+    def test_ratio_comparison_preserves_undefined_values_as_null(self) -> None:
+        request = {
+            "request_id": "ratio_null_comparison",
+            "domain": "delivery",
+            "mode": "metric",
+            "purpose": "offline ratio null compilation proof",
+            "metric": "return_amount_rate",
+            "dimensions": [],
+            "detail_receipt": self._metric_detail_receipt(
+                "delivery", "return_amount_rate"
+            ),
+            "calendar_month": "2026-07",
+            "comparison": {"kind": "previous_period"},
+        }
+        normalized = tools._validate_request(request)
+        datasets, semantics = tools._contracts("delivery")
+        normalized = tools._validate_metric_detail_gate(normalized, semantics)
+        tools._validate_pre_entity_metric_plan(normalized, datasets, semantics)
+        sql, _params, _scope = tools._build_metric_query(
+            normalized,
+            datasets,
+            semantics,
+            tools._metric_query_limit(normalized),
+        )
+        self.assertIn("c.metric_value AS metric_value", sql)
+        self.assertIn("p.metric_value AS comparison_value", sql)
+        self.assertIn(
+            "CASE WHEN c.metric_value IS NOT NULL AND p.metric_value IS NOT NULL",
+            sql,
+        )
+        self.assertNotIn(
+            "COALESCE(c.metric_value, 0) AS metric_value", sql
+        )
+        self.assertNotIn(
+            "COALESCE(p.metric_value, 0) AS comparison_value", sql
+        )
+
+    def test_future_target_keeps_a_published_target_state(self) -> None:
+        request = {
+            "request_id": "future_target_state",
+            "domain": "target",
+            "mode": "metric",
+            "purpose": "offline future target compilation proof",
+            "metric": "delivery_target_completion",
+            "dimensions": [],
+            "attribution_mode": "transaction_detail",
+            "detail_receipt": self._metric_detail_receipt(
+                "target", "delivery_target_completion"
+            ),
+            "calendar_month": "2099-01",
+        }
+        normalized = tools._validate_request(request)
+        datasets, semantics = tools._contracts("target")
+        normalized = tools._validate_metric_detail_gate(normalized, semantics)
+        tools._validate_pre_entity_metric_plan(normalized, datasets, semantics)
+        sql, _params, _scope = tools._build_metric_query(
+            normalized,
+            datasets,
+            semantics,
+            tools._metric_query_limit(normalized),
+        )
+        self.assertRegex(
+            sql,
+            r"CASE WHEN .* = 0 AND 'not_started' IN \('not_started', 'includes_future'\) THEN 'not_set_for_future' WHEN .* = 0 THEN 'missing'",
+        )
+        self.assertTrue(
+            tools._target_status_is_coherent(
+                {
+                    "metric_value": None,
+                    "completion_rate": None,
+                    "target_amount_rmb": "100",
+                    "actual_amount_rmb": None,
+                    "gap_amount_rmb": None,
+                },
+                {"target_data_state": "set", "period_state": "not_started"},
+            )
+        )
+
     def test_snapshot_change_metrics_compile_and_project_exact_capabilities(self) -> None:
         domain = "inventory"
         metric = "month_end_inventory_cost_rmb"
@@ -2681,6 +2827,11 @@ class BusinessContractTests(unittest.TestCase):
         assert_disclosure_seals(dso_raw)
         assert_attestation_and_claim_seals(dso_raw)
         dso_sql, dso_params = dso_calls[0]["sql"], dso_calls[0]["params"]
+        self.assertIn(
+            "CASE WHEN COUNT(DISTINCT bill_month) = 13 THEN SUM(", dso_sql
+        )
+        self.assertIn("ELSE NULL END AS average_net_debt_rmb", dso_sql)
+        self.assertNotIn("HAVING COUNT(DISTINCT bill_month)", dso_sql)
         self.assertIn("`d`.`is_inner_cus` = %s", dso_sql)
         self.assertIn("`s`.`bill_status` = %s", dso_sql)
         self.assertIn("`s`.`is_inner_cus` = %s", dso_sql)

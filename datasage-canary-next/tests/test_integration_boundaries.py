@@ -14,11 +14,9 @@ import unittest
 from unittest import mock
 
 import yaml
-from agent.turn_context import build_turn_context
 from hermes_cli.plugins import PluginManager
 from hermes_cli.tools_config import _get_platform_tools
 from tools import clarify_tool as _hermes_clarify_registration  # noqa: F401
-from tools import hook_output_spill as hermes_hook_output_spill
 from tools import tool_search as hermes_tool_search
 from tools.registry import ToolRegistry, registry as hermes_registry
 
@@ -66,98 +64,6 @@ runtime_health = _load_module("runtime_health")
 entitlements = _load_module("entitlements")
 skill_prompt = _load_module("skill_prompt")
 schemas = _load_module("schemas")
-
-
-class _TurnTodoStore:
-    def has_items(self):
-        return True
-
-
-class _TurnGuardrails:
-    def reset_for_turn(self):
-        pass
-
-
-class _WeComTurnAgent:
-    """Small host double matching the public turn-context seam."""
-
-    def __init__(self):
-        self.session_id = "datasage-skill-spill-regression"
-        self.model = "test/model"
-        self.provider = "openrouter"
-        self.base_url = "https://example.invalid/v1"
-        self.api_key = "test-key"
-        self.api_mode = "chat_completions"
-        self.platform = "wecom"
-        self.quiet_mode = True
-        self.max_iterations = 90
-        self.tools = []
-        self.valid_tool_names = set()
-        self._skip_mcp_refresh = True
-        self.compression_enabled = False
-        self.context_compressor = types.SimpleNamespace(
-            protect_first_n=2,
-            protect_last_n=2,
-        )
-        self._cached_system_prompt = "SYSTEM"
-        self._memory_store = None
-        self._memory_manager = None
-        self._memory_nudge_interval = 0
-        self._turns_since_memory = 0
-        self._user_turn_count = 0
-        self._todo_store = _TurnTodoStore()
-        self._tool_guardrails = _TurnGuardrails()
-        self._compression_warning = None
-        self._interrupt_requested = False
-        self._memory_write_origin = "assistant_tool"
-        self._stream_context_scrubber = None
-        self._stream_think_scrubber = None
-        self.api_content_at_persist = "<unset>"
-
-    def _ensure_db_session(self):
-        pass
-
-    def _restore_primary_runtime(self):
-        pass
-
-    def _cleanup_dead_connections(self):
-        return False
-
-    def _emit_status(self, _message):
-        pass
-
-    def _replay_compression_warning(self):
-        pass
-
-    def _hydrate_todo_store(self, *_args, **_kwargs):
-        pass
-
-    def _safe_print(self, *_args, **_kwargs):
-        pass
-
-    def _persist_session(self, messages, _history=None):
-        self.api_content_at_persist = messages[-1].get("api_content")
-
-
-def _build_wecom_turn_context(agent):
-    return build_turn_context(
-        agent=agent,
-        user_message="hello",
-        system_message=None,
-        conversation_history=None,
-        task_id=None,
-        stream_callback=None,
-        persist_user_message=None,
-        restore_or_build_system_prompt=lambda *_args, **_kwargs: None,
-        install_safe_stdio=lambda: None,
-        sanitize_surrogates=lambda value: value,
-        summarize_user_message_for_log=lambda value: value,
-        set_session_context=lambda _session_id: None,
-        set_current_write_origin=lambda _origin: None,
-        ra=lambda: types.SimpleNamespace(
-            _set_interrupt=lambda *_args, **_kwargs: None
-        ),
-    )
 
 
 class RuntimeBoundaryTests(unittest.TestCase):
@@ -407,6 +313,90 @@ class StrictSessionIdentityTests(unittest.TestCase):
                 entitlements._session_value("HERMES_SESSION_USER_ID"),
             )
 
+    def test_registered_scorecard_requires_entitlement_for_every_bundle_metric(self):
+        manager = PluginManager()
+        isolated_registry = ToolRegistry()
+        with tempfile.TemporaryDirectory() as raw_root:
+            empty_bundled = Path(raw_root) / "bundled-plugins"
+            empty_bundled.mkdir()
+            with (
+                mock.patch(
+                    "hermes_cli.plugins.get_bundled_plugins_dir",
+                    return_value=empty_bundled,
+                ),
+                mock.patch(
+                    "hermes_cli.plugins.get_hermes_home",
+                    return_value=PROFILE_ROOT,
+                ),
+                mock.patch.object(manager, "_scan_entry_points", return_value=[]),
+                mock.patch(
+                    "hermes_cli.plugins._get_enabled_plugins",
+                    return_value={"datasage-query"},
+                ),
+                mock.patch(
+                    "hermes_cli.plugins._get_disabled_plugins",
+                    return_value=set(),
+                ),
+                mock.patch("tools.registry.registry", isolated_registry),
+            ):
+                manager.discover_and_load()
+
+        loaded = manager._plugins["datasage-query"]
+        self.assertTrue(loaded.enabled)
+        self.assertIsNone(loaded.error)
+        specs = loaded.module.entitlements.SCORECARD_METRICS
+        domains = sorted({str(spec["domain"]) for spec in specs})
+        metrics = {
+            domain: sorted(
+                {
+                    str(spec["metric"])
+                    for spec in specs
+                    if spec["domain"] == domain
+                }
+            )
+            for domain in domains
+        }
+        full_rule = {
+            "tools": ["datasage_catalog"],
+            "domains": domains,
+            "metrics": metrics,
+            "allow_catalog_discovery": True,
+        }
+
+        def invoke(rule):
+            with (
+                mock.patch.dict(
+                    os.environ, {"HERMES_HOME": str(PROFILE_ROOT)}
+                ),
+                mock.patch.object(
+                    loaded.module.entitlements.settings,
+                    "profile_settings",
+                    return_value={"data_entitlements": {}},
+                ),
+                mock.patch.object(
+                    loaded.module.entitlements,
+                    "_principal_rule",
+                    return_value=rule,
+                ),
+            ):
+                return json.loads(
+                    isolated_registry.dispatch(
+                        "datasage_catalog",
+                        {"requests": [{"view": "performance_scorecard"}]},
+                    )
+                )
+
+        allowed = invoke(full_rule)
+        self.assertEqual("success", allowed["status"], allowed)
+        self.assertEqual(
+            "datasage-catalog-model-wire/v2", allowed["model_wire_version"]
+        )
+        denied_rule = copy.deepcopy(full_rule)
+        first_domain = str(specs[0]["domain"])
+        denied_rule["metrics"][first_domain].remove(str(specs[0]["metric"]))
+        denied = invoke(denied_rule)
+        self.assertEqual("DATA_ENTITLEMENT_DENIED", denied["error"]["code"])
+
 
 class GitGovernedSkillTests(unittest.TestCase):
     def _profile_with_skill(self, root: Path, payload: bytes = b"# Skill\n") -> None:
@@ -440,76 +430,6 @@ class GitGovernedSkillTests(unittest.TestCase):
         )
         self.assertNotIn("frozen_wecom_skill_hook", registration)
         self.assertIn("requires_toolsets: [datasage-query]", main_skill)
-        return
-        hook = skill_prompt.build_wecom_skill_hook(main_skill)
-        result = hook(platform="wecom", is_first_turn=True)
-        context = result["context"]
-        normalized = " ".join(context.split())
-
-        self.assertLess(len(main_skill), 16000)
-        self.assertLess(len(context), 16000)
-        self.assertIn('authority="git"', context)
-        self.assertIn('immutable="process"', context)
-        self.assertIn("`error.code: DATA_ENTITLEMENT_DENIED`", normalized)
-        self.assertIn("`当前请求未获授权，业务查询未执行。`", normalized)
-        self.assertIn("stop all further DataSage calls for that turn", normalized)
-        self.assertIn("no independent non-DataSage request", normalized)
-        self.assertIn("the entire final answer must be exactly", normalized)
-        self.assertIn("For a mixed turn with", normalized)
-        self.assertIn("render only the denied business branch as exactly", normalized)
-        self.assertIn("complete each independent non-DataSage branch normally", normalized)
-        self.assertIn("applies only to that code", normalized)
-        self.assertIn(
-            "never reuse it for another failure or ordinary conversation",
-            normalized,
-        )
-        for answer_hygiene_rule in (
-            "In a user-visible answer for a DataSage business branch",
-            "never name, cite, or reverse-announce",
-            "`detail_receipt`, `content_hash`",
-            "claim or disclosure seals",
-            "attestation schema IDs",
-            "model wire or payload, SQL, schemas, or physical fields",
-            "Keep required natural business disclosures, typed states, truncation, and reconciliation",
-            "A user-visible `metric_id` remains allowed for testing or clarification",
-            "Describe a successful `metric_detail` only as “所选指标详情已返回”",
-            "explicit completeness proof that is sealed and `applies: true`",
-            "do not affect independent ordinary chat",
-            "or the `DATA_ENTITLEMENT_DENIED` rule above",
-        ):
-            self.assertIn(answer_hygiene_rule, normalized)
-
-        self.assertIn(
-            "If `truncated: true` OR `data_state: truncated`",
-            normalized,
-        )
-        self.assertIn("only the requested Top N is returned", normalized)
-        self.assertIn("never imply a complete ranking", normalized)
-        self.assertIn(
-            "When `truncated` is not `true` AND `data_state` is not `truncated`",
-            normalized,
-        )
-        self.assertIn(
-            "do not claim or imply that the result is truncated",
-            normalized,
-        )
-        self.assertIn("official Hermes `clarify`", normalized)
-        self.assertIn(
-            "metric-detail calls and `datasage_query` calls must both be zero",
-            normalized,
-        )
-        self.assertIn("Before any `datasage_catalog` call", normalized)
-        self.assertIn(
-            "the first catalog request for that branch must be only "
-            "`{domain: customer_risk, view: expert_index}`",
-            normalized,
-        )
-        self.assertIn(
-            "Do not begin that formal-turnover branch with a `receivable` "
-            "expert index or summary as a discovery detour.",
-            normalized,
-        )
-        self.assertIsNone(hook(platform="cli", is_first_turn=True))
 
     def test_soul_denial_rule_requires_trusted_signal_and_preserves_mixed_turn(self):
         normalized = " ".join(
@@ -523,25 +443,12 @@ class GitGovernedSkillTests(unittest.TestCase):
         self.assertNotIn("DATA_ENTITLEMENT_DENIED", normalized)
 
     def test_official_plugin_manager_turn_context_does_not_spill_main_skill(self):
-        profile_config = yaml.safe_load(
-            (PROFILE_ROOT / "config.yaml").read_text(encoding="utf-8")
-        )
-        max_chars = profile_config["hooks"]["output_spill"]["max_chars"]
         manager = PluginManager()
         isolated_registry = ToolRegistry()
 
         with tempfile.TemporaryDirectory() as raw_root:
-            temporary_root = Path(raw_root)
-            empty_bundled = temporary_root / "bundled-plugins"
+            empty_bundled = Path(raw_root) / "bundled-plugins"
             empty_bundled.mkdir()
-            spill_root = temporary_root / "hook-output-spill"
-            spill_config = {
-                "enabled": True,
-                "max_chars": max_chars,
-                "preview_head": 500,
-                "preview_tail": 500,
-                "directory": str(spill_root),
-            }
 
             with (
                 mock.patch(
@@ -588,81 +495,6 @@ class GitGovernedSkillTests(unittest.TestCase):
             )
             # The expert workflow is now an ordinary Hermes on-demand Skill;
             # there is intentionally no plugin-injected prompt to spill.
-            return
-
-            agent = _WeComTurnAgent()
-            with (
-                mock.patch(
-                    "hermes_cli.lifecycle.invoke_hook",
-                    side_effect=manager.invoke_hook,
-                ),
-                mock.patch(
-                    "tools.hook_output_spill.get_spill_config",
-                    return_value=spill_config,
-                ),
-                mock.patch.object(
-                    hermes_hook_output_spill,
-                    "spill_if_oversized",
-                    wraps=hermes_hook_output_spill.spill_if_oversized,
-                ) as spill_if_oversized,
-                mock.patch(
-                    "agent.auxiliary_client.set_runtime_main",
-                    lambda *_args, **_kwargs: None,
-                ),
-            ):
-                turn = _build_wecom_turn_context(agent)
-
-            current_message = turn.messages[turn.current_turn_user_idx]
-            self.assertEqual(expected, turn.plugin_user_context)
-            self.assertEqual(
-                "hello\n\n" + expected,
-                current_message["api_content"],
-            )
-            self.assertEqual(
-                current_message["api_content"],
-                agent.api_content_at_persist,
-            )
-            spill_if_oversized.assert_called_once()
-            self.assertEqual(
-                max_chars,
-                spill_if_oversized.call_args.kwargs["config"]["max_chars"],
-            )
-            self.assertNotIn("[plugin hook output truncated", turn.plugin_user_context)
-            self.assertFalse(list(spill_root.rglob("*.txt")))
-            normalized = " ".join(turn.plugin_user_context.split())
-            for required in (
-                "`expert_index -> metric_detail -> query`",
-                "`content_hash`",
-                "`detail_receipt`",
-                "official Hermes `clarify`",
-                "typed `undefined`",
-                "ranked or Top-N result",
-                "Never describe structural contribution as a cause",
-                "For every sealed `disclosure_ledger` item",
-                "`error.code: DATA_ENTITLEMENT_DENIED`",
-                "`当前请求未获授权，业务查询未执行。`",
-                "stop all further DataSage calls for that turn",
-                "no independent non-DataSage request",
-                "the entire final answer must be exactly",
-                "For a mixed turn with",
-                "render only the denied business branch as exactly",
-                "complete each independent non-DataSage branch normally",
-                "applies only to that code",
-                "never reuse it for another failure or ordinary conversation",
-                "In a user-visible answer for a DataSage business branch",
-                "never name, cite, or reverse-announce",
-                "`detail_receipt`, `content_hash`",
-                "claim or disclosure seals",
-                "attestation schema IDs",
-                "model wire or payload, SQL, schemas, or physical fields",
-                "Keep required natural business disclosures, typed states, truncation, and reconciliation",
-                "A user-visible `metric_id` remains allowed for testing or clarification",
-                "Describe a successful `metric_detail` only as “所选指标详情已返回”",
-                "explicit completeness proof that is sealed and `applies: true`",
-                "do not affect independent ordinary chat",
-                "or the `DATA_ENTITLEMENT_DENIED` rule above",
-            ):
-                self.assertIn(required, normalized)
 
     def test_hermes_clarify_stays_direct_and_datasage_catalog_is_searchable(self):
         self.assertIn("clarify", HERMES_CORE_TOOL_NAMES)
@@ -1068,14 +900,19 @@ class DistributionBoundaryTests(unittest.TestCase):
             "canary_transcript_adapter.py", "_datasage_capability_adapter"
         )
         contracts = _load_module("contracts")
+        wire = _load_module("wire")
         suite = json.loads(
             (PLUGIN_ROOT / "e2e" / "golden_expert_cases.json").read_text(
                 encoding="utf-8"
             )
         )
         self.assertEqual([], scorer.validate_suite(suite))
-        self.assertEqual(3, suite["required_category_minimums"]["change_diagnosis"])
-        self.assertEqual(2, suite["required_category_minimums"]["capability_boundary"])
+        self.assertGreaterEqual(
+            suite["required_category_minimums"]["change_diagnosis"], 4
+        )
+        self.assertGreaterEqual(
+            suite["required_category_minimums"]["capability_boundary"], 3
+        )
         cases = {
             item["id"]: item
             for item in suite["cases"]
@@ -1136,6 +973,29 @@ class DistributionBoundaryTests(unittest.TestCase):
                 _plan, evidence = adapter._normalize(calls)
                 self.assertEqual(["catalog", "metric_detail"], evidence["receipts"])
                 self.assertEqual([], scorer._score_case(case, observed(case, evidence)))
+
+                compact_detail_payload = json.loads(
+                    wire.enforce_tool_result_budget(
+                        "datasage_catalog", json.dumps(detail_payload)
+                    )
+                )
+                compact_calls = [
+                    calls[0],
+                    catalog_call(detail_request, compact_detail_payload),
+                ]
+                _plan, compact_evidence = adapter._normalize(compact_calls)
+                self.assertIn("metric_detail", compact_evidence["receipts"])
+                compact_without_receipt = copy.deepcopy(compact_detail_payload)
+                compact_without_receipt["results"][0].pop("detail_receipt")
+                _plan, compact_invalid_evidence = adapter._normalize(
+                    [
+                        calls[0],
+                        catalog_call(detail_request, compact_without_receipt),
+                    ]
+                )
+                self.assertNotIn(
+                    "metric_detail", compact_invalid_evidence["receipts"]
+                )
 
                 _plan, index_only = adapter._normalize(calls[:1])
                 self.assertNotIn("metric_detail", index_only["receipts"])
@@ -1318,6 +1178,38 @@ class DistributionBoundaryTests(unittest.TestCase):
         ordinary_evidence["error_codes"] = ["UNCHANGED_NON_BOUNDARY_ERROR"]
         self.assertEqual(
             [], scorer._score_case(ordinary, observed(ordinary, ordinary_evidence))
+        )
+
+        compact_query_call = {
+            "name": "datasage_query",
+            "arguments": ordinary_calls[-1]["arguments"],
+            "result": {
+                "status": "success",
+                "model_wire_version": "datasage-query-model-wire/v2",
+                "results": [
+                    {
+                        "request_id": "ordinary_delivery",
+                        "status": "success",
+                        "truncated": False,
+                        "rows": [],
+                    }
+                ],
+                "evidence_bundle": {
+                    "items": [
+                        {
+                            "request_id": "ordinary_delivery",
+                            "status": "success",
+                        }
+                    ]
+                },
+            },
+        }
+        _plan, compact_query_evidence = adapter._normalize([compact_query_call])
+        self.assertEqual(1, compact_query_evidence["successful_queries"])
+        self.assertIn("coverage", compact_query_evidence["receipts"])
+        self.assertNotIn(
+            "TRANSCRIPT_REQUEST_RESULT_MISMATCH",
+            compact_query_evidence["error_codes"],
         )
 
     def test_distribution_excludes_private_replay_topology(self):

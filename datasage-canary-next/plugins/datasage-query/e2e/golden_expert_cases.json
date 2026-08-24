@@ -1,12 +1,12 @@
 {
   "schema": "datasage-golden-expert-cases/v2",
   "suite": "digital-expert-kernel-stage1",
-  "minimum_case_count": 31,
+  "minimum_case_count": 35,
   "required_category_minimums": {
-    "change_diagnosis": 3,
-    "capability_boundary": 2,
-    "target_gap": 4,
-    "ambiguity": 4,
+    "change_diagnosis": 4,
+    "capability_boundary": 3,
+    "target_gap": 5,
+    "ambiguity": 5,
     "multiturn": 6,
     "top_n": 3,
     "partial_failure": 3,
@@ -303,6 +303,43 @@
       "allowed_conclusions": ["report_observed_change", "state_noncausal", "state_no_default_prediction", "request_independent_evidence"],
       "forbidden_conclusions": ["predict_default", "set_credit_decision", "recommend_stop_shipment"],
       "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage"], "minimum_successful_queries": 2, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
+    },
+
+    {
+      "id": "ambiguity_05_performance_scorecard", "category": "ambiguity", "conversation_id": "ambiguity_05", "turn": 1,
+      "prompt": "请做公司指定月份的经营表现总览；先走受治理的 performance scorecard，不要先枚举单域指标，也不要把缺失的盈利能力编成公司健康结论。",
+      "expected_plan": {"domains": ["delivery", "receipt", "target", "inventory", "receivable"], "metrics": ["delivery_amount", "net_receipt_amount", "delivery_target_completion", "receipt_target_completion", "inventory_turnover_days", "current_inventory_amount_rmb", "debt_balance_trend", "overdue_receivable_amount"], "dimensions": [], "operations": ["performance_scorecard_first", "parallel_evidence", "previous_period"], "time_semantics": "scorecard_user_period_with_separate_snapshots", "context_action": "new", "must_not_metrics": []},
+      "required_conclusions": ["report_available_evidence", "disclose_data_limits"],
+      "allowed_conclusions": ["report_available_evidence", "report_observed_change", "disclose_data_limits", "state_noncausal"],
+      "forbidden_conclusions": ["invent_result", "infer_company_health", "invent_profitability", "mix_period_and_snapshot"],
+      "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage"], "minimum_successful_queries": 8, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
+    },
+    {
+      "id": "change_06_return_amount_rate_undefined", "category": "change_diagnosis", "conversation_id": "change_06", "turn": 1,
+      "prompt": "比较指定连续两个月的当期金额退货率；任一期间同期毛出库金额分母无效时必须保留 typed undefined，不得写成0%或据此计算变化。",
+      "expected_plan": {"domains": ["delivery"], "metrics": ["return_amount_rate"], "dimensions": [], "operations": ["previous_period"], "time_semantics": "resolved_month_vs_previous_month", "context_action": "new", "must_not_metrics": ["return_amount", "gross_delivery_amount"]},
+      "required_conclusions": ["preserve_typed_undefined", "disclose_data_limits"],
+      "allowed_conclusions": ["preserve_typed_undefined", "report_available_evidence", "disclose_data_limits"],
+      "forbidden_conclusions": ["report_undefined_as_zero", "calculate_change_from_undefined", "infer_missing_value", "invent_result"],
+      "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
+    },
+    {
+      "id": "boundary_03_grouped_formal_turnover_undefined", "category": "capability_boundary", "conversation_id": "boundary_03", "turn": 1,
+      "prompt": "按部门查看最近12个完整自然月的正式应收周转天数；月末欠款快照不足的部门必须保留为 typed undefined，不得删组、补零或自行补算。",
+      "expected_plan": {"domains": ["customer_risk"], "metrics": ["formal_receivable_turnover_days"], "dimensions": ["department"], "operations": [], "time_semantics": "last_12_completed_months", "context_action": "new", "must_not_metrics": ["average_settlement_days"]},
+      "required_conclusions": ["report_available_evidence", "preserve_typed_undefined", "disclose_data_limits"],
+      "allowed_conclusions": ["report_available_evidence", "preserve_typed_undefined", "disclose_data_limits"],
+      "forbidden_conclusions": ["drop_undefined_group", "report_undefined_as_zero", "infer_missing_value", "invent_result"],
+      "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
+    },
+    {
+      "id": "target_05_future_published_target_only", "category": "target_gap", "conversation_id": "target_05", "turn": 1,
+      "prompt": "查询下一个尚未开始但已发布目标的自然月出库目标；只返回已发布 target，actual、completion 和 gap 都不可伪造。",
+      "expected_plan": {"domains": ["target"], "metrics": ["delivery_target_completion"], "dimensions": [], "operations": ["future_target_only"], "time_semantics": "future_published_month", "context_action": "new", "must_not_metrics": ["receipt_target_completion"]},
+      "required_conclusions": ["report_future_target_only", "disclose_data_limits"],
+      "allowed_conclusions": ["report_future_target_only", "disclose_data_limits"],
+      "forbidden_conclusions": ["report_future_actual", "report_future_completion", "report_future_gap", "report_target_gap", "infer_missing_value", "invent_result"],
+      "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
     }
   ]
 }

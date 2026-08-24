@@ -9,8 +9,8 @@ model:
 agent:
   reasoning_effort: high
 tools:
-  # DataSage exposes only four profile tools. Hermes' own guidance recommends
-  # eager schemas for a small toolset; deferral added a describe/search round
+  # DataSage adds four non-core tools to the standard Hermes host surface.
+  # Keep this small deferrable set eager: deferral added a describe/search round
   # trip to most real turns without enough schema savings to justify it.
   tool_search:
     enabled: "off"
@@ -141,6 +141,7 @@ skills:
     - hermes-agent-skill-authoring
     - himalaya
     - huggingface-hub
+    - humanizer
     - imessage
     - inspecting-hermes-desktop-dom
     - llama-cpp

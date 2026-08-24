@@ -42,6 +42,7 @@ _CATALOG_METRIC_FIELDS = (
     "default_inventory_scope",
     "max_group_dimensions",
     "exact_default_lookup_supported",
+    "comparison_kinds",
     "supports_dimensions",
     "supports_change_decomposition",
     "operation_summary",
@@ -74,7 +75,7 @@ def _compact_dimension(
 
 def _metric_operation_summary(metric: Mapping[str, Any]) -> list[str]:
     operations = ["direct_fact"]
-    if metric.get("supports_generic_comparison") is True:
+    if metric.get("comparison_kinds"):
         operations.append("returned_comparison")
     if metric.get("allowed_dimensions"):
         operations.append("dimension_breakdown")
@@ -154,15 +155,21 @@ def _compact_catalog_result(
             for key in ("lens", "time_binding"):
                 if key in item:
                     compact_detail[key] = item[key]
-            template = item.get("request_template")
-            if isinstance(template, Mapping):
-                template = dict(template)
-                template["detail_receipt"] = item.get("detail_receipt")
-                compact_detail["request_template"] = template
             compact_details.append(compact_detail)
+        recommended_bundle = [
+            {
+                key: item[key]
+                for key in ("lens", "time_binding", "request_template")
+                if key in item
+            }
+            for item in result.get("recommended_bundle", [])
+            if isinstance(item, Mapping)
+            and isinstance(item.get("request_template"), Mapping)
+        ]
         return {
             "level": "performance_scorecard",
             "recipe": result.get("recipe"),
+            "recommended_bundle": recommended_bundle,
             "metric_count": len(compact_details),
             "metric_details": compact_details,
         }

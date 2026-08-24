@@ -12,6 +12,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from . import settings
+from .scorecard import SCORECARD_METRICS
 
 
 TOOL_NAMES = frozenset(
@@ -181,6 +182,17 @@ def _catalog_allowed(rule: Mapping[str, Any], args: Any) -> bool:
     for request in requests:
         if not isinstance(request, Mapping):
             return False
+        if set(request) == {"view"} and request.get("view") == "performance_scorecard":
+            if rule.get("allow_catalog_discovery") is not True:
+                return False
+            for spec in SCORECARD_METRICS:
+                domain = spec.get("domain")
+                metric = spec.get("metric")
+                if not _domain_allowed(rule, domain) or not _metric_allowed(
+                    rule, domain, metric
+                ):
+                    return False
+            continue
         domain = request.get("domain")
         if not _domain_allowed(rule, domain):
             return False

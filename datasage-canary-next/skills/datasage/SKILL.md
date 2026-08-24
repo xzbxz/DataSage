@@ -1,7 +1,7 @@
 ---
 name: datasage
 description: Use governed internal company metrics to answer, diagnose, compare, and advise.
-version: 0.13.1-alpha1
+version: 0.14.0-alpha1
 author: datasage
 platforms: [windows]
 metadata:
@@ -26,14 +26,19 @@ Choose the route adaptively; this is not a mandatory call sequence.
 
 1. Frame the decision, metric meaning, period, grain, and material scope.
 2. For a broad operating-performance review, load one
-   `performance_scorecard` catalog view first. Query only its material subset,
-   keep period flows separate from current/latest snapshots, and disclose that
-   profitability is unavailable rather than inferring company-wide health.
+   `performance_scorecard` catalog view first. This route takes precedence over
+   metric-unknown routing: do not call an `expert_index` before the scorecard
+   call completes. Query only its material subset, keep period flows separate
+   from current/latest snapshots, and disclose that profitability is
+   unavailable rather than inferring company-wide health. After the scorecard,
+   use an `expert_index` only for a material question it leaves unresolved, and
+   state why the extra lookup is necessary.
 3. Reuse the selected domain, metric, and valid detail receipt from the current
    session. A new turn alone is not a reason to reload them.
-4. If the metric is unknown, call `datasage_catalog` with the most likely
-   domain's `expert_index`. Read a small number of candidate details before
-   asking the user when their definitions can resolve the ambiguity.
+4. Only when the request is not a broad operating-performance review and the
+   metric is unknown, call `datasage_catalog` with the most likely domain's
+   `expert_index`. Read a small number of candidate details before asking the
+   user when their definitions can resolve the ambiguity.
 5. For an explicit period, filter, dimension, comparison, ranking, or
    decomposition, load the selected metric detail and copy that result's
    `detail_receipt` into `datasage_query`. Never reuse it for another metric.

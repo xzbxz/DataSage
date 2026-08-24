@@ -991,14 +991,15 @@ def _formal_dso_query(
     debt_avg_select = [
         *avg_key_select,
         *avg_output_select,
-        f"(SUM(CASE WHEN bill_month IN (%s, %s) THEN monthly_debt_rmb / 2 ELSE monthly_debt_rmb END) / {period_months}) AS average_net_debt_rmb",
+        f"CASE WHEN COUNT(DISTINCT bill_month) = {expected_snapshots} "
+        f"THEN SUM(CASE WHEN bill_month IN (%s, %s) THEN monthly_debt_rmb / 2 ELSE monthly_debt_rmb END) / {period_months} "
+        "ELSE NULL END AS average_net_debt_rmb",
         "COUNT(DISTINCT bill_month) AS snapshot_month_count",
     ]
     debt_avg = (
         f"SELECT {', '.join(debt_avg_select)} "
         "FROM debt_monthly"
         + (" GROUP BY " + ", ".join(avg_group) if avg_group else "")
-        + f" HAVING COUNT(DISTINCT bill_month) = {expected_snapshots}"
     )
 
     delivery_key_select = [f"{_qualified('s', column)} AS {_quote_column(alias)}" for column, alias in delivery_keys]
@@ -1520,7 +1521,7 @@ def _target_completion_query(
             state = "includes_in_progress"
         period_state = f"'{state}'"
     target_state = (
-        f"CASE WHEN {period_state} IN ('not_started', 'includes_future') "
+        f"CASE WHEN {target_rows} = 0 AND {period_state} IN ('not_started', 'includes_future') "
         f"THEN 'not_set_for_future' "
         f"WHEN {target_rows} = 0 THEN 'missing' "
         f"WHEN {target_nulls} > 0 THEN 'incomplete' "
