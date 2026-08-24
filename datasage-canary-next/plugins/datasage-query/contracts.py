@@ -12,6 +12,8 @@ from typing import Any, Mapping
 
 import yaml
 
+from .scorecard import performance_scorecard_manifest
+
 _DOMAIN_FOLDERS = {
     "delivery": "delivery-query",
     "receipt": "receipt-query",
@@ -1454,7 +1456,11 @@ def _catalog_expert_index(domain: str, planner: Mapping[str, Any]) -> dict[str, 
             for key in (
                 "code",
                 "label",
+                "business_definition",
+                "time_policy",
                 "unit",
+                "unit_policy",
+                "currency_policy",
                 "required_attribution_mode",
                 "allowed_attribution_modes",
                 "available_inventory_scopes",
@@ -1470,6 +1476,18 @@ def _catalog_expert_index(domain: str, planner: Mapping[str, Any]) -> dict[str, 
         item["supports_change_decomposition"] = bool(
             raw.get("change_decomposition_dimensions")
         )
+        operations = ["direct_fact"]
+        if raw.get("supports_generic_comparison") is True:
+            operations.append("returned_comparison")
+        if item["supports_dimensions"]:
+            operations.append("dimension_breakdown")
+        if item["supports_change_decomposition"]:
+            operations.append("complete_change_decomposition")
+        if raw.get("target_gap_decomposition"):
+            operations.append("complete_target_gap_decomposition")
+        item["operation_summary"] = operations
+        if raw.get("answer_contract") is not None:
+            item["limitations"] = _copy_guidance(raw.get("answer_contract"))
         item["requires_metric_detail"] = (
             raw.get("exact_default_lookup_supported") is not True
         )
@@ -1935,6 +1953,76 @@ def _catalog_metric_detail(
     }
 
 
+def _catalog_metric_detail_receipt(detail: Mapping[str, Any]) -> str:
+    """Seal one metric detail independently of its surrounding catalog batch."""
+
+    canonical = {
+        "schema": "datasage-metric-detail-receipt/v1",
+        "catalog_version": _CATALOG_VERSION,
+        "detail": detail,
+    }
+    return hashlib.sha256(
+        json.dumps(
+            canonical,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _catalog_performance_scorecard() -> dict[str, Any]:
+    """Resolve the code-owned scorecard through ordinary metric contracts."""
+
+    manifest = performance_scorecard_manifest()
+    raw_bundle = manifest.get("recommended_bundle")
+    if not isinstance(raw_bundle, list):
+        raise ContractFailure(
+            "CONTRACT_UNAVAILABLE", "performance scorecard bundle is invalid"
+        )
+    metric_details: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in raw_bundle:
+        if not isinstance(item, Mapping):
+            raise ContractFailure(
+                "CONTRACT_UNAVAILABLE", "performance scorecard item is invalid"
+            )
+        template = item.get("request_template")
+        if not isinstance(template, Mapping):
+            raise ContractFailure(
+                "CONTRACT_UNAVAILABLE", "performance scorecard request is invalid"
+            )
+        domain = template.get("domain")
+        metric = template.get("metric")
+        if domain not in _DOMAIN_FOLDERS or not isinstance(metric, str):
+            raise ContractFailure(
+                "CONTRACT_UNAVAILABLE", "performance scorecard metric is invalid"
+            )
+        identity = (str(domain), metric)
+        if identity in seen:
+            raise ContractFailure(
+                "CONTRACT_UNAVAILABLE", "performance scorecard metric is duplicated"
+            )
+        seen.add(identity)
+        planner = _domain_contract(str(domain), "planner")["planner"]
+        detail = _catalog_metric_detail(str(domain), metric, planner)
+        metric_details.append(
+            {
+                "lens": item.get("lens"),
+                "time_binding": item.get("time_binding"),
+                "request_template": _copy_guidance(template),
+                "detail": detail,
+                "detail_receipt": _catalog_metric_detail_receipt(detail),
+            }
+        )
+    return {
+        "level": "performance_scorecard",
+        "recipe": manifest,
+        "metric_count": len(metric_details),
+        "metric_details": metric_details,
+    }
+
+
 def datasage_catalog(args: dict[str, Any], **_kwargs: Any) -> str:
     """Return governed planning catalogs without owning the conversation."""
     try:
@@ -1943,7 +2031,7 @@ def datasage_catalog(args: dict[str, Any], **_kwargs: Any) -> str:
         requests = args.get("requests")
         if not isinstance(requests, list) or not 1 <= len(requests) <= 6:
             raise ContractFailure("INVALID_INPUT", "requests 必须包含一到六个域合同请求。")
-        normalized: list[tuple[str, str | None, str | None]] = []
+        normalized: list[tuple[str | None, str | None, str | None]] = []
         for request in requests:
             if (
                 not isinstance(request, Mapping)
@@ -1953,6 +2041,14 @@ def datasage_catalog(args: dict[str, Any], **_kwargs: Any) -> str:
             domain = request.get("domain")
             metric = request.get("metric")
             view = request.get("view")
+            if view == "performance_scorecard":
+                if set(request) != {"view"}:
+                    raise ContractFailure(
+                        "INVALID_INPUT",
+                        "performance_scorecard view does not accept domain or metric.",
+                    )
+                normalized.append((None, None, "performance_scorecard"))
+                continue
             if domain not in _DOMAIN_FOLDERS:
                 raise ContractFailure("INVALID_INPUT", "业务域不受支持。")
             if metric is not None and (
@@ -1961,7 +2057,7 @@ def datasage_catalog(args: dict[str, Any], **_kwargs: Any) -> str:
                 or len(metric) > 100
             ):
                 raise ContractFailure("INVALID_INPUT", "metric 格式无效。")
-            if view is not None and view != "expert_index":
+            if view is not None and view not in {"expert_index", "full", "audit"}:
                 raise ContractFailure("INVALID_INPUT", "view 不受支持。")
             if metric is not None and view is not None:
                 raise ContractFailure(
@@ -1979,14 +2075,24 @@ def datasage_catalog(args: dict[str, Any], **_kwargs: Any) -> str:
             raise ContractFailure("INVALID_INPUT", "同一个目录请求不能重复。")
         results: list[dict[str, Any]] = []
         for domain, metric, view in normalized:
+            if view == "performance_scorecard":
+                result = _catalog_performance_scorecard()
+                results.append(result)
+                continue
+            if domain is None:
+                raise ContractFailure("INVALID_INPUT", "目录请求缺少业务域。")
             planner = _domain_contract(domain, "planner")["planner"]
-            results.append(
-                _catalog_metric_detail(domain, metric, planner)
-                if metric is not None
-                else _catalog_expert_index(domain, planner)
-                if view == "expert_index"
-                else _catalog_summary(domain, planner)
-            )
+            if metric is not None:
+                result = _catalog_metric_detail(domain, metric, planner)
+                result["detail_receipt"] = _catalog_metric_detail_receipt(result)
+            elif view == "expert_index":
+                result = _catalog_expert_index(domain, planner)
+            elif view in {"full", "audit"}:
+                result = _catalog_summary(domain, planner)
+                result["projection_mode"] = "audit_full"
+            else:
+                result = _catalog_summary(domain, planner)
+            results.append(result)
         payload: dict[str, Any] = {
             "status": "success",
             "catalog_version": _CATALOG_VERSION,

@@ -2,10 +2,18 @@ _config_version: 34
 timezone: Asia/Shanghai
 model:
   provider: deepseek
-  default: deepseek-v4-flash
+  # This profile is the complex-analysis lane. Route cheap lookup traffic
+  # through a separate Flash profile instead of switching models mid-session.
+  default: deepseek-v4-pro
   base_url: https://api.deepseek.com/v1
 agent:
   reasoning_effort: high
+tools:
+  # DataSage exposes only four profile tools. Hermes' own guidance recommends
+  # eager schemas for a small toolset; deferral added a describe/search round
+  # trip to most real turns without enough schema savings to justify it.
+  tool_search:
+    enabled: "off"
 platform_toolsets:
   cli:
     - hermes-cli
@@ -44,11 +52,12 @@ plugins:
         max_rows: 100
         max_cell_chars: 2000
         max_dimension_display_chars: 80
-        # Hermes' executor has an effective ~100k character ceiling. Preserve
-        # internal proof construction, then bound the final JSON wire envelope.
+        # Keep internal and public budgets below Hermes' final wire ceiling.
+        # The final wrapper also returns a partial prefix instead of discarding
+        # every successful result when a batch is still too large.
         max_tool_result_chars: 90000
-        max_result_bytes: 262144
-        max_batch_bytes: 524288
+        max_result_bytes: 80000
+        max_batch_bytes: 85000
         # Business owner approval recorded 2026-08-11: every authenticated
         # WeCom member may use the complete governed DataSage data surface.
         data_entitlements:
@@ -92,6 +101,83 @@ plugins:
 skills:
   # Git is authoritative; tracked expert guidance requires operator approval.
   write_approval: true
+  # Keep only the small set of skills that materially supports a governed
+  # digital expert. Disabled skill files remain installed and recoverable.
+  disabled:
+    - airtable
+    - apple-notes
+    - apple-reminders
+    - architecture-diagram
+    - arxiv
+    - ascii-art
+    - ascii-video
+    - baoyu-infographic
+    - blogwatcher
+    - claude-code
+    - claude-design
+    - codebase-inspection
+    - codex
+    - comfyui
+    - common-data-foundation
+    - competitor-news-monitor
+    - computer-use
+    - datasage-query-patterns
+    - design-md
+    - document-to-action-items
+    - dogfood
+    - email-inbox-triage
+    - evaluating-llms-harness
+    - excalidraw
+    - findmy
+    - gif-search
+    - github-auth
+    - github-code-review
+    - github-issue-to-pr
+    - github-issues
+    - github-pr-workflow
+    - github-repo-management
+    - google-workspace
+    - hermes-agent
+    - hermes-agent-skill-authoring
+    - himalaya
+    - huggingface-hub
+    - imessage
+    - inspecting-hermes-desktop-dom
+    - llama-cpp
+    - llm-wiki
+    - manim-video
+    - maps
+    - meeting-action-items
+    - merge-reconciler
+    - nano-pdf
+    - node-inspect-debugger
+    - notion
+    - obsidian
+    - opencode
+    - openhue
+    - p5js
+    - plan
+    - popular-web-designs
+    - pretext
+    - product-price-monitor
+    - python-debugpy
+    - requesting-code-review
+    - research-paper-writing
+    - sdlc-review
+    - serving-llms-vllm
+    - simplify-code
+    - sketch
+    - songsee
+    - songwriting-and-ai-music
+    - spike
+    - systematic-debugging
+    - teams-meeting-pipeline
+    - test-driven-development
+    - touchdesigner-mcp
+    - weekly-review-planning
+    - weights-and-biases
+    - xurl
+    - youtube-content
 platforms:
   wecom:
     enabled: true

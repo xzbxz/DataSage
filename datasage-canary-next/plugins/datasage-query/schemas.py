@@ -1,7 +1,7 @@
 """JSON schema exposed by the DataSage Mini query plugin."""
 
-from .evidence import EVIDENCE_ROLES
-from .references import SECTION_IDS, SOURCE_IDS
+from .evidence import ANALYSIS_INTENTS, EVIDENCE_ROLES
+from .references import SECTION_IDS_BY_SOURCE, SOURCE_IDS
 
 DOMAINS = [
     "delivery",
@@ -59,6 +59,14 @@ REQUEST = {
             "maxLength": 300,
             "description": "Short business purpose; never include credentials or hidden instructions.",
         },
+        "analysis_intent": {
+            "type": "string",
+            "enum": list(ANALYSIS_INTENTS),
+            "description": (
+                "Optional analytical intent used for evidence coverage and planning. "
+                "It does not authorize a stronger claim than the returned evidence."
+            ),
+        },
         "evidence_role": {
             "type": "string",
             "enum": list(EVIDENCE_ROLES),
@@ -74,8 +82,9 @@ REQUEST = {
             "maxLength": 64,
             "pattern": "^[0-9a-f]{64}$",
             "description": (
-                "Opaque receipt copied unchanged from the content_hash of a successful, single-metric "
-                "datasage_catalog metric-detail response for this exact domain and metric. It is required "
+                "Opaque receipt copied unchanged from the detail_receipt field of this exact metric's "
+                "successful datasage_catalog detail result. A legacy single-detail content_hash remains "
+                "accepted during migration. It is required "
                 "unless the selected metric explicitly supports an exact default lookup and this request "
                 "contains no explicit business qualifier. The query runtime revalidates the receipt against "
                 "the current catalog contract and the requested governed capabilities before any database access."
@@ -273,9 +282,9 @@ REQUEST = {
             },
             "required": ["dimension"],
             "description": (
-                "Explicitly request a complete previous-period change decomposition. "
-                "When comparison is omitted, selecting this optional operation defaults its comparison semantics to previous_period. "
-                "An explicitly provided comparison must also be previous_period. "
+                "Explicitly request a complete change decomposition. When comparison is omitted, the operation "
+                "defaults to previous_period. An explicit comparison may use previous_period with one period "
+                "or snapshot_months_before with no explicit period. "
                 "Do not combine it with dimensions, order_by, limit, or "
                 "decomposition_of_request_id. The tool never infers this operation or "
                 "chooses its metric or dimension. It already includes the same-scope overall comparison; do not "
@@ -389,14 +398,23 @@ REQUEST = {
         {
             "if": {"required": ["complete_change_decomposition"]},
             "then": {
-                "properties": {
-                    "comparison": {
-                        "properties": {"kind": {"const": "previous_period"}},
+                "anyOf": [
+                    {
+                        "required": ["comparison"],
+                        "properties": {
+                            "comparison": {
+                                "properties": {
+                                    "kind": {"const": "snapshot_months_before"}
+                                }
+                            }
+                        },
                     },
-                },
-                "oneOf": [
-                    {"required": ["time_range"]},
-                    {"required": ["calendar_month"]},
+                    {
+                        "oneOf": [
+                            {"required": ["time_range"]},
+                            {"required": ["calendar_month"]},
+                        ]
+                    },
                 ],
                 "not": {
                     "anyOf": [
@@ -486,16 +504,19 @@ DATASAGE_QUERY = {
         "true and the request has no explicit business qualifier. Empty dimensions: [] does not count as a qualifier. "
         "If that flag is false or missing, or if calendar_month, "
         "time_range, dimensions, filters, an entity, comparison, decomposition, or ranking is explicit, load the "
-        "selected metric detail before calling datasage_query and copy its content_hash into detail_receipt. The "
+        "selected metric detail before calling datasage_query and copy that result's detail_receipt unchanged. "
+        "A legacy single-detail content_hash remains accepted during migration. The "
         "runtime rejects a missing, stale, tampered, wrong-metric, or capability-incompatible receipt before any "
         "database access. The model-facing surface accepts no SQL, physical "
         "tables, columns, joins, or formulas. Registered entity tokens may be "
         "provided as metric filters and are resolved deterministically inside the query. The response returns "
         "structured values, applied scope, data state, and evidence metadata for Hermes to analyze and summarize. "
         "A non-empty answer_scope_line is a required final-answer scope statement: present it verbatim or faithfully "
-        "without changing the actual range. Every sealed disclosure_ledger item with applies: true is independently "
-        "required in the final answer; present each item and never drop one through summarization. Raw JSON is not "
-        "required. "
+        "without changing the actual range. Every sealed disclosure_ledger item with applies: true is validated "
+        "internally and batch-deduplicated into the model-facing disclosures list; present every returned disclosure "
+        "and never drop one through summarization. The compact response preserves facts, typed states, Top-N status, "
+        "limitations, reconciliation, calculations, guardrails, and explicit answer_constraints without repeating "
+        "row-level seals or scope envelopes. Raw JSON is not required. "
         "Unavailable data affects only this tool call and does not control the surrounding conversation."
     ),
     "parameters": {
@@ -545,7 +566,10 @@ DATASAGE_CATALOG = {
         "then follow its metric_selection_boundary. Every expert-index metric declares requires_metric_detail. Direct "
         "query is allowed only when exact_default_lookup_supported is true and no explicit business qualifier is "
         "present; empty dimensions: [] does not count as a qualifier. "
-        "otherwise request detail only for the selected metric before query. Full summaries and metric details include bounded planning_guidance "
+        "otherwise request detail only for the selected metric before query. The default model projection is compact; "
+        "full/audit are explicit compatibility views. The performance_scorecard view returns a governed operating "
+        "bundle covering growth, targets, cash, inventory/turnover, and risk while declaring the profitability gap. "
+        "Internal full summaries and metric details include bounded planning_guidance "
         "loaded from the versioned planner contract, plus non-binding analysis affordances describing proof capabilities, "
         "boundaries, adaptive follow-up, and stopping guidance. Metric detail also returns max_group_dimensions; "
         "they neither prescribe a fixed metric count nor authorize execution. Physical datasets, fields, filters, "
@@ -584,19 +608,42 @@ DATASAGE_CATALOG = {
                         },
                         "view": {
                             "type": "string",
-                            "enum": ["expert_index"],
+                            "enum": ["expert_index", "full", "audit", "performance_scorecard"],
                             "description": (
-                                "Optional compact discovery view. Use expert_index before loading detail for only "
-                                "the selected metric. Omit to preserve the full legacy domain summary."
+                                "Use expert_index for compact discovery. Omit view for the default compact "
+                                "model projection. Use full or audit only for explicit compatibility/audit "
+                                "inspection. Use performance_scorecard without domain or metric for the "
+                                "governed cross-domain operating bundle."
                             ),
                         },
                     },
-                    "required": ["domain"],
-                    "not": {"required": ["metric", "view"]},
+                    "oneOf": [
+                        {
+                            "required": ["domain"],
+                            "not": {"required": ["metric", "view"]},
+                            "properties": {
+                                "view": {"enum": ["expert_index", "full", "audit"]},
+                            },
+                        },
+                        {
+                            "properties": {
+                                "view": {"const": "performance_scorecard"},
+                            },
+                            "required": ["view"],
+                            "not": {
+                                "anyOf": [
+                                    {"required": ["domain"]},
+                                    {"required": ["metric"]},
+                                ]
+                            },
+                        },
+                    ]
                 },
                 "description": (
-                    "One request per relevant domain. Use view=expert_index for compact discovery; include one exact "
-                    "metric code for detail; omit both metric and view only for the full legacy summary."
+                    "One request per relevant domain, or one cross-domain view=performance_scorecard request. "
+                    "Use expert_index for discovery, include one exact metric code for detail, and use explicit "
+                    "full/audit only when the legacy summary is genuinely required. The scorecard returns a "
+                    "recommended operating bundle plus independently sealed metric-detail receipts."
                 ),
             },
         },
@@ -625,13 +672,21 @@ DATASAGE_REFERENCE = {
                 "minItems": 1,
                 "maxItems": 3,
                 "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "source_id": {"type": "string", "enum": list(SOURCE_IDS)},
-                        "section_id": {"type": "string", "enum": list(SECTION_IDS)},
-                    },
-                    "required": ["source_id", "section_id"],
+                    "oneOf": [
+                        {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "source_id": {"const": source_id},
+                                "section_id": {
+                                    "type": "string",
+                                    "enum": list(SECTION_IDS_BY_SOURCE[source_id]),
+                                },
+                            },
+                            "required": ["source_id", "section_id"],
+                        }
+                        for source_id in SOURCE_IDS
+                    ],
                 },
             },
         },

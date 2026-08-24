@@ -335,21 +335,28 @@ def _validate_detail_request_capabilities(
         raise
 
 
-def _current_metric_detail_receipt(domain: str, metric_code: str) -> str:
-    """Recompute the public metric-detail seal from current versioned contracts."""
+def _current_metric_detail_receipts(domain: str, metric_code: str) -> tuple[str, ...]:
+    """Recompute the current batch-safe per-detail receipt."""
 
     payload = json.loads(
         contracts.datasage_catalog(
             {"requests": [{"domain": domain, "metric": metric_code}]}
         )
     )
-    receipt = payload.get("content_hash") if payload.get("status") == "success" else None
+    legacy_receipt = (
+        payload.get("content_hash") if payload.get("status") == "success" else None
+    )
     results = payload.get("results")
     selected = results[0] if isinstance(results, list) and len(results) == 1 else None
     selected_metric = selected.get("metric") if isinstance(selected, Mapping) else None
+    detail_receipt = (
+        selected.get("detail_receipt") if isinstance(selected, Mapping) else None
+    )
     if (
-        not isinstance(receipt, str)
-        or _DETAIL_RECEIPT.fullmatch(receipt) is None
+        not isinstance(legacy_receipt, str)
+        or _DETAIL_RECEIPT.fullmatch(legacy_receipt) is None
+        or not isinstance(detail_receipt, str)
+        or _DETAIL_RECEIPT.fullmatch(detail_receipt) is None
         or not isinstance(selected, Mapping)
         or selected.get("domain") != domain
         or not isinstance(selected_metric, Mapping)
@@ -358,6 +365,24 @@ def _current_metric_detail_receipt(domain: str, metric_code: str) -> str:
         raise QueryFailure(
             "CONTRACT_UNAVAILABLE",
             "当前指标详情收据无法生成。",
+            stage="contract_load",
+        )
+    return (detail_receipt,)
+
+
+def _current_metric_detail_receipt(domain: str, metric_code: str) -> str:
+    """Compatibility helper for callers that still expect the legacy receipt."""
+
+    payload = json.loads(
+        contracts.datasage_catalog(
+            {"requests": [{"domain": domain, "metric": metric_code}]}
+        )
+    )
+    receipt = payload.get("content_hash") if payload.get("status") == "success" else None
+    if not isinstance(receipt, str) or _DETAIL_RECEIPT.fullmatch(receipt) is None:
+        raise QueryFailure(
+            "CONTRACT_UNAVAILABLE",
+            "当前指标详情兼容收据无法生成。",
             stage="contract_load",
         )
     return receipt
@@ -394,8 +419,15 @@ def _validate_metric_detail_gate(
                 "detail_receipt 无效、已过期或与当前查询不匹配。",
                 stage="input_validation",
             )
-        expected = _current_metric_detail_receipt(str(request.get("domain")), metric_code)
-        if not hmac.compare_digest(supplied, expected):
+        domain = str(request.get("domain"))
+        expected_receipts = (
+            *_current_metric_detail_receipts(domain, metric_code),
+            _current_metric_detail_receipt(domain, metric_code),
+        )
+        if not any(
+            hmac.compare_digest(supplied, expected)
+            for expected in expected_receipts
+        ):
             raise QueryFailure(
                 "METRIC_DETAIL_RECEIPT_INVALID",
                 "detail_receipt 无效、已过期或与当前查询不匹配。",
@@ -2518,8 +2550,7 @@ def _metric_query_limit(request: Mapping[str, Any]) -> int:
     requested_limit = request.get("limit", environment_cap)
     if not isinstance(requested_limit, int) or isinstance(requested_limit, bool):
         raise QueryFailure("INVALID_INPUT", "limit 必须是整数。")
-    ranking_cap = 10 if request.get("order_by") is not None else environment_cap
-    return max(1, min(ranking_cap, environment_cap, requested_limit))
+    return max(1, min(environment_cap, requested_limit))
 
 
 def _validate_pre_entity_metric_plan(
@@ -6371,6 +6402,9 @@ _MODEL_WIRE_RESULT_FIELDS = (
     "target_gap_reconciliation",
     "row_count",
     "truncated",
+    "requested_limit",
+    "effective_limit",
+    "has_more",
     "applied_time_range",
     "error",
 )
@@ -8071,6 +8105,9 @@ def _run_one(
             "complete_partition_proof_failure": complete_partition_proof_failure,
             "row_count": len(public_rows),
             "truncated": truncated,
+            "requested_limit": int(request.get("limit", _bounded_int("max_rows", 100, 1, 100))),
+            "effective_limit": limit,
+            "has_more": bool(truncated),
             "applied_time_range": applied_time_range,
             "error": None,
             "elapsed_ms": elapsed_ms,

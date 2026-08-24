@@ -592,278 +592,81 @@ class BusinessContractTests(unittest.TestCase):
             )
         return contexts, results, operation_partitions
 
-    def test_user_visible_datasage_skills_survive_tool_search_deferral(self) -> None:
-        for relative_path in (
-            "skills/datasage/SKILL.md",
-            "skills/datasage/datasage-query-patterns/SKILL.md",
-        ):
-            content = (PROFILE_ROOT / relative_path).read_text(encoding="utf-8")
-            self.assertNotIn("requires_toolsets: [datasage-query]", content)
-
-        internal_foundation = (
-            PROFILE_ROOT / "skills/common-data-foundation/SKILL.md"
-        ).read_text(encoding="utf-8")
-        self.assertIn(
-            "requires_toolsets: [datasage-query]",
-            internal_foundation,
+    def test_user_visible_datasage_skill_survives_eager_schema_and_curation(self) -> None:
+        config = yaml.safe_load((PROFILE_ROOT / "config.yaml").read_text(encoding="utf-8"))
+        self.assertEqual("off", config["tools"]["tool_search"]["enabled"])
+        content = (PROFILE_ROOT / "skills/datasage/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("requires_toolsets: [datasage-query]", content)
+        self.assertIn("requires_tools: [datasage_catalog, datasage_query]", content)
+        self.assertTrue(
+            {"common-data-foundation", "datasage-query-patterns"}
+            <= set(config["skills"]["disabled"])
         )
 
     def test_user_visible_skills_declare_the_official_tool_search_bridge(self) -> None:
         main_skill = (PROFILE_ROOT / "skills/datasage/SKILL.md").read_text(
             encoding="utf-8"
         )
-        companion = (
-            PROFILE_ROOT / "skills/datasage/datasage-query-patterns/SKILL.md"
-        ).read_text(encoding="utf-8")
-
-        for tool_name in ("`tool_search`", "`tool_describe`", "`tool_call`"):
-            self.assertIn(tool_name, main_skill)
-            self.assertIn(tool_name, companion)
-        for boundary in (
-            "authorization",
-            "query preflight",
-            "evidence boundaries",
-            "non-causality rules",
+        for bridge_name in ("`tool_search`", "`tool_describe`", "`tool_call`"):
+            self.assertNotIn(bridge_name, main_skill)
+        for direct_tool in (
+            "`datasage_catalog`",
+            "`datasage_query`",
+            "`datasage_entity_resolve`",
+            "`datasage_reference`",
         ):
-            self.assertIn(boundary, main_skill)
-        for content in (main_skill, companion):
-            self.assertIn("Never guess a tool name or argument", content)
+            self.assertIn(direct_tool, main_skill)
 
     def test_main_skill_top_n_disclosure_depends_on_returned_state(self) -> None:
         content = (PROFILE_ROOT / "skills/datasage/SKILL.md").read_text(
             encoding="utf-8"
         )
-        finalization = content.split("Finalization:", 1)[1].split(
-            "## Stop and failure behavior", 1
-        )[0]
-        top_n_rule = next(
-            paragraph
-            for paragraph in finalization.split("\n-")
-            if "ranked or Top-N result" in paragraph
-        )
-        normalized = " ".join(top_n_rule.split())
-
-        for required in (
-            "ranked or Top-N result",
-            "returned `datasage_query`",
-            "`truncated` and `data_state`",
-            "If `truncated: true` OR `data_state: truncated`",
-            "only the requested Top N is returned",
-            "source result was truncated",
-            "never imply a complete ranking",
-            "When `truncated` is not `true` AND `data_state` is not `truncated`",
-            "do not claim or imply that the result is truncated",
-        ):
-            self.assertIn(required, normalized)
-        self.assertNotIn(
-            "`truncated: true` AND `data_state: truncated`",
-            normalized,
-        )
+        normalized = " ".join(content.split())
+        self.assertIn("A Top-N result describes only the returned ranking", normalized)
+        for field in ("`requested_limit`", "`effective_limit`", "`has_more`"):
+            self.assertIn(field, normalized)
+        self.assertEqual(100, schemas.REQUEST["properties"]["limit"]["maximum"])
+        with mock.patch.object(tools, "_bounded_int", return_value=100):
+            self.assertEqual(
+                50,
+                tools._metric_query_limit(
+                    {
+                        "limit": 50,
+                        "order_by": {"field": "metric_value", "direction": "desc"},
+                    }
+                ),
+            )
 
     def test_complete_change_finalization_reports_noncausal_structural_contribution(
         self,
     ) -> None:
-        content = (PROFILE_ROOT / "skills/datasage/SKILL.md").read_text(
+        skill = (PROFILE_ROOT / "skills/datasage/SKILL.md").read_text(
             encoding="utf-8"
         )
-        finalization = content.split("Finalization:", 1)[1].split(
-            "## Stop and failure behavior", 1
-        )[0]
-        contribution_rule = next(
-            paragraph
-            for paragraph in finalization.split("\n-")
-            if "`operation` is `complete_change_decomposition`" in " ".join(
-                paragraph.split()
-            )
+        self.assertIn(
+            "Structural contribution requires an explicitly reconciled decomposition",
+            skill,
         )
-        normalized = " ".join(contribution_rule.split())
-
-        for required in (
-            "only when `operation` is `complete_change_decomposition` AND the returned "
-            "`change_reconciliation.status` is explicitly `reconciled`",
-            "a general `status: success` does not authorize it",
-            "“结构贡献” / “structural contribution”",
-            "strictly equivalent non-causal accounting term",
-            "returned overall delta",
-            "using only that partition's returned `delta_value`",
-            "cover all returned partitions",
-            "response's reconciliation basis",
-            "Call a partition a structural contributor and report a rate only when that "
-            "same returned claim has `structural_contribution` in `allowed_relations`",
-            "valid seal covers a returned `facts.net_change_contribution_rate`",
-            "zero-delta partition or a claim without that relation is not a structural "
-            "contributor and has no zero rate to fill",
-            "Never describe structural contribution as a cause, driver, or causal explanation",
-            "When reporting “结构贡献” for this authorized reconciled operation",
-            "state in the same paragraph or adjacent sentence: "
-            "“这是净变化的结构分解，不代表业务原因或驱动。”",
-            "Outside that negated boundary, never name a partition with 原因, 驱动, "
-            "导致, or causal equivalents",
-            "Use each authorized returned decimal-string rate directly",
-            "signed dimensionless fraction: `1` means `100%`",
-            "negative values and absolute values greater than `1` are valid",
-            "multiply by 100 exactly once",
-            "one consistent display precision across partitions",
-            "Preserve every nonzero direction",
-            "show `0 < rate < threshold` for a positive rate or "
-            "`-threshold < rate < 0` for a negative rate",
-            "never show it as `0.00%` or `-0.00%`",
-            "Never recompute a rate from visible amounts, scale it twice, take "
-            "its absolute "
-            "value, clamp it, normalize partition rates to 100%, or force them to sum "
-            "to 100%",
-            "do not calculate, infer, or invent it",
-            "absence for a zero overall delta or zero partition delta is not a zero rate",
-            "When the returned `change_reconciliation.status` is `not_reconciled`, "
-            "or when `change_reconciliation` or its status is missing",
-            "preserve the returned gap or local-result scope and never call it structural "
-            "contribution",
-        ):
-            self.assertIn(required, normalized)
-        self.assertNotIn(
-            "successful `complete_change_decomposition`",
-            normalized,
+        self.assertIn(
+            "Correlation and decomposition alone never authorize causality",
+            skill,
         )
-
-        main_skill = skill_prompt.load_main_skill(PROFILE_ROOT)
-        hook = skill_prompt.build_wecom_skill_hook(main_skill)
-        projected = hook(platform="wecom", is_first_turn=True)
-        self.assertIsInstance(projected, dict)
-        context = projected["context"]
-        projected_normalized = " ".join(context.split())
-        self.assertIn('authority="git"', context)
-        self.assertIn('immutable="process"', context)
-        for required in (
-            "only when `operation` is `complete_change_decomposition` AND the returned "
-            "`change_reconciliation.status` is explicitly `reconciled`",
-            "a general `status: success` does not authorize it",
-            "using only that partition's returned `delta_value`",
-            "Call a partition a structural contributor and report a rate only when that "
-            "same returned claim has `structural_contribution` in `allowed_relations`",
-            "zero-delta partition or a claim without that relation is not a structural "
-            "contributor and has no zero rate to fill",
-            "Never describe structural contribution as a cause, driver, or causal explanation",
-            "When reporting “结构贡献” for this authorized reconciled operation",
-            "state in the same paragraph or adjacent sentence: "
-            "“这是净变化的结构分解，不代表业务原因或驱动。”",
-            "Outside that negated boundary, never name a partition with 原因, 驱动, "
-            "导致, or causal equivalents",
-            "Use each authorized returned decimal-string rate directly",
-            "multiply by 100 exactly once",
-            "show `0 < rate < threshold` for a positive rate or "
-            "`-threshold < rate < 0` for a negative rate",
-            "never show it as `0.00%` or `-0.00%`",
-            "Never recompute a rate from visible amounts, scale it twice, take its absolute "
-            "value, clamp it, normalize partition rates to 100%, or force them to sum "
-            "to 100%",
-            "absence for a zero overall delta or zero partition delta is not a zero rate",
-            "When the returned `change_reconciliation.status` is `not_reconciled`, "
-            "or when `change_reconciliation` or its status is missing",
-            "preserve the returned gap or local-result scope and never call it structural "
-            "contribution",
-        ):
-            self.assertIn(required, projected_normalized)
-
-        governance_rule = content.split(
-            "The default governance path is", 1
-        )[1].split("### Plan and bind scope", 1)[0]
-        governance_normalized = " ".join(governance_rule.split())
-        for required in (
-            "Apply `expert_index -> metric_detail -> query` per newly selected metric "
-            "branch, not per turn",
-            "Run it for a new Hermes session, changed domain or metric, or no retained "
-            "proof of selection plus successful detail",
-            "In the same Hermes session, reuse the prior successful detail receipt only "
-            "for that metric while runtime accepts it",
-            "If rejected as stale or invalid, refresh only the selected detail",
-            "refresh `expert_index` only if selection becomes unsupported or ambiguous",
-            "A new turn alone never forces refresh",
-        ):
-            self.assertIn(required, governance_normalized)
-            self.assertIn(required, projected_normalized)
-
         semantics = yaml.safe_load(
             (PLUGIN_ROOT / "contracts" / "delivery-semantics.yaml").read_text(
                 encoding="utf-8"
             )
         )
-        answer_contract_metrics = {
-            metric_code
-            for metric_code, definition in semantics["metrics"].items()
-            if definition.get("answer_contract") is not None
-        }
-        self.assertEqual({"delivery_amount"}, answer_contract_metrics)
-        expected_answer_contract = (
-            "仅当返回的是完整变化分解且状态已对账时，才可称为结构贡献；凡实际报告结构贡献，"
-            "必须在同段或紧邻句明确说明：这是净变化的结构分解，不代表业务原因或驱动。"
-            "除该否定边界外，不得用原因、驱动或导致命名任何分区。"
-        )
-        self.assertEqual(
-            [expected_answer_contract],
-            semantics["metrics"]["delivery_amount"]["answer_contract"],
-        )
-        serialized_semantics = json.dumps(semantics, ensure_ascii=False)
-        self.assertNotIn(
-            "“原因”只允许指向查询证实的客户、产品、业务员、部门或组织结构变化",
-            serialized_semantics,
-        )
-        self.assertIn(
-            "结构变化只能称为结构观察；完整对账授权时可称为结构贡献，"
-            "但均不得称为原因、驱动或导致",
-            serialized_semantics,
-        )
-
+        answer_contract = semantics["metrics"]["delivery_amount"]["answer_contract"]
+        self.assertTrue(any("不代表业务原因或驱动" in item for item in answer_contract))
         detail = json.loads(
             contracts.datasage_catalog(
-                {
-                    "requests": [
-                        {"domain": "delivery", "metric": "delivery_amount"}
-                    ]
-                }
+                {"requests": [{"domain": "delivery", "metric": "delivery_amount"}]}
             )
         )
         self.assertEqual("success", detail["status"])
-        self.assertEqual(
-            [expected_answer_contract],
-            detail["results"][0]["metric"]["answer_contract"],
-        )
-        current_receipt = detail.pop("content_hash")
-        stale_detail = json.loads(json.dumps(detail, ensure_ascii=False))
-        stale_detail["results"][0]["metric"].pop("answer_contract")
-        stale_receipt = hashlib.sha256(
-            json.dumps(
-                stale_detail,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
-        self.assertNotEqual(current_receipt, stale_receipt)
-        stale_request = {
-            "request_id": "delivery_old_answer_contract_receipt",
-            "domain": "delivery",
-            "mode": "metric",
-            "purpose": "verify prior delivery detail receipt is invalid",
-            "metric": "delivery_amount",
-            "dimensions": [],
-            "time_range": {"start": "2026-07-01", "end": "2026-08-01"},
-            "detail_receipt": stale_receipt,
-        }
-        with mock.patch.object(
-            tools,
-            "_execute_with_source",
-            side_effect=AssertionError("stale receipt must fail before database"),
-        ) as execute:
-            stale_result = json.loads(
-                tools.runtime_guarded_datasage_query(
-                    {"requests": [stale_request]}
-                )
-            )
-        execute.assert_not_called()
-        self.assertEqual("failed", stale_result["status"])
-        self.assertEqual(
-            "METRIC_DETAIL_RECEIPT_INVALID", stale_result["error"]["code"]
-        )
+        self.assertIn("detail_receipt", detail["results"][0])
 
     def test_model_visible_contribution_rate_wire_contract_is_direct_use_only(
         self,
@@ -1993,32 +1796,13 @@ class BusinessContractTests(unittest.TestCase):
         )
 
         main_skill = skill_prompt.load_main_skill(PROFILE_ROOT)
-        patterns = (
-            PROFILE_ROOT / "skills/datasage/datasage-query-patterns/SKILL.md"
-        ).read_text(encoding="utf-8")
-        hook_context = skill_prompt.build_wecom_skill_hook(main_skill)(
-            platform="wecom",
-            is_first_turn=True,
-        )["context"]
-        for content in (main_skill, patterns, hook_context):
-            normalized = " ".join(content.split())
-            self.assertIn("`exact_default_lookup_supported: true`", normalized)
-            self.assertIn("false or missing", normalized)
-            self.assertIn("`calendar_month` and `time_range`", normalized)
-        normalized_hook = " ".join(hook_context.split())
-        self.assertIn("When `answer_scope_line` is non-empty", normalized_hook)
-        self.assertIn("faithfully state its actual returned range", normalized_hook)
-        self.assertIn("For every sealed `disclosure_ledger` item", normalized_hook)
-        self.assertIn("whose `applies` value is `true`", normalized_hook)
-        self.assertIn("fully cover all of its independent business propositions", normalized_hook)
-        self.assertIn("Natural rewording and lossless merging", normalized_hook)
-        self.assertIn("inclusion, exclusion, definition, or conditional scope", normalized_hook)
-        self.assertIn("another request, metric, or domain", normalized_hook)
-        self.assertIn("Semicolon-separated, coordinated, and conditional clauses", normalized_hook)
-        self.assertIn("never start another catalog, detail, or query call", normalized_hook)
-        for content in (main_skill, hook_context):
-            self.assertNotIn("one by one", content)
-            self.assertNotIn("must not drop or merge away", content)
+        normalized = " ".join(main_skill.split())
+        self.assertIn("copy that result's `detail_receipt`", normalized)
+        self.assertIn("Never reuse it for another metric", normalized)
+        self.assertIn("Preserve typed states", normalized)
+        registration = (PLUGIN_ROOT / "__init__.py").read_text(encoding="utf-8")
+        self.assertNotIn("frozen_wecom_skill_hook", registration)
+        self.assertIn('register_hook("transform_llm_output"', registration)
 
     def test_runtime_metric_detail_receipt_gate_fails_closed_before_database(
         self,
@@ -2144,18 +1928,12 @@ class BusinessContractTests(unittest.TestCase):
         query_description = schemas.DATASAGE_QUERY["description"]
         self.assertIn("content_hash", query_description)
         self.assertIn("before any database access", query_description)
-        for skill_path in (
-            PROFILE_ROOT / "skills" / "datasage" / "SKILL.md",
-            PROFILE_ROOT
-            / "skills"
-            / "datasage"
-            / "datasage-query-patterns"
-            / "SKILL.md",
-        ):
-            skill_content = skill_path.read_text(encoding="utf-8")
-            self.assertIn("`content_hash`", skill_content)
-            self.assertIn("`detail_receipt`", skill_content)
-            self.assertIn("unchanged", skill_content)
+        skill_content = (
+            PROFILE_ROOT / "skills" / "datasage" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("`detail_receipt`", skill_content)
+        self.assertIn("Never reuse it for another metric", skill_content)
+        self.assertNotIn("copy its `content_hash`", skill_content)
 
         with mock.patch.object(
             tools,
@@ -3637,28 +3415,13 @@ class BusinessContractTests(unittest.TestCase):
         self.assertNotIn(formal_dso_disclosure_id, delivery_receipt_ids)
 
         main_skill = skill_prompt.load_main_skill(PROFILE_ROOT)
-        hook = skill_prompt.build_wecom_skill_hook(main_skill)
-        hook_context = hook(platform="wecom", is_first_turn=True)["context"]
-        normalized_hook = " ".join(hook_context.split())
-        for required in (
-            "formal receivable turnover days or formal DSO",
-            "`customer_risk` expert index",
-            "ordinary net debt, aging, or overdue receivables",
-            "`receivable` domain",
-            "selected metric detail's `answer_contract`",
-            "formal-receivable-turnover-calculation-attestation/v1",
-            "valid `attestation_seal`, and a valid enclosing `claim_seal`",
-            "both the formula disclosure and the two-sided external-customer-scope disclosure",
-            "applicable and validly sealed",
-            "never invent a denominator amount",
-            "missing, invalid, or `status: undefined`",
-            "do not make a formal turnover numeric or component-formula assertion",
-            "`undefined` or `partial` is a governed result state, not a tool error",
-            "independently sealed non-formula facts and disclosures",
-            "Do not re-query merely to repair or restate this finalization contract",
-        ):
-            self.assertIn(required, normalized_hook)
-        self.assertIsNone(hook(platform="cli", is_first_turn=True))
+        self.assertLess(len(main_skill), 6_000)
+        self.assertIn("Preserve typed states", main_skill)
+        self.assertIn("Never invent or substitute a metric", main_skill)
+        self.assertNotIn("formal-receivable-turnover-calculation-attestation/v1", main_skill)
+        registration = (PLUGIN_ROOT / "__init__.py").read_text(encoding="utf-8")
+        self.assertNotIn("frozen_wecom_skill_hook", registration)
+        self.assertIn('register_hook("transform_llm_output"', registration)
 
     def test_delivery_internal_customer_exclusion_is_sealed_and_model_visible(
         self,
@@ -4888,27 +4651,14 @@ class BusinessContractTests(unittest.TestCase):
         main_skill = (PROFILE_ROOT / "skills/datasage/SKILL.md").read_text(
             encoding="utf-8"
         )
-        patterns = (
-            PROFILE_ROOT / "skills/datasage/datasage-query-patterns/SKILL.md"
-        ).read_text(encoding="utf-8")
-        normalized_main = " ".join(main_skill.split())
-        normalized_patterns = " ".join(patterns.split())
-        for normalized in (normalized_main, normalized_patterns):
-            self.assertIn("`metric_selection_boundary`", normalized)
-            self.assertIn("official Hermes `clarify`", normalized)
-            self.assertIn("`datasage_query`", normalized)
+        normalized = " ".join(main_skill.split())
+        self.assertIn("Read a small number of candidate details", normalized)
+        self.assertIn("before asking the user", normalized)
+        soul = (PROFILE_ROOT / "SOUL.md").read_text(encoding="utf-8")
         self.assertIn(
-            "metric-detail calls and `datasage_query` calls must both be zero",
-            normalized_main,
+            "Ask for clarification only when materially different interpretations",
+            " ".join(soul.split()),
         )
-        self.assertIn(
-            "zero metric-detail and `datasage_query` calls before the clarification response",
-            normalized_patterns,
-        )
-        for normalized in (normalized_main, normalized_patterns):
-            self.assertIn("domain-local", normalized)
-            self.assertIn("single minimal related domain", normalized)
-            self.assertIn("Never enumerate every domain", normalized)
 
     def test_delivery_planner_has_no_dev1_acceptance_orphan(self) -> None:
         for relative_path in (

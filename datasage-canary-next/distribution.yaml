@@ -1,6 +1,6 @@
-name: datasage-canary-next
-version: 0.12.0-dev37
-description: Hermes-native digital business expert with governed read-only data tools.
+name: datasage-expert-next
+version: 0.13.1-alpha1
+description: Rebuilt Hermes-native digital expert with lean skills and governed evidence tools.
 hermes_requires: ==0.20.0
 author: datasage
 license: Proprietary
@@ -27,11 +27,13 @@ env_requires:
 - name: WECOM_SECRET
   description: WeCom AI Bot secret.
 distribution_owned:
+- ARCHITECTURE.md
 - distribution.yaml
 - SOUL.md
 - profile.yaml
 - config.yaml
 - plugins/datasage-query/__init__.py
+- plugins/datasage-query/answer_guard.py
 - plugins/datasage-query/analytical_queries.py
 - plugins/datasage-query/contracts.py
 - plugins/datasage-query/contracts/customer_risk-semantics.yaml
@@ -56,6 +58,7 @@ distribution_owned:
 - plugins/datasage-query/references.py
 - plugins/datasage-query/requirements.txt
 - plugins/datasage-query/runtime_health.py
+- plugins/datasage-query/scorecard.py
 - plugins/datasage-query/schemas.py
 - plugins/datasage-query/settings.py
 - plugins/datasage-query/skill_prompt.py
@@ -86,6 +89,11 @@ distribution_owned:
 - plugins/datasage-query/vendor/pymysql-1.2.0.dist-info/top_level.txt
 - plugins/datasage-query/vendor/pymysql-1.2.0.dist-info/WHEEL
 - plugins/datasage-query/wire.py
+- tests/test_answer_guard.py
+- tests/test_business_contracts.py
+- tests/test_compact_payloads.py
+- tests/test_expert_architecture.py
+- tests/test_integration_boundaries.py
 - skills/common-data-foundation/references/answer-boundary.md
 - skills/common-data-foundation/references/entity-rules.md
 - skills/common-data-foundation/references/expert-playbooks.yaml

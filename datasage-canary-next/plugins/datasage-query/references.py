@@ -162,6 +162,10 @@ _SECTION_SPECS: dict[str, dict[str, tuple[str, Any]]] = {
 
 SOURCE_IDS = tuple(_SOURCE_PATHS)
 SECTION_IDS = tuple(sorted({section for values in _SECTION_SPECS.values() for section in values}))
+SECTION_IDS_BY_SOURCE = {
+    source_id: tuple(sorted(section_specs))
+    for source_id, section_specs in _SECTION_SPECS.items()
+}
 
 
 def _profile_root() -> Path:
