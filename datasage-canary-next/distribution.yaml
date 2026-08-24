@@ -1,5 +1,5 @@
 name: datasage-expert-next
-version: 0.14.0-alpha1
+version: 0.14.0-alpha2
 description: Rebuilt Hermes-native digital expert with lean skills and governed evidence tools.
 hermes_requires: ==0.20.0
 author: datasage

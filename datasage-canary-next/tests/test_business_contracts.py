@@ -345,15 +345,20 @@ class BusinessContractTests(unittest.TestCase):
         cls,
         *,
         partition_truncated: bool = False,
+        partition_population_size: int | None = None,
         inconsistent_partition_snapshot: bool = False,
         coverage_case: str = "complete",
-    ) -> tuple[dict[str, object], dict[str, dict[str, object]], list[str]]:
+    ) -> tuple[
+        dict[str, object],
+        dict[str, dict[str, object]],
+        list[tuple[str, tuple[object, ...], int]],
+    ]:
         source_evidence = cls._read_only_source_evidence()
-        sql_calls: list[str] = []
+        sql_calls: list[tuple[str, tuple[object, ...], int]] = []
         captured_raw: dict[str, dict[str, object]] = {}
-        dimension_rows = (
-            {"whse_id": "w1", "whse_name": "W1"},
-            {"whse_id": "w2", "whse_name": "W2"},
+        dimension_rows = tuple(
+            {"whse_id": f"w{index}", "whse_name": f"W{index}"}
+            for index in range(1, max(2, partition_population_size or 0) + 1)
         )
 
         class Snapshot:
@@ -366,9 +371,13 @@ class BusinessContractTests(unittest.TestCase):
                 return None
 
             def execute(self, sql, _params, _limit, **_kwargs):
-                sql_calls.append(sql)
+                sql_calls.append((sql, tuple(_params), _limit))
                 partition = tools._INTERNAL_PARTITION_ROW_COUNT in sql
-                full_known = 3 if partition_truncated else 2
+                full_known = (
+                    partition_population_size
+                    if partition_population_size is not None
+                    else 3 if partition_truncated else 2
+                )
                 base = {
                     tools._INTERNAL_MATCH_COUNT: full_known,
                     tools._INTERNAL_SNAPSHOT_MONTH: "2026-07",
@@ -404,11 +413,20 @@ class BusinessContractTests(unittest.TestCase):
                             "change_rate": "0.25",
                         }
                     ], False, source_evidence
-                triplets = (
-                    (("40", "30", "10"), ("30", "25", "5"))
-                    if partition_truncated
-                    else (("60", "50", "10"), ("40", "30", "10"))
-                )
+                if partition_population_size is not None:
+                    all_triplets = (
+                        (("100", "80", "20"),)
+                        + (("0", "0", "0"),) * (partition_population_size - 1)
+                    )
+                    triplets = all_triplets[:_limit]
+                    result_truncated = len(all_triplets) > _limit
+                else:
+                    triplets = (
+                        (("40", "30", "10"), ("30", "25", "5"))
+                        if partition_truncated
+                        else (("60", "50", "10"), ("40", "30", "10"))
+                    )
+                    result_truncated = partition_truncated
                 rows = []
                 for index, (current, comparison, delta) in enumerate(triplets):
                     row = {
@@ -429,28 +447,28 @@ class BusinessContractTests(unittest.TestCase):
                             current_known_value_count=2 if index == 0 else 1,
                             comparison_known_value_count=1,
                         )
-                    if partition_truncated:
+                    if result_truncated:
                         row.update(
                             {
                                 tools._INTERNAL_PARTITION_CURRENT: "100",
                                 tools._INTERNAL_PARTITION_COMPARISON: "80",
                                 tools._INTERNAL_PARTITION_DELTA: "20",
-                                tools._INTERNAL_PARTITION_ROW_COUNT: 3,
+                                tools._INTERNAL_PARTITION_ROW_COUNT: full_known,
                             }
                         )
                         if coverage_case != "proof_missing":
                             row.update(
                                 {
                                     tools._INTERNAL_PARTITION_CURRENT_MISSING: 0,
-                                    tools._INTERNAL_PARTITION_CURRENT_KNOWN: 3,
+                                    tools._INTERNAL_PARTITION_CURRENT_KNOWN: full_known,
                                     tools._INTERNAL_PARTITION_COMPARISON_MISSING: 0,
-                                    tools._INTERNAL_PARTITION_COMPARISON_KNOWN: 3,
+                                    tools._INTERNAL_PARTITION_COMPARISON_KNOWN: full_known,
                                 }
                             )
                     rows.append(row)
                 if inconsistent_partition_snapshot:
                     rows[1][tools._INTERNAL_SNAPSHOT_MONTH] = "2026-08"
-                return rows, partition_truncated, source_evidence
+                return rows, result_truncated, source_evidence
 
         original_projection = tools._model_wire_result
 
@@ -1016,6 +1034,8 @@ class BusinessContractTests(unittest.TestCase):
         expanded, links = tools._expand_complete_change_decompositions([request])
         self.assertEqual(2, len(expanded))
         self.assertEqual({request["request_id"]}, set(links))
+        self.assertNotIn("limit", expanded[0])
+        self.assertEqual(20, expanded[1]["limit"])
         scopes = []
         for expanded_request in expanded:
             normalized = tools._validate_request(expanded_request)
@@ -1108,14 +1128,41 @@ class BusinessContractTests(unittest.TestCase):
             ]["current_known_value_count"],
         )
 
+        bounded_payload, bounded_raw, bounded_calls = self._run_snapshot_change_operation(
+            partition_population_size=21,
+        )
+        bounded = bounded_raw[partition_id]
+        self.assertEqual("success", bounded_payload["status"])
+        self.assertEqual(20, bounded["requested_limit"])
+        self.assertEqual(20, bounded["effective_limit"])
+        self.assertEqual(20, bounded["row_count"])
+        self.assertEqual(20, len(bounded["rows"]))
+        self.assertTrue(bounded["truncated"])
+        self.assertTrue(bounded["has_more"])
+        partition_sql, partition_params, partition_limit = bounded_calls[1]
+        self.assertEqual(20, partition_limit)
+        self.assertEqual(21, partition_params[-1])
+        self.assertIn("LIMIT %s", partition_sql)
+        self.assertIn(tools._INTERNAL_PARTITION_ROW_COUNT, partition_sql)
+        bounded_reconciliation = bounded["change_reconciliation"]
+        self.assertEqual("reconciled", bounded_reconciliation["status"])
+        self.assertEqual(
+            "same_statement_window_full_partition",
+            bounded_reconciliation["proof_mode"],
+        )
+        self.assertEqual(21, bounded_reconciliation["full_partition_row_count"])
+        self.assertEqual(20, bounded_reconciliation["returned_driver_row_count"])
+        self.assertEqual(1, bounded_reconciliation["unreturned_driver_row_count"])
+        self.assertFalse(
+            bounded_reconciliation["complete_population_claims_returned"]
+        )
+
         invalid_payload, invalid_raw, _calls = self._run_snapshot_change_operation(
             inconsistent_partition_snapshot=True,
         )
         invalid = invalid_raw[partition_id]
-        self.assertEqual("failed", invalid_payload["status"])
-        self.assertEqual(
-            "DATABASE_IDENTITY_CHANGED", invalid_payload["error"]["code"]
-        )
+        self.assertEqual("partial", invalid_payload["status"])
+        self.assertNotIn("error", invalid_payload)
         self.assertEqual("CONTRACT_UNAVAILABLE", invalid["error"]["code"])
         self.assertEqual(
             "not_reconciled", invalid["change_reconciliation"]["status"]
@@ -1207,6 +1254,144 @@ class BusinessContractTests(unittest.TestCase):
         self.assertEqual("INVALID_PLAN", failure["error"]["code"])
         execute.assert_not_called()
         snapshot.assert_not_called()
+
+    def test_post_sql_failures_preserve_confirmed_source_evidence(self) -> None:
+        raw_request = {
+            "request_id": "post_sql_source_evidence",
+            "domain": "delivery",
+            "mode": "metric",
+            "purpose": "offline post-SQL source evidence regression",
+            "metric": "delivery_amount",
+            "detail_receipt": self._metric_detail_receipt(
+                "delivery", "delivery_amount"
+            ),
+            "calendar_month": "2026-08",
+            "dimensions": ["customer"],
+            "limit": 100,
+            "order_by": {"field": "metric_value", "direction": "desc"},
+        }
+        request = tools._validate_delivery_metric_scope(
+            tools._validate_request(raw_request)
+        )
+        datasets, semantics = tools._contracts("delivery")
+        request = tools._validate_metric_detail_gate(request, semantics)
+        tools._validate_pre_entity_metric_plan(request, datasets, semantics)
+        prepared = {
+            "request": request,
+            "datasets": datasets,
+            "semantics": semantics,
+            "resolved_entities": [],
+            "entity_resolution_db_call_count": 0,
+        }
+        source_evidence = self._read_only_source_evidence()
+        large_rows = [
+            {
+                "customer_id": f"customer-{index}",
+                "customer_name": f"Customer {index} " + "x" * 1_500,
+                "metric_value": "1.00",
+            }
+            for index in range(100)
+        ]
+        self.assertGreater(
+            len(json.dumps(large_rows, ensure_ascii=False).encode("utf-8")),
+            80_000,
+        )
+
+        original_bounded_int = tools._bounded_int
+
+        def configured_result_budget(name, default, minimum, maximum):
+            if name == "max_result_bytes":
+                return 80_000
+            return original_bounded_int(name, default, minimum, maximum)
+
+        with mock.patch.object(
+            tools,
+            "_bounded_int",
+            side_effect=configured_result_budget,
+        ):
+            oversized = tools._run_one(
+                raw_request,
+                prepared=prepared,
+                execute_query=lambda *_args, **_kwargs: (
+                    large_rows,
+                    False,
+                    source_evidence,
+                ),
+            )
+        self.assertEqual("failed", oversized["status"])
+        self.assertEqual("OUTPUT_TOO_LARGE", oversized["error"]["code"])
+        self.assertEqual(1, oversized["business_sql_attempted_count"])
+        self.assertEqual(1, oversized["business_sql_confirmed_count"])
+        self.assertEqual(source_evidence, oversized["source_evidence_ref"])
+
+        with mock.patch.object(
+            tools,
+            "_evidence_rows_and_state",
+            side_effect=RuntimeError("synthetic post-SQL failure"),
+        ):
+            unexpected = tools._run_one(
+                raw_request,
+                prepared=prepared,
+                execute_query=lambda *_args, **_kwargs: (
+                    [{"customer_id": "customer-1", "customer_name": "C1", "metric_value": "1.00"}],
+                    False,
+                    source_evidence,
+                ),
+            )
+        self.assertEqual("failed", unexpected["status"])
+        self.assertEqual("INTERNAL_ERROR", unexpected["error"]["code"])
+        self.assertEqual(1, unexpected["business_sql_confirmed_count"])
+        self.assertEqual(source_evidence, unexpected["source_evidence_ref"])
+
+    def test_source_evidence_invalidity_and_identity_drift_are_distinct(self) -> None:
+        valid = self._read_only_source_evidence()
+        invalid = dict(valid)
+        invalid["identity_sha256"] = "2" * 64
+
+        for label, reference in (("missing", None), ("invalid", invalid)):
+            with self.subTest(label=label):
+                with self.assertRaises(tools.QueryFailure) as raised:
+                    tools._consistent_source_evidence_ref([reference])
+                self.assertEqual(
+                    "DATABASE_SOURCE_EVIDENCE_INVALID",
+                    raised.exception.code,
+                )
+                self.assertEqual("database_security", raised.exception.stage)
+                self.assertEqual(
+                    "Database source evidence is invalid.",
+                    raised.exception.message,
+                )
+
+        with self.assertRaises(tools.QueryFailure) as missing_batch:
+            tools._batch_source_evidence_ref(
+                [
+                    {
+                        "business_sql_confirmed_count": 1,
+                        "source_evidence_ref": None,
+                    }
+                ]
+            )
+        self.assertEqual(
+            "DATABASE_SOURCE_EVIDENCE_INVALID",
+            missing_batch.exception.code,
+        )
+
+        changed = dict(valid)
+        changed["identity_sha256"] = "2" * 64
+        changed.pop("security_evidence_sha256")
+        canonical = json.dumps(
+            changed,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        changed["security_evidence_sha256"] = hashlib.sha256(
+            b"datasage-query-source-evidence/v1\x00" + canonical
+        ).hexdigest()
+        with self.assertRaises(tools.QueryFailure) as drift:
+            tools._consistent_source_evidence_ref([valid, changed])
+        self.assertEqual("DATABASE_IDENTITY_CHANGED", drift.exception.code)
+        self.assertEqual("database_security", drift.exception.stage)
 
     def test_model_wire_rejects_invalid_structural_reconciliation(self) -> None:
         results, _wire = self._run_synthetic_change_pipeline(

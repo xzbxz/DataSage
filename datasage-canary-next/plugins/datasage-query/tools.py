@@ -1244,6 +1244,7 @@ def _expand_complete_change_decompositions(
             "request_id": partition_id,
             "dimensions": [dimension],
             "decomposition_of_request_id": overall_id,
+            "limit": 20,
         }
         expanded.extend((overall_request, partition_request))
         operation_partitions[partition_id] = overall_id
@@ -6345,8 +6346,8 @@ def _consistent_source_evidence_ref(
             )
         except DatabaseSecurityError as exc:
             raise QueryFailure(
-                "DATABASE_IDENTITY_CHANGED",
-                "Database source identity changed during query execution.",
+                exc.code,
+                str(exc),
                 stage="database_security",
             ) from exc
     if not validated:
@@ -8149,6 +8150,11 @@ def _run_one(
             [
                 *preflight_source_evidence_refs,
                 *(
+                    [source_evidence_ref]
+                    if source_evidence_ref is not None
+                    else []
+                ),
+                *(
                     [failure.source_evidence_ref]
                     if failure.source_evidence_ref is not None
                     else []
@@ -8179,6 +8185,16 @@ def _run_one(
         )
     except Exception:
         logger.exception("datasage_query unexpected request failure query_id=%s", query_id)
+        source_evidence_ref = _consistent_source_evidence_ref(
+            [
+                *preflight_source_evidence_refs,
+                *(
+                    [source_evidence_ref]
+                    if source_evidence_ref is not None
+                    else []
+                ),
+            ]
+        )
         failure_stage = current_stage
         elapsed_ms = int((time.monotonic() - started) * 1000)
         result = _failure_result(
@@ -8192,6 +8208,7 @@ def _run_one(
             entity_preflight_elapsed_ms=entity_preflight_elapsed_ms,
             business_sql_attempted_count=business_sql_attempted_count,
             business_sql_confirmed_count=business_sql_confirmed_count,
+            source_evidence_ref=source_evidence_ref,
         )
     _audit(
         {

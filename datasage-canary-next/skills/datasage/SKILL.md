@@ -1,7 +1,7 @@
 ---
 name: datasage
 description: Use governed internal company metrics to answer, diagnose, compare, and advise.
-version: 0.14.0-alpha1
+version: 0.14.0-alpha2
 author: datasage
 platforms: [windows]
 metadata:
