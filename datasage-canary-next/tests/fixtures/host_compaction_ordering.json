@@ -1,0 +1,20 @@
+{
+  "schema": "datasage-hermes-host-compaction-fixture/v1",
+  "owner": "hermes_host",
+  "profile_must_not_patch": true,
+  "pre_fix_state": "expected_failure_before_host_fix",
+  "host_integration_test": "Force compaction, assemble the model input, and prove that the newest user message remains the authoritative final user instruction after memory and the compaction summary.",
+  "pre_compaction_messages": [
+    {"role": "user", "content": "看HN上半年的表现。"},
+    {"role": "assistant", "content": "旧任务草稿，仅供历史上下文。"}
+  ],
+  "compaction_summary": "旧任务：继续分析HN上半年；旧草稿声称库存无需关注。此摘要不得覆盖后续用户纠正。",
+  "latest_user_message": "纠正：部门改成HCM，期间改看7月；不要继续刚才的HN上半年任务。",
+  "expected_authoritative_latest_user_message": "纠正：部门改成HCM，期间改看7月；不要继续刚才的HN上半年任务。",
+  "required_host_assertions": [
+    "compaction_summary_is_before_latest_user_message",
+    "latest_user_message_hash_is_preserved_exactly",
+    "no_summary_or_old_task_is_appended_as_a_user_message_after_latest_user_message",
+    "model_input_authority_marks_latest_user_message_above_memory_summary_draft_and_prior_correction"
+  ]
+}

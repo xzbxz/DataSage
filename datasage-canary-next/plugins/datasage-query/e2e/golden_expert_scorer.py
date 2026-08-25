@@ -20,7 +20,7 @@ from typing import Any
 
 
 HERE = Path(__file__).resolve().parent
-SCHEMA = "datasage-golden-expert-cases/v2"
+SCHEMA = "datasage-golden-expert-cases/v3"
 CANDIDATE_SCHEMA = "datasage-golden-expert-candidate/v1"
 REPORT_SCHEMA = "datasage-golden-expert-report/v1"
 PLAN_LIST_FIELDS = ("domains", "metrics", "dimensions", "operations")
@@ -197,6 +197,10 @@ def validate_suite(suite: Any) -> list[str]:
     errors: list[str] = []
     if not isinstance(suite, dict) or suite.get("schema") != SCHEMA:
         return [f"suite schema must be {SCHEMA}"]
+    if suite.get("plan_constraint_semantics") != "required-and-forbidden-subsets/v1":
+        errors.append(
+            "suite plan_constraint_semantics must be required-and-forbidden-subsets/v1"
+        )
     cases = suite.get("cases")
     if not isinstance(cases, list):
         return ["suite cases must be a list"]
@@ -208,10 +212,10 @@ def validate_suite(suite: Any) -> list[str]:
     conversations: dict[str, list[int]] = {}
     required_keys = {
         "id", "category", "conversation_id", "turn", "prompt",
-        "expected_plan", "required_conclusions", "allowed_conclusions",
+        "plan_constraints", "required_conclusions", "allowed_conclusions",
         "forbidden_conclusions", "evidence_requirements",
     }
-    optional_keys = {"expected_final_answer_sha256"}
+    optional_keys: set[str] = set()
     for index, case in enumerate(cases):
         where = f"cases[{index}]"
         if (
@@ -233,23 +237,6 @@ def validate_suite(suite: Any) -> list[str]:
             errors.append(f"{where}.category is invalid")
         else:
             categories[category] += 1
-        expected_final_answer_sha256 = case.get("expected_final_answer_sha256")
-        if category == "permission_denied":
-            if (
-                not isinstance(expected_final_answer_sha256, str)
-                or len(expected_final_answer_sha256) != 64
-                or any(
-                    char not in "0123456789abcdef"
-                    for char in expected_final_answer_sha256
-                )
-            ):
-                errors.append(
-                    f"{where}.expected_final_answer_sha256 is required for permission_denied"
-                )
-        elif expected_final_answer_sha256 is not None:
-            errors.append(
-                f"{where}.expected_final_answer_sha256 is only allowed for permission_denied"
-            )
         if not isinstance(conversation, str) or not conversation:
             errors.append(f"{where}.conversation_id is invalid")
         elif not isinstance(turn, int) or turn < 1:
@@ -258,24 +245,32 @@ def validate_suite(suite: Any) -> list[str]:
             conversations.setdefault(conversation, []).append(turn)
         if not isinstance(case.get("prompt"), str) or not case["prompt"].strip():
             errors.append(f"{where}.prompt is empty")
-        plan = case.get("expected_plan")
+        plan = case.get("plan_constraints")
         if not isinstance(plan, dict):
-            errors.append(f"{where}.expected_plan is invalid")
+            errors.append(f"{where}.plan_constraints is invalid")
         else:
             for field in PLAN_LIST_FIELDS + ("must_not_metrics",):
                 if not isinstance(plan.get(field), list):
-                    errors.append(f"{where}.expected_plan.{field} must be a list")
+                    errors.append(f"{where}.plan_constraints.{field} must be a list")
+            for field in PLAN_LIST_FIELDS:
+                forbidden_field = f"must_not_{field}"
+                if forbidden_field in plan and not isinstance(
+                    plan[forbidden_field], list
+                ):
+                    errors.append(
+                        f"{where}.plan_constraints.{forbidden_field} must be a list"
+                    )
             if plan.get("context_action") not in {"new", "preserve", "replace", "reset"}:
-                errors.append(f"{where}.expected_plan.context_action is invalid")
+                errors.append(f"{where}.plan_constraints.context_action is invalid")
             if not isinstance(plan.get("time_semantics"), str):
-                errors.append(f"{where}.expected_plan.time_semantics is invalid")
+                errors.append(f"{where}.plan_constraints.time_semantics is invalid")
             if "context_bindings" in plan and not isinstance(plan["context_bindings"], dict):
-                errors.append(f"{where}.expected_plan.context_bindings is invalid")
+                errors.append(f"{where}.plan_constraints.context_bindings is invalid")
             elif isinstance(plan.get("context_bindings"), dict):
                 for name, binding in plan["context_bindings"].items():
                     if isinstance(binding, dict) and not _is_typed_context_fingerprint(binding):
                         errors.append(
-                            f"{where}.expected_plan.context_bindings.{name} "
+                            f"{where}.plan_constraints.context_bindings.{name} "
                             "has an invalid typed fingerprint"
                         )
         required = case.get("required_conclusions")
@@ -330,37 +325,43 @@ def _score_case(
     observed: Any,
     *,
     live_fixture: bool = False,
-    final_answer_sha256: str | None = None,
 ) -> list[str]:
     if not isinstance(observed, dict):
         return ["candidate case must be an object"]
     errors: list[str] = []
-    expected = case["expected_plan"]
+    constraints = case["plan_constraints"]
     plan = observed.get("plan")
     if not isinstance(plan, dict):
         return ["plan is missing"]
     for field in PLAN_LIST_FIELDS:
         observed_values = set(_list(plan.get(field)))
-        expected_values = set(expected[field])
-        if observed_values != expected_values:
+        required_values = set(constraints[field])
+        missing_values = required_values.difference(observed_values)
+        if missing_values:
             errors.append(
-                f"plan.{field}={sorted(observed_values)!r}, "
-                f"expected exactly {sorted(expected_values)!r}"
+                f"plan.{field} is missing required values "
+                f"{sorted(missing_values)!r}"
             )
-    observed_metrics = set(_list(plan.get("metrics")))
-    forbidden_metrics = set(expected["must_not_metrics"])
-    if "*" in forbidden_metrics and observed_metrics:
-        errors.append("plan contains a metric although no metric is authorized")
-    else:
-        overlap = observed_metrics.intersection(forbidden_metrics)
-        if overlap:
-            errors.append(f"plan contains forbidden metrics {sorted(overlap)!r}")
+        forbidden_values = set(
+            constraints.get(
+                f"must_not_{field}",
+                constraints.get("must_not_metrics", []) if field == "metrics" else [],
+            )
+        )
+        if "*" in forbidden_values and observed_values:
+            errors.append(f"plan contains {field} although none are authorized")
+        else:
+            overlap = observed_values.intersection(forbidden_values)
+            if overlap:
+                errors.append(
+                    f"plan contains forbidden {field} {sorted(overlap)!r}"
+                )
     for field in ("time_semantics", "context_action"):
-        if plan.get(field) != expected[field]:
+        if plan.get(field) != constraints[field]:
             errors.append(
-                f"plan.{field}={plan.get(field)!r}, expected {expected[field]!r}"
+                f"plan.{field}={plan.get(field)!r}, expected {constraints[field]!r}"
             )
-    expected_bindings = expected.get("context_bindings", {})
+    expected_bindings = constraints.get("context_bindings", {})
     observed_bindings = plan.get("context_bindings", {})
     if not isinstance(observed_bindings, dict):
         errors.append("plan.context_bindings must be an object")
@@ -389,13 +390,6 @@ def _score_case(
     forbidden = set(conclusions).intersection(case["forbidden_conclusions"])
     if forbidden:
         errors.append(f"forbidden conclusions present {sorted(forbidden)!r}")
-    expected_final_answer_sha256 = case.get("expected_final_answer_sha256")
-    if (
-        expected_final_answer_sha256 is not None
-        and final_answer_sha256 != expected_final_answer_sha256
-    ):
-        errors.append("final answer does not exactly match the governed denial text")
-
     requirement = case["evidence_requirements"]
     evidence = observed.get("evidence")
     if not isinstance(evidence, dict):
@@ -448,7 +442,7 @@ def score(suite: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
         observed = by_id[case["id"]]
         session_id = observed.get("session_id")
         conversation = case["conversation_id"]
-        action = case["expected_plan"]["context_action"]
+        action = case["plan_constraints"]["context_action"]
         if not isinstance(session_id, str) or not session_id:
             context_errors[case["id"]].append("session_id is missing")
             continue
@@ -470,7 +464,6 @@ def score(suite: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
         previous_session[conversation] = session_id
 
     receipt_turns = candidate["canary_receipt"]["turns"]
-    receipt_by_id = {turn["test_id"]: turn for turn in receipt_turns}
     live_ids = {
         turn["test_id"]
         for turn in receipt_turns
@@ -484,7 +477,6 @@ def score(suite: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
             case,
             by_id[case["id"]],
             live_fixture=case["id"] in live_ids,
-            final_answer_sha256=receipt_by_id[case["id"]]["final_answer_sha256"],
         )
         errors.extend(context_errors[case["id"]])
         passed = not errors

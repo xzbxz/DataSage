@@ -23,18 +23,10 @@ TOOL_NAMES = frozenset(
         "datasage_query",
     }
 )
-REFERENCE_SOURCE_DOMAINS = {
-    "planner_delivery": "delivery",
-    "planner_receipt": "receipt",
-    "planner_receivable": "receivable",
-    "planner_target": "target",
-    "planner_customer_risk": "customer_risk",
-    "planner_inventory": "inventory",
-}
 SHARED_REFERENCE_SOURCES = frozenset(
     {"expert_playbooks", "answer_boundary", "entity_guidance", "query_rules"}
 )
-ALL_REFERENCE_SOURCES = frozenset(REFERENCE_SOURCE_DOMAINS) | SHARED_REFERENCE_SOURCES
+ALL_REFERENCE_SOURCES = SHARED_REFERENCE_SOURCES
 DENIED_CODE = "DATA_ENTITLEMENT_DENIED"
 DENIED_MESSAGE = "当前请求未获授权，业务查询未执行。"
 _SCALAR_TYPES = (str, int, float, bool)
@@ -251,9 +243,6 @@ def _reference_allowed(rule: Mapping[str, Any], args: Any) -> bool:
             return False
         source_id = request.get("source_id")
         if not _contains(sources, source_id):
-            return False
-        domain = REFERENCE_SOURCE_DOMAINS.get(str(source_id))
-        if domain is not None and not _domain_allowed(rule, domain):
             return False
         if source_id in SHARED_REFERENCE_SOURCES and rule.get(
             "allow_shared_references"

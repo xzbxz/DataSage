@@ -11,8 +11,6 @@ from typing import Any, Mapping
 
 import yaml
 
-from .contracts import ContractFailure, model_guidance_projection
-
 
 REGISTRY_VERSION = "datasage-reference-registry/v1"
 RESPONSE_SCHEMA = "datasage-reference-response/v1"
@@ -22,14 +20,6 @@ MAX_TOTAL_CONTENT_CHARS = 9_000
 MAX_INDEX_RESPONSE_CHARS = 6_000
 MAX_READ_RESPONSE_CHARS = 14_000
 _REGISTRY_PATH = "plugins/datasage-query/contracts/reference-registry.yaml"
-_PLANNER_DOMAINS = {
-    "planner_delivery": "delivery",
-    "planner_receipt": "receipt",
-    "planner_receivable": "receivable",
-    "planner_target": "target",
-    "planner_customer_risk": "customer_risk",
-    "planner_inventory": "inventory",
-}
 
 # Source paths and every readable section are code-owned constants.  The YAML
 # registry pins versions and hashes for audit, but cannot authorize a new path,
@@ -39,43 +29,13 @@ _SOURCE_PATHS = {
     "answer_boundary": "skills/common-data-foundation/references/answer-boundary.md",
     "entity_guidance": "skills/common-data-foundation/references/entity-rules.md",
     "query_rules": "skills/common-data-foundation/references/query-rules.md",
-    "planner_delivery": "skills/delivery-query/references/planner-contract.yaml",
-    "planner_receipt": "skills/receipt-query/references/planner-contract.yaml",
-    "planner_receivable": "skills/receivable-query/references/planner-contract.yaml",
-    "planner_target": "skills/target-query/references/planner-contract.yaml",
-    "planner_customer_risk": "skills/customer-risk-query/references/planner-contract.yaml",
-    "planner_inventory": "skills/inventory-query/references/planner-contract.yaml",
 }
-
-
-def _yaml_sections(prefix: str, recipes: tuple[str, ...]) -> dict[str, tuple[str, tuple[str, ...]]]:
-    sections: dict[str, tuple[str, tuple[str, ...]]] = {
-        "defaults": ("yaml", ("defaults",)),
-        "planning_rules": ("yaml", ("planning_rules",)),
-        "recipe_policy": ("yaml", ("recipe_policy",)),
-        "answer_boundary": ("yaml", ("answer_boundary",)),
-    }
-    sections.update(
-        {f"recipe.{name}": ("yaml", (prefix, name)) for name in recipes}
-    )
-    return sections
 
 
 _SECTION_SPECS: dict[str, dict[str, tuple[str, Any]]] = {
     "expert_playbooks": {
         "planning_semantics": ("yaml", ("planning_semantics",)),
         "evidence_roles": ("yaml", ("evidence_roles",)),
-        **{
-            f"playbook.{name}": ("yaml", ("playbooks", name))
-            for name in (
-                "metric_lookup",
-                "performance_review",
-                "change_diagnosis",
-                "anomaly_scan",
-                "entity_deep_dive",
-                "contribution_analysis",
-            )
-        },
     },
     "answer_boundary": {
         "evidence_types": ("markdown_heading", "Five evidence types"),
@@ -100,64 +60,6 @@ _SECTION_SPECS: dict[str, dict[str, tuple[str, Any]]] = {
         "safety_cost": ("markdown_heading", "Safety and cost"),
         "failure_semantics": ("markdown_heading", "Failure semantics"),
     },
-    "planner_delivery": {
-        "defaults": ("yaml", ("defaults",)),
-        "tool_planning": ("yaml", ("tool_planning",)),
-        "intent_routes": ("yaml", ("intent_routes",)),
-        "recipe_policy": ("yaml", ("recipe_policy",)),
-        "answer_boundary": ("yaml", ("answer_contract",)),
-        **{
-            f"recipe.{name}": ("yaml", ("analysis_recipes", name))
-            for name in (
-                "delivery_overview", "return_overview", "order_overview",
-                "warehouse_delivery_overview", "physical_dimension_delivery_overview",
-                "trend_change", "ranking_structure", "governed_change_decomposition",
-                "change_observations", "entity_evidence_card",
-                "delivery_order_alignment", "explain_change",
-            )
-        },
-    },
-    "planner_receipt": _yaml_sections(
-        "recipes",
-        (
-            "receipt_overview", "trend_change", "period_change", "ranking_structure",
-            "governed_change_decomposition", "change_observations", "source_structure",
-            "customer_receipt_card", "explain_change",
-        ),
-    ),
-    "planner_receivable": _yaml_sections(
-        "recipes",
-        (
-            "receivable_occurrence_overview", "current_debt_overview", "aging_structure",
-            "trend_change", "change_observations", "customer_receivable_card",
-            "source_reconciliation", "explain_change",
-        ),
-    ),
-    "planner_target": _yaml_sections(
-        "recipes",
-        (
-            "completion_overview", "salesperson_ranking", "dimension_ranking",
-            "monthly_completion_trend", "gap_attention", "entity_target_card",
-            "allocated_performance", "completion_change_handoff",
-        ),
-    ),
-    "planner_customer_risk": _yaml_sections(
-        "recipes",
-        (
-            "portfolio_overview", "attention_map", "customer_evidence_card",
-            "trend_change", "peer_comparison", "settlement_and_open_pressure",
-            "decision_handoff",
-        ),
-    ),
-    "planner_inventory": _yaml_sections(
-        "recipes",
-        (
-            "current_inventory_overview", "current_on_hand_overview",
-            "current_inventory_ranking", "month_end_inventory_overview",
-            "month_end_trend", "change_observations", "explain_change",
-            "inventory_age_evidence", "turnover_days", "slow_moving_evidence",
-        ),
-    ),
 }
 
 SOURCE_IDS = tuple(_SOURCE_PATHS)
@@ -186,7 +88,7 @@ def _load_registry(root: Path) -> dict[str, Any]:
     if not isinstance(parsed, dict) or parsed.get("version") != REGISTRY_VERSION:
         raise ValueError("reference registry version is invalid")
     sources = parsed.get("sources")
-    if not isinstance(sources, dict) or set(sources) != set(_SOURCE_PATHS):
+    if not isinstance(sources, dict) or not set(_SOURCE_PATHS).issubset(sources):
         raise ValueError("reference registry source set is invalid")
     for source_id, expected_path in _SOURCE_PATHS.items():
         item = sources.get(source_id)
@@ -260,62 +162,21 @@ def _yaml_value(text: str, selector: tuple[str, ...]) -> str:
     return yaml.safe_dump(value, allow_unicode=True, sort_keys=False).strip() + "\n"
 
 
-def _planner_guidance(root: Path, source_id: str, raw: bytes) -> dict[str, Any]:
-    domain = _PLANNER_DOMAINS[source_id]
-    planner = yaml.safe_load(raw.decode("utf-8"))
-    semantics = yaml.safe_load(
-        _trusted_file(
-            root,
-            f"plugins/datasage-query/contracts/{domain}-semantics.yaml",
-        ).read_text(encoding="utf-8")
-    )
-    if not isinstance(planner, Mapping) or not isinstance(semantics, Mapping):
-        raise ValueError("planner availability contracts are invalid")
-    try:
-        return model_guidance_projection(domain, planner, semantics)
-    except ContractFailure as exc:
-        raise ValueError("planner availability projection is invalid") from exc
-
-
 def _available_sections(
-    root: Path, source_id: str, raw: bytes
+    _root: Path, source_id: str, _raw: bytes
 ) -> list[str]:
-    if source_id not in _PLANNER_DOMAINS:
-        return sorted(_SECTION_SPECS[source_id])
-    guidance = _planner_guidance(root, source_id, raw)
-    return [
-        section_id
-        for section_id, (kind, selector) in sorted(
-            _SECTION_SPECS[source_id].items()
-        )
-        if kind == "yaml"
-        and _yaml_selector_available(guidance, selector)
-    ]
-
-
-def _yaml_selector_available(value: Any, selector: tuple[str, ...]) -> bool:
-    try:
-        _select_yaml_value(value, selector)
-    except ValueError:
-        return False
-    return True
+    return sorted(_SECTION_SPECS[source_id])
 
 
 def _section_content(
-    root: Path,
-    source_id: str,
+    _root: Path,
+    _source_id: str,
     raw: bytes,
     kind: str,
     selector: Any,
 ) -> str:
     text = raw.decode("utf-8")
     if kind == "yaml":
-        if source_id in _PLANNER_DOMAINS:
-            guidance = _planner_guidance(root, source_id, raw)
-            value = _select_yaml_value(guidance, selector)
-            return yaml.safe_dump(
-                value, allow_unicode=True, sort_keys=False
-            ).strip() + "\n"
         return _yaml_value(text, selector)
     if kind == "markdown_heading":
         return _markdown_heading(text, selector)

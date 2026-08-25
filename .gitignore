@@ -12,6 +12,7 @@ datasage-canary-next/*
 !datasage-canary-next/plugins/datasage-query/vendor/pymysql-1.2.0.dist-info/licenses/
 !datasage-canary-next/plugins/datasage-query/vendor/pymysql/
 !datasage-canary-next/plugins/datasage-query/vendor/pymysql/constants/
+!datasage-canary-next/release/
 !datasage-canary-next/skills/
 !datasage-canary-next/skills/common-data-foundation/
 !datasage-canary-next/skills/common-data-foundation/references/
@@ -29,11 +30,20 @@ datasage-canary-next/*
 !datasage-canary-next/skills/receivable-query/references/
 !datasage-canary-next/skills/target-query/
 !datasage-canary-next/skills/target-query/references/
+!datasage-canary-next/tests/
+!datasage-canary-next/tests/fixtures/
+!datasage-canary-next/.gitignore
 !datasage-canary-next/.no-bundled-skills
+!datasage-canary-next/ARCHITECTURE.md
+!datasage-canary-next/README.md
+!datasage-canary-next/REFACTOR_CHARTER.md
+!datasage-canary-next/REFACTOR_DESIGN.md
+!datasage-canary-next/build_release_receipt.py
 !datasage-canary-next/config.yaml
 !datasage-canary-next/distribution.yaml
 !datasage-canary-next/plugins/datasage-query/__init__.py
 !datasage-canary-next/plugins/datasage-query/analytical_queries.py
+!datasage-canary-next/plugins/datasage-query/capability_contract.py
 !datasage-canary-next/plugins/datasage-query/contracts.py
 !datasage-canary-next/plugins/datasage-query/contracts/customer_risk-semantics.yaml
 !datasage-canary-next/plugins/datasage-query/contracts/datasets.yaml
@@ -62,6 +72,7 @@ datasage-canary-next/*
 !datasage-canary-next/plugins/datasage-query/requirements.txt
 !datasage-canary-next/plugins/datasage-query/runtime_health.py
 !datasage-canary-next/plugins/datasage-query/schemas.py
+!datasage-canary-next/plugins/datasage-query/scorecard.py
 !datasage-canary-next/plugins/datasage-query/settings.py
 !datasage-canary-next/plugins/datasage-query/skill_prompt.py
 !datasage-canary-next/plugins/datasage-query/tools.py
@@ -92,6 +103,7 @@ datasage-canary-next/*
 !datasage-canary-next/plugins/datasage-query/vendor/pymysql/times.py
 !datasage-canary-next/plugins/datasage-query/wire.py
 !datasage-canary-next/profile.yaml
+!datasage-canary-next/release/datasage-v015-rc2-release-receipt.json
 !datasage-canary-next/skills/common-data-foundation/references/answer-boundary.md
 !datasage-canary-next/skills/common-data-foundation/references/entity-rules.md
 !datasage-canary-next/skills/common-data-foundation/references/expert-playbooks.yaml
@@ -106,3 +118,10 @@ datasage-canary-next/*
 !datasage-canary-next/skills/receivable-query/references/planner-contract.yaml
 !datasage-canary-next/skills/target-query/references/planner-contract.yaml
 !datasage-canary-next/SOUL.md
+!datasage-canary-next/tests/HOST_COMPACTION_INTEGRATION.md
+!datasage-canary-next/tests/fixtures/host_compaction_ordering.json
+!datasage-canary-next/tests/test_business_contracts.py
+!datasage-canary-next/tests/test_compact_payloads.py
+!datasage-canary-next/tests/test_expert_architecture.py
+!datasage-canary-next/tests/test_integration_boundaries.py
+!datasage-canary-next/tests/test_v015_refactor_acceptance.py

@@ -1,14 +1,12 @@
-"""Bounded, read-only DataSage guidance for WeCom turns."""
+"""Bounded, read-only access to the governed DataSage main Skill."""
 
 from __future__ import annotations
 
 from pathlib import Path
 import stat
-from typing import Any, Mapping
 
 
 MAIN_SKILL_PATH = "skills/datasage/SKILL.md"
-_WECOM_PLATFORMS = frozenset({"wecom", "hermes-wecom"})
 _MAX_MAIN_SKILL_BYTES = 64 * 1024
 
 
@@ -68,68 +66,3 @@ def load_main_skill(profile_root: Path | None = None) -> str:
     if not content.strip():
         raise SkillPromptIntegrityError("main skill is empty")
     return content
-
-
-def build_wecom_skill_hook(main_skill: str):
-    """Return a hook whose captured guidance cannot change during the process."""
-
-    frozen = str(main_skill)
-    context = (
-        "<datasage_main_skill immutable=\"process\" source=\"profile-file\" "
-        "authority=\"git\">\n"
-        + frozen
-        + "\n</datasage_main_skill>"
-    )
-
-    def history_contains_frozen_context(
-        conversation_history: Any,
-        user_message: Any,
-    ) -> bool:
-        if not isinstance(conversation_history, (list, tuple)):
-            return False
-        messages = list(conversation_history)
-        # Hermes invokes pre_llm_call after appending the current clean user
-        # message. Exclude that message so only replayed prompt state decides
-        # whether the frozen skill survived an ordinary turn or compaction.
-        for index in range(len(messages) - 1, -1, -1):
-            message = messages[index]
-            if (
-                isinstance(message, Mapping)
-                and message.get("role") == "user"
-                and message.get("content") == user_message
-            ):
-                messages = messages[:index]
-                break
-        for message in messages:
-            if not isinstance(message, Mapping):
-                continue
-            for field in ("api_content", "content"):
-                value = message.get(field)
-                if isinstance(value, str) and context in value:
-                    return True
-        return False
-
-    def inject_main_skill(
-        *,
-        platform: str = "",
-        conversation_history: Any = None,
-        is_first_turn: bool = False,
-        user_message: Any = None,
-        **_kwargs: Any,
-    ):
-        if str(platform).strip().casefold() not in _WECOM_PLATFORMS:
-            return None
-        if not is_first_turn and history_contains_frozen_context(
-            conversation_history,
-            user_message,
-        ):
-            return None
-        return {"context": context}
-
-    return inject_main_skill
-
-
-def frozen_wecom_skill_hook():
-    """Load once at plugin registration, then serve only the frozen value."""
-
-    return build_wecom_skill_hook(load_main_skill())

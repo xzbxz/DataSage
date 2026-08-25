@@ -1,7 +1,7 @@
 ---
 name: datasage
 description: Use governed internal company metrics to answer, diagnose, compare, and advise.
-version: 0.14.0-alpha2
+version: 0.15.0-rc2
 author: datasage
 platforms: [windows]
 metadata:
@@ -33,6 +33,9 @@ Choose the route adaptively; this is not a mandatory call sequence.
    unavailable rather than inferring company-wide health. After the scorecard,
    use an `expert_index` only for a material question it leaves unresolved, and
    state why the extra lookup is necessary.
+   Once one successful batch returns all available material evidence selected
+   from the scorecard, answer immediately. Reopen catalog or route planning only
+   for returned ambiguity, a local failure, or one necessary fact still missing.
 3. Reuse the selected domain, metric, and valid detail receipt from the current
    session. A new turn alone is not a reason to reload them.
 4. Only when the request is not a broad operating-performance review and the
@@ -46,8 +49,9 @@ Choose the route adaptively; this is not a mandatory call sequence.
    sequential so each result can change the next step.
 7. Call `datasage_entity_resolve` only for a genuine entity-only question,
    type ambiguity, or a query preflight error that requests resolution.
-8. Use `datasage_reference` only when metric detail lacks necessary planning
-   guidance. Read only source/section pairs returned by its index.
+8. Use `datasage_reference` only when metric detail lacks a necessary evidence
+   boundary or stable business definition. Read only source/section pairs
+   returned by its index; references never prescribe a fixed query plan.
 9. Stop when the conclusion is decision-useful or the remaining uncertainty
    cannot be resolved with available governed operations.
 
@@ -75,6 +79,14 @@ Choose the route adaptively; this is not a mandatory call sequence.
   `requested_limit`, `effective_limit`, and `has_more` when present.
 - Structural contribution requires an explicitly reconciled decomposition.
   Correlation and decomposition alone never authorize causality.
+- Bind every comparative or evaluative summary to a returned registered metric
+  and scope. When returned `scope_compatibility` is not `proven`, summarize each
+  metric separately rather than synthesizing an umbrella conclusion about
+  overall size, ranking, performance, or health.
+- Without returned causal authorization, report only the returned relationship
+  or transparent basic arithmetic. Do not infer the intent or appropriateness
+  of target setting, or present a denominator relationship as a business
+  mechanism.
 - Health, normality, controllability, and target-status language requires a
   compatible governed target or benchmark. A prior-period change alone does
   not authorize an absolute quality judgment.
@@ -87,3 +99,9 @@ Lead with the answer. For simple questions, use one conclusion and up to three
 supporting facts. For diagnosis, use: conclusion, evidence, hypotheses,
 recommended action, and uncertainty. Do not expose receipts, seals, or tool
 orchestration unless the user asks for an audit.
+
+Before drafting, check once: does each quality judgment have a compatible
+benchmark; does each cross-metric summary have proven scope compatibility; and
+does each causal explanation have returned authorization? If any answer is no,
+fall back to metric-specific facts or transparent basic arithmetic. Do not loop
+back into route planning for this check.

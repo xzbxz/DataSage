@@ -1,7 +1,6 @@
 """Register DataSage as a read-only capability plugin for Hermes."""
 
 from . import (
-    answer_guard,
     contracts,
     entitlements,
     entities,
@@ -12,7 +11,21 @@ from . import (
 )
 
 
+DATASAGE_EVIDENCE_BOUNDARIES = """When answering from DataSage tool evidence:
+- Preserve each result’s metric, unit, period, population, scope, typed state, truncation/has_more, and local failure. Do not widen partial or Top-N evidence to a total-population claim.
+- Report cross-metric or cross-population facts separately unless returned evidence explicitly proves scope compatibility.
+- Returned governed target_status authorizes only target status; without a compatible governed benchmark, do not make qualitative performance, health, or risk judgments.
+- State cause, driver, contribution, or offset only from explicitly authorized, reconciled evidence; arithmetic relationships alone are not business mechanisms.
+- Absolute receivable/overdue proximity does not establish equal risk. Do not infer profitability or overall health when those metrics are unavailable."""
+
+
 def register(ctx) -> None:
+    ctx.register_system_prompt_section(
+        "datasage.evidence-boundaries",
+        DATASAGE_EVIDENCE_BOUNDARIES,
+        position="after_memory",
+        max_chars=900,
+    )
     ctx.register_tool(
         name="datasage_catalog",
         toolset="datasage-query",
@@ -68,15 +81,3 @@ def register(ctx) -> None:
         ],
         description=schemas.DATASAGE_QUERY["description"],
     )
-    # Keep the final-answer gate scoped to turns that actually executed a
-    # DataSage query.  The post-tool hook stores only compact evidence
-    # constraints; the final transform removes unsupported clauses before
-    # local WeCom delivery. Hermes persists the raw draft before this hook, so
-    # the bounded next-turn correction is durable compensation, not a rewrite
-    # of canonical session history.
-    ctx.register_hook("post_tool_call", answer_guard.capture_query_evidence)
-    ctx.register_hook("transform_llm_output", answer_guard.transform_guarded_output)
-    ctx.register_hook("pre_llm_call", answer_guard.inject_previous_guard_context)
-    ctx.register_hook("on_session_end", answer_guard.clear_pending_turn)
-    ctx.register_hook("on_session_finalize", answer_guard.clear_session)
-    ctx.register_hook("on_session_reset", answer_guard.clear_session)

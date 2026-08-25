@@ -1,5 +1,5 @@
 name: datasage-query
-version: "0.14.0-alpha2"
+version: "0.15.0-rc2"
 manifest_version: 2
 api_version: 1
 description: "Hermes-native governed business evidence and analysis tools for DataSage Expert."
@@ -11,13 +11,6 @@ provides_tools:
   - datasage_entity_resolve
   - datasage_reference
   - datasage_query
-provides_hooks:
-  - post_tool_call
-  - transform_llm_output
-  - pre_llm_call
-  - on_session_end
-  - on_session_finalize
-  - on_session_reset
 requires_env:
   - name: DATA_QUERY_MYSQL_HOST
     description: "MySQL RDS host."
@@ -51,6 +44,4 @@ config_schema:
   max_cell_chars: {type: int, default: 2000, description: "Maximum public cell text length."}
   max_dimension_display_chars: {type: int, default: 80, description: "Maximum dimension display length."}
   max_tool_result_chars: {type: int, default: 90000, description: "Final Hermes-safe tool wire limit."}
-  max_result_bytes: {type: int, default: 80000, description: "Maximum internal result bytes."}
-  max_batch_bytes: {type: int, default: 85000, description: "Maximum internal batch bytes."}
   data_entitlements: {type: dict, default: {}, description: "Governed per-principal data entitlements."}

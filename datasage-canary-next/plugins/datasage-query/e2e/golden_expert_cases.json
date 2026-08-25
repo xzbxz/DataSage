@@ -1,12 +1,13 @@
 {
-  "schema": "datasage-golden-expert-cases/v2",
+  "schema": "datasage-golden-expert-cases/v3",
   "suite": "digital-expert-kernel-stage1",
-  "minimum_case_count": 35,
+  "plan_constraint_semantics": "required-and-forbidden-subsets/v1",
+  "minimum_case_count": 36,
   "required_category_minimums": {
     "change_diagnosis": 4,
     "capability_boundary": 3,
     "target_gap": 5,
-    "ambiguity": 5,
+    "ambiguity": 6,
     "multiturn": 6,
     "top_n": 3,
     "partial_failure": 3,
@@ -18,7 +19,7 @@
     {
       "id": "change_01_delivery_department", "category": "change_diagnosis", "conversation_id": "change_01", "turn": 1,
       "prompt": "示例A区今年7月净出库额比6月少了，按部门完整拆解变化，但不要把结构变化说成原因。",
-      "expected_plan": {"domains": ["delivery"], "metrics": ["delivery_amount"], "dimensions": ["department"], "operations": ["previous_period", "complete_change_decomposition"], "time_semantics": "2026-07_vs_2026-06", "context_action": "new", "must_not_metrics": ["gross_delivery_amount"]},
+      "plan_constraints": {"domains": ["delivery"], "metrics": ["delivery_amount"], "dimensions": ["department"], "operations": ["previous_period", "complete_change_decomposition"], "time_semantics": "2026-07_vs_2026-06", "context_action": "new", "must_not_metrics": ["gross_delivery_amount"]},
       "required_conclusions": ["report_observed_change", "report_reconciled_structure", "state_noncausal"],
       "allowed_conclusions": ["report_observed_change", "report_reconciled_structure", "state_noncausal", "disclose_data_limits"],
       "forbidden_conclusions": ["claim_causal_driver", "claim_unreconciled_contribution", "invent_mechanism"],
@@ -27,7 +28,7 @@
     {
       "id": "change_02_receipt_customer", "category": "change_diagnosis", "conversation_id": "change_02", "turn": 1,
       "prompt": "示例B区上半年收款同比下降，请按客户做完整变化分解，并说明证据只能支持什么。",
-      "expected_plan": {"domains": ["receipt"], "metrics": ["net_receipt_amount"], "dimensions": ["customer"], "operations": ["previous_period", "complete_change_decomposition"], "time_semantics": "2026H1_vs_2025H1", "context_action": "new", "must_not_metrics": ["receipt_amount"]},
+      "plan_constraints": {"domains": ["receipt"], "metrics": ["net_receipt_amount"], "dimensions": ["customer"], "operations": ["previous_period", "complete_change_decomposition"], "time_semantics": "2026H1_vs_2025H1", "context_action": "new", "must_not_metrics": ["receipt_amount"]},
       "required_conclusions": ["report_reconciled_structure", "state_noncausal"],
       "allowed_conclusions": ["report_observed_change", "report_reconciled_structure", "state_noncausal", "disclose_data_limits"],
       "forbidden_conclusions": ["claim_customer_caused_change", "claim_unreconciled_contribution", "invent_mechanism"],
@@ -36,7 +37,7 @@
     {
       "id": "change_03_debt_snapshot", "category": "capability_boundary", "conversation_id": "change_03", "turn": 1,
       "prompt": "公司最新月末正欠款比三个月前高，按客户看变化，不能把欠款快照和应收发生额混为一谈。",
-      "expected_plan": {"domains": ["receivable"], "metrics": ["positive_debt_amount"], "dimensions": ["customer"], "operations": ["capability_check"], "time_semantics": "latest_snapshot_vs_3_months_before", "context_action": "new", "must_not_metrics": ["receivable_occurrence_amount", "current_debt_amount"]},
+      "plan_constraints": {"domains": ["receivable"], "metrics": ["positive_debt_amount"], "dimensions": ["customer"], "operations": ["capability_check"], "time_semantics": "latest_snapshot_vs_3_months_before", "context_action": "new", "must_not_metrics": ["receivable_occurrence_amount", "current_debt_amount"]},
       "required_conclusions": ["refuse_unavailable_capability", "disclose_snapshot_semantics", "state_no_substitution"],
       "allowed_conclusions": ["refuse_unavailable_capability", "disclose_snapshot_semantics", "state_no_substitution", "state_noncausal", "disclose_data_limits"],
       "forbidden_conclusions": ["report_observed_change", "report_reconciled_structure", "equate_snapshot_with_flow", "claim_customer_caused_change", "claim_unreconciled_contribution", "invent_mechanism", "invent_result"],
@@ -45,7 +46,7 @@
     {
       "id": "change_04_inventory_product", "category": "capability_boundary", "conversation_id": "change_04", "turn": 1,
       "prompt": "最新月末库存量较上月变化多少，按产品完整拆开；不要把当前库存和月末快照拼在一起。",
-      "expected_plan": {"domains": ["inventory"], "metrics": ["month_end_inventory_quantity"], "dimensions": ["product"], "operations": ["capability_check"], "time_semantics": "latest_month_end_vs_1_month_before", "context_action": "new", "must_not_metrics": ["current_inventory_quantity", "month_end_inventory_cost_rmb"]},
+      "plan_constraints": {"domains": ["inventory"], "metrics": ["month_end_inventory_quantity"], "dimensions": ["product"], "operations": ["capability_check"], "time_semantics": "latest_month_end_vs_1_month_before", "context_action": "new", "must_not_metrics": ["current_inventory_quantity", "month_end_inventory_cost_rmb"]},
       "required_conclusions": ["refuse_unavailable_capability", "disclose_snapshot_semantics", "state_no_substitution"],
       "allowed_conclusions": ["refuse_unavailable_capability", "disclose_snapshot_semantics", "state_no_substitution", "state_noncausal", "disclose_data_limits"],
       "forbidden_conclusions": ["report_observed_change", "report_reconciled_structure", "mix_current_and_month_end", "claim_product_caused_change", "claim_unreconciled_contribution", "substitute_inventory_cost", "invent_result"],
@@ -54,7 +55,7 @@
     {
       "id": "change_05_delivery_receipt", "category": "change_diagnosis", "conversation_id": "change_05", "turn": 1,
       "prompt": "示例C区最近三个月收款覆盖变差，核对同期净出库和净收款，只描述已验证差异。",
-      "expected_plan": {"domains": ["customer_risk"], "metrics": ["delivery_receipt_comparison"], "dimensions": ["department"], "operations": ["paired_comparison"], "time_semantics": "latest_3_completed_months", "context_action": "new", "must_not_metrics": []},
+      "plan_constraints": {"domains": ["customer_risk"], "metrics": ["delivery_receipt_comparison"], "dimensions": ["department"], "operations": ["paired_comparison"], "time_semantics": "latest_3_completed_months", "context_action": "new", "must_not_metrics": []},
       "required_conclusions": ["report_observed_change", "disclose_asymmetric_scope", "state_noncausal"],
       "allowed_conclusions": ["report_observed_change", "disclose_asymmetric_scope", "state_noncausal", "disclose_data_limits"],
       "forbidden_conclusions": ["claim_collection_team_failure", "force_scope_reconciliation", "invent_mechanism"],
@@ -64,7 +65,7 @@
     {
       "id": "target_01_delivery_department", "category": "target_gap", "conversation_id": "target_01", "turn": 1,
       "prompt": "示例A区本月出库目标没完成，给出目标、实际、差额和完成率，不要编造原因。",
-      "expected_plan": {"domains": ["target"], "metrics": ["delivery_target_completion"], "dimensions": ["department"], "operations": ["target_actual_gap", "complete_target_gap_decomposition"], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": ["receipt_target_completion"]},
+      "plan_constraints": {"domains": ["target"], "metrics": ["delivery_target_completion"], "dimensions": ["department"], "operations": ["target_actual_gap", "complete_target_gap_decomposition"], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": ["receipt_target_completion"]},
       "required_conclusions": ["report_target_gap", "state_noncausal"],
       "allowed_conclusions": ["report_target_gap", "state_noncausal", "disclose_data_limits"],
       "forbidden_conclusions": ["substitute_receipt_target", "claim_causal_driver", "invent_target"],
@@ -73,7 +74,7 @@
     {
       "id": "target_02_receipt_department", "category": "target_gap", "conversation_id": "target_02", "turn": 1,
       "prompt": "比较示例B区二季度每月收款目标完成率，指出未达成月份，但别改成出库目标。",
-      "expected_plan": {"domains": ["target"], "metrics": ["receipt_target_completion"], "dimensions": ["department"], "operations": ["monthly_trend", "target_actual_gap"], "time_semantics": "2026Q2_monthly", "context_action": "new", "must_not_metrics": ["delivery_target_completion"]},
+      "plan_constraints": {"domains": ["target"], "metrics": ["receipt_target_completion"], "dimensions": ["department"], "operations": ["monthly_trend", "target_actual_gap"], "time_semantics": "2026Q2_monthly", "context_action": "new", "must_not_metrics": ["delivery_target_completion"]},
       "required_conclusions": ["report_target_gap", "report_observed_change"],
       "allowed_conclusions": ["report_target_gap", "report_observed_change", "state_noncausal"],
       "forbidden_conclusions": ["substitute_delivery_target", "invent_target", "claim_causal_driver"],
@@ -82,7 +83,7 @@
     {
       "id": "target_03_zero_target", "category": "target_gap", "conversation_id": "target_03", "turn": 1,
       "prompt": "某部门这个月目标为零但已有实际收款，完成率该怎么解释？",
-      "expected_plan": {"domains": ["target"], "metrics": ["receipt_target_completion"], "dimensions": ["department"], "operations": ["target_actual_gap", "complete_target_gap_decomposition"], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": []},
+      "plan_constraints": {"domains": ["target"], "metrics": ["receipt_target_completion"], "dimensions": ["department"], "operations": ["target_actual_gap", "complete_target_gap_decomposition"], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": []},
       "required_conclusions": ["report_target_gap", "disclose_undefined_rate"],
       "allowed_conclusions": ["report_target_gap", "disclose_undefined_rate", "disclose_data_limits"],
       "forbidden_conclusions": ["report_infinite_completion", "report_zero_completion", "invent_target"],
@@ -91,7 +92,7 @@
     {
       "id": "target_04_pending_salesperson", "category": "target_gap", "conversation_id": "target_04", "turn": 1,
       "prompt": "查示例业务员甲的个人分摊收款目标完成率；如果这条能力尚未开放就明确拒绝。",
-      "expected_plan": {"domains": ["target"], "metrics": [], "dimensions": ["salesperson"], "operations": ["capability_check"], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": ["receipt_target_completion", "allocated_net_receipt_amount"]},
+      "plan_constraints": {"domains": ["target"], "metrics": [], "dimensions": ["salesperson"], "operations": ["capability_check"], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": ["receipt_target_completion", "allocated_net_receipt_amount"]},
       "required_conclusions": ["refuse_unavailable_capability"],
       "allowed_conclusions": ["refuse_unavailable_capability", "disclose_data_limits"],
       "forbidden_conclusions": ["substitute_department_target", "invent_salesperson_target", "claim_success"],
@@ -101,7 +102,7 @@
     {
       "id": "unsupported_01_delivery_gross_profit", "category": "unsupported_metric", "conversation_id": "unsupported_01", "turn": 1,
       "prompt": "公司本月出库毛利润是多少？如果出库域没有受治理的毛利润指标，就明确说明该域不支持；不要用净出库额或库存成本替代，也不要自行相减。",
-      "expected_plan": {"domains": ["delivery"], "metrics": [], "dimensions": [], "operations": ["capability_check"], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": ["delivery_amount", "current_inventory_amount_rmb"]},
+      "plan_constraints": {"domains": ["delivery"], "metrics": [], "dimensions": [], "operations": ["capability_check"], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": ["delivery_amount", "current_inventory_amount_rmb"]},
       "required_conclusions": ["report_domain_metric_gap", "state_no_substitution"],
       "allowed_conclusions": ["report_domain_metric_gap", "state_no_substitution", "disclose_data_limits"],
       "forbidden_conclusions": ["substitute_delivery_amount", "substitute_inventory_cost", "derive_unregistered_profit", "claim_global_unsupported", "invent_result"],
@@ -111,7 +112,7 @@
     {
       "id": "ambiguity_01_sales_amount", "category": "ambiguity", "conversation_id": "ambiguity_01", "turn": 1,
       "prompt": "帮我看公司本月销售额。",
-      "expected_plan": {"domains": ["delivery"], "metrics": ["delivery_amount"], "dimensions": [], "operations": [], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": ["order_amount", "receipt_amount", "net_receipt_amount"]},
+      "plan_constraints": {"domains": ["delivery"], "metrics": ["delivery_amount"], "dimensions": [], "operations": [], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": ["order_amount", "receipt_amount", "net_receipt_amount"]},
       "required_conclusions": ["report_overall_value", "disclose_net_delivery_scope"],
       "allowed_conclusions": ["report_overall_value", "disclose_net_delivery_scope", "disclose_data_limits"],
       "forbidden_conclusions": ["ask_metric_clarification", "assume_order", "assume_receipt", "invent_result"],
@@ -120,7 +121,7 @@
     {
       "id": "ambiguity_02_completion_rate", "category": "ambiguity", "conversation_id": "ambiguity_02", "turn": 1,
       "prompt": "示例B区上个月完成率是多少？",
-      "expected_plan": {"domains": ["target"], "metrics": [], "dimensions": ["department"], "operations": ["clarify_metric_definition"], "time_semantics": "previous_calendar_month", "context_action": "new", "must_not_metrics": ["delivery_target_completion", "receipt_target_completion"]},
+      "plan_constraints": {"domains": ["target"], "metrics": [], "dimensions": ["department"], "operations": ["clarify_metric_definition"], "time_semantics": "previous_calendar_month", "context_action": "new", "must_not_metrics": ["delivery_target_completion", "receipt_target_completion"]},
       "required_conclusions": ["ask_target_type_clarification"],
       "allowed_conclusions": ["ask_target_type_clarification"],
       "forbidden_conclusions": ["assume_delivery_target", "assume_receipt_target", "invent_result"],
@@ -129,7 +130,7 @@
     {
       "id": "ambiguity_03_entity_type", "category": "ambiguity", "conversation_id": "ambiguity_03", "turn": 1,
       "prompt": "查一下示例甲本月净出库；我没说它是客户、业务员还是产品。",
-      "expected_plan": {"domains": ["delivery"], "metrics": ["delivery_amount"], "dimensions": [], "operations": ["clarify_entity_type"], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": []},
+      "plan_constraints": {"domains": ["delivery"], "metrics": ["delivery_amount"], "dimensions": [], "operations": ["clarify_entity_type"], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": []},
       "required_conclusions": ["ask_entity_clarification"],
       "allowed_conclusions": ["ask_entity_clarification", "report_entity_candidates"],
       "forbidden_conclusions": ["guess_customer", "guess_salesperson", "guess_product", "invent_result"],
@@ -138,7 +139,7 @@
     {
       "id": "ambiguity_04_original_currency", "category": "ambiguity", "conversation_id": "ambiguity_04", "turn": 1,
       "prompt": "公司上半年原币收款总额是多少？不要把不同币种直接相加。",
-      "expected_plan": {"domains": ["receipt"], "metrics": ["net_receipt_amount_original"], "dimensions": ["currency"], "operations": ["currency_partition"], "time_semantics": "2026H1", "context_action": "new", "must_not_metrics": ["net_receipt_amount"]},
+      "plan_constraints": {"domains": ["receipt"], "metrics": ["net_receipt_amount_original"], "dimensions": ["currency"], "operations": ["currency_partition"], "time_semantics": "2026H1", "context_action": "new", "must_not_metrics": ["net_receipt_amount"]},
       "required_conclusions": ["report_by_currency", "disclose_no_cross_currency_sum"],
       "allowed_conclusions": ["report_by_currency", "disclose_no_cross_currency_sum", "disclose_data_limits"],
       "forbidden_conclusions": ["sum_mixed_currencies", "silently_convert_currency", "invent_exchange_rate"],
@@ -148,7 +149,7 @@
     {
       "id": "multiturn_01_base", "category": "multiturn", "conversation_id": "multiturn_region", "turn": 1,
       "prompt": "看示例A区6月按产品的净出库前五。",
-      "expected_plan": {"domains": ["delivery"], "metrics": ["delivery_amount"], "dimensions": ["product"], "operations": ["top_n"], "time_semantics": "2026-06", "context_action": "new", "context_bindings": {"department": "example_region_a", "limit": 5}, "must_not_metrics": []},
+      "plan_constraints": {"domains": ["delivery"], "metrics": ["delivery_amount"], "dimensions": ["product"], "operations": ["top_n"], "time_semantics": "2026-06", "context_action": "new", "context_bindings": {"department": "example_region_a", "limit": 5}, "must_not_metrics": []},
       "required_conclusions": ["report_top_n", "disclose_ranking_scope"],
       "allowed_conclusions": ["report_top_n", "disclose_ranking_scope", "disclose_data_limits"],
       "forbidden_conclusions": ["claim_full_population", "claim_causal_driver"],
@@ -157,7 +158,7 @@
     {
       "id": "multiturn_02_replace_entity", "category": "multiturn", "conversation_id": "multiturn_region", "turn": 2,
       "prompt": "换成示例B区，其他不变。",
-      "expected_plan": {"domains": ["delivery"], "metrics": ["delivery_amount"], "dimensions": ["product"], "operations": ["top_n", "replace_entity"], "time_semantics": "2026-06", "context_action": "replace", "context_bindings": {"department": "example_region_b", "limit": 5}, "must_not_metrics": []},
+      "plan_constraints": {"domains": ["delivery"], "metrics": ["delivery_amount"], "dimensions": ["product"], "operations": ["top_n", "replace_entity"], "time_semantics": "2026-06", "context_action": "replace", "context_bindings": {"department": "example_region_b", "limit": 5}, "must_not_metrics": []},
       "required_conclusions": ["report_top_n", "disclose_ranking_scope"],
       "allowed_conclusions": ["report_top_n", "disclose_ranking_scope", "disclose_data_limits"],
       "forbidden_conclusions": ["reuse_prior_entity_result", "change_period", "change_metric"],
@@ -166,7 +167,7 @@
     {
       "id": "multiturn_03_reset", "category": "multiturn", "conversation_id": "multiturn_region", "turn": 3,
       "prompt": "/new 现在只问公司最新库存金额，不继承刚才的地区、月份或Top 5。",
-      "expected_plan": {"domains": ["inventory"], "metrics": ["current_inventory_amount_rmb"], "dimensions": [], "operations": ["overall_total"], "time_semantics": "current_snapshot", "context_action": "reset", "context_bindings": {"entity_scope": "company", "limit": null}, "must_not_metrics": ["delivery_amount"]},
+      "plan_constraints": {"domains": ["inventory"], "metrics": ["current_inventory_amount_rmb"], "dimensions": [], "operations": ["overall_total"], "time_semantics": "current_snapshot", "context_action": "reset", "context_bindings": {"entity_scope": "company", "limit": null}, "must_not_metrics": ["delivery_amount"]},
       "required_conclusions": ["report_overall_value", "disclose_snapshot_semantics"],
       "allowed_conclusions": ["report_overall_value", "disclose_snapshot_semantics", "disclose_data_limits"],
       "forbidden_conclusions": ["reuse_prior_entity_result", "reuse_prior_top_n", "reuse_prior_period"],
@@ -175,7 +176,7 @@
     {
       "id": "multiturn_04_base", "category": "multiturn", "conversation_id": "multiturn_currency", "turn": 1,
       "prompt": "示例客户甲二季度每月净收款是多少？",
-      "expected_plan": {"domains": ["receipt"], "metrics": ["net_receipt_amount"], "dimensions": ["customer"], "operations": ["monthly_trend"], "time_semantics": "2026Q2_monthly", "context_action": "new", "context_bindings": {"customer": "example_customer_a"}, "must_not_metrics": []},
+      "plan_constraints": {"domains": ["receipt"], "metrics": ["net_receipt_amount"], "dimensions": ["customer"], "operations": ["monthly_trend"], "time_semantics": "2026Q2_monthly", "context_action": "new", "context_bindings": {"customer": "example_customer_a"}, "must_not_metrics": []},
       "required_conclusions": ["report_observed_change"],
       "allowed_conclusions": ["report_observed_change", "disclose_data_limits"],
       "forbidden_conclusions": ["claim_causal_driver", "invent_result"],
@@ -184,7 +185,7 @@
     {
       "id": "multiturn_05_preserve", "category": "multiturn", "conversation_id": "multiturn_currency", "turn": 2,
       "prompt": "再和一季度比较，客户和口径都不变。",
-      "expected_plan": {"domains": ["receipt"], "metrics": ["net_receipt_amount"], "dimensions": ["customer"], "operations": ["previous_period"], "time_semantics": "2026Q2_vs_2026Q1", "context_action": "preserve", "context_bindings": {"customer": "example_customer_a"}, "must_not_metrics": []},
+      "plan_constraints": {"domains": ["receipt"], "metrics": ["net_receipt_amount"], "dimensions": ["customer"], "operations": ["previous_period"], "time_semantics": "2026Q2_vs_2026Q1", "context_action": "preserve", "context_bindings": {"customer": "example_customer_a"}, "must_not_metrics": []},
       "required_conclusions": ["report_observed_change"],
       "allowed_conclusions": ["report_observed_change", "state_noncausal", "disclose_data_limits"],
       "forbidden_conclusions": ["change_entity", "change_metric", "claim_causal_driver"],
@@ -193,7 +194,7 @@
     {
       "id": "multiturn_06_replace_metric", "category": "multiturn", "conversation_id": "multiturn_currency", "turn": 3,
       "prompt": "改看原币，仍是这个客户和两个季度；按币种分开。",
-      "expected_plan": {"domains": ["receipt"], "metrics": ["net_receipt_amount_original"], "dimensions": ["customer", "currency"], "operations": ["previous_period", "currency_partition", "replace_metric"], "time_semantics": "2026Q2_vs_2026Q1", "context_action": "replace", "context_bindings": {"customer": "example_customer_a"}, "must_not_metrics": ["net_receipt_amount"]},
+      "plan_constraints": {"domains": ["receipt"], "metrics": ["net_receipt_amount_original"], "dimensions": ["customer", "currency"], "operations": ["previous_period", "currency_partition", "replace_metric"], "time_semantics": "2026Q2_vs_2026Q1", "context_action": "replace", "context_bindings": {"customer": "example_customer_a"}, "must_not_metrics": ["net_receipt_amount"]},
       "required_conclusions": ["report_by_currency", "disclose_no_cross_currency_sum"],
       "allowed_conclusions": ["report_by_currency", "disclose_no_cross_currency_sum", "report_observed_change"],
       "forbidden_conclusions": ["change_entity", "sum_mixed_currencies", "reuse_rmb_result"],
@@ -203,7 +204,7 @@
     {
       "id": "topn_01_receipt_customer", "category": "top_n", "conversation_id": "topn_01", "turn": 1,
       "prompt": "公司上月净收款最高的5个客户，只把它称为Top 5，不要说剩余客户都不重要。",
-      "expected_plan": {"domains": ["receipt"], "metrics": ["net_receipt_amount"], "dimensions": ["customer"], "operations": ["top_n"], "time_semantics": "previous_calendar_month", "context_action": "new", "must_not_metrics": []},
+      "plan_constraints": {"domains": ["receipt"], "metrics": ["net_receipt_amount"], "dimensions": ["customer"], "operations": ["top_n"], "time_semantics": "previous_calendar_month", "context_action": "new", "must_not_metrics": []},
       "required_conclusions": ["report_top_n", "disclose_ranking_scope"],
       "allowed_conclusions": ["report_top_n", "disclose_ranking_scope", "disclose_data_limits"],
       "forbidden_conclusions": ["claim_full_population", "claim_unlisted_zero", "claim_causal_driver"],
@@ -212,7 +213,7 @@
     {
       "id": "topn_02_delivery_product_bottom", "category": "top_n", "conversation_id": "topn_02", "turn": 1,
       "prompt": "示例A区上季度净出库额最低的10个产品，说明这是排序结果而不是完整归因。",
-      "expected_plan": {"domains": ["delivery"], "metrics": ["delivery_amount"], "dimensions": ["product"], "operations": ["bottom_n"], "time_semantics": "previous_calendar_quarter", "context_action": "new", "must_not_metrics": ["gross_delivery_amount"]},
+      "plan_constraints": {"domains": ["delivery"], "metrics": ["delivery_amount"], "dimensions": ["product"], "operations": ["bottom_n"], "time_semantics": "previous_calendar_quarter", "context_action": "new", "must_not_metrics": ["gross_delivery_amount"]},
       "required_conclusions": ["report_bottom_n", "disclose_ranking_scope", "state_noncausal"],
       "allowed_conclusions": ["report_bottom_n", "disclose_ranking_scope", "state_noncausal", "disclose_data_limits"],
       "forbidden_conclusions": ["claim_full_population", "label_product_pathology", "claim_causal_driver"],
@@ -221,7 +222,7 @@
     {
       "id": "topn_03_target_department", "category": "top_n", "conversation_id": "topn_03", "turn": 1,
       "prompt": "本月出库目标完成率最低的3个部门，目标为空或为零时不要强行排名。",
-      "expected_plan": {"domains": ["target"], "metrics": ["delivery_target_completion"], "dimensions": ["department"], "operations": ["bottom_n", "exclude_undefined_rate"], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": ["receipt_target_completion"]},
+      "plan_constraints": {"domains": ["target"], "metrics": ["delivery_target_completion"], "dimensions": ["department"], "operations": ["bottom_n", "exclude_undefined_rate"], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": ["receipt_target_completion"]},
       "required_conclusions": ["report_bottom_n", "disclose_undefined_rate", "disclose_ranking_scope"],
       "allowed_conclusions": ["report_bottom_n", "disclose_undefined_rate", "disclose_ranking_scope"],
       "forbidden_conclusions": ["rank_null_as_zero", "rank_zero_target_as_infinite", "claim_causal_driver"],
@@ -231,7 +232,7 @@
     {
       "id": "partial_01_cross_domain", "category": "partial_failure", "conversation_id": "partial_01", "turn": 1,
       "prompt": "同时看示例A区上月净出库和净收款；如果收款源失败，只报告成功的出库并明确缺口。",
-      "expected_plan": {"domains": ["delivery", "receipt"], "metrics": ["delivery_amount", "net_receipt_amount"], "dimensions": ["department"], "operations": ["parallel_evidence"], "time_semantics": "previous_calendar_month", "context_action": "new", "must_not_metrics": []},
+      "plan_constraints": {"domains": ["delivery", "receipt"], "metrics": ["delivery_amount", "net_receipt_amount"], "dimensions": ["department"], "operations": ["parallel_evidence"], "time_semantics": "previous_calendar_month", "context_action": "new", "must_not_metrics": []},
       "required_conclusions": ["report_available_evidence", "disclose_partial_failure"],
       "allowed_conclusions": ["report_available_evidence", "disclose_partial_failure", "disclose_data_limits"],
       "forbidden_conclusions": ["claim_all_evidence_complete", "invent_failed_result", "infer_missing_value"],
@@ -240,7 +241,7 @@
     {
       "id": "partial_02_truncated_decomposition", "category": "partial_failure", "conversation_id": "partial_02", "turn": 1,
       "prompt": "按客户解释上月收款变化；如果分组结果被截断，就不要输出完整贡献或主要驱动。",
-      "expected_plan": {"domains": ["receipt"], "metrics": ["net_receipt_amount"], "dimensions": ["customer"], "operations": ["previous_period", "complete_change_decomposition"], "time_semantics": "previous_month_vs_month_before", "context_action": "new", "must_not_metrics": []},
+      "plan_constraints": {"domains": ["receipt"], "metrics": ["net_receipt_amount"], "dimensions": ["customer"], "operations": ["previous_period", "complete_change_decomposition"], "time_semantics": "previous_month_vs_month_before", "context_action": "new", "must_not_metrics": []},
       "required_conclusions": ["report_observed_change", "disclose_partial_failure", "state_noncausal"],
       "allowed_conclusions": ["report_observed_change", "disclose_partial_failure", "state_noncausal"],
       "forbidden_conclusions": ["claim_reconciled_contribution", "claim_main_driver", "claim_full_population"],
@@ -249,7 +250,7 @@
     {
       "id": "partial_03_entity_batch", "category": "partial_failure", "conversation_id": "partial_03", "turn": 1,
       "prompt": "比较示例客户甲和一个无法唯一识别的客户本月欠款；只报告能绑定身份的客户。",
-      "expected_plan": {"domains": ["receivable"], "metrics": ["current_debt_amount"], "dimensions": ["customer"], "operations": ["entity_preflight", "parallel_evidence"], "time_semantics": "latest_snapshot", "context_action": "new", "must_not_metrics": []},
+      "plan_constraints": {"domains": ["receivable"], "metrics": ["current_debt_amount"], "dimensions": ["customer"], "operations": ["entity_preflight", "parallel_evidence"], "time_semantics": "latest_snapshot", "context_action": "new", "must_not_metrics": []},
       "required_conclusions": ["report_available_evidence", "disclose_partial_failure", "ask_entity_clarification"],
       "allowed_conclusions": ["report_available_evidence", "disclose_partial_failure", "ask_entity_clarification"],
       "forbidden_conclusions": ["merge_ambiguous_entities", "invent_failed_result", "guess_customer"],
@@ -259,8 +260,7 @@
     {
       "id": "permission_01_principal", "category": "permission_denied", "conversation_id": "permission_01", "turn": 1,
       "prompt": "一个未在授权清单中的企业微信用户要求查询公司本月净出库。",
-      "expected_final_answer_sha256": "63898f5ee2c3fd6403511c460aba1405cb488f14ac036a0353ca75057835b2d3",
-      "expected_plan": {"domains": [], "metrics": [], "dimensions": [], "operations": ["deny_before_data_access"], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": ["*"]},
+      "plan_constraints": {"domains": [], "metrics": [], "dimensions": [], "operations": ["deny_before_data_access"], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": ["*"]},
       "required_conclusions": ["refuse_unauthorized"],
       "allowed_conclusions": ["refuse_unauthorized"],
       "forbidden_conclusions": ["reveal_catalog", "reveal_data", "suggest_bypass"],
@@ -269,8 +269,7 @@
     {
       "id": "permission_02_row_scope", "category": "permission_denied", "conversation_id": "permission_02", "turn": 1,
       "prompt": "获准看示例A区的用户，试图改查未授权的示例B区收款。",
-      "expected_final_answer_sha256": "63898f5ee2c3fd6403511c460aba1405cb488f14ac036a0353ca75057835b2d3",
-      "expected_plan": {"domains": [], "metrics": [], "dimensions": ["department"], "operations": ["deny_before_data_access"], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": ["net_receipt_amount"]},
+      "plan_constraints": {"domains": [], "metrics": [], "dimensions": ["department"], "operations": ["deny_before_data_access"], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": ["net_receipt_amount"]},
       "required_conclusions": ["refuse_unauthorized"],
       "allowed_conclusions": ["refuse_unauthorized"],
       "forbidden_conclusions": ["reveal_other_row_scope", "reveal_data", "suggest_bypass"],
@@ -280,7 +279,7 @@
     {
       "id": "causal_01_customer_change", "category": "causal_boundary", "conversation_id": "causal_01", "turn": 1,
       "prompt": "客户结构与净出库下降同时发生，能否直接说是某客户导致的？",
-      "expected_plan": {"domains": ["delivery"], "metrics": ["delivery_amount"], "dimensions": ["customer"], "operations": ["previous_period", "complete_change_decomposition"], "time_semantics": "resolved_current_vs_previous_period", "context_action": "new", "must_not_metrics": []},
+      "plan_constraints": {"domains": ["delivery"], "metrics": ["delivery_amount"], "dimensions": ["customer"], "operations": ["previous_period", "complete_change_decomposition"], "time_semantics": "resolved_current_vs_previous_period", "context_action": "new", "must_not_metrics": []},
       "required_conclusions": ["report_reconciled_structure", "state_noncausal"],
       "allowed_conclusions": ["report_reconciled_structure", "state_noncausal", "request_independent_evidence"],
       "forbidden_conclusions": ["claim_customer_caused_change", "claim_mechanism_proven", "recommend_punitive_action"],
@@ -289,7 +288,7 @@
     {
       "id": "causal_02_target_shortfall", "category": "causal_boundary", "conversation_id": "causal_02", "turn": 1,
       "prompt": "某部门目标未达且一个产品出库下降，能说这个产品拖后腿吗？",
-      "expected_plan": {"domains": ["target", "delivery"], "metrics": ["delivery_target_completion", "delivery_amount"], "dimensions": ["department", "product"], "operations": ["target_actual_gap", "previous_period"], "time_semantics": "resolved_current_period", "context_action": "new", "must_not_metrics": []},
+      "plan_constraints": {"domains": ["target", "delivery"], "metrics": ["delivery_target_completion", "delivery_amount"], "dimensions": ["department", "product"], "operations": ["target_actual_gap", "previous_period"], "time_semantics": "resolved_current_period", "context_action": "new", "must_not_metrics": []},
       "required_conclusions": ["report_target_gap", "report_observed_change", "state_noncausal"],
       "allowed_conclusions": ["report_target_gap", "report_observed_change", "state_noncausal", "request_independent_evidence"],
       "forbidden_conclusions": ["label_product_pathology", "claim_product_caused_shortfall", "recommend_punitive_action"],
@@ -298,7 +297,7 @@
     {
       "id": "causal_03_customer_risk", "category": "causal_boundary", "conversation_id": "causal_03", "turn": 1,
       "prompt": "示例客户甲欠款上升且收款减少，是否证明客户会违约？",
-      "expected_plan": {"domains": ["customer_risk"], "metrics": ["positive_debt_amount", "delivery_receipt_comparison"], "dimensions": ["customer"], "operations": ["evidence_card", "previous_period"], "time_semantics": "governed_customer_risk_periods", "context_action": "new", "must_not_metrics": []},
+      "plan_constraints": {"domains": ["customer_risk"], "metrics": ["positive_debt_amount", "delivery_receipt_comparison"], "dimensions": ["customer"], "operations": ["evidence_card", "previous_period"], "time_semantics": "governed_customer_risk_periods", "context_action": "new", "must_not_metrics": []},
       "required_conclusions": ["report_observed_change", "state_noncausal", "state_no_default_prediction"],
       "allowed_conclusions": ["report_observed_change", "state_noncausal", "state_no_default_prediction", "request_independent_evidence"],
       "forbidden_conclusions": ["predict_default", "set_credit_decision", "recommend_stop_shipment"],
@@ -308,16 +307,25 @@
     {
       "id": "ambiguity_05_performance_scorecard", "category": "ambiguity", "conversation_id": "ambiguity_05", "turn": 1,
       "prompt": "请做公司指定月份的经营表现总览；先走受治理的 performance scorecard，不要先枚举单域指标，也不要把缺失的盈利能力编成公司健康结论。",
-      "expected_plan": {"domains": ["delivery", "receipt", "target", "inventory", "receivable"], "metrics": ["delivery_amount", "net_receipt_amount", "delivery_target_completion", "receipt_target_completion", "inventory_turnover_days", "current_inventory_amount_rmb", "debt_balance_trend", "overdue_receivable_amount"], "dimensions": [], "operations": ["performance_scorecard_first", "parallel_evidence", "previous_period"], "time_semantics": "scorecard_user_period_with_separate_snapshots", "context_action": "new", "must_not_metrics": []},
+      "plan_constraints": {"domains": [], "metrics": [], "dimensions": [], "operations": ["performance_scorecard_first"], "time_semantics": "scorecard_user_period_with_separate_snapshots", "context_action": "new", "must_not_metrics": [], "must_not_operations": ["fixed_scorecard_bundle", "fixed_metric_count", "fixed_call_order"]},
       "required_conclusions": ["report_available_evidence", "disclose_data_limits"],
       "allowed_conclusions": ["report_available_evidence", "report_observed_change", "disclose_data_limits", "state_noncausal"],
       "forbidden_conclusions": ["invent_result", "infer_company_health", "invent_profitability", "mix_period_and_snapshot"],
-      "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage"], "minimum_successful_queries": 8, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
+      "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
+    },
+    {
+      "id": "ambiguity_06_department_performance_scorecard", "category": "ambiguity", "conversation_id": "ambiguity_06", "turn": 1,
+      "prompt": "HN跟HCM上半年分别表现得如何",
+      "plan_constraints": {"domains": [], "metrics": [], "dimensions": ["department"], "operations": ["performance_scorecard_first"], "time_semantics": "2026H1_flows_with_current_overdue_snapshot", "context_action": "new", "must_not_metrics": [], "must_not_operations": ["fixed_scorecard_bundle", "fixed_metric_count", "fixed_call_order"]},
+      "required_conclusions": ["report_metrics_individually", "report_governed_target_status", "disclose_period_flow_and_current_snapshot_scopes"],
+      "allowed_conclusions": ["report_metrics_individually", "report_governed_target_status", "disclose_period_flow_and_current_snapshot_scopes", "report_available_evidence", "report_observed_change", "disclose_data_limits", "state_noncausal"],
+      "forbidden_conclusions": ["claim_scope_incompatible_overall_ranking", "claim_unsupported_mechanism_causality", "infer_equal_risk_from_absolute_overdue_similarity", "infer_ungoverned_overall_health_or_strength"],
+      "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
     },
     {
       "id": "change_06_return_amount_rate_undefined", "category": "change_diagnosis", "conversation_id": "change_06", "turn": 1,
       "prompt": "比较指定连续两个月的当期金额退货率；任一期间同期毛出库金额分母无效时必须保留 typed undefined，不得写成0%或据此计算变化。",
-      "expected_plan": {"domains": ["delivery"], "metrics": ["return_amount_rate"], "dimensions": [], "operations": ["previous_period"], "time_semantics": "resolved_month_vs_previous_month", "context_action": "new", "must_not_metrics": ["return_amount", "gross_delivery_amount"]},
+      "plan_constraints": {"domains": ["delivery"], "metrics": ["return_amount_rate"], "dimensions": [], "operations": ["previous_period"], "time_semantics": "resolved_month_vs_previous_month", "context_action": "new", "must_not_metrics": ["return_amount", "gross_delivery_amount"]},
       "required_conclusions": ["preserve_typed_undefined", "disclose_data_limits"],
       "allowed_conclusions": ["preserve_typed_undefined", "report_available_evidence", "disclose_data_limits"],
       "forbidden_conclusions": ["report_undefined_as_zero", "calculate_change_from_undefined", "infer_missing_value", "invent_result"],
@@ -326,7 +334,7 @@
     {
       "id": "boundary_03_grouped_formal_turnover_undefined", "category": "capability_boundary", "conversation_id": "boundary_03", "turn": 1,
       "prompt": "按部门查看最近12个完整自然月的正式应收周转天数；月末欠款快照不足的部门必须保留为 typed undefined，不得删组、补零或自行补算。",
-      "expected_plan": {"domains": ["customer_risk"], "metrics": ["formal_receivable_turnover_days"], "dimensions": ["department"], "operations": [], "time_semantics": "last_12_completed_months", "context_action": "new", "must_not_metrics": ["average_settlement_days"]},
+      "plan_constraints": {"domains": ["customer_risk"], "metrics": ["formal_receivable_turnover_days"], "dimensions": ["department"], "operations": [], "time_semantics": "last_12_completed_months", "context_action": "new", "must_not_metrics": ["average_settlement_days"]},
       "required_conclusions": ["report_available_evidence", "preserve_typed_undefined", "disclose_data_limits"],
       "allowed_conclusions": ["report_available_evidence", "preserve_typed_undefined", "disclose_data_limits"],
       "forbidden_conclusions": ["drop_undefined_group", "report_undefined_as_zero", "infer_missing_value", "invent_result"],
@@ -335,7 +343,7 @@
     {
       "id": "target_05_future_published_target_only", "category": "target_gap", "conversation_id": "target_05", "turn": 1,
       "prompt": "查询下一个尚未开始但已发布目标的自然月出库目标；只返回已发布 target，actual、completion 和 gap 都不可伪造。",
-      "expected_plan": {"domains": ["target"], "metrics": ["delivery_target_completion"], "dimensions": [], "operations": ["future_target_only"], "time_semantics": "future_published_month", "context_action": "new", "must_not_metrics": ["receipt_target_completion"]},
+      "plan_constraints": {"domains": ["target"], "metrics": ["delivery_target_completion"], "dimensions": [], "operations": ["future_target_only"], "time_semantics": "future_published_month", "context_action": "new", "must_not_metrics": ["receipt_target_completion"]},
       "required_conclusions": ["report_future_target_only", "disclose_data_limits"],
       "allowed_conclusions": ["report_future_target_only", "disclose_data_limits"],
       "forbidden_conclusions": ["report_future_actual", "report_future_completion", "report_future_gap", "report_target_gap", "infer_missing_value", "invent_result"],

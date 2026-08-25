@@ -1,16 +1,17 @@
 """JSON schema exposed by the DataSage Mini query plugin."""
 
+from .capability_contract import (
+    ATTRIBUTION_MODES,
+    DELIVERY_SCOPES,
+    INVENTORY_SCOPES,
+    PUBLIC_REQUEST_LIMIT,
+    SUPPORTED_DOMAINS,
+    query_request_schema_conditions,
+)
 from .evidence import ANALYSIS_INTENTS, EVIDENCE_ROLES
 from .references import SECTION_IDS_BY_SOURCE, SOURCE_IDS
 
-DOMAINS = [
-    "delivery",
-    "receipt",
-    "receivable",
-    "target",
-    "customer_risk",
-    "inventory",
-]
+DOMAINS = list(SUPPORTED_DOMAINS)
 
 ENTITY_TYPES = [
     "department",
@@ -92,7 +93,7 @@ REQUEST = {
         },
         "attribution_mode": {
             "type": "string",
-            "enum": ["transaction_detail", "salesperson_allocation"],
+            "enum": list(ATTRIBUTION_MODES),
             "description": (
                 "Required for target-domain metric requests. Use transaction_detail for ordinary, customer, "
                 "department, organization, or unqualified salesperson questions. Use salesperson_allocation "
@@ -101,7 +102,7 @@ REQUEST = {
         },
         "delivery_scope": {
             "type": "string",
-            "enum": ["default_net", "explicit_gross", "order_delivery_alignment"],
+            "enum": list(DELIVERY_SCOPES),
             "description": (
                 "Delivery-domain metric scope. Omit or use default_net for an unqualified net-delivery request; "
                 "use explicit_gross only when the user explicitly asks for gross/before-return delivery; use "
@@ -112,7 +113,7 @@ REQUEST = {
         },
         "inventory_scope": {
             "type": "string",
-            "enum": ["total", "on_hand", "available", "allocated", "in_transit"],
+            "enum": list(INVENTORY_SCOPES),
             "description": (
                 "Inventory-domain metric scope. Omit for the metric default. total includes statuses 1/2/3; "
                 "on_hand includes statuses 1/2; available uses status 1 and excludes missing and defective "
@@ -125,7 +126,7 @@ REQUEST = {
             "minLength": 1,
             "maxLength": 100,
             "description": (
-                "Exact metric code copied from the selected domain planner metrics; required in metric mode. Never "
+                "Exact metric code copied from the selected domain catalog; required in metric mode. Never "
                 "invent a code, derive a new metric, or try code synonyms. If the requested meaning has no exact code, "
                 "do not call this tool. Load the selected metric detail first when expert_index returns "
                 "requires_metric_detail: true, when exact_default_lookup_supported is false or missing, or when the "
@@ -452,6 +453,7 @@ REQUEST = {
                 },
             },
         },
+        *query_request_schema_conditions(),
     ],
 }
 
@@ -526,7 +528,7 @@ DATASAGE_QUERY = {
             "requests": {
                 "type": "array",
                 "minItems": 1,
-                "maxItems": 10,
+                "maxItems": PUBLIC_REQUEST_LIMIT,
                 "items": REQUEST,
                 "description": (
                     "Independent governed requests or explicit semantic operations selected by Hermes for the "
@@ -556,23 +558,18 @@ DATASAGE_QUERY = {
 DATASAGE_CATALOG = {
     "name": "datasage_catalog",
     "description": (
-        "Formal DSO/正式DSO: first `customer_risk` `expert_index`; never first inspect `receivable`. "
-        "Formal receivable turnover days/正式应收周转天数 has the same ownership: do not use a "
-        "receivable expert index or summary as a discovery detour. Ordinary net debt, aging, and overdue "
-        "receivables remain in `receivable`. "
         "Load the trusted DataSage metric catalog needed to plan an internal business-data query. "
         "Hermes chooses whether data is needed and which domains match the user's request; DataSage does not "
         "classify or control ordinary conversation. Request expert_index for the smallest metric-discovery surface, "
-        "then follow its metric_selection_boundary. Every expert-index metric declares requires_metric_detail. Direct "
+        "then request detail for a selected metric when required. Every expert-index metric declares "
+        "requires_metric_detail. Direct "
         "query is allowed only when exact_default_lookup_supported is true and no explicit business qualifier is "
         "present; empty dimensions: [] does not count as a qualifier. "
-        "otherwise request detail only for the selected metric before query. The default model projection is compact; "
+        "Otherwise request detail only for the selected metric before query. The default model projection is compact; "
         "full/audit are explicit compatibility views. The performance_scorecard view returns a governed operating "
-        "bundle covering growth, targets, cash, inventory/turnover, and risk while declaring the profitability gap. "
-        "Internal full summaries and metric details include bounded planning_guidance "
-        "loaded from the versioned planner contract, plus non-binding analysis affordances describing proof capabilities, "
-        "boundaries, adaptive follow-up, and stopping guidance. Metric detail also returns max_group_dimensions; "
-        "they neither prescribe a fixed metric count nor authorize execution. Physical datasets, fields, filters, "
+        "set of candidate lenses while declaring unavailable capabilities. Hermes selects and orders the material "
+        "subset. Metric detail returns capability facts and max_group_dimensions; these facts do not prescribe a "
+        "metric count, call sequence, interpretation, or conclusion. Physical datasets, fields, filters, "
         "joins and formulas remain plugin-private and are never returned to Hermes. This loader invokes no second model."
     ),
     "parameters": {
@@ -590,12 +587,7 @@ DATASAGE_CATALOG = {
                         "domain": {
                             "type": "string",
                             "enum": DOMAINS,
-                            "description": (
-                                "Governed business domain. For formal DSO, formal receivable turnover days, "
-                                "正式DSO, or 正式应收周转天数, the first catalog request must be "
-                                "customer_risk with view=expert_index; do not first load receivable expert_index "
-                                "or its summary. Ordinary net debt, aging, and overdue receivables remain receivable."
-                            ),
+                            "description": "Governed business domain selected by Hermes.",
                         },
                         "metric": {
                             "type": "string",
@@ -613,7 +605,7 @@ DATASAGE_CATALOG = {
                                 "Use expert_index for compact discovery. Omit view for the default compact "
                                 "model projection. Use full or audit only for explicit compatibility/audit "
                                 "inspection. Use performance_scorecard without domain or metric for the "
-                                "governed cross-domain operating bundle."
+                                "governed cross-domain candidate lenses."
                             ),
                         },
                     },
@@ -643,7 +635,7 @@ DATASAGE_CATALOG = {
                     "One request per relevant domain, or one cross-domain view=performance_scorecard request. "
                     "Use expert_index for discovery, include one exact metric code for detail, and use explicit "
                     "full/audit only when the legacy summary is genuinely required. The scorecard returns a "
-                    "recommended operating bundle plus independently sealed metric-detail receipts."
+                    "set of candidate lenses plus independently sealed metric-detail receipts."
                 ),
             },
         },
@@ -655,8 +647,8 @@ DATASAGE_CATALOG = {
 DATASAGE_REFERENCE = {
     "name": "datasage_reference",
     "description": (
-        "Read a small, approved DataSage expert-planning reference when a complex diagnosis, claim boundary, "
-        "entity ambiguity, or domain-specific analysis recipe requires guidance not present in the metric catalog. "
+        "Read a small, approved DataSage analytical reference when evidence semantics, a claim boundary, "
+        "or entity ambiguity requires context not present in the metric catalog. "
         "Use mode=index only to discover fixed source_id/section_id pairs, then mode=read for at most three exact "
         "sections. This tool is non-authorizing and read-only: it cannot accept paths, filenames, URLs, globs, "
         "offsets, SQL, or user documents; it never reads plugin-private execution contracts and never accesses a "
@@ -761,7 +753,7 @@ DATASAGE_ENTITY_RESOLVE = {
             },
             "attribution_mode": {
                 "type": "string",
-                "enum": ["transaction_detail", "salesperson_allocation"],
+                "enum": list(ATTRIBUTION_MODES),
                 "description": "Optional governed ledger path for path-dependent metrics; requires metric and narrows the valid filter role.",
             },
             "limit": {

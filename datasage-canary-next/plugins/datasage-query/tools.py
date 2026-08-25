@@ -32,6 +32,14 @@ from typing import Any, Callable, Mapping, Sequence
 import yaml
 
 from .analytical_queries import AnalysisQueryError, build_analytical_metric_query
+from .capability_contract import (
+    CapabilityContractError,
+    DOMAIN_SOURCES,
+    PHYSICAL_EXECUTION_BUDGET,
+    SUPPORTED_DOMAINS,
+    physical_request_cost,
+    validate_request_field_contract,
+)
 from .db_security import (
     confirm_mysql_read_only_transaction,
     DatabaseSecurityError,
@@ -50,21 +58,9 @@ _PYMYSQL_IMPORT_LOCK = threading.RLock()
 _QUERY_CONCURRENCY_LOCK = threading.Lock()
 _ACTIVE_QUERY_CALLS = 0
 
-_DOMAINS = {
-    "delivery",
-    "receipt",
-    "receivable",
-    "target",
-    "customer_risk",
-    "inventory",
-}
+_DOMAINS = set(SUPPORTED_DOMAINS)
 _SEMANTIC_PATHS = {
-    "delivery": "plugins/datasage-query/contracts/delivery-semantics.yaml",
-    "receipt": "plugins/datasage-query/contracts/receipt-semantics.yaml",
-    "receivable": "plugins/datasage-query/contracts/receivable-semantics.yaml",
-    "target": "plugins/datasage-query/contracts/target-semantics.yaml",
-    "customer_risk": "plugins/datasage-query/contracts/customer_risk-semantics.yaml",
-    "inventory": "plugins/datasage-query/contracts/inventory-semantics.yaml",
+    domain: DOMAIN_SOURCES[domain]["semantics"] for domain in SUPPORTED_DOMAINS
 }
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _COLUMN_IDENTIFIER = re.compile(r"^[A-Za-z0-9_]+$")
@@ -960,6 +956,10 @@ def _validate_request(request: Any) -> dict[str, Any]:
         raise QueryFailure("INVALID_INPUT", "查询目的无效。")
     if set(request) - _METRIC_REQUEST_FIELDS:
         raise QueryFailure("INVALID_INPUT", "请求包含当前模式不接受的字段。")
+    try:
+        validate_request_field_contract(request)
+    except CapabilityContractError as exc:
+        raise QueryFailure(exc.code, exc.message) from exc
     if not isinstance(request.get("metric"), str):
         raise QueryFailure("INVALID_INPUT", "指标模式缺少 metric。")
     metric_filters = request.get("metric_filters")
@@ -1172,12 +1172,6 @@ def _validate_request(request: Any) -> dict[str, Any]:
             )
     if isinstance(time_range, dict) and "field" in time_range:
         raise QueryFailure("INVALID_INPUT", "指标模式的 time_range 不接受物理字段。")
-    attribution_mode = request.get("attribution_mode")
-    if domain == "target" and mode == "metric":
-        if attribution_mode not in {"transaction_detail", "salesperson_allocation"}:
-            raise QueryFailure("ATTRIBUTION_MODE_REQUIRED", "目标指标必须明确交易事实账或业务员分摊账。")
-    elif attribution_mode is not None:
-        raise QueryFailure("INVALID_INPUT", "只有目标域指标可以指定 attribution_mode。")
     return request
 
 
@@ -1205,10 +1199,12 @@ def _complete_decomposition_overall_id(
 
 def _expand_complete_change_decompositions(
     requests: Sequence[Any],
+    *,
+    reserved_request_ids: Sequence[str] = (),
 ) -> tuple[list[Any], dict[str, str]]:
     """Expand only explicit semantic operations into governed request pairs."""
 
-    used_request_ids = {
+    used_request_ids = set(reserved_request_ids) | {
         str(request.get("request_id"))
         for request in requests
         if isinstance(request, Mapping)
@@ -1312,10 +1308,12 @@ def _target_gap_overall_id(
 
 def _expand_complete_target_gap_decompositions(
     requests: Sequence[Any],
+    *,
+    reserved_request_ids: Sequence[str] = (),
 ) -> tuple[list[Any], dict[str, str]]:
     """Expand an explicit target-gap operation into overall and partition queries."""
 
-    used_request_ids = {
+    used_request_ids = set(reserved_request_ids) | {
         str(request.get("request_id"))
         for request in requests
         if isinstance(request, Mapping)
@@ -1349,6 +1347,140 @@ def _expand_complete_target_gap_decompositions(
         expanded.extend((overall_request, partition_request))
         operation_partitions[partition_id] = overall_id
     return expanded, operation_partitions
+
+
+def _allocate_public_request_branches(
+    requests: Sequence[Any],
+    *,
+    physical_budget: int = PHYSICAL_EXECUTION_BUDGET,
+) -> tuple[list[Any], dict[str, QueryFailure]]:
+    """Admit public branches independently into the physical execution budget."""
+
+    admitted: list[Any] = []
+    local_failures: dict[str, QueryFailure] = {}
+    remaining = physical_budget
+    for raw_request in requests:
+        request_id = (
+            str(raw_request.get("request_id"))
+            if isinstance(raw_request, Mapping)
+            else ""
+        )
+        try:
+            # Complete-operation expansion calls the structural validator. Do
+            # the same validation per public branch first so one malformed
+            # operation cannot escape into the batch-level exception handler.
+            _validate_request(raw_request)
+            cost = physical_request_cost(raw_request)
+        except CapabilityContractError as exc:
+            local_failures[request_id] = QueryFailure(
+                exc.code,
+                exc.message,
+                stage="input_validation",
+            )
+            continue
+        except QueryFailure as exc:
+            local_failures[request_id] = _at_stage(exc, "input_validation")
+            continue
+        if cost > remaining:
+            local_failures[request_id] = QueryFailure(
+                "EXECUTION_BUDGET_EXCEEDED",
+                "This request branch exceeds the remaining physical execution budget; retry it separately.",
+                stage="query_planning",
+            )
+            continue
+        admitted.append(raw_request)
+        remaining -= cost
+    return admitted, local_failures
+
+
+def _order_public_branch_artifacts(
+    public_requests: Sequence[Any],
+    expanded_requests: Sequence[Any],
+    results: Sequence[Mapping[str, Any]],
+    local_failures: Mapping[str, QueryFailure],
+    operation_partitions: Mapping[str, str],
+    target_gap_partitions: Mapping[str, str],
+    *,
+    elapsed_ms: int,
+) -> tuple[list[Mapping[str, Any]], list[dict[str, Any]]]:
+    """Project one result per public branch after validating physical pairs."""
+
+    request_by_id = {
+        str(request.get("request_id")): request
+        for request in expanded_requests
+        if isinstance(request, Mapping) and isinstance(request.get("request_id"), str)
+    }
+    result_by_id = {
+        str(result.get("request_id")): dict(result)
+        for result in results
+        if isinstance(result, Mapping) and isinstance(result.get("request_id"), str)
+    }
+    ordered_requests: list[Mapping[str, Any]] = []
+    ordered_results: list[dict[str, Any]] = []
+    for raw_request in public_requests:
+        if not isinstance(raw_request, Mapping):
+            continue
+        request_id = raw_request.get("request_id")
+        if not isinstance(request_id, str):
+            continue
+        failure = local_failures.get(request_id)
+        if failure is not None:
+            ordered_requests.append(raw_request)
+            ordered_results.append(
+                _failure_result(
+                    request_id,
+                    failure,
+                    elapsed_ms,
+                    business_metric_ref=(
+                        str(raw_request.get("metric"))
+                        if isinstance(raw_request.get("metric"), str)
+                        else None
+                    ),
+                    business_sql_attempted_count=0,
+                    business_sql_confirmed_count=0,
+                )
+            )
+            continue
+        overall_id = operation_partitions.get(request_id)
+        if overall_id is None:
+            overall_id = target_gap_partitions.get(request_id)
+        physical_ids = (request_id,)
+        if isinstance(overall_id, str):
+            # The overall query is an internal reconciliation operand. Require
+            # both physical artifacts to exist, but expose only the public
+            # partition branch whose ID was supplied by Hermes.
+            physical_ids = (overall_id, request_id)
+        for physical_id in physical_ids:
+            request = request_by_id.get(physical_id)
+            result = result_by_id.get(physical_id)
+            if request is None or result is None:
+                raise QueryFailure(
+                    "INTERNAL_ERROR",
+                    "The physical execution plan did not produce a result for every admitted branch.",
+                    stage="result_validation",
+                )
+        public_request = request_by_id.get(request_id)
+        public_result = result_by_id.get(request_id)
+        if public_request is None or public_result is None:
+            raise QueryFailure(
+                "INTERNAL_ERROR",
+                "The physical execution plan did not produce its public branch result.",
+                stage="result_validation",
+            )
+        ordered_requests.append(public_request)
+        ordered_results.append(public_result)
+    ordered_ids = [str(result.get("request_id")) for result in ordered_results]
+    if (
+        len(ordered_requests) != len(public_requests)
+        or len(ordered_results) != len(public_requests)
+        or len(set(ordered_ids)) != len(ordered_ids)
+    ):
+        raise QueryFailure(
+            "INTERNAL_ERROR",
+            "The public branch execution plan could not be reconciled.",
+            stage="result_validation",
+        )
+    return ordered_requests, ordered_results
 
 
 def _validate_target_gap_decomposition_capability(
@@ -1406,8 +1538,6 @@ def _validate_delivery_metric_scope(request: Mapping[str, Any]) -> dict[str, Any
     normalized = dict(request)
     scope = normalized.get("delivery_scope")
     if normalized.get("domain") != "delivery" or normalized.get("mode") != "metric":
-        if scope is not None:
-            raise QueryFailure("INVALID_INPUT", "delivery_scope 只适用于出库域指标。")
         return normalized
 
     metric = str(normalized.get("metric") or "")
@@ -1437,8 +1567,6 @@ def _validate_inventory_metric_scope(request: Mapping[str, Any]) -> dict[str, An
     normalized = dict(request)
     scope = normalized.get("inventory_scope")
     if normalized.get("domain") != "inventory" or normalized.get("mode") != "metric":
-        if scope is not None:
-            raise QueryFailure("INVALID_INPUT", "inventory_scope 只适用于库存域指标。")
         return normalized
     if scope is not None and scope not in _INVENTORY_SCOPES:
         raise QueryFailure("INVALID_INPUT", "库存范围不受支持。")
@@ -6412,8 +6540,6 @@ _MODEL_WIRE_RESULT_FIELDS = (
     "disclosure_contract_version",
     "disclosure_ledger",
     "disclosure_ledger_seal",
-    # Governed proof capabilities consumed by the typed-answer validator.
-    "allowed_reasoning_topics",
     "change_reconciliation",
     "target_gap_reconciliation",
     "row_count",
@@ -6687,6 +6813,18 @@ def _mark_model_wire_evidence_integrity_failure(
 def _filter_model_wire_evidence(projected: dict[str, Any]) -> None:
     """Expose only sealed, result-bound claims and applicable disclosures."""
 
+    if projected.get("status") != "success":
+        # A local failure carries no business evidence to validate. Preserve
+        # its original typed error while making it impossible for stale proof
+        # fields to leak from a partially constructed execution result.
+        projected["claim_ledger"] = []
+        projected["disclosure_ledger"] = []
+        projected.pop("disclosure_contract_version", None)
+        projected.pop("disclosure_ledger_seal", None)
+        projected.pop("change_reconciliation", None)
+        projected.pop("target_gap_reconciliation", None)
+        return
+
     claims = projected.get("claim_ledger")
     claim_ledger_present = "claim_ledger" in projected
     if claim_ledger_present:
@@ -6956,6 +7094,10 @@ def _model_wire_result(result: Mapping[str, Any]) -> dict[str, Any]:
         projected["change_reconciliation"] = _model_wire_change_reconciliation(
             projected["change_reconciliation"]
         )
+    # Reasoning policy is not part of the public data contract. Evidence
+    # validation may use an empty topic list as private fail-closed state, but
+    # Hermes remains responsible for choosing and labelling useful hypotheses.
+    projected.pop("allowed_reasoning_topics", None)
     return projected
 
 
@@ -7789,21 +7931,11 @@ def _model_wire_calculations(
     return projected
 
 
-def _prepare_one(
+def _validate_request_plan_without_entities(
     raw_request: Any,
-    *,
-    deadline_at: float | None,
-    resolution_cache: dict[tuple[str, str], Any],
-    max_unique_lookups: int,
-    preflight_stats: dict[str, Any],
-) -> dict[str, Any]:
-    if deadline_at is not None and time.monotonic() >= deadline_at:
-        raise QueryFailure(
-            "BATCH_DEADLINE_EXCEEDED",
-            "本次批量查询已达到总时限。",
-            timeout=True,
-            stage="batch_deadline",
-        )
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Validate one branch through the last database-free planning boundary."""
+
     try:
         request = _validate_inventory_metric_scope(
             _validate_delivery_metric_scope(_validate_request(raw_request))
@@ -7819,6 +7951,27 @@ def _prepare_one(
         _validate_pre_entity_metric_plan(request, datasets, semantics)
     except QueryFailure as exc:
         raise _at_stage(exc, "input_validation")
+    return request, datasets, semantics
+
+
+def _prepare_one(
+    raw_request: Any,
+    *,
+    deadline_at: float | None,
+    resolution_cache: dict[tuple[str, str], Any],
+    max_unique_lookups: int,
+    preflight_stats: dict[str, Any],
+) -> dict[str, Any]:
+    if deadline_at is not None and time.monotonic() >= deadline_at:
+        raise QueryFailure(
+            "BATCH_DEADLINE_EXCEEDED",
+            "本次批量查询已达到总时限。",
+            timeout=True,
+            stage="batch_deadline",
+        )
+    request, datasets, semantics = _validate_request_plan_without_entities(
+        raw_request
+    )
     resolved_entities: list[dict[str, Any]] = []
     if request["mode"] == "metric":
         def exact_lookup(sql: str, params: Sequence[Any], limit: int):
@@ -8138,13 +8291,6 @@ def _run_one(
         }
         if isinstance(snapshot_group_marker, str) and snapshot_group_marker:
             result["_snapshot_group_marker"] = snapshot_group_marker
-        encoded_size = len(
-            json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        )
-        if encoded_size > _bounded_int(
-            "max_result_bytes", 262144, 16384, 1048576
-        ):
-            raise QueryFailure("OUTPUT_TOO_LARGE", "查询结果超过安全上下文上限，请缩小范围或减少明细列。")
     except QueryFailure as failure:
         source_evidence_ref = _consistent_source_evidence_ref(
             [
@@ -8275,17 +8421,20 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
             args.get("calculations"),
             [str(request_id) for request_id in request_ids],
         )
+        public_requests = list(requests)
+        requests, local_branch_failures = _allocate_public_request_branches(
+            public_requests
+        )
         requests, operation_partitions = _expand_complete_change_decompositions(
-            requests
+            requests,
+            reserved_request_ids=[str(request_id) for request_id in request_ids],
         )
         requests, target_gap_partitions = (
-            _expand_complete_target_gap_decompositions(requests)
-        )
-        if len(requests) > 10:
-            raise QueryFailure(
-                "INVALID_INPUT",
-                "Expanded complete decompositions exceed the ten-request execution budget.",
+            _expand_complete_target_gap_decompositions(
+                requests,
+                reserved_request_ids=[str(request_id) for request_id in request_ids],
             )
+        )
         call_timeout = _bounded_int("call_timeout_seconds", 60, 1, 300)
         deadline_at = batch_started + call_timeout
         audit_context = {
@@ -8686,6 +8835,15 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
             results,
             target_gap_partitions,
         )
+        requests, results = _order_public_branch_artifacts(
+            public_requests,
+            requests,
+            results,
+            local_branch_failures,
+            operation_partitions,
+            target_gap_partitions,
+            elapsed_ms=int((time.monotonic() - batch_started) * 1000),
+        )
         calculation_results = _build_governed_calculations(
             calculations,
             results,
@@ -8726,16 +8884,6 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
         if calculations:
             payload["calculation_count"] = len(public_calculation_results)
             payload["calculations"] = public_calculation_results
-        encoded_size = len(
-            json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        )
-        if encoded_size > _bounded_int(
-            "max_batch_bytes", 524288, 65536, 2097152
-        ):
-            raise QueryFailure(
-                "OUTPUT_TOO_LARGE",
-                "本次批量证据超过安全上下文上限，请减少子问题或缩小明细范围。",
-            )
         _audit_batch_capabilities(args, requests, results)
     except QueryFailure as failure:
         payload = {
@@ -8847,32 +8995,6 @@ def runtime_guarded_datasage_query(
             args.get("calculations"),
             [str(request_id) for request_id in request_ids],
         )
-        for request in requests:
-            normalized_request = _validate_inventory_metric_scope(
-                _validate_delivery_metric_scope(_validate_request(request))
-            )
-            datasets, semantics = _contracts(str(normalized_request["domain"]))
-            normalized_request = _validate_metric_detail_gate(
-                normalized_request,
-                semantics,
-            )
-            _validate_pre_entity_metric_plan(
-                normalized_request,
-                datasets,
-                semantics,
-            )
-        guarded_requests, guarded_operations = (
-            _expand_complete_change_decompositions(requests)
-        )
-        guarded_requests, guarded_target_gap_operations = (
-            _expand_complete_target_gap_decompositions(guarded_requests)
-        )
-        if len(guarded_requests) > 10:
-            raise QueryFailure(
-                "INVALID_INPUT",
-                "Expanded complete decompositions exceed the ten-request execution budget.",
-            )
-
         from . import runtime_health
 
         readiness = runtime_health.query_readiness_status()
@@ -8902,23 +9024,45 @@ def runtime_guarded_datasage_query(
             stage="runtime_readiness",
             retryable=_readiness_retryable(internal_reason_code),
         )
-        elapsed_ms = int((time.monotonic() - started) * 1000)
-        results = [
-            _failure_result(
-                str(request.get("request_id")),
-                failure,
-                elapsed_ms,
-                business_metric_ref=(
-                    str(request.get("metric"))
-                    if isinstance(request, Mapping)
-                    and isinstance(request.get("metric"), str)
-                    else None
-                ),
-                business_sql_attempted_count=0,
-                business_sql_confirmed_count=0,
+        public_requests = list(requests)
+        guarded_requests, local_branch_failures = (
+            _allocate_public_request_branches(public_requests)
+        )
+        guarded_requests, guarded_operations = (
+            _expand_complete_change_decompositions(
+                guarded_requests,
+                reserved_request_ids=[str(request_id) for request_id in request_ids],
             )
-            for request in guarded_requests
-        ]
+        )
+        guarded_requests, guarded_target_gap_operations = (
+            _expand_complete_target_gap_decompositions(
+                guarded_requests,
+                reserved_request_ids=[str(request_id) for request_id in request_ids],
+            )
+        )
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        results = []
+        for request in guarded_requests:
+            branch_failure = failure
+            try:
+                _validate_request_plan_without_entities(request)
+            except QueryFailure as exc:
+                branch_failure = exc
+            results.append(
+                _failure_result(
+                    str(request.get("request_id")),
+                    branch_failure,
+                    elapsed_ms,
+                    business_metric_ref=(
+                        str(request.get("metric"))
+                        if isinstance(request, Mapping)
+                        and isinstance(request.get("metric"), str)
+                        else None
+                    ),
+                    business_sql_attempted_count=0,
+                    business_sql_confirmed_count=0,
+                )
+            )
         _finalize_complete_decomposition_outcomes(
             results,
             guarded_operations,
@@ -8931,6 +9075,15 @@ def runtime_guarded_datasage_query(
             ],
             results,
             guarded_target_gap_operations,
+        )
+        guarded_requests, results = _order_public_branch_artifacts(
+            public_requests,
+            guarded_requests,
+            results,
+            local_branch_failures,
+            guarded_operations,
+            guarded_target_gap_operations,
+            elapsed_ms=elapsed_ms,
         )
         calculation_results = _build_governed_calculations(
             calculations,

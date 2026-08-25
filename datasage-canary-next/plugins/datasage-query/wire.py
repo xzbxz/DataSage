@@ -103,7 +103,6 @@ def _compact_metric_detail(
     for key in (
         "allowed_dimensions",
         "change_decomposition_dimensions",
-        "reasoning_topics",
         "target_gap_decomposition",
         "dimensions_by_attribution_mode",
     ):
@@ -141,37 +140,42 @@ def _compact_catalog_result(
             value_policies=value_policies,
         )
     if level == "performance_scorecard":
-        compact_details: list[dict[str, Any]] = []
-        for item in result.get("metric_details", []):
-            if not isinstance(item, Mapping) or not isinstance(
-                item.get("detail"), Mapping
-            ):
+        compact_lenses: list[dict[str, Any]] = []
+        metric_count = 0
+        for raw_lens in result.get("candidate_lenses", []):
+            if not isinstance(raw_lens, Mapping):
                 continue
-            compact_detail = _compact_metric_detail(
-                item["detail"],
-                detail_receipt=item.get("detail_receipt"),
-                value_policies=value_policies,
-            )
-            for key in ("lens", "time_binding"):
-                if key in item:
-                    compact_detail[key] = item[key]
-            compact_details.append(compact_detail)
-        recommended_bundle = [
-            {
-                key: item[key]
-                for key in ("lens", "time_binding", "request_template")
-                if key in item
+            compact_candidates: list[dict[str, Any]] = []
+            for raw_candidate in raw_lens.get("candidates", []):
+                if not isinstance(raw_candidate, Mapping) or not isinstance(
+                    raw_candidate.get("detail"), Mapping
+                ):
+                    continue
+                compact_candidates.append(
+                    _compact_metric_detail(
+                        raw_candidate["detail"],
+                        detail_receipt=raw_candidate.get("detail_receipt"),
+                        value_policies=value_policies,
+                    )
+                )
+            metric_count += len(compact_candidates)
+            compact_lens = {
+                key: value
+                for key, value in raw_lens.items()
+                if key != "candidates"
             }
-            for item in result.get("recommended_bundle", [])
-            if isinstance(item, Mapping)
-            and isinstance(item.get("request_template"), Mapping)
-        ]
+            compact_lens["candidates"] = compact_candidates
+            compact_lenses.append(compact_lens)
         return {
             "level": "performance_scorecard",
-            "recipe": result.get("recipe"),
-            "recommended_bundle": recommended_bundle,
-            "metric_count": len(compact_details),
-            "metric_details": compact_details,
+            "version": result.get("version"),
+            "kind": result.get("kind"),
+            "selection_owner": result.get("selection_owner"),
+            "ordering_owner": result.get("ordering_owner"),
+            "interpretation_owner": result.get("interpretation_owner"),
+            "candidate_lenses": compact_lenses,
+            "metric_count": metric_count,
+            "evidence_boundaries": result.get("evidence_boundaries", []),
         }
     metrics = []
     for metric in result.get("metrics", []):
@@ -192,7 +196,6 @@ def _compact_catalog_result(
             "level": level,
             "metric_count": result.get("metric_count", len(metrics)),
             "metrics": metrics,
-            "metric_selection_boundary": result.get("metric_selection_boundary"),
         }.items()
         if value is not None
     }
@@ -388,7 +391,6 @@ def compact_query_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "business_metric_ref",
                 "business_metric_label",
                 "business_dimension_labels",
-                "allowed_reasoning_topics",
                 "change_reconciliation",
                 "target_gap_reconciliation",
                 "row_count",
@@ -465,7 +467,12 @@ def compact_query_payload(payload: dict[str, Any]) -> dict[str, Any]:
 def _partial_results_payload(
     payload: dict[str, Any], limit: int
 ) -> str | None:
-    """Keep a useful prefix of successful batch results within the wire budget."""
+    """Keep the most useful complete branches within the wire budget.
+
+    Successful evidence is retained before local failures.  Within each group
+    the public request order remains stable, so truncation never lets a verbose
+    error crowd out evidence that Hermes can still use to answer the question.
+    """
 
     results = payload.get("results")
     if not isinstance(results, list) or not results:
@@ -483,6 +490,7 @@ def _partial_results_payload(
             "semantic_coverage_receipts",
             "disclosures",
             "answer_constraints",
+            "answer_scope_line",
             "metric_contexts",
             "calculations",
             "calculation_count",
@@ -511,8 +519,8 @@ def _partial_results_payload(
                 "error": {
                     "code": "OUTPUT_TRUNCATED",
                     "message": (
-                        "The successful batch exceeded the model-safe wire budget. "
-                        "A complete prefix is returned; narrow the omitted branches or retry them separately."
+                        "The batch exceeded the model-safe wire budget. "
+                        "A complete success-first subset is returned; narrow the omitted branches or retry them separately."
                     ),
                     "retryable": True,
                 },
@@ -530,7 +538,7 @@ def _partial_results_payload(
         if isinstance(bundle, Mapping):
             filtered_bundle = {
                 key: bundle[key]
-                for key in ("version", "coverage", "answer_guardrails")
+                for key in ("version", "answer_guardrails")
                 if key in bundle
             }
             for field in ("items", "evidence_gaps"):
@@ -542,6 +550,33 @@ def _partial_results_payload(
                         if isinstance(item, Mapping)
                         and item.get("request_id") in request_ids
                     ]
+            coverage = bundle.get("coverage")
+            if isinstance(coverage, Mapping):
+                retained_items = filtered_bundle.get("items", [])
+                role_labels = sorted(
+                    {
+                        item.get("evidence_role")
+                        for item in retained_items
+                        if isinstance(item, Mapping)
+                        and isinstance(item.get("evidence_role"), str)
+                    }
+                )
+                unspecified = sorted(
+                    request_id
+                    for request_id in request_ids
+                    if not any(
+                        isinstance(item, Mapping)
+                        and item.get("request_id") == request_id
+                        and isinstance(item.get("evidence_role"), str)
+                        for item in retained_items
+                    )
+                )
+                filtered_bundle["coverage"] = {
+                    "request_count": len(request_ids),
+                    "requested_role_labels": role_labels,
+                    "unspecified_request_ids": unspecified,
+                    "role_labels_authorize_claims": False,
+                }
             current["evidence_bundle"] = filtered_bundle
         constraints = payload.get("answer_constraints")
         if isinstance(constraints, Mapping):
@@ -609,11 +644,20 @@ def _partial_results_payload(
                 current["calculations"] = retained_calculations
         return current
 
-    for item in results:
+    prioritized_results = [
+        item
+        for item in results
+        if isinstance(item, Mapping) and item.get("status") == "success"
+    ] + [
+        item
+        for item in results
+        if not (isinstance(item, Mapping) and item.get("status") == "success")
+    ]
+    for item in prioritized_results:
         partial["results"].append(item)
         if len(_compact_json(candidate(partial["results"]))) > limit:
             partial["results"].pop()
-            break
+            continue
     if not partial["results"]:
         return None
     rendered = _compact_json(candidate(partial["results"]))

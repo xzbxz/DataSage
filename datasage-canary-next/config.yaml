@@ -1,10 +1,10 @@
-_config_version: 34
+_config_version: 35
 timezone: Asia/Shanghai
 model:
   provider: deepseek
-  # This profile is the complex-analysis lane. Route cheap lookup traffic
-  # through a separate Flash profile instead of switching models mid-session.
-  default: deepseek-v4-pro
+  # This canary uses Flash for the current quality/latency replay. Keep one
+  # model fixed for the full session so the result remains attributable.
+  default: deepseek-v4-flash
   base_url: https://api.deepseek.com/v1
 agent:
   reasoning_effort: high
@@ -52,12 +52,9 @@ plugins:
         max_rows: 100
         max_cell_chars: 2000
         max_dimension_display_chars: 80
-        # Keep internal and public budgets below Hermes' final wire ceiling.
-        # The final wrapper also returns a partial prefix instead of discarding
-        # every successful result when a batch is still too large.
+        # Compact business evidence first, then enforce Hermes' final wire
+        # ceiling. Oversized batches retain a complete success-first subset.
         max_tool_result_chars: 90000
-        max_result_bytes: 80000
-        max_batch_bytes: 85000
         # Business owner approval recorded 2026-08-11: every authenticated
         # WeCom member may use the complete governed DataSage data surface.
         data_entitlements:
@@ -89,12 +86,6 @@ plugins:
                 - answer_boundary
                 - entity_guidance
                 - query_rules
-                - planner_delivery
-                - planner_receipt
-                - planner_receivable
-                - planner_target
-                - planner_customer_risk
-                - planner_inventory
               allow_shared_references: true
               allow_reference_index: true
               allow_all_rows: true
@@ -121,7 +112,6 @@ skills:
     - common-data-foundation
     - competitor-news-monitor
     - computer-use
-    - datasage-query-patterns
     - design-md
     - document-to-action-items
     - dogfood

@@ -1,130 +1,125 @@
-# DataSage Expert Next 架构基线
+# DataSage Expert 0.15 架构
 
-版本：0.14.0-alpha2
-Hermes：0.20.0
+版本：`0.15.0-rc2`  
+运行基线：Hermes `0.20.5`
 
-## 目标
+## 唯一目标
 
-将 DataSage 从“由模型搬运治理协议的 BI 查询器”重塑为“由 Hermes 负责理解与推理、由插件负责确定性治理与证据、由按需 Skill 提供分析方法”的企业数字专家。
+增强 Hermes 理解经营问题、选择证据、形成结论和提出行动建议的能力，
+而不是用注册表、规则、工作流或答案模板替代 Hermes 的判断。
 
-## 权威设计原则
+本版是边界重构，不增加数据库、不修改企微凭据、不引入路由引擎，也不
+迁移全部指标到新 DSL。完整冻结标准见 `REFACTOR_CHARTER.md`，实现决策见
+`REFACTOR_DESIGN.md`。
 
-1. Hermes 官方插件边界：业务集成使用独立插件；`pre_llm_call` 注入会存入 `api_content` sidecar 并在后续会话回放，只用于确需随会话重放的动态上下文。永久规则放在 SOUL/Skill，不用它逐轮重复注入完整系统提示或工作流。
-2. Hermes 官方提示分层：SOUL 属于稳定身份层；Skill 属于按需程序知识；运行状态不写进提示词。
-3. Hermes 官方工具披露：四个 DataSage 非核心工具采用 eager schema，避免冷工具的 search/describe 往返；企微仍保留标准 Hermes host 工具面。
-4. Hermes 官方插件状态：运行时游标、缓存和去重应使用 `ctx.state` 或插件自己的受控状态，不写入 `config.yaml`，也不要求模型记忆哈希协议。
-5. 数据代理实践：工具少而清晰，提示指导目标而不是硬编码路径；上下文按需检索；真实端到端评测同时测正确性、延迟、工具错误和最终表达。
+## 三层职责
 
-官方依据：
+### Hermes：经营判断
 
-- https://hermes-agent.nousresearch.com/docs/developer-guide/plugins
-- https://hermes-agent.nousresearch.com/docs/developer-guide/prompt-assembly/
-- https://hermes-agent.nousresearch.com/docs/user-guide/features/tool-search
-- https://hermes-agent.nousresearch.com/docs/developer-guide/creating-skills
-- https://github.com/NousResearch/hermes-agent/releases/tag/v2026.8.3
-- https://openai.com/index/inside-our-in-house-data-agent/
-- https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents
-- https://www.anthropic.com/engineering/writing-tools-for-agents
+Hermes 负责理解问题、选择指标和分析深度、安排工具调用、区分观察与假设、
+形成结论及建议，并在多轮对话中接受用户最新纠正。任何能力元数据都不得
+指定固定指标数、固定调用顺序、原因、阈值、建议或答案措辞。
 
-## 分层职责
+### Capability contract：可验证事实
 
-### SOUL：稳定身份
+`plugins/datasage-query/capability_contract.py` 是请求字段所有权和物理执行成本
+的单一合同。它只描述可确定验证的事实：字段属于哪个 domain、允许枚举、
+目标指标是否需要归因方式、公开分支和物理操作预算，以及 schema 条件。
 
-只保留使命、证据类型、建议权限、因果边界和回答风格。不得包含工具参数、receipt、seal、特殊指标公式或领域 recipe。
+现有 `*-semantics.yaml` 继续作为 v0.15 指标定义和物理查询来源。新增普通
+指标不需要再维护一份路由注册表；能力合同也不能包含 prompt 关键词、recipe、
+question type、固定 plan、业务判断或回答模板。
 
-### DataSage Skill：按需分析方法
+### DataSage plugin：确定性治理和证据
 
-只在需要内部公司事实时加载。提供 Frame → Evidence → Diagnose → Advise 的启发式方法，不规定每题都执行固定调用序列。领域细节通过 catalog/detail/reference 按需获取。
+插件负责 schema、权限、receipt、只读查询编译、执行限制、typed state、
+证据压缩和披露。插件返回结构化证据，不读取、删改或重写 Hermes 的最终文本。
 
-### DataSage Plugin：确定性事实与治理
+## 请求与失败域
 
-负责指标目录、实体绑定、查询编译、执行限制、计算、证据完整性、披露去重和渐进输出。模型不应验证哈希、拼装 seal 或记住物理字段。
+```text
+用户问题
+  -> Hermes 自适应选择证据
+  -> 公开 schema（由 capability contract 生成字段条件）
+  -> 每个 public branch 独立验证
+  -> 每个 branch 按 operation 申请物理执行槽
+  -> 成功与局部失败共同进入 compact wire
+  -> 最终字符预算保留 success-first 完整分支
+  -> Hermes 形成答案
+```
 
-### Hermes：对话与推理
+只有 envelope 无法解析、权限整体拒绝或无法建立可信执行环境时可以整批失败。
+某个 branch 的字段、receipt、实体、能力或物理预算错误必须局部化，不能清空
+其他有效结果。`complete` 操作成本为两个物理槽；普通操作成本为一个。公开
+最多十个 branch，每个 branch 放不进剩余物理预算时仅返回
+`EXECUTION_BUDGET_EXCEEDED`。
 
-负责理解用户意图、选择分析路径、综合内部证据与外部/用户前提、排列假设、形成建议以及多轮承接。
+原始单结果和批结果 byte gate 已删除。行数、单元格长度、查询超时、SQL 只读、
+权限和最终 `max_tool_result_chars` 仍保留。压缩发生在最终字符预算之前；超限时
+先保留成功证据，再保留局部失败。
 
-## 0.13.1-alpha1 基线
+## Scorecard 边界
 
-- 新建独立 Profile；旧版不修改。
-- 默认复杂分析模型改为 `deepseek-v4-pro`；旧 Profile 可继续承担 Flash 查数流量。
-- 四个 DataSage 非核心工具改为 eager schema，消除主要 tool-search/describe 税；`hermes-wecom` 的标准 host 工具面保持不变。
-- 移除插件注册的完整 Skill 注入；改为 Hermes 原生按需 Skill。
-- SOUL 与主 Skill 重写为短、高层、目标导向版本。
-- 禁用重复/冲突的 companion Skill，并将无关的创意、开发、智能家居等 Hermes 播种技能从专家索引中排除；保留 DataSage、办公文档、引用与 Humanizer 等少量能力。技能文件仍保留，可随时恢复。
-- `analysis_intent` 正式加入公开 schema。
-- snapshot change decomposition 的 schema 与运行时对齐。
-- reference 请求改为 source/section 判别联合，阻止非法笛卡尔组合。
-- 每个 metric detail 返回独立 `detail_receipt`；迁移期兼容旧单详情 `content_hash`。
-- 排名不再静默封顶 10；返回 requested/effective limit 和 has_more。
-- 内部结果预算与最终 wire 对齐；批量超限优先返回完整结果前缀，而不是整包清空。
-- catalog 默认返回紧凑模型投影；`full/audit` 显式保留兼容全量视图。
-- 新增受治理的 `performance_scorecard` 规划视图，一次返回增长、回款、目标、库存周转与风险所需的独立指标详情和 receipt，并明确声明缺少利润指标。
-- query wire 对 claim、seal、披露做去重，在保留事实、状态、Top-N 元数据、范围、限制、协调证明和计算结果的前提下降低回包负担。
-- 新增回答证据边界校验：阻止把 Top-N 写成总体、无治理基准的健康/可控判断、无协调分解的结构贡献、未证明可比的跨指标节奏和任何未经授权的机制因果。
-- 回答门禁按 request 的指标 label/ref 绑定约束；工具证据解析失败时保守拦截。
-- 运行时 Memory 仅保留稳定用户偏好，不再保存 receipt、工具步骤、会话实体、测试事实、版本路径或账户标识。
+`performance_scorecard` 是经营分析候选镜头的目录视图，不是一份必须照抄的
+执行计划。它可以提供增长、目标、回款、库存、风险等可用镜头和各自 receipt，
+并披露利润、现金流等缺口；Hermes 根据问题和证据重要性选择最小充分子集。
+测试不得锁定固定八项、固定顺序、固定调用数或固定最终答案。
 
-## 0.14.0-alpha1 已实施
+## 已删除的设计
 
-- 修复 `performance_scorecard` 在 Hermes 实际注册 handler 上被 entitlement 无条件拒绝的问题；只有具备完整跨域指标权限的主体可调用。
-- scorecard 收敛为一套可执行 `recommended_bundle`；八个请求模板各自携带合法 `request_id` 与对应 `detail_receipt`，不再与 recipe/detail 重复。
-- catalog 与执行层共享精确 `comparison_kinds`；current snapshot 和分析型指标不再宣称运行时无法执行的通用比较。
-- 比例指标跨期比较保留未定义值为 `NULL`；未来目标在已有目标行时保留目标状态；正式 DSO 不再静默删除快照不完整分组，而是返回 typed undefined。
-- compact-v2 E2E 适配器按 wire 版本解析 evidence item，同时保留 raw-v1 兼容并对未知版本失败关闭。
-- 回答门禁保留 Markdown 与段落结构，补齐已复现的规范性、因果、Top-N 和跨指标漏判；指标命中的“整体增长”等表述只绑定相应 request，独立全局断言仍按整批证据校验，普通非业务因果句不受影响。
-- 宽泛经营审视先走 scorecard，`expert_index` 仅处理非 scorecard 的未知指标或 scorecard 后明确的重大缺口；展示级基础运算与 governed calculation 的边界已统一。
-- Humanizer 在本数字专家 profile 中禁用；Tool Search 保持关闭，未新增 Router、Skill、指标、数据源或业务解释规则。
+- 冲突的 `datasage-query-patterns` companion Skill；
+- 模型可见的 planner source、固定 overview bundle 和 recipe 路由；
+- schema 允许但运行时整批拒绝的重复字段验证路径；
+- compact 之前的 raw result / raw batch byte gate；
+- 精确 plan 集合评分和固定最终答案哈希作为发布门槛。
 
-## 0.14.0-alpha2 已实施
+Golden 测试改为“必需能力 + 禁止行为 + 语义结论”约束。它验证专家能力的
+边界，不要求模型重复某个作者预设的思考轨迹。
 
-- 自动生成的完整变化分解只返回有完整分区证明支撑的前 20 行，并保留截断、尾部汇总和非完整人口声明；普通查询与其他分解不受影响。
-- 查询完成后的容量或内部错误保留已确认的数据库来源证据；缺失或无效证据不再误报成数据库身份变化，真实的多来源身份漂移仍失败关闭。
-- 未调整单结果、批量或最终工具回包上限，未修改 Hermes core、数据库配置或企微配置。
+## 多轮与宿主边界
 
-### 回答门禁的精确边界
+最新用户消息必须高于 Memory、压缩摘要、旧任务、旧草稿和门禁纠偏文本。
+Profile 只允许 Memory 保存稳定偏好和稳定事实，不保存 receipt、临时 period、
+临时 entity、工具步骤或模型草稿。
 
-- 对当前本地企微通道，`transform_llm_output` 在最终发送前替换不安全文本；在插件已加载、证据已捕获且非代理流式发送的前提下，这是交付层门禁。
-- Hermes 0.20.0 会在 transform 前持久化原始 assistant draft，因此该插件不能改写 canonical `state.db` 历史。下一轮 `pre_llm_call` 注入短纠偏文本作为多轮补偿；该纠偏会随用户轮次持久化，不是一次性上下文，也不是历史重写。
-- 进程在工具返回与最终转换之间重启、进程内证据状态被淘汰，或未来切换为不可编辑的代理流式发送时，不能宣称 fail-closed。若要解决 canonical 历史，需要 Hermes core 提供“持久化前 transform”或受支持的 assistant-row replacement API。
+Hermes 宿主的上下文压缩顺序不在 Profile 插件控制范围内。本包提供宿主合同
+fixture，要求压缩后保留用户纠正、当前 period/scope/entity/metric 和事实/假设
+区分；在宿主 E2E 通过前不得宣称该能力已由 Profile 自身修复。
+
+## 发布身份与回滚
+
+`build_release_receipt.py` 根据 `distribution_owned` 的实际文件内容计算 SHA-256；
+`distribution.yaml` 中由 Hermes 安装器管理的 `name`、`source`、`installed_at`
+会先做显式归一化，因此源码候选和合法安装实例可比较同一内容身份
+身份，不再用模型名、绝对 source 路径、安装时间或一次答案哈希冒充版本证明。
+receipt 不读取 `.env`、数据库状态、sessions、logs、Memory 或企微凭据。
+
+本候选只能先部署到隔离 canary。回滚方式是恢复上一份经过 receipt 记录的完整
+distribution-owned 文件集合；不得覆盖运行目标的 `.env`、`state.db`、sessions、
+logs 或用户 Memory。部署、启动、业务数据库查询和企微发消息均不属于本次离线
+重构授权。
+
+## 验收门槛
+
+- schema 与逐分支运行时字段合同机械等价；
+- mixed valid/invalid batch 保留成功证据；
+- complete 扩展超预算只局部失败；
+- compact-before-budget 且 success-first；
+- scorecard 的指标选择、顺序和调用数可自适应；
+- planner/companion/fixed-answer scorer 不在发布路径；
+- 发布身份由内容计算；
+- 完整离线测试通过，并单独记录宿主 E2E、真实企微交付和三次稳定性测试的
+  未验证状态，不能用单元测试替代。
 
 ## 当前验证状态
 
-- `python -B -m unittest discover -s tests -p 'test_*.py'`：124/124 通过（2026-08-24 隔离候选验证）。
-- 108/108 个目录可用指标完成离线 request normalization、detail gate、pre-entity validation 与 SQL 静态编译；未执行 SQL。
-- golden expert suite 从 31 例增至 35 例，新增 scorecard 首路由、比例未定义、分组正式 DSO 未定义和未来 target-only 边界；`validate_suite` 无错误。
-- 0.13.1 目标 runtime 的整改前 Hermes 官方 `prompt-size --platform wecom --json` 实测基线：系统提示 14,648 字符，较旧版 16,770 字符降低 12.7%；Skill 索引为 8 项、1,000 字符。完整 Skill 正文按需加载，不计入该索引数字。本候选禁用 Humanizer 后必须在部署时重测，不把该基线冒充候选现值。
-- 同次基线实测的模型可见工具为 21 个、70,934 bytes：其中四个 DataSage 非核心工具为 28,796 bytes，其余 17 个 Hermes core/host 工具约 42,138 bytes。当前 `tool_search: off` 让它们全部 eager；即使启用 Tool Search，也只有非核心 DataSage 部分可延迟。这是用固定 schema 换取更少的 `tool_search/tool_describe` 往返，不是“总 token 一定下降”；保持关闭，必须由真实 A/B 验证其延迟与成本收益。
-- 隔离候选源目录的离线 `prompt-size` 为系统提示 13,011 chars、Skill 索引 1 项/127 chars、工具 21 个/71,036 bytes；源目录不含运行目标保留的非 owned 办公 Skills，因此该结果仅证明源包可组装，不能替代部署后的新会话测量。
-- 本轮未查询业务数据库、未修改 `.env` 或企微凭据；能力通过离线合同、紧凑投影和对抗规则测试验证，真实答案质量仍需用户在 canary 企微入口验收。
-
-## 后续必须完成
-
-### P0：在进入真实流量前
-
-- [x] 为新 receipt、reference union、Top-N 元数据、partial wire 增加架构回归测试。
-- [x] 将受影响的旧 prompt-specific 测试替换为架构不变量与运行时合同测试，没有删除质量门槛。
-- [ ] 为 receipt、reference union 和 partial wire 补充随机/属性测试。
-- [ ] 建立 50–100 条真实业务问题的 Hermes E2E 基线，每题至少 3 次 trial。
-- [ ] 硬门槛：工具执行后无最终答复为 0；不可恢复参数错误为 0；P90 小于 60 秒；成功 catalog 重放为 0。
-- [ ] 用相同题库 A/B `deepseek-v4-flash` 与 `deepseek-v4-pro`，按“每个被接受结果的总成本”决定路由。
-
-### P1：专家能力
-
-- 增加带单位检查的受控计算 AST：百分点、CAGR、加权平均、指数、跨期和有限跨指标计算。
-- 增加同比、自定义基准、周/季/年、滚动窗口和命名 cohort。
-- 增加受控分布、分位数、异常扫描、透视和安全 drill-through 原语。
-- 把 disclosure、格式化和 claim 校验完全下沉；默认只向模型返回高信号业务事实。
-- 对独立过滤查询先统一实体预检，再并发执行；不要让一个 filter 串行化整批。
-- 使用插件状态保存已选 domain/metric、有效 receipt 和 catalog 指纹，消除追问重放。
-
-### P2：专家闭环
-
-- 引入可验证的机制/实验/对照证据合同，使因果结论不再永久不可达。
-- 建立 forecast、scenario、方案比较、行动跟踪和反馈学习能力。
-- 增加 10–15 轮长对话与强制压缩测试，验证 period、scope、entity、receipt 和用户修正的保持。
-- 对最终文本使用人工校准的 grader，评价结论性、简洁度、行动性、证据一致性和过度模板化。
-
-## 发布规则
-
-本版本只允许发布到 `datasage-canary-next` 隔离 canary。发布必须使用 `distribution_owned` 白名单并保留 `.env`、`state.db`、sessions、logs 与用户 Memory；启动后只验证企微连接，不自动发送消息或查询业务数据库。真实 E2E 验收完成前不得切换更大范围流量。
+- 稳定文件状态下两次完整离线运行均为 `101/101 OK`，耗时分别为
+  `44.178s` 和 `41.928s`；故障注入测试中的 synthetic traceback 是预期日志。
+- capability/schema-runtime 等价、mixed partial、物理预算局部失败、complete
+  内部 ID 隔离、compact-before-budget、success-first subset、coverage 重建、
+  candidate scorecard、planner 删除链和内容发布身份均有回归测试。
+- 本轮未访问业务数据库、运行 Profile 的 state/log/session/Memory、企微交付或
+  任何凭据。
+- 尚未完成 Hermes 宿主 compaction 集成、真实企微 raw-vs-delivered 对照、真实
+  业务题每题三次稳定性、P50/P90 和成本验收。因此 `0.15.0-rc2` 是可审查的
+  离线重构候选，不是已获准部署或扩大流量的版本。

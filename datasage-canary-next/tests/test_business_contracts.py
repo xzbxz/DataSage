@@ -25,6 +25,7 @@ package.__path__ = [str(PLUGIN_ROOT)]
 sys.modules[TEST_PACKAGE] = package
 
 contracts = importlib.import_module(f"{TEST_PACKAGE}.contracts")
+references = importlib.import_module(f"{TEST_PACKAGE}.references")
 schemas = importlib.import_module(f"{TEST_PACKAGE}.schemas")
 skill_prompt = importlib.import_module(f"{TEST_PACKAGE}.skill_prompt")
 tools = importlib.import_module(f"{TEST_PACKAGE}.tools")
@@ -618,9 +619,15 @@ class BusinessContractTests(unittest.TestCase):
         )
         self.assertIn("requires_toolsets: [datasage-query]", content)
         self.assertIn("requires_tools: [datasage_catalog, datasage_query]", content)
-        self.assertTrue(
-            {"common-data-foundation", "datasage-query-patterns"}
-            <= set(config["skills"]["disabled"])
+        self.assertIn("common-data-foundation", set(config["skills"]["disabled"]))
+        self.assertNotIn("datasage-query-patterns", set(config["skills"]["disabled"]))
+        self.assertFalse(
+            (
+                PROFILE_ROOT
+                / "skills"
+                / "datasage"
+                / "datasage-query-patterns"
+            ).exists()
         )
 
     def test_user_visible_skills_declare_the_official_tool_search_bridge(self) -> None:
@@ -693,67 +700,9 @@ class BusinessContractTests(unittest.TestCase):
             contracts.datasage_catalog({"requests": [{"domain": "delivery"}]})
         )
         self.assertEqual("success", payload["status"])
-        affordances = payload["results"][0]["analysis_affordances"]
-        self.assertEqual("datasage-analysis-affordances/v8", affordances["version"])
-        contract = affordances["claim_wire_contracts"][
-            "net_change_contribution_rate"
-        ]
-
-        self.assertEqual(
-            "results[].claim_ledger[].facts.net_change_contribution_rate",
-            contract["field_path"],
-        )
-        self.assertEqual(
-            [
-                "same_result_change_reconciliation_operation_is_complete_change_decomposition",
-                "same_result_change_reconciliation_status_is_reconciled",
-                "claim_is_validly_sealed",
-                "claim_allowed_relations_contains_structural_contribution",
-                "returned_overall_delta_is_nonzero",
-                "producer_returned_the_field",
-            ],
-            contract["consume_only_when"],
-        )
-        self.assertEqual(
-            "result_status_success_alone_never_authorizes_consumption",
-            contract["success_boundary"],
-        )
-        self.assertEqual("decimal_string", contract["wire_type"])
-        self.assertEqual("signed_dimensionless_fraction", contract["semantic_type"])
-        self.assertEqual("one_equals_one_hundred_percent", contract["scale"])
-        self.assertEqual(
-            "negative_and_absolute_value_greater_than_one_are_valid",
-            contract["valid_range"],
-        )
-        self.assertEqual(
-            "sealed_returned_value_direct_use_only",
-            contract["provenance"],
-        )
-        self.assertEqual(
-            "multiply_by_100_exactly_once_with_one_consistent_display_precision",
-            contract["percentage_display"],
-        )
-
-        forbidden = set(contract["forbidden_transformations"])
-        self.assertEqual(
-            {
-                "recompute_from_visible_amounts",
-                "take_absolute_value",
-                "clamp",
-                "normalize_partition_rates_to_one_hundred_percent",
-                "force_partition_rates_to_sum_to_one_hundred_percent",
-                "invent_or_fill_when_absent",
-            },
-            forbidden,
-        )
-        self.assertEqual(
-            {
-                "zero_overall_delta": "field_absent_not_zero_rate",
-                "zero_partition_delta": "field_absent_not_zero_rate",
-                "producer_omission": "field_absent_never_infer_or_fill",
-            },
-            contract["absence_semantics"],
-        )
+        serialized_catalog = json.dumps(payload, ensure_ascii=False)
+        self.assertNotIn("analysis_affordances", serialized_catalog)
+        self.assertNotIn("reasoning_topics", serialized_catalog)
 
         results, model_wire = self._run_synthetic_change_pipeline(
             overall_triplet=("65.0000", "60", "5.0000"),
@@ -875,12 +824,6 @@ class BusinessContractTests(unittest.TestCase):
                     detail["metric"]["supports_generic_comparison"],
                     bool(expected),
                 )
-                planning = detail["analysis_affordances"][
-                    "selected_metric_change_planning"
-                ]
-                self.assertEqual(
-                    bool(expected), "change_extreme_ranking" in planning
-                )
 
         index = json.loads(
             contracts.datasage_catalog(
@@ -997,7 +940,7 @@ class BusinessContractTests(unittest.TestCase):
             )
         )
 
-    def test_snapshot_change_metrics_compile_and_project_exact_capabilities(self) -> None:
+    def test_snapshot_change_metrics_compile_from_published_capabilities(self) -> None:
         domain = "inventory"
         metric = "month_end_inventory_cost_rmb"
         dimensions = ("warehouse", "product")
@@ -1014,13 +957,7 @@ class BusinessContractTests(unittest.TestCase):
             list(dimensions),
             detail["metric"]["change_decomposition_dimensions"],
         )
-        operation = detail["analysis_affordances"][
-            "selected_metric_change_planning"
-        ]["complete_change_decomposition"]
-        self.assertIn(
-            "reconciled_decomposition",
-            operation["evidence_shape_separation"],
-        )
+        self.assertNotIn("analysis_affordances", detail)
         request = {
             "request_id": "inventory_compile_partition",
             "domain": domain,
@@ -1161,7 +1098,11 @@ class BusinessContractTests(unittest.TestCase):
             inconsistent_partition_snapshot=True,
         )
         invalid = invalid_raw[partition_id]
-        self.assertEqual("partial", invalid_payload["status"])
+        self.assertEqual(
+            "failed",
+            invalid_payload["status"],
+            "an internal overall success must not upgrade the one public failed branch",
+        )
         self.assertNotIn("error", invalid_payload)
         self.assertEqual("CONTRACT_UNAVAILABLE", invalid["error"]["code"])
         self.assertEqual(
@@ -1251,7 +1192,8 @@ class BusinessContractTests(unittest.TestCase):
             failure = json.loads(
                 tools.runtime_guarded_datasage_query({"requests": [flow_snapshot]})
             )
-        self.assertEqual("INVALID_PLAN", failure["error"]["code"])
+        self.assertNotIn("error", failure)
+        self.assertEqual("INVALID_PLAN", failure["results"][0]["error"]["code"])
         execute.assert_not_called()
         snapshot.assert_not_called()
 
@@ -1318,8 +1260,11 @@ class BusinessContractTests(unittest.TestCase):
                     source_evidence,
                 ),
             )
-        self.assertEqual("failed", oversized["status"])
-        self.assertEqual("OUTPUT_TOO_LARGE", oversized["error"]["code"])
+        self.assertEqual(
+            "success",
+            oversized["status"],
+            "raw internal size must not erase evidence that the model wire can compact",
+        )
         self.assertEqual(1, oversized["business_sql_attempted_count"])
         self.assertEqual(1, oversized["business_sql_confirmed_count"])
         self.assertEqual(source_evidence, oversized["source_evidence_ref"])
@@ -1546,9 +1491,10 @@ class BusinessContractTests(unittest.TestCase):
                 self.assertEqual("success", payload["status"], metric_code)
                 detail = payload["results"][0]
                 self.assertIs(detail["metric"]["supports_generic_comparison"], False)
-                self.assertNotIn(
-                    "change_extreme_ranking",
-                    detail["analysis_affordances"]["selected_metric_change_planning"],
+                self.assertEqual(
+                    [],
+                    detail["capability_affordances"]
+                    ["selected_metric_capabilities"]["comparison_kinds"],
                 )
 
     def test_target_dimension_limits_preserve_global_and_metric_arity(self) -> None:
@@ -1557,17 +1503,7 @@ class BusinessContractTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        planner = yaml.safe_load(
-            (
-                PROFILE_ROOT
-                / "skills"
-                / "target-query"
-                / "references"
-                / "planner-contract.yaml"
-            ).read_text(encoding="utf-8")
-        )
         self.assertEqual(5, semantics["defaults"]["max_business_dimensions"])
-        self.assertEqual(5, planner["defaults"]["max_business_dimensions"])
         expected = {
             "delivery_target_amount": 3,
             "receipt_target_amount": 3,
@@ -1602,7 +1538,7 @@ class BusinessContractTests(unittest.TestCase):
             )
             self.assertIn(
                 "complete_target_gap_decomposition",
-                detail["analysis_affordances"]["selected_metric_target_gap_planning"],
+                detail["capability_affordances"]["capabilities"],
             )
 
     def test_target_gap_executor_reconciles_three_amounts_in_one_scope(self) -> None:
@@ -1706,18 +1642,13 @@ class BusinessContractTests(unittest.TestCase):
                     "target_gap_composition", tools.evidence._supports(partition)
                 )
 
-    def test_domain_analysis_seeds_use_an_adaptive_soft_budget(self) -> None:
-        for domain in ("receipt", "receivable", "inventory", "target"):
-            content = (
-                PROFILE_ROOT
-                / "skills"
-                / f"{domain}-query"
-                / "references"
-                / "planner-contract.yaml"
-            ).read_text(encoding="utf-8")
-            self.assertIn("自适应软预算", content)
-            self.assertIn("不设固定查询、追问或轮数上限", content)
-            self.assertNotIn("最多在首批结果暴露实质缺口时追加一次", content)
+    def test_domain_planner_recipes_are_not_model_visible(self) -> None:
+        self.assertFalse(
+            any(source_id.startswith("planner_") for source_id in references._SECTION_SPECS)
+        )
+        self.assertFalse(
+            any(source_id.startswith("planner_") for source_id in references._SOURCE_PATHS)
+        )
 
     def test_receipt_detail_gate_and_required_answer_scope_survive_model_wire(
         self,
@@ -1757,60 +1688,7 @@ class BusinessContractTests(unittest.TestCase):
             False,
         )
 
-        unique = expert_index["metric_selection_boundary"]["branches"][
-            "unique_compatible"
-        ]
-        self.assertEqual(
-            {
-                "selected_metric.exact_default_lookup_supported": True,
-                "explicit_qualifiers_present": False,
-            },
-            unique["direct_query_when_all"],
-        )
-        detail_conditions = unique["detail_first_when_any"]
-        self.assertIn(
-            {"selected_metric.exact_default_lookup_supported": False},
-            detail_conditions,
-        )
-        self.assertIn(
-            {"selected_metric.exact_default_lookup_supported": "missing"},
-            detail_conditions,
-        )
-        qualifier_condition = next(
-            condition
-            for condition in detail_conditions
-            if condition.get("explicit_qualifiers_present") is True
-        )
-        self.assertIs(qualifier_condition["explicit_qualifiers_present"], True)
-        self.assertEqual(
-            {
-                "calendar_month",
-                "time_range",
-                "dimensions",
-                "filters",
-                "entity",
-                "comparison",
-                "decomposition",
-                "ranking",
-            },
-            set(qualifier_condition["examples"]),
-        )
-        self.assertEqual(
-            {"dimensions": []},
-            qualifier_condition["empty_values_do_not_count_as_present"],
-        )
-        self.assertIs(
-            unique["direct_query_when_all"]["explicit_qualifiers_present"],
-            False,
-        )
-        self.assertEqual(
-            "query_selected_metric_at_exact_governed_default",
-            unique["actions"]["direct_query"],
-        )
-        self.assertEqual(
-            "load_selected_metric_detail_before_query",
-            unique["actions"]["detail_first"],
-        )
+        self.assertNotIn("metric_selection_boundary", expert_index)
         self.assertNotIn("next_step", expert_index)
 
         captured: dict[str, object] = {}
@@ -2105,9 +1983,14 @@ class BusinessContractTests(unittest.TestCase):
             ).read_text(encoding="utf-8")
         )
         self.assertEqual("datasage-mini-receipt-semantics/v9", receipt_contract["version"])
-        self.assertIn(
-            "本次实际查询的用途分组或筛选范围",
-            "\n".join(receipt_contract["answer_contract"]),
+        self.assertNotIn("answer_contract", receipt_contract)
+        receipt_disclosures = {
+            item["id"]: item
+            for item in receipt_contract["default_disclosures"]
+        }
+        self.assertEqual(
+            "用途以本次实际查询的用途分组或筛选范围为准。",
+            receipt_disclosures["receipt.domain.usage-scope"]["text"],
         )
 
         query_description = schemas.DATASAGE_QUERY["description"]
@@ -2131,9 +2014,6 @@ class BusinessContractTests(unittest.TestCase):
         self.assertIn("copy that result's `detail_receipt`", normalized)
         self.assertIn("Never reuse it for another metric", normalized)
         self.assertIn("Preserve typed states", normalized)
-        registration = (PLUGIN_ROOT / "__init__.py").read_text(encoding="utf-8")
-        self.assertNotIn("frozen_wecom_skill_hook", registration)
-        self.assertIn('register_hook("transform_llm_output"', registration)
 
     def test_runtime_metric_detail_receipt_gate_fails_closed_before_database(
         self,
@@ -2276,7 +2156,8 @@ class BusinessContractTests(unittest.TestCase):
             )
         self.assertEqual("failed", runtime_failure["status"])
         self.assertEqual(
-            "METRIC_DETAIL_REQUIRED", runtime_failure["error"]["code"]
+            "METRIC_DETAIL_REQUIRED",
+            runtime_failure["results"][0]["error"]["code"],
         )
 
     def test_public_runtime_receipt_gate_covers_plan_batch_decomposition_and_wire(
@@ -2312,7 +2193,10 @@ class BusinessContractTests(unittest.TestCase):
                 )
             )
         self.assertEqual("failed", late_failure["status"])
-        self.assertEqual("INVALID_PLAN", late_failure["error"]["code"])
+        self.assertNotIn("error", late_failure)
+        self.assertEqual(
+            "INVALID_PLAN", late_failure["results"][0]["error"]["code"]
+        )
         execute.assert_not_called()
 
         exact_default = {
@@ -2331,18 +2215,37 @@ class BusinessContractTests(unittest.TestCase):
             "metric": "net_receipt_amount",
             "dimensions": [],
         }
-        with mock.patch.object(
-            tools,
-            "_execute_with_source",
-            side_effect=AssertionError("batch validation must be DB-free"),
-        ) as execute:
-            batch_failure = json.loads(
+        with (
+            mock.patch.object(
+                runtime_health,
+                "query_readiness_status",
+                return_value={"ready": True},
+            ),
+            mock.patch.object(
+                tools,
+                "_execute_with_source",
+                return_value=(
+                    [{"metric_value": "42.00"}],
+                    False,
+                    self._read_only_source_evidence(),
+                ),
+            ) as execute,
+        ):
+            mixed = json.loads(
                 tools.runtime_guarded_datasage_query(
                     {"requests": [exact_default, missing_receipt]}
                 )
             )
-        self.assertEqual("METRIC_DETAIL_REQUIRED", batch_failure["error"]["code"])
-        execute.assert_not_called()
+        self.assertEqual("partial", mixed["status"])
+        self.assertEqual(2, mixed["request_count"])
+        by_id = {item["request_id"]: item for item in mixed["results"]}
+        self.assertEqual("success", by_id["batch_exact_default"]["status"])
+        self.assertEqual("failed", by_id["batch_missing_receipt"]["status"])
+        self.assertEqual(
+            "METRIC_DETAIL_REQUIRED",
+            by_id["batch_missing_receipt"]["error"]["code"],
+        )
+        execute.assert_called_once()
 
         decomposition = {
             "request_id": "bad_decomposition_receipt",
@@ -2366,7 +2269,7 @@ class BusinessContractTests(unittest.TestCase):
             )
         self.assertEqual(
             "METRIC_DETAIL_RECEIPT_INVALID",
-            decomposition_failure["error"]["code"],
+            decomposition_failure["results"][0]["error"]["code"],
         )
         execute.assert_not_called()
 
@@ -2422,6 +2325,126 @@ class BusinessContractTests(unittest.TestCase):
         self.assertNotIn(
             delivery_receipt,
             json.dumps(with_receipt, ensure_ascii=False),
+        )
+
+    def test_physical_execution_budget_is_a_local_branch_failure(self) -> None:
+        requests = [
+            {
+                "request_id": f"budget_normal_{index}",
+                "domain": "delivery",
+                "mode": "metric",
+                "purpose": "offline physical budget branch probe",
+                "metric": "delivery_amount",
+                "dimensions": [],
+            }
+            for index in range(9)
+        ]
+        requests.append(
+            {
+                "request_id": "budget_complete_overflow",
+                "domain": "receipt",
+                "mode": "metric",
+                "purpose": "offline physical budget complete operation probe",
+                "metric": "net_receipt_amount",
+                "detail_receipt": self._metric_detail_receipt(
+                    "receipt", "net_receipt_amount"
+                ),
+                "calendar_month": "2026-07",
+                "complete_change_decomposition": {"dimension": "customer"},
+            }
+        )
+        with (
+            mock.patch.object(
+                runtime_health,
+                "query_readiness_status",
+                return_value={"ready": True},
+            ),
+            mock.patch.object(
+                tools,
+                "_execute_with_source",
+                return_value=(
+                    [{"metric_value": "42.00"}],
+                    False,
+                    self._read_only_source_evidence(),
+                ),
+            ) as execute,
+        ):
+            payload = json.loads(
+                tools.runtime_guarded_datasage_query({"requests": requests})
+            )
+
+        self.assertEqual("partial", payload["status"])
+        self.assertEqual(10, payload["request_count"])
+        by_id = {item["request_id"]: item for item in payload["results"]}
+        for index in range(9):
+            self.assertEqual("success", by_id[f"budget_normal_{index}"]["status"])
+        self.assertEqual(
+            "EXECUTION_BUDGET_EXCEEDED",
+            by_id["budget_complete_overflow"]["error"]["code"],
+        )
+        self.assertEqual(9, execute.call_count)
+
+    def test_generated_decomposition_ids_do_not_collide_or_leak_into_public_coverage(
+        self,
+    ) -> None:
+        complete = {
+            "request_id": "public_partition",
+            "domain": "delivery",
+            "mode": "metric",
+            "purpose": "offline generated ID collision boundary probe",
+            "metric": "delivery_amount",
+            "detail_receipt": self._metric_detail_receipt(
+                "delivery", "delivery_amount"
+            ),
+            "calendar_month": "2026-07",
+            "complete_change_decomposition": {"dimension": "department"},
+        }
+        first_expansion, first_links = tools._expand_complete_change_decompositions(
+            [complete], reserved_request_ids=[complete["request_id"]]
+        )
+        colliding_public_id = first_links[complete["request_id"]]
+        colliding_public = {
+            "request_id": colliding_public_id,
+            "domain": "delivery",
+            "mode": "metric",
+            "purpose": "offline public ID collision boundary probe",
+            "metric": "delivery_amount",
+            "dimensions": [],
+        }
+        expanded, links = tools._expand_complete_change_decompositions(
+            [complete, colliding_public],
+            reserved_request_ids=[complete["request_id"], colliding_public_id],
+        )
+        expanded_ids = [item["request_id"] for item in expanded]
+        self.assertEqual(len(expanded_ids), len(set(expanded_ids)))
+        self.assertNotEqual(colliding_public_id, links[complete["request_id"]])
+        self.assertIn(colliding_public_id, expanded_ids)
+        self.assertNotEqual(first_expansion[0]["request_id"], expanded[0]["request_id"])
+
+        with mock.patch.object(
+            runtime_health,
+            "query_readiness_status",
+            return_value={
+                "ready": False,
+                "reason_code": "DATABASE_CONFIGURATION_MISSING",
+            },
+        ):
+            payload = json.loads(
+                tools.runtime_guarded_datasage_query(
+                    {"requests": [complete, colliding_public]}
+                )
+            )
+        public_ids = [item["request_id"] for item in payload["results"]]
+        self.assertEqual(
+            [complete["request_id"], colliding_public_id], public_ids
+        )
+        self.assertEqual(len(public_ids), len(set(public_ids)))
+        evidence_ids = {
+            item["request_id"] for item in payload["evidence_bundle"]["items"]
+        }
+        self.assertEqual(set(public_ids), evidence_ids)
+        self.assertEqual(
+            len(public_ids), payload["evidence_bundle"]["coverage"]["request_count"]
         )
 
     def test_public_model_wire_and_bundle_fail_closed_together(self) -> None:
@@ -3194,7 +3217,7 @@ class BusinessContractTests(unittest.TestCase):
             self.assertEqual("undefined", projected["data_state"])
             self.assertEqual([], projected["claim_ledger"])
             self.assertEqual(0, projected["row_count"])
-            self.assertEqual([], projected["allowed_reasoning_topics"])
+            self.assertNotIn("allowed_reasoning_topics", projected)
             self.assertEqual(
                 "EVIDENCE_INTEGRITY_INVALID",
                 projected["error"]["code"],
@@ -3453,7 +3476,7 @@ class BusinessContractTests(unittest.TestCase):
                 result["claim_ledger"][0]["facts"],
                 case_name,
             )
-            self.assertEqual([], result["allowed_reasoning_topics"], case_name)
+            self.assertNotIn("allowed_reasoning_topics", result, case_name)
             case_disclosure_ids = {
                 item["disclosure_id"] for item in result["disclosure_ledger"]
             }
@@ -3729,7 +3752,8 @@ class BusinessContractTests(unittest.TestCase):
         execute.assert_not_called()
         self.assertEqual("failed", stale_payload["status"])
         self.assertEqual(
-            "METRIC_DETAIL_RECEIPT_INVALID", stale_payload["error"]["code"]
+            "METRIC_DETAIL_RECEIPT_INVALID",
+            stale_payload["results"][0]["error"]["code"],
         )
 
         delivery_receipt_result, _ = run_query(
@@ -3755,9 +3779,6 @@ class BusinessContractTests(unittest.TestCase):
         self.assertIn("Preserve typed states", main_skill)
         self.assertIn("Never invent or substitute a metric", main_skill)
         self.assertNotIn("formal-receivable-turnover-calculation-attestation/v1", main_skill)
-        registration = (PLUGIN_ROOT / "__init__.py").read_text(encoding="utf-8")
-        self.assertNotIn("frozen_wecom_skill_hook", registration)
-        self.assertIn('register_hook("transform_llm_output"', registration)
 
     def test_delivery_internal_customer_exclusion_is_sealed_and_model_visible(
         self,
@@ -3894,23 +3915,24 @@ class BusinessContractTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        rules = delivery["answer_rules"]
-        joined_rules = "\n".join(rules)
-        self.assertNotIn("不设置固定最大查询跨度", joined_rules)
-        self.assertNotIn("跨度较长”本身说成口径错误或拒绝理由", joined_rules)
-        governance_rule = next(
-            rule
-            for rule in rules
-            if "query-policy.governed_metric_time_range.max_days" in rule
-        )
-        self.assertIn("query-policy 的 wider_analysis 规则拆分", governance_rule)
-        self.assertIn("单一权威治理", governance_rule)
+        self.assertNotIn("answer_rules", delivery)
         time_policy = policy["governed_metric_time_range"]
         self.assertEqual(
             "split_into_independently_bounded_periods",
             time_policy["wider_analysis"],
         )
-        self.assertNotIn(str(time_policy["max_days"]), governance_rule)
+        catalog = json.loads(
+            contracts.datasage_catalog(
+                {"requests": [{"domain": "delivery", "metric": "delivery_amount"}]}
+            )
+        )
+        self.assertEqual(
+            time_policy,
+            catalog["query_policy"]["governed_metric_time_range"],
+        )
+        description = schemas.REQUEST["properties"]["time_range"]["description"]
+        self.assertIn("Start-inclusive", description)
+        self.assertIn("end-exclusive", description)
 
     def test_snapshot_month_evidence_and_typed_states_are_model_safe(self) -> None:
         def run_query(
@@ -4406,7 +4428,8 @@ class BusinessContractTests(unittest.TestCase):
         execute.assert_not_called()
         self.assertEqual("failed", stale_payload["status"])
         self.assertEqual(
-            "METRIC_DETAIL_RECEIPT_INVALID", stale_payload["error"]["code"]
+            "METRIC_DETAIL_RECEIPT_INVALID",
+            stale_payload["results"][0]["error"]["code"],
         )
         self.assertNotIn("42.00", json.dumps(stale_payload))
 
@@ -4813,10 +4836,10 @@ class BusinessContractTests(unittest.TestCase):
         self.assertEqual("failed", stale_payload["status"])
         self.assertEqual(
             "METRIC_DETAIL_RECEIPT_INVALID",
-            stale_payload["error"]["code"],
+            stale_payload["results"][0]["error"]["code"],
         )
 
-    def test_target_metric_ambiguity_requires_official_clarification(self) -> None:
+    def test_target_catalog_publishes_candidates_without_owning_clarification(self) -> None:
         payload = json.loads(
             contracts.datasage_catalog(
                 {"requests": [{"domain": "target", "view": "expert_index"}]}
@@ -4831,53 +4854,12 @@ class BusinessContractTests(unittest.TestCase):
         }
         self.assertTrue(completion_metrics.issubset(metric_codes))
 
-        boundary = expert_index["metric_selection_boundary"]
-        branches = boundary["branches"]
-        self.assertEqual(
-            "candidate_index_only_no_match_classification",
-            boundary["producer_scope"],
-        )
-        self.assertEqual(
-            "call_official_clarify",
-            branches["multiple_materially_distinct"]["next_step"],
-        )
-        self.assertEqual(
-            {"metric_detail_calls": 0, "datasage_query_calls": 0},
-            branches["multiple_materially_distinct"][
-                "before_clarification_response"
-            ],
-        )
-        self.assertEqual(
-            "report_domain_local_gap_or_call_official_clarify",
-            branches["zero_compatible"]["next_step"],
-        )
-        zero_branch = branches["zero_compatible"]
-        self.assertEqual("current_returned_domain_only", zero_branch["scope"])
-        self.assertEqual(
-            {"metric_detail_calls": 0, "datasage_query_calls": 0},
-            zero_branch["before_response"],
-        )
-        self.assertEqual(
-            "user_semantics_explicitly_support_one_minimal_related_domain",
-            zero_branch["cross_domain_check"]["allowed_only_when"],
-        )
-        self.assertEqual(
-            "load_only_that_related_domain_expert_index",
-            zero_branch["cross_domain_check"]["action"],
-        )
-        self.assertEqual(
-            ["enumerate_all_domains", "claim_globally_unsupported"],
-            zero_branch["forbidden"],
-        )
+        self.assertNotIn("metric_selection_boundary", expert_index)
         self.assertNotIn("next_step", expert_index)
         serialized_index = json.dumps(expert_index, ensure_ascii=False)
         self.assertNotIn('"exact_match"', serialized_index)
         self.assertNotIn('"ambiguity"', serialized_index)
 
-        activation = (
-            "user_explicitly_selected_both_or_original_question_explicitly_"
-            "requests_both"
-        )
         for metric in sorted(completion_metrics):
             detail = json.loads(
                 contracts.datasage_catalog(
@@ -4887,123 +4869,25 @@ class BusinessContractTests(unittest.TestCase):
             self.assertEqual("success", detail["status"], metric)
             projected = detail["results"][0]
             self.assertEqual(metric, projected["metric"]["code"])
-            self.assertNotIn(
-                "return_delivery_and_receipt_together",
-                json.dumps(detail, ensure_ascii=False),
-            )
-            guidance = projected["planning_guidance"]
-            clarify_rules = [
-                rule
-                for rule in guidance["planning_rules"]
-                if "Hermes 官方 clarify" in rule
-            ]
-            self.assertEqual(1, len(clarify_rules), metric)
-            self.assertIn(
-                "澄清答复前 metric detail 和 datasage_query 均为0",
-                clarify_rules[0],
-            )
-            self.assertIn("用户明确选择两者", clarify_rules[0])
-            exact_overview_policy = guidance["recipe_policy"][
-                "exact_overview_bundle"
-            ]
-            self.assertIn("仅在用户明确选择出库与收款两者", exact_overview_policy)
-            self.assertIn("原问题明确要求", exact_overview_policy)
-            recipes = guidance["recipes"]
-            overview = recipes["completion_overview"]
-            self.assertEqual("exact_overview_bundle", overview["kind"])
-            self.assertEqual(activation, overview["activation"])
-            self.assertEqual(
-                completion_metrics,
-                {request["metric"] for request in overview["requests"]},
-            )
-            dual_query_recipes = []
-            for recipe_name, recipe in recipes.items():
-                requests = (
-                    recipe.get("requests")
-                    if isinstance(recipe, dict)
-                    else None
-                )
-                if not isinstance(requests, list):
-                    continue
-                request_metrics = {
-                    request.get("metric")
-                    for request in requests
-                    if isinstance(request, dict)
-                }
-                if completion_metrics.issubset(request_metrics):
-                    dual_query_recipes.append(recipe_name)
-                    self.assertEqual(activation, recipe.get("activation"))
-            self.assertEqual(["completion_overview"], dual_query_recipes)
+            serialized_detail = json.dumps(projected, ensure_ascii=False)
+            for forbidden in (
+                "planning_guidance",
+                "recipe_policy",
+                "recipes",
+                "next_step",
+                "call_official_clarify",
+            ):
+                self.assertNotIn(forbidden, serialized_detail)
 
-        planner_path = (
-            PROFILE_ROOT / "skills/target-query/references/planner-contract.yaml"
+    def test_model_planner_skill_contracts_are_absent_from_release_tree(self) -> None:
+        planner_contracts = list(
+            (PROFILE_ROOT / "skills").glob("*-query/references/planner-contract.yaml")
         )
-        semantics_path = (
-            PROFILE_ROOT
-            / "plugins/datasage-query/contracts/target-semantics.yaml"
-        )
-        planner = yaml.safe_load(planner_path.read_text(encoding="utf-8"))
-        semantics = yaml.safe_load(semantics_path.read_text(encoding="utf-8"))
-        self.assertEqual(
-            "clarify_before_metric_detail_and_query",
-            planner["defaults"]["ambiguous_target_type"],
-        )
-        self.assertEqual(
-            {"metric_detail_calls": 0, "datasage_query_calls": 0},
-            planner["defaults"]["ambiguous_target_pre_response"],
-        )
-        self.assertEqual(
-            activation,
-            planner["recipes"]["completion_overview"]["activation"],
-        )
-        self.assertEqual("plugin_physical_execution", semantics["contract_role"])
-        for session_policy_key in (
-            "ambiguous_target_type",
-            "ambiguous_target_pre_response",
-            "completion_overview_activation",
-        ):
-            self.assertNotIn(session_policy_key, semantics["defaults"])
-        semantics_recipe_status = semantics["analysis_recipes_status"]
-        self.assertEqual(
-            "reference_only_not_runtime_or_model_authority",
-            semantics_recipe_status["status"],
-        )
-        self.assertEqual(
-            "planner_contract",
-            semantics_recipe_status["authoritative_source"],
-        )
-        self.assertIs(semantics_recipe_status["runtime_authority"], False)
-        self.assertIs(semantics_recipe_status["user_intent_authority"], False)
-        self.assertNotIn(
-            "activation",
-            semantics["analysis_recipes"]["completion_overview"],
-        )
-        for content in (
-            planner_path.read_text(encoding="utf-8"),
-            semantics_path.read_text(encoding="utf-8"),
-        ):
-            self.assertNotIn("return_delivery_and_receipt_together", content)
-
-        main_skill = (PROFILE_ROOT / "skills/datasage/SKILL.md").read_text(
-            encoding="utf-8"
-        )
-        normalized = " ".join(main_skill.split())
-        self.assertIn("Read a small number of candidate details", normalized)
-        self.assertIn("before asking the user", normalized)
-        soul = (PROFILE_ROOT / "SOUL.md").read_text(encoding="utf-8")
-        self.assertIn(
-            "Ask for clarification only when materially different interpretations",
-            " ".join(soul.split()),
-        )
-
-    def test_delivery_planner_has_no_dev1_acceptance_orphan(self) -> None:
-        for relative_path in (
-            "skills/delivery-query/references/planner-contract.yaml",
-            "plugins/datasage-query/contracts/delivery-semantics.yaml",
-        ):
-            content = (PROFILE_ROOT / relative_path).read_text(encoding="utf-8")
-            self.assertNotIn("phase_a_acceptance", content)
-            self.assertNotIn("dev1_single_metric_vertical_slice", content)
+        self.assertEqual([], planner_contracts)
+        for path in (PLUGIN_ROOT / "contracts").glob("*-semantics.yaml"):
+            semantics = yaml.safe_load(path.read_text(encoding="utf-8"))
+            self.assertNotIn("model_planner_contract", semantics, path.name)
+            self.assertNotIn("triggers", semantics, path.name)
 
     def test_all_model_catalog_details_avoid_legacy_driver_vocabulary(self) -> None:
         checked_metrics = 0
@@ -5033,16 +4917,20 @@ class BusinessContractTests(unittest.TestCase):
                 self.assertEqual("success", payload["status"], metric["code"])
                 serialized = json.dumps(payload, ensure_ascii=False).casefold()
                 self.assertNotIn("driver", serialized, metric["code"])
+                self.assertNotIn("analysis_affordances", serialized)
+                self.assertNotIn("reasoning_topics", serialized)
                 if metric["supports_change_decomposition"]:
-                    self.assertIn(
-                        "structural_contributor_count_semantics", serialized
+                    self.assertTrue(
+                        payload["results"][0]["metric"][
+                            "change_decomposition_dimensions"
+                        ]
                     )
                     structural_metrics += 1
                 checked_metrics += 1
         self.assertGreater(checked_metrics, 100)
         self.assertGreater(structural_metrics, 0)
 
-    def test_model_wire_renames_legacy_reconciliation_fields_without_mutation(self) -> None:
+    def test_model_wire_does_not_mutate_or_publish_legacy_reconciliation_fields(self) -> None:
         internal_reconciliation = {
             "driver_projection_fingerprint": "projection-1",
             "driver_current_sum": 12,
@@ -5064,10 +4952,7 @@ class BusinessContractTests(unittest.TestCase):
         )
         serialized = json.dumps(projected, ensure_ascii=False).casefold()
         self.assertNotIn("driver", serialized)
-        public = projected["change_reconciliation"]
-        self.assertEqual(["claim-1"], public["structural_contributor_claim_ids"])
-        self.assertEqual(3, public["full_partition_row_count"])
-        self.assertEqual(1, public["returned_nonzero_contributor_count"])
+        self.assertNotIn("change_reconciliation", projected)
         self.assertIn("driver_claim_ids", internal_reconciliation)
 
     def test_model_wire_filters_unsealed_evidence_for_every_metric(self) -> None:
@@ -5171,6 +5056,7 @@ class BusinessContractTests(unittest.TestCase):
         self.assertEqual(valid["claim_ledger"], projected["claim_ledger"])
         self.assertEqual("complete", projected["data_state"])
         self.assertNotIn("error", projected)
+        self.assertNotIn("allowed_reasoning_topics", projected)
         self.assertEqual(
             ["delivery.scope"],
             [
@@ -5217,7 +5103,7 @@ class BusinessContractTests(unittest.TestCase):
                 failed_closed["error"]["code"],
                 label,
             )
-            self.assertEqual([], failed_closed["allowed_reasoning_topics"], label)
+            self.assertNotIn("allowed_reasoning_topics", failed_closed, label)
 
         partially_tampered = result_fixture()
         second_claim = json.loads(
@@ -5787,6 +5673,51 @@ class BusinessContractTests(unittest.TestCase):
             }
             self.assertEqual("客户部门", labels["department"])
             self.assertEqual("业务组织", labels["organization"])
+
+    def test_distribution_and_component_versions_are_content_consistent(self) -> None:
+        distribution = yaml.safe_load(
+            (PROFILE_ROOT / "distribution.yaml").read_text(encoding="utf-8")
+        )
+        plugin_manifest = yaml.safe_load(
+            (PLUGIN_ROOT / "plugin.yaml").read_text(encoding="utf-8")
+        )
+        architecture = (PROFILE_ROOT / "ARCHITECTURE.md").read_text(
+            encoding="utf-8"
+        )
+        main_skill = skill_prompt.load_main_skill(PROFILE_ROOT)
+
+        version = str(distribution["version"])
+        hermes_version = str(distribution["hermes_requires"]).removeprefix("==")
+        self.assertEqual(version, str(plugin_manifest["version"]))
+        self.assertIn(f"version: {version}", main_skill)
+        self.assertIn(f"`{version}`", architecture)
+        self.assertIn(f"`{hermes_version}`", architecture)
+
+    def test_skill_keeps_adaptive_planning_and_evidence_boundaries(self) -> None:
+        main_skill = skill_prompt.load_main_skill(PROFILE_ROOT)
+        normalized = " ".join(main_skill.split())
+
+        self.assertIn("Choose the route adaptively", normalized)
+        self.assertIn("If one branch fails, preserve valid independent evidence", normalized)
+        for forbidden in (
+            "must query exactly",
+            "fixed metric count",
+            "fixed call order",
+            "answer template",
+        ):
+            self.assertNotIn(forbidden, normalized.casefold())
+        self.assertTrue(callable(skill_prompt.load_main_skill))
+        self.assertFalse(hasattr(skill_prompt, "build_wecom_skill_hook"))
+        self.assertFalse(hasattr(skill_prompt, "frozen_wecom_skill_hook"))
+
+        registration = (PLUGIN_ROOT / "__init__.py").read_text(encoding="utf-8")
+        self.assertEqual(4, registration.count("ctx.register_tool("))
+        self.assertEqual(1, registration.count("ctx.register_system_prompt_section("))
+        self.assertNotIn("ctx.register_hook(", registration)
+        self.assertNotIn("answer_guard", registration)
+        self.assertNotIn("transform_llm_output", registration)
+        self.assertNotIn("post_tool_call", registration)
+        self.assertNotIn("pre_llm_call", registration)
 
 
 if __name__ == "__main__":

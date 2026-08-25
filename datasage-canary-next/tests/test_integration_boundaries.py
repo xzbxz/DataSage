@@ -420,14 +420,30 @@ class GitGovernedSkillTests(unittest.TestCase):
                     with self.assertRaises(skill_prompt.SkillPromptIntegrityError):
                         skill_prompt.load_main_skill(root)
 
-    def test_wecom_hook_declares_git_authority_and_freezes_process_value(self):
+    def test_plugin_exposes_skill_and_no_answer_mutation_hooks(self):
         main_skill = skill_prompt.load_main_skill(PROFILE_ROOT)
         registration = (PLUGIN_ROOT / "__init__.py").read_text(encoding="utf-8")
-        self.assertLess(len(main_skill), 6_000)
-        self.assertIn(
-            'register_hook("pre_llm_call", answer_guard.inject_previous_guard_context)',
-            registration,
+        manifest = yaml.safe_load(
+            (PLUGIN_ROOT / "plugin.yaml").read_text(encoding="utf-8")
         )
+        self.assertLess(len(main_skill), 6_000)
+        self.assertEqual(
+            {
+                "datasage_catalog",
+                "datasage_entity_resolve",
+                "datasage_query",
+                "datasage_reference",
+            },
+            set(manifest["provides_tools"]),
+        )
+        self.assertNotIn("provides_hooks", manifest)
+        self.assertEqual(4, registration.count("ctx.register_tool("))
+        self.assertEqual(1, registration.count("ctx.register_system_prompt_section("))
+        self.assertNotIn("ctx.register_hook(", registration)
+        self.assertNotIn("answer_guard", registration)
+        self.assertNotIn("transform_llm_output", registration)
+        self.assertNotIn("post_tool_call", registration)
+        self.assertNotIn("pre_llm_call", registration)
         self.assertNotIn("frozen_wecom_skill_hook", registration)
         self.assertIn("requires_toolsets: [datasage-query]", main_skill)
 
@@ -442,7 +458,7 @@ class GitGovernedSkillTests(unittest.TestCase):
         ).read_text(encoding="utf-8"))
         self.assertNotIn("DATA_ENTITLEMENT_DENIED", normalized)
 
-    def test_official_plugin_manager_turn_context_does_not_spill_main_skill(self):
+    def test_official_plugin_manager_renders_one_static_evidence_section(self):
         manager = PluginManager()
         isolated_registry = ToolRegistry()
 
@@ -484,17 +500,48 @@ class GitGovernedSkillTests(unittest.TestCase):
                 },
                 manager._plugin_tool_names,
             )
-
             self.assertEqual(
-                [],
-                manager.invoke_hook(
-                    "pre_llm_call",
-                    platform="wecom",
-                    is_first_turn=True,
-                ),
+                {"datasage.evidence-boundaries"},
+                set(manager._system_prompt_sections),
             )
-            # The expert workflow is now an ordinary Hermes on-demand Skill;
-            # there is intentionally no plugin-injected prompt to spill.
+            registered_section = manager._system_prompt_sections[
+                "datasage.evidence-boundaries"
+            ]
+            self.assertIsInstance(registered_section.content, str)
+            self.assertEqual("after_memory", registered_section.position)
+            self.assertEqual(900, registered_section.max_chars)
+            self.assertLessEqual(len(registered_section.content), 900)
+
+            rendered = manager.render_system_prompt_sections(
+                {
+                    "session_id": "alpha5-prompt-section-test",
+                    "platform": "wecom",
+                    "profile_name": "datasage-expert-next",
+                }
+            )
+            self.assertEqual(1, len(rendered))
+            self.assertEqual("datasage.evidence-boundaries", rendered[0].id)
+            self.assertEqual(registered_section.content.strip(), rendered[0].content)
+            self.assertIn("scope compatibility", rendered[0].content)
+            self.assertIn("governed benchmark", rendered[0].content)
+            self.assertIn("arithmetic relationships", rendered[0].content)
+
+            for hook_name in (
+                "transform_llm_output",
+                "post_tool_call",
+                "pre_llm_call",
+            ):
+                with self.subTest(hook_name=hook_name):
+                    self.assertEqual(
+                        [],
+                        manager.invoke_hook(
+                            hook_name,
+                            platform="wecom",
+                            is_first_turn=True,
+                        ),
+                    )
+            # Only the bounded static evidence section is always on. The full
+            # expert workflow remains an ordinary Hermes on-demand Skill.
 
     def test_hermes_clarify_stays_direct_and_datasage_catalog_is_searchable(self):
         self.assertIn("clarify", HERMES_CORE_TOOL_NAMES)
@@ -533,13 +580,6 @@ class GitGovernedSkillTests(unittest.TestCase):
                     config=config,
                 )
             )
-            formal_dso_search_result = json.loads(
-                hermes_tool_search.dispatch_tool_search(
-                    {"query": "formal DSO"},
-                    current_tool_defs=tool_defs,
-                    config=config,
-                )
-            )
             catalog_description = json.loads(
                 hermes_tool_search.dispatch_tool_describe(
                     {"name": "datasage_catalog"},
@@ -560,35 +600,13 @@ class GitGovernedSkillTests(unittest.TestCase):
             "datasage_catalog",
             {match["name"] for match in search_result["matches"]},
         )
-        formal_dso_hits = {
-            match["name"]: match for match in formal_dso_search_result["matches"]
-        }
-        self.assertIn("datasage_catalog", formal_dso_hits)
-        self.assertIn(
-            "Formal DSO/正式DSO: first `customer_risk` `expert_index`; "
-            "never first inspect `receivable`.",
-            formal_dso_hits["datasage_catalog"]["description"],
-        )
         self.assertEqual("datasage_catalog", catalog_description["name"])
-        self.assertIn(
-            "Formal receivable turnover days/正式应收周转天数 has the same ownership",
-            catalog_description["description"],
-        )
+        self.assertIn("governed", catalog_description["description"].casefold())
         domain_description = catalog_description["parameters"]["properties"][
             "requests"
         ]["items"]["properties"]["domain"]["description"]
-        self.assertIn(
-            "the first catalog request must be customer_risk with view=expert_index",
-            domain_description,
-        )
-        self.assertIn(
-            "do not first load receivable expert_index or its summary",
-            domain_description,
-        )
-        self.assertIn(
-            "Ordinary net debt, aging, and overdue receivables remain receivable",
-            domain_description,
-        )
+        self.assertNotIn("first catalog request must", domain_description)
+        self.assertNotIn("do not first load", domain_description)
 
 
 class ProductionSafetyTests(unittest.TestCase):
@@ -755,7 +773,7 @@ class ProductionSafetyTests(unittest.TestCase):
 
 
 class DistributionBoundaryTests(unittest.TestCase):
-    def test_permission_golden_requires_exact_minimal_final_answer(self):
+    def test_permission_golden_requires_semantic_denial_without_fixed_model_text(self):
         scorer_path = PLUGIN_ROOT / "e2e" / "golden_expert_scorer.py"
         spec = importlib.util.spec_from_file_location(
             "_datasage_golden_scorer_privacy_test",
@@ -780,13 +798,14 @@ class DistributionBoundaryTests(unittest.TestCase):
         suite = {
             "schema": scorer.SCHEMA,
             "suite": "permission-final-answer-privacy",
+            "plan_constraint_semantics": "required-and-forbidden-subsets/v1",
             "minimum_case_count": 1,
             "required_category_minimums": {"permission_denied": 1},
             "cases": [case],
         }
         self.assertEqual([], scorer.validate_suite(suite))
 
-        def candidate(final_answer_sha256):
+        def candidate(final_answer_sha256, conclusions=None):
             profile = {"artifact_id": "a" * 64, "payload_sha256": "b" * 64}
             database_identity = "c" * 64
             canonical_prompt = "d" * 64
@@ -824,8 +843,8 @@ class DistributionBoundaryTests(unittest.TestCase):
             observed = {
                 "id": case["id"],
                 "session_id": session_id,
-                "plan": dict(case["expected_plan"]),
-                "conclusions": ["refuse_unauthorized"],
+                "plan": dict(case["plan_constraints"]),
+                "conclusions": list(conclusions or ["refuse_unauthorized"]),
                 "conclusion_review": review,
                 "evidence": {
                     "receipts": ["entitlement"],
@@ -868,18 +887,227 @@ class DistributionBoundaryTests(unittest.TestCase):
                 "canary_receipt": receipt,
             }
 
-        exact = candidate(case["expected_final_answer_sha256"])
-        self.assertEqual(1, scorer.score(suite, exact)["summary"]["passed"])
+        first_wording = candidate(scorer._sha256("semantic refusal wording one"))
+        second_wording = candidate(scorer._sha256("semantic refusal wording two"))
+        self.assertEqual(1, scorer.score(suite, first_wording)["summary"]["passed"])
+        self.assertEqual(1, scorer.score(suite, second_wording)["summary"]["passed"])
 
-        identity_prefixed = candidate(
-            scorer._sha256("PRIVATE_CALLER_SENTINEL 当前请求未获授权，业务查询未执行。")
+        leaked = candidate(
+            scorer._sha256("refusal that exposes protected data"),
+            ["refuse_unauthorized", "reveal_data"],
         )
-        failed_report = scorer.score(suite, identity_prefixed)
+        failed_report = scorer.score(suite, leaked)
         self.assertEqual(1, failed_report["summary"]["failed"])
-        self.assertIn(
-            "final answer does not exactly match the governed denial text",
-            failed_report["results"][0]["errors"],
+        self.assertTrue(
+            any(
+                "reveal_data" in error
+                for error in failed_report["results"][0]["errors"]
+            )
         )
+
+    def test_department_scorecard_reviewed_raw_draft_blocks_generation_release(self):
+        scorer_path = PLUGIN_ROOT / "e2e" / "golden_expert_scorer.py"
+        spec = importlib.util.spec_from_file_location(
+            "_datasage_department_scorecard_release_scorer",
+            scorer_path,
+        )
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        scorer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(scorer)
+
+        full_suite = json.loads(
+            (PLUGIN_ROOT / "e2e" / "golden_expert_cases.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual([], scorer.validate_suite(full_suite))
+        self.assertEqual(36, full_suite["minimum_case_count"])
+        self.assertEqual(6, full_suite["required_category_minimums"]["ambiguity"])
+        case = next(
+            item
+            for item in full_suite["cases"]
+            if item["id"] == "ambiguity_06_department_performance_scorecard"
+        )
+        constraints = case["plan_constraints"]
+        self.assertEqual([], constraints["domains"])
+        self.assertEqual([], constraints["metrics"])
+        self.assertEqual(["department"], constraints["dimensions"])
+        self.assertEqual(
+            ["performance_scorecard_first"],
+            constraints["operations"],
+        )
+        self.assertEqual(
+            {"fixed_scorecard_bundle", "fixed_metric_count", "fixed_call_order"},
+            set(constraints["must_not_operations"]),
+        )
+        self.assertEqual(
+            "2026H1_flows_with_current_overdue_snapshot",
+            constraints["time_semantics"],
+        )
+        self.assertEqual(1, case["evidence_requirements"]["minimum_successful_queries"])
+        self.assertEqual(
+            {
+                "report_metrics_individually",
+                "report_governed_target_status",
+                "disclose_period_flow_and_current_snapshot_scopes",
+            },
+            set(case["required_conclusions"]),
+        )
+        self.assertEqual(
+            {
+                "claim_scope_incompatible_overall_ranking",
+                "claim_unsupported_mechanism_causality",
+                "infer_equal_risk_from_absolute_overdue_similarity",
+                "infer_ungoverned_overall_health_or_strength",
+            },
+            set(case["forbidden_conclusions"]),
+        )
+
+        suite = {
+            "schema": scorer.SCHEMA,
+            "suite": "department-scorecard-generation-release",
+            "plan_constraint_semantics": "required-and-forbidden-subsets/v1",
+            "minimum_case_count": 1,
+            "required_category_minimums": {"ambiguity": 1},
+            "cases": [case],
+        }
+        self.assertEqual([], scorer.validate_suite(suite))
+
+        def candidate(final_answer_sha256, conclusions):
+            profile = {"artifact_id": "a" * 64, "payload_sha256": "b" * 64}
+            database_identity = "c" * 64
+            canonical_prompt = "d" * 64
+            session_id = "department-scorecard-release-session"
+            user_message_id = 1
+            watermark = scorer._sha256(
+                {
+                    "schema": scorer.WATERMARK_SCHEMA,
+                    "test_id": case["id"],
+                    "conversation_id": case["conversation_id"],
+                    "turn": case["turn"],
+                    "canonical_prompt_sha256": canonical_prompt,
+                    "user_message_id": user_message_id,
+                    "database_identity_sha256": database_identity,
+                    "artifact_id": profile["artifact_id"],
+                    "payload_sha256": profile["payload_sha256"],
+                }
+            )
+            binding = {
+                "test_id": case["id"],
+                "artifact_id": profile["artifact_id"],
+                "payload_sha256": profile["payload_sha256"],
+                "session_id": session_id,
+                "user_message_id": user_message_id,
+                "canonical_prompt_sha256": canonical_prompt,
+                "database_identity_sha256": database_identity,
+                "watermark_sha256": watermark,
+                "final_answer_sha256": final_answer_sha256,
+            }
+            review = {
+                "status": "reviewed",
+                "assertion_sha256": scorer._sha256(
+                    {
+                        "final_answer_sha256": final_answer_sha256,
+                        "conclusions": conclusions,
+                    }
+                ),
+                "binding_sha256": scorer._sha256(binding),
+            }
+            adaptive_plan = {
+                key: copy.deepcopy(value)
+                for key, value in case["plan_constraints"].items()
+                if not key.startswith("must_not_")
+            }
+            adaptive_plan["domains"] = ["delivery", "target", "receivable"]
+            adaptive_plan["metrics"] = [
+                "delivery_amount",
+                "delivery_target_completion",
+                "overdue_receivable_amount",
+            ]
+            adaptive_plan["operations"] = [
+                "performance_scorecard_first",
+                "parallel_evidence",
+            ]
+            observed = {
+                "id": case["id"],
+                "session_id": session_id,
+                "plan": adaptive_plan,
+                "conclusions": list(conclusions),
+                "conclusion_review": review,
+                "evidence": {
+                    "receipts": ["catalog", "query", "coverage"],
+                    "successful_queries": 5,
+                    "failed_queries": 0,
+                    "truncated": False,
+                    "reconciled": False,
+                    "query_attempted": True,
+                    "error_codes": [],
+                },
+            }
+            turn = {
+                "test_id": case["id"],
+                "conversation_id": case["conversation_id"],
+                "turn": case["turn"],
+                "session_id": session_id,
+                "user_message_id": user_message_id,
+                "canonical_prompt_sha256": canonical_prompt,
+                "database_identity_sha256": database_identity,
+                "watermark_sha256": watermark,
+                "final_answer_sha256": final_answer_sha256,
+                "candidate_case_sha256": scorer._sha256(observed),
+                "conclusion_review": review,
+            }
+            cases = [observed]
+            receipt = {
+                "schema": scorer.RECEIPT_SCHEMA,
+                "profile_artifact": profile,
+                "state_db_identity_sha256": database_identity,
+                "source": {"state_db_identity_sha256": database_identity},
+                "candidate_cases_sha256": scorer._sha256(cases),
+                "turns": [turn],
+            }
+            receipt["receipt_sha256"] = scorer._sha256(receipt)
+            return {
+                "schema": scorer.CANDIDATE_SCHEMA,
+                "profile_artifact": profile,
+                "state_db_identity_sha256": database_identity,
+                "cases": cases,
+                "canary_receipt": receipt,
+            }
+
+        reviewed_bad_raw_draft_sha256 = (
+            "59729b742e6e360f92e5c6d7b5c9c26f7489db27aa687437c8cc17be85030eb4"
+        )
+        self.assertEqual(64, len(reviewed_bad_raw_draft_sha256))
+        bad_conclusions = [
+            *case["required_conclusions"],
+            *case["forbidden_conclusions"],
+        ]
+        known_bad = candidate(reviewed_bad_raw_draft_sha256, bad_conclusions)
+        self.assertEqual(
+            reviewed_bad_raw_draft_sha256,
+            known_bad["canary_receipt"]["turns"][0]["final_answer_sha256"],
+        )
+        failed_report = scorer.score(suite, known_bad)
+        self.assertEqual(1, failed_report["summary"]["failed"])
+        errors = failed_report["results"][0]["errors"]
+        for label in case["forbidden_conclusions"]:
+            self.assertTrue(
+                any(label in error for error in errors),
+                f"forbidden conclusion was not reported: {label}",
+            )
+
+        clean_sha256 = scorer._sha256(
+            {
+                "control": "clean-required-labels",
+                "test_id": case["id"],
+            }
+        )
+        clean = candidate(clean_sha256, case["required_conclusions"])
+        clean_report = scorer.score(suite, clean)
+        self.assertEqual(1, clean_report["summary"]["passed"], clean_report)
+        self.assertEqual([], clean_report["results"][0]["errors"])
 
     def test_snapshot_capability_boundaries_require_bound_metric_detail(self):
         def load_e2e_module(filename, module_name):
@@ -955,7 +1183,7 @@ class DistributionBoundaryTests(unittest.TestCase):
 
         def observed(case, evidence):
             return {
-                "plan": dict(case["expected_plan"]),
+                "plan": dict(case["plan_constraints"]),
                 "conclusions": list(case["required_conclusions"]),
                 "evidence": evidence,
             }
@@ -965,8 +1193,8 @@ class DistributionBoundaryTests(unittest.TestCase):
                 self.assertEqual("capability_boundary", case["category"])
                 self.assertEqual([], case["evidence_requirements"]["required_error_codes"])
                 self.assertTrue(case["evidence_requirements"]["must_not_query"])
-                domain = case["expected_plan"]["domains"][0]
-                metric = case["expected_plan"]["metrics"][0]
+                domain = case["plan_constraints"]["domains"][0]
+                metric = case["plan_constraints"]["metrics"][0]
                 calls = catalog_calls(domain, metric)
                 detail_request = calls[1]["arguments"]["requests"][0]
                 detail_payload = calls[1]["result"]
@@ -1106,7 +1334,7 @@ class DistributionBoundaryTests(unittest.TestCase):
                                     "months": 1,
                                 },
                                 "complete_change_decomposition": {
-                                    "dimension": case["expected_plan"]["dimensions"][0]
+                                    "dimension": case["plan_constraints"]["dimensions"][0]
                                 },
                             }
                         ]
@@ -1228,8 +1456,15 @@ class DistributionBoundaryTests(unittest.TestCase):
             "plugins/datasage-query/e2e/trusted_replay_runner.py",
         }
 
-        self.assertLessEqual(retained_evaluation_assets, owned)
+        self.assertIn("plugins/datasage-query", owned)
+        self.assertIn("tests", owned)
+        self.assertFalse(
+            any(item.startswith("plugins/datasage-query/") for item in owned)
+        )
+        self.assertFalse(any(item.startswith("tests/") for item in owned))
         self.assertTrue(private_replay_assets.isdisjoint(owned))
+        for relative in retained_evaluation_assets:
+            self.assertTrue((PROFILE_ROOT / relative).is_file(), relative)
         for relative in private_replay_assets:
             self.assertFalse((PROFILE_ROOT / relative).exists(), relative)
         for relative in owned:

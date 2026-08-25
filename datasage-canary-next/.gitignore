@@ -1,0 +1,74 @@
+# Credentials and authentication
+.env
+.env.EXAMPLE
+auth.json
+auth.lock
+
+# Hermes runtime state
+state.db
+state.db-shm
+state.db-wal
+hermes_state.db
+response_store.db*
+gateway.pid
+gateway.lock
+gateway_state.json
+gateway-starts.log
+processes.json
+.hermes_history
+.skills_prompt_snapshot.json
+.update_check
+channel_directory.json
+models_dev_cache.json
+ollama_cloud_models_cache.json
+provider_models_cache.json
+
+# Runtime and user-owned directories
+audio_cache/
+cache/
+cron/
+gateway-service/
+home/
+hook_outputs/
+hooks/
+image_cache/
+logs/
+lsp/
+memories/
+pairing/
+pastes/
+pending/
+pending_messages/
+plans/
+platforms/
+sandboxes/
+sessions/
+skins/
+state/
+state-snapshots/
+workspace/
+local/
+backups/
+
+# Generated language/tool caches
+__pycache__/
+.pytest_cache/
+*.pyc
+*.pyo
+node_modules/
+
+# Hermes seeds many bundled Skills into the live Profile. Track only this
+# distribution's two owned Skill surfaces.
+skills/*
+!skills/common-data-foundation/
+!skills/datasage/
+skills/common-data-foundation/*
+!skills/common-data-foundation/SKILL.md
+!skills/common-data-foundation/references/
+skills/common-data-foundation/references/*
+!skills/common-data-foundation/references/answer-boundary.md
+!skills/common-data-foundation/references/entity-rules.md
+!skills/common-data-foundation/references/expert-playbooks.yaml
+!skills/common-data-foundation/references/query-rules.md
+skills/datasage/*
+!skills/datasage/SKILL.md

@@ -10,7 +10,7 @@ sources:
     title: Evidence and answer boundary
     source_version: datasage-answer-boundary/v1
     path: skills/common-data-foundation/references/answer-boundary.md
-    source_sha256: d3c9032a93da46135bf8eebd11d45550827d09af8ac37fbb7d0c6de8dc7d6836
+    source_sha256: bfeb5265635ee355f5ed05bb8c3fcf8b0c34806f87144d8f07cc4983a7caa0d5
     content_format: markdown
   entity_guidance:
     title: Model-safe entity resolution guidance
@@ -24,39 +24,3 @@ sources:
     path: skills/common-data-foundation/references/query-rules.md
     source_sha256: 4993975430005f3518e195badfc3f1a8642ff262291191685fd77bf2e3c9c9c4
     content_format: markdown
-  planner_delivery:
-    title: Delivery planner guidance
-    source_version: datasage-mini-delivery-planner/v13
-    path: skills/delivery-query/references/planner-contract.yaml
-    source_sha256: 9d055fef5b80e84dd13876f47b3a4700207b2a53128e101a00c30c5449df18bb
-    content_format: yaml_projection
-  planner_receipt:
-    title: Receipt planner guidance
-    source_version: datasage-mini-receipt-planner/v3
-    path: skills/receipt-query/references/planner-contract.yaml
-    source_sha256: 69a19b3e2c87a48a89601e5b71f315895266e269baa0e22ac85b9abc2d01fd27
-    content_format: yaml_projection
-  planner_receivable:
-    title: Receivable planner guidance
-    source_version: datasage-mini-receivable-planner/v4
-    path: skills/receivable-query/references/planner-contract.yaml
-    source_sha256: bbf9ffe689514fc40594181d749bbb0d5ad3a6532b4a99df54ca0fa1f4405d71
-    content_format: yaml_projection
-  planner_target:
-    title: Target planner guidance
-    source_version: datasage-mini-target-planner/v7
-    path: skills/target-query/references/planner-contract.yaml
-    source_sha256: 36e332c114e6d5d7c08733ea6228e5e97c67dff69bb3ba0436a657172a2991fd
-    content_format: yaml_projection
-  planner_customer_risk:
-    title: Customer-risk planner guidance
-    source_version: datasage-mini-customer-risk-planner/v5
-    path: skills/customer-risk-query/references/planner-contract.yaml
-    source_sha256: 0ac2a39448bb38fc7fb06ac7952a23f7b4891d5141f7acfc63a6cab38363cc0d
-    content_format: yaml_projection
-  planner_inventory:
-    title: Inventory planner guidance
-    source_version: datasage-mini-inventory-planner/v4
-    path: skills/inventory-query/references/planner-contract.yaml
-    source_sha256: 91cd3516b8ef75b394bc14e4050b37f1dd7d3feca1b8a75c5254774283da8cea
-    content_format: yaml_projection

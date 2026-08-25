@@ -1,9 +1,7 @@
 version: datasage-mini-inventory-semantics/v8
 domain: inventory
 contract_role: plugin_physical_execution
-model_planner_contract: references/planner-contract.yaml
 business_name: 库存事实、未动销与周转分析
-triggers: [库存, 存货, 当前库存, 在仓, 可用库存, 已配库存, 在途库存, 月末库存, 库龄, 未动销, 备货, 滞销, 周转, 库存周转]
 tables: [vk_dw.inventory_barcode_detail_dw, vk_dwd.inventory_cost_dwd, vk_dw.goods_turnover_basic_data_dw, vk_dwd.goods_detail_dwd, vk_dwd.whse_info_dwd]
 
 defaults:
@@ -424,73 +422,3 @@ metrics:
     required_filters: {}
     allowed_dimensions: *turnover_dimensions
     answer_note: 默认主结果为成本口径周转天数，同时返回 DDP 指导口径；使用期初期末半权重的梯形平均库存和期间自然天数。净出库不大于零、平均库存不大于零或全局月快照不连续时，对应结果不可定义。
-
-analysis_recipes_status:
-  status: reference_only_not_runtime_or_model_authority
-  authoritative_source: planner_contract
-  rule: 本块仅保留发布维护比对；运行时不读取，合同服务不投影，不能作为固定配方或指标授权来源。
-
-analysis_recipes:
-  current_inventory_overview:
-    requests:
-      - {metric: current_inventory_quantity, dimensions: [unit]}
-      - {metric: current_inventory_roll_count, dimensions: []}
-      - {metric: current_inventory_amount_rmb, dimensions: []}
-    default_scope: total
-  current_on_hand_overview:
-    requests:
-      - {metric: current_inventory_quantity, dimensions: [unit], inventory_scope: on_hand}
-      - {metric: current_inventory_roll_count, dimensions: [], inventory_scope: on_hand}
-      - {metric: current_inventory_amount_rmb, dimensions: [], inventory_scope: on_hand}
-  current_inventory_ranking:
-    metric: choose_from_current_inventory_metrics
-    dimensions: [product, warehouse, warehouse_department, warehouse_organization, ready_goods, ready_type]
-    default_limit: 10
-  month_end_inventory_overview:
-    requests:
-      - {metric: month_end_inventory_quantity, dimensions: [unit]}
-      - {metric: month_end_inventory_cost_rmb, dimensions: []}
-    time: latest_snapshot
-  month_end_trend:
-    metrics: [month_end_inventory_quantity, month_end_inventory_cost_rmb]
-    time_bucket: month
-    default_period: latest_6_available_snapshot_months
-  change_observations:
-    label: partial_observations_only
-    metric: choose_from_month_end_inventory_metrics
-    dimensions: [product, warehouse, warehouse_department, warehouse_organization, ready_goods]
-    comparison: {kind: previous_period}
-    default_limit: 10
-    interpretation: 排名和分组差异只是未完全分解的结构 observations；不得称为驱动、贡献或原因，未展示分组也不代表没有变化。
-  governed_change_decomposition:
-    metric: month_end_inventory_cost_rmb
-    dimensions: [warehouse, product]
-    comparison: {kind: snapshot_months_before, months: 1}
-    operation: complete_change_decomposition
-    relation: reconciled_change_only
-  explain_change:
-    first: governed_change_decomposition
-    fallback: change_observations
-    output: 只报告已验证的产品、仓库或组织结构观察；原因必须有独立证据，否则明确为当前数据无法验证。
-  inventory_age_evidence:
-    requests: [current_warehouse_age_days, oldest_inventory_days]
-    limitation: 两项分别表示当前在仓入仓时间证据和月末未动销证据，不得互相替代。
-  turnover_days:
-    metric: inventory_turnover_days
-    default_period: latest_12_complete_accounting_months
-    outputs: [cost_turnover_days, ddp_turnover_days]
-  slow_moving_evidence:
-    steps: [show_month_end_inventory, show_unclosed_days, show_turnover_days_and_states]
-    limitation: 不发明滞销阈值，不自动输出补货、清仓或责任判断。
-
-analysis_boundaries:
-  - 当前库存快照、月末核算快照和周转月汇总是不同粒度，不得直接逐行连接。
-  - 当前总库存默认含未配、已配和在途；当前在仓只含未配和已配；可用库存只含未配并排除缺失仓和次品仓。CCBS 仓不默认排除。
-  - 数量必须按单位分组或过滤；仅 M/m 归一为 m，不换算 y、kg、Pcs 与 m。
-  - 当前 DDP 金额和月末核算成本不得静默混用；原币金额不得跨币种汇总。
-  - 月末表的 id 是物理唯一键；月+仓库+产品+色号+批次不是唯一键，合法的币种、核算组织、单位和成本层必须保留求和。
-  - whse_org 是仓库组织，org_name 是核算组织；回答必须按所选维度明确区分。
-  - 月末负卷/匹数是可能合法的核算数据，不取绝对值、不截断。
-  - 周转天数按 N 个经营月读取 N+1 个连续月末快照；期初和期末半权重，分母不含期初月净出库。
-  - 全局月份缺失时周转不可用；已存在全局月份内某对象无记录可按零补齐；有库存无出库的对象不能被删除。
-  - 高库存、低净出库、长未动销或长周转只是证据，不自动生成补货、清仓或责任判断。
