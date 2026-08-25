@@ -35,7 +35,10 @@ _MANUAL_CATALOG_KEYS = {
 def metric_comparison_kinds(definition: Mapping[str, Any]) -> list[str]:
     """Return only comparison kinds accepted by the metric execution path."""
 
-    if definition.get("query_kind") is not None:
+    if (
+        definition.get("query_kind") is not None
+        or definition.get("required_time_bucket") is not None
+    ):
         return []
     time_policy = definition.get("time_policy")
     time_field = definition.get("time_field")
@@ -656,6 +659,16 @@ def _model_semantic_projection(
                 f"metric {code} lacks a safe business label or definition",
             )
         comparison_kinds = metric_comparison_kinds(definition)
+        required_time_bucket = definition.get("required_time_bucket")
+        if required_time_bucket is not None:
+            if (
+                required_time_bucket not in {"day", "month"}
+                or not isinstance(definition.get("time_field"), str)
+            ):
+                raise ContractFailure(
+                    "CONTRACT_UNAVAILABLE",
+                    f"metric {code} has an invalid required time bucket",
+                )
         item: dict[str, Any] = {
             "code": code,
             "label": label,
@@ -672,6 +685,8 @@ def _model_semantic_projection(
             "comparison_kinds": comparison_kinds,
             "supports_generic_comparison": bool(comparison_kinds),
         }
+        if required_time_bucket is not None:
+            item["required_time_bucket"] = required_time_bucket
         if change_decomposition_dimensions:
             item["change_decomposition_dimensions"] = (
                 change_decomposition_dimensions
@@ -1251,6 +1266,26 @@ def datasage_catalog(args: dict[str, Any], **_kwargs: Any) -> str:
             )
         if len(set(normalized)) != len(normalized):
             raise ContractFailure("INVALID_INPUT", "同一个目录请求不能重复。")
+        local_failures: list[dict[str, Any]] = []
+        if any(view == "performance_scorecard" for _, _, view in normalized) and len(
+            normalized
+        ) > 1:
+            local_failures = [
+                {
+                    "request_index": index,
+                    "error": {
+                        "code": "REDUNDANT_WITH_SCORECARD",
+                        "message": (
+                            "performance_scorecard 必须单独请求；冗余目录分支未执行。"
+                        ),
+                    },
+                }
+                for index, (_, _, view) in enumerate(normalized)
+                if view != "performance_scorecard"
+            ]
+            normalized = [
+                item for item in normalized if item[2] == "performance_scorecard"
+            ]
         results: list[dict[str, Any]] = []
         for domain, metric, view in normalized:
             if view == "performance_scorecard":
@@ -1272,12 +1307,15 @@ def datasage_catalog(args: dict[str, Any], **_kwargs: Any) -> str:
                 result = _catalog_summary(domain, planner)
             results.append(result)
         payload: dict[str, Any] = {
-            "status": "success",
+            "status": "partial" if local_failures else "success",
             "catalog_version": _CATALOG_VERSION,
             "contract_role": "governed_metric_catalog",
             "query_policy": _query_policy_projection(),
             "results": results,
         }
+        if local_failures:
+            payload["failed_request_count"] = len(local_failures)
+            payload["failures"] = local_failures
         payload["content_hash"] = hashlib.sha256(
             json.dumps(
                 payload,

@@ -19,14 +19,9 @@ TOOL_NAMES = frozenset(
     {
         "datasage_catalog",
         "datasage_entity_resolve",
-        "datasage_reference",
         "datasage_query",
     }
 )
-SHARED_REFERENCE_SOURCES = frozenset(
-    {"expert_playbooks", "answer_boundary", "entity_guidance", "query_rules"}
-)
-ALL_REFERENCE_SOURCES = SHARED_REFERENCE_SOURCES
 DENIED_CODE = "DATA_ENTITLEMENT_DENIED"
 DENIED_MESSAGE = "当前请求未获授权，业务查询未执行。"
 _SCALAR_TYPES = (str, int, float, bool)
@@ -223,34 +218,6 @@ def _entity_allowed(rule: Mapping[str, Any], args: Any) -> bool:
     )
 
 
-def _reference_allowed(rule: Mapping[str, Any], args: Any) -> bool:
-    if not isinstance(args, Mapping):
-        return False
-    sources = _string_set(rule.get("reference_sources"), allow_wildcard=False)
-    if sources is None or not sources.issubset(ALL_REFERENCE_SOURCES):
-        return False
-    mode = args.get("mode")
-    if mode == "index":
-        # The current index response is global rather than caller-filtered.
-        return rule.get("allow_reference_index") is True and sources == set(
-            ALL_REFERENCE_SOURCES
-        )
-    requests = args.get("requests")
-    if mode != "read" or not isinstance(requests, list) or not requests:
-        return False
-    for request in requests:
-        if not isinstance(request, Mapping):
-            return False
-        source_id = request.get("source_id")
-        if not _contains(sources, source_id):
-            return False
-        if source_id in SHARED_REFERENCE_SOURCES and rule.get(
-            "allow_shared_references"
-        ) is not True:
-            return False
-    return True
-
-
 def _policy_values(value: Any) -> set[tuple[type, Any]] | None:
     if not isinstance(value, list) or not value:
         return None
@@ -324,7 +291,7 @@ def authorized(tool_name: str, args: Any) -> bool:
         return _entity_allowed(rule, args)
     if tool_name == "datasage_query":
         return _query_allowed(rule, args)
-    return _reference_allowed(rule, args)
+    return False
 
 
 def guard(tool_name: str, handler: Callable[..., str]) -> Callable[..., str]:

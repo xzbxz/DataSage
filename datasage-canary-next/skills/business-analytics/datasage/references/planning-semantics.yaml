@@ -1,0 +1,17 @@
+version: datasage-planning-semantics/v1
+
+planning_semantics:
+  required_roles: Normal minimum for a fresh answer; clarification, already-returned compatible evidence, or an unavailable governed capability may reduce the new query plan.
+  optional_roles: Add only when the role could change a decision-relevant conclusion.
+  claim_requirements: Proof conditions remain mandatory even when a role label is present.
+
+evidence_roles:
+  outcome: Direct evidence for the requested measure or operating state.
+  comparison: A compatible baseline or comparison period.
+  benchmark: A governed target, norm, threshold, or peer reference.
+  offset: A governed counterflow or offset that helps interpret the outcome.
+  breadth: Evidence about how widely an observation is distributed.
+  composition: A governed dimensional decomposition of the outcome or change.
+  concentration: Evidence about whether results are concentrated in a bounded set.
+  anomaly: Evidence that an observation differs materially from a valid reference.
+  hypothesis_test: Evidence selected to distinguish plausible explanations.

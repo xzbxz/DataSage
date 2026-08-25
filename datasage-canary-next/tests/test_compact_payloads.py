@@ -151,10 +151,6 @@ def _query_payload() -> dict[str, object]:
                 },
             ],
             "evidence_gaps": [],
-            "answer_guardrails": {
-                "norm_judgment_requires": "governed_benchmark",
-                "structural_contribution_requires": "reconciled_change_reconciliation",
-            },
         },
         "results": results,
         "source_evidence_ref": {
@@ -184,6 +180,25 @@ class CompactPayloadTests(unittest.TestCase):
         self.assertEqual(
             "performance_scorecard",
             variants[1]["properties"]["view"]["const"],
+        )
+
+    def test_scorecard_is_publicly_exclusive_and_runtime_localizes_mixed_calls(self):
+        mixed = {
+            "requests": [
+                {"view": "performance_scorecard"},
+                {"domain": "delivery", "view": "expert_index"},
+            ]
+        }
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.validate(mixed, schemas.DATASAGE_CATALOG["parameters"])
+
+        _raw, compact = _catalog(mixed)
+        self.assertEqual("partial", compact["status"])
+        self.assertEqual("performance_scorecard", compact["results"][0]["level"])
+        self.assertEqual(1, compact["failed_request_count"])
+        self.assertEqual(
+            "REDUNDANT_WITH_SCORECARD",
+            compact["failures"][0]["error"]["code"],
         )
 
     def test_default_catalog_is_compact_and_full_view_remains_compatible(self):
@@ -270,6 +285,7 @@ class CompactPayloadTests(unittest.TestCase):
         query_requests = []
         for index, detail in enumerate(candidates, start=1):
             self.assertEqual("metric", detail["level"])
+            self.assertNotIn("dimensions", detail)
             receipt = detail["detail_receipt"]
             receipts.append(receipt)
             domain = detail["domain"]
@@ -303,7 +319,7 @@ class CompactPayloadTests(unittest.TestCase):
         rendered = wire.enforce_tool_result_budget("datasage_query", raw)
         compact = json.loads(rendered)
         self.assertLess(len(rendered), len(raw) * 0.55)
-        self.assertEqual("datasage-query-model-wire/v2", compact["model_wire_version"])
+        self.assertEqual("datasage-query-model-wire/v3", compact["model_wire_version"])
         self.assertEqual(1, len(compact["disclosures"]))
         self.assertEqual(["ranked", "structure"], compact["disclosures"][0]["request_ids"])
         result = compact["results"][0]
@@ -322,12 +338,16 @@ class CompactPayloadTests(unittest.TestCase):
             ["structure"],
             compact["answer_constraints"]["reconciliation_missing"]["request_ids"],
         )
-        self.assertTrue(compact["answer_constraints"]["benchmark_missing"]["value"])
         self.assertEqual(
-            "not_proven_across_metrics",
-            compact["answer_constraints"]["scope_compatibility"]["status"],
+            [],
+            compact["answer_constraints"]["benchmark_evidence"]["request_ids"],
         )
-        self.assertIn("answer_guardrails", compact["evidence_bundle"])
+        self.assertEqual(
+            [],
+            compact["answer_constraints"]["scope_compatibility"]["proofs"],
+        )
+        self.assertNotIn("answer_guardrails", compact["evidence_bundle"])
+        self.assertNotIn('"rule":', rendered)
         self.assertEqual(1, compact["calculation_count"])
         for forbidden in (
             "claim_seal",
@@ -339,15 +359,55 @@ class CompactPayloadTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, rendered)
 
-    def test_period_comparison_alone_is_not_a_normative_benchmark(self):
+    def test_only_sealed_supports_project_benchmark_evidence(self):
         payload = _query_payload()
+        payload["evidence_bundle"]["items"][0]["evidence_role"] = "benchmark"
         payload["evidence_bundle"]["items"][0]["supports"].extend(
             ["period_comparison", "change"]
         )
         compact = json.loads(wire.enforce_tool_result_budget("datasage_query", payload))
-        benchmark = compact["answer_constraints"]["benchmark_missing"]
+        benchmark = compact["answer_constraints"]["benchmark_evidence"]
+        self.assertNotIn("ranked", benchmark["request_ids"])
+
+        payload["evidence_bundle"]["items"][0]["supports"].append("target_status")
+        compact = json.loads(wire.enforce_tool_result_budget("datasage_query", payload))
+        benchmark = compact["answer_constraints"]["benchmark_evidence"]
         self.assertIn("ranked", benchmark["request_ids"])
-        self.assertNotIn("ranked", benchmark["benchmark_request_ids"])
+
+    def test_scope_compatibility_projects_only_bound_calculation_proofs(self):
+        payload = _query_payload()
+        compact = json.loads(wire.enforce_tool_result_budget("datasage_query", payload))
+        compatibility = compact["answer_constraints"]["scope_compatibility"]
+        self.assertEqual([], compatibility["proofs"])
+        self.assertNotIn("status", compatibility)
+
+        payload["calculations"][0].update(
+            {
+                "operands": [
+                    {"request_id": "ranked"},
+                    {"request_id": "structure"},
+                ],
+                "scope_compatibility": {
+                    "same_metric_basis": True,
+                    "same_filter_scope": True,
+                    "same_unit": True,
+                },
+                "period_compatibility": {
+                    "status": "compatible",
+                    "reason_codes": [],
+                },
+            }
+        )
+        compact = json.loads(wire.enforce_tool_result_budget("datasage_query", payload))
+        self.assertEqual(
+            [
+                {
+                    "calculation_id": "c1",
+                    "request_ids": ["ranked", "structure"],
+                }
+            ],
+            compact["answer_constraints"]["scope_compatibility"]["proofs"],
+        )
 
     def test_partial_query_prefix_filters_batch_metadata_to_returned_requests(self):
         payload = _query_payload()

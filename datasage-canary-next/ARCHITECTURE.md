@@ -1,6 +1,6 @@
 # DataSage Expert 0.15 架构
 
-版本：`0.15.0-rc3`
+版本：`0.15.0-rc4`
 运行基线：Hermes `0.20.5`
 
 ## 唯一目标
@@ -12,13 +12,20 @@
 迁移全部指标到新 DSL。完整冻结标准见 `REFACTOR_CHARTER.md`，实现决策见
 `REFACTOR_DESIGN.md`。
 
-## 三层职责
+## 四层职责
 
 ### Hermes：经营判断
 
 Hermes 负责理解问题、选择指标和分析深度、安排工具调用、区分观察与假设、
 形成结论及建议，并在多轮对话中接受用户最新纠正。任何能力元数据都不得
 指定固定指标数、固定调用顺序、原因、阈值、建议或答案措辞。
+
+### Profile Skill：分析方法
+
+`skills/business-analytics/datasage/SKILL.md` 只说明何时使用 DataSage、如何
+自适应分析和解释证据；少用的稳定定义通过 Hermes 原生 `references/` 按需加载。
+Skill 不拥有指标能力、权限、receipt、物理查询或结论授权，也不再通过插件
+实现第二套 reference loader。
 
 ### Capability contract：可验证事实
 
@@ -34,6 +41,8 @@ question type、固定 plan、业务判断或回答模板。
 
 插件负责 schema、权限、receipt、只读查询编译、执行限制、typed state、
 证据压缩和披露。插件返回结构化证据，不读取、删改或重写 Hermes 的最终文本。
+SOUL 只保留专家身份与事实/假设/建议等高层原则；动态期间、scope、benchmark
+和兼容性只在工具证据中计算一次，wire 只做结构投影。
 
 ## 请求与失败域
 
@@ -68,6 +77,9 @@ question type、固定 plan、业务判断或回答模板。
 ## 已删除的设计
 
 - 冲突的 `datasage-query-patterns` companion Skill；
+- test-only `skill_prompt.py` 和自定义 `datasage_reference`/reference registry；
+- 手工维护的 bundled Skill 禁用清单，改用 Hermes 官方 `.no-bundled-skills`；
+- 每次查询重复返回的静态 `answer_guardrails` 和英文解释规则；
 - 模型可见的 planner source、固定 overview bundle 和 recipe 路由；
 - schema 允许但运行时整批拒绝的重复字段验证路径；
 - compact 之前的 raw result / raw batch byte gate；
@@ -113,13 +125,13 @@ logs 或用户 Memory。部署、启动、业务数据库查询和企微发消�
 
 ## 当前验证状态
 
-- 稳定文件状态下两次完整离线运行均为 `101/101 OK`，耗时分别为
-  `44.178s` 和 `41.928s`；故障注入测试中的 synthetic traceback 是预期日志。
+- 当前完整离线运行 `113/113 OK`，耗时 `30.172s`；故障注入测试中的
+  synthetic traceback 是预期日志。
 - capability/schema-runtime 等价、mixed partial、物理预算局部失败、complete
   内部 ID 隔离、compact-before-budget、success-first subset、coverage 重建、
   candidate scorecard、planner 删除链和内容发布身份均有回归测试。
-- 本轮未访问业务数据库、运行 Profile 的 state/log/session/Memory、企微交付或
-  任何凭据。
+- 本轮只读复盘了指定 canary 的两轮真实企微会话，并将错误结论固化为语义
+  Golden；未访问业务数据库配置、企微凭据或发送企微消息。
 - 尚未完成 Hermes 宿主 compaction 集成、真实企微 raw-vs-delivered 对照、真实
-  业务题每题三次稳定性、P50/P90 和成本验收。因此 `0.15.0-rc3` 是可审查的
+  业务题每题三次稳定性、P50/P90 和成本验收。因此 `0.15.0-rc4` 是可审查的
   离线重构候选，不是已获准部署或扩大流量的版本。

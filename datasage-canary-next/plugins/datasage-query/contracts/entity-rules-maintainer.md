@@ -1,6 +1,10 @@
 # Entity rules
 
-> Maintainer-only rationale. This file is not a model or runtime contract and must not be loaded as a second semantic authority. Runtime identity behavior comes from `entity-registry.yaml` plus each domain's execution semantics; model-visible identity behavior comes only from the generated contract projection. Keep this note solely for release-review traceability.
+> Maintainer-only rationale. This file is not a model or runtime contract and
+> must not be loaded as a second semantic authority. Runtime identity behavior
+> comes from `entity-registry.yaml` plus each domain's execution semantics;
+> model-visible identity behavior lives only in the DataSage Skill's safe
+> `references/entity-guidance.md` projection.
 
 1. Follow the selected domain semantics for attribute precedence. A field stored on a fact row is not automatically a transaction-time historical snapshot.
 2. When a fact already contains the domain-approved customer, product, color, or supplier attribute, use that copy instead of joining the same master attribute again.

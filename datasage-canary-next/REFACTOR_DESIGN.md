@@ -36,7 +36,7 @@ assert_capability_boundary(value: Any) -> None
 ```
 
 Validation raises `CapabilityContractError(code, message)`. It has no imports
-from contracts, tools, scorecard, wire, references, or Skills.
+from contracts, tools, scorecard, wire, or Skills.
 
 Metric-specific dimensions, filters, comparisons, adapters, receipts, scope
 values, and disclosures remain compiled from existing semantics by the current
@@ -60,6 +60,8 @@ metrics at once.
 
 - `performance_scorecard` remains outside the capability compiler and exposes
   candidate lenses. Hermes chooses the material subset.
+- Stable model guidance uses Hermes-native `SKILL.md` plus on-demand
+  `references/`; the plugin does not implement a parallel reference loader.
 - Planner recipes, prompt triggers, exact overview bundles, and fixed routes
   are not model-visible references and are not release requirements.
 - Golden plans become required/forbidden semantic constraints, never exact set
@@ -69,10 +71,12 @@ metrics at once.
 ## Implementation ownership
 
 - Architecture agent: `capability_contract.py`, `schemas.py`, `contracts.py`,
-  `references.py`, `scorecard.py`.
+  `scorecard.py`.
 - Execution agent: `tools.py` only.
 - Acceptance agent: `tests/**` and `plugins/datasage-query/e2e/**` only.
 - Main agent: `wire.py`, version/config/distribution/Skill/docs, companion Skill
   deletion, integration fixes, and final verification.
 
-No agent may edit the running profile.
+Subagents do not commit, touch runtime state, database configuration, or WeCom
+credentials. The main agent alone integrates reviewed changes in the Profile Git
+repository.

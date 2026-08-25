@@ -264,6 +264,26 @@ def _supports(result: Mapping[str, Any]) -> list[str]:
     return sorted(supported)
 
 
+def _calendar_period_states(value: Any) -> list[str]:
+    """Read only canonical v2 calendar evidence nodes."""
+
+    if not isinstance(value, Mapping):
+        return []
+    states: list[str] = []
+    calendar = value.get("calendar_evidence")
+    if (
+        isinstance(calendar, Mapping)
+        and calendar.get("version") == "calendar-period-evidence/v2"
+        and calendar.get("period_state")
+        in {"completed", "in_progress", "not_started"}
+    ):
+        states.append(str(calendar["period_state"]))
+    for key, child in value.items():
+        if key != "calendar_evidence" and isinstance(child, Mapping):
+            states.extend(_calendar_period_states(child))
+    return states
+
+
 def _limitations(
     request: Mapping[str, Any], result: Mapping[str, Any]
 ) -> list[str]:
@@ -291,14 +311,7 @@ def _limitations(
                     for reason in reasons
                     if isinstance(reason, str) and reason
                 )
-        period_states = [
-            item.get("period_state")
-            for item in (
-                [period]
-                if "period_state" in period
-                else [value for value in period.values() if isinstance(value, Mapping)]
-            )
-        ]
+        period_states = _calendar_period_states(period)
         if "in_progress" in period_states:
             limitations.append("PERIOD_IN_PROGRESS")
         if "not_started" in period_states:
@@ -627,7 +640,7 @@ def _claim_is_validly_sealed(claim: Mapping[str, Any]) -> bool:
 def _has_calendar_period_evidence(value: Any) -> bool:
     if not isinstance(value, Mapping):
         return False
-    if value.get("version") == "calendar-period-evidence/v1":
+    if value.get("version") == "calendar-period-evidence/v2":
         return True
     return any(
         _has_calendar_period_evidence(item)
@@ -861,14 +874,4 @@ def build_evidence_bundle(
         "coverage_receipts": _coverage_receipts(request_by_id, result_by_id),
         "items": items,
         "evidence_gaps": evidence_gaps,
-        "answer_guardrails": {
-            "observed_claims_require": "sealed_claim_id",
-            "structural_contribution_requires": "reconciled_change_reconciliation",
-            "causal_conclusion": "not_authorized",
-            "cross_metric_common_cause_or_contribution": "not_authorized",
-            "joint_or_systemic_inference_from_independent_marginals": "not_authorized",
-            "norm_judgment_requires": "governed_benchmark",
-            "hypotheses_require": "explicit_label_and_next_evidence",
-            "follow_up_decision": "answer_layer_materiality_only",
-        },
     }

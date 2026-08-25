@@ -348,6 +348,24 @@
       "allowed_conclusions": ["report_future_target_only", "disclose_data_limits"],
       "forbidden_conclusions": ["report_future_actual", "report_future_completion", "report_future_gap", "report_target_gap", "infer_missing_value", "invent_result"],
       "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
+    },
+    {
+      "id": "ambiguity_07_live_idk_scorecard", "category": "ambiguity", "conversation_id": "live_idk_20260825", "turn": 1,
+      "prompt": "IDK今年怎么样",
+      "plan_constraints": {"domains": [], "metrics": [], "dimensions": ["department"], "operations": ["performance_scorecard_first"], "time_semantics": "2026_ytd_flows_with_separate_snapshots", "context_action": "new", "must_not_metrics": [], "must_not_operations": ["fixed_scorecard_bundle", "fixed_metric_count", "fixed_call_order"]},
+      "required_conclusions": ["report_metrics_individually", "report_governed_target_status", "disclose_period_flow_and_snapshot_scopes", "disclose_partial_period_comparison_limit"],
+      "allowed_conclusions": ["report_metrics_individually", "report_governed_target_status", "disclose_period_flow_and_snapshot_scopes", "disclose_partial_period_comparison_limit", "report_available_evidence", "disclose_data_limits", "state_noncausal"],
+      "forbidden_conclusions": ["infer_ungoverned_overall_health_or_strength", "claim_formal_trend_from_partial_period_mismatch", "claim_benchmarkless_risk_level", "claim_scope_incompatible_cross_metric_strength", "predict_in_progress_period_outcome", "relabel_time_series_scalar_as_current_snapshot"],
+      "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage"], "minimum_successful_queries": 1, "allow_partial_failure": true, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
+    },
+    {
+      "id": "multiturn_07_live_balance_correction", "category": "multiturn", "conversation_id": "live_idk_20260825", "turn": 2,
+      "prompt": "欠款净余额，你是怎么计算的，结果对吗",
+      "plan_constraints": {"domains": ["customer_risk"], "metrics": ["debt_balance_trend", "current_debt_amount"], "dimensions": ["department"], "operations": [], "time_semantics": "2026_ytd_series_vs_latest_snapshot", "context_action": "preserve", "must_not_metrics": []},
+      "required_conclusions": ["correct_prior_mislabeled_balance", "distinguish_time_series_from_current_snapshot", "report_current_snapshot_with_scope", "disclose_data_limits"],
+      "allowed_conclusions": ["correct_prior_mislabeled_balance", "distinguish_time_series_from_current_snapshot", "report_current_snapshot_with_scope", "disclose_data_limits", "report_available_evidence", "state_noncausal"],
+      "forbidden_conclusions": ["retain_unsupported_risk_level", "label_snapshot_as_month_end_without_proof", "claim_time_series_scalar_is_current_balance", "invent_balance_reconciliation", "infer_ungoverned_overall_health_or_strength"],
+      "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
     }
   ]
 }

@@ -66,7 +66,6 @@ plugins:
               tools:
                 - datasage_catalog
                 - datasage_entity_resolve
-                - datasage_reference
                 - datasage_query
               domains: ["*"]
               metrics:
@@ -81,94 +80,10 @@ plugins:
               allow_unscoped_entity_resolution: true
               allow_type_neutral_entity_resolution: true
               allow_entity_resolution_all_rows: true
-              reference_sources:
-                - expert_playbooks
-                - answer_boundary
-                - entity_guidance
-                - query_rules
-              allow_shared_references: true
-              allow_reference_index: true
               allow_all_rows: true
 skills:
   # Git is authoritative; tracked expert guidance requires operator approval.
   write_approval: true
-  # Keep only the small set of skills that materially supports a governed
-  # digital expert. Disabled skill files remain installed and recoverable.
-  disabled:
-    - airtable
-    - apple-notes
-    - apple-reminders
-    - architecture-diagram
-    - arxiv
-    - ascii-art
-    - ascii-video
-    - baoyu-infographic
-    - blogwatcher
-    - claude-code
-    - claude-design
-    - codebase-inspection
-    - codex
-    - comfyui
-    - common-data-foundation
-    - competitor-news-monitor
-    - computer-use
-    - design-md
-    - document-to-action-items
-    - dogfood
-    - email-inbox-triage
-    - evaluating-llms-harness
-    - excalidraw
-    - findmy
-    - gif-search
-    - github-auth
-    - github-code-review
-    - github-issue-to-pr
-    - github-issues
-    - github-pr-workflow
-    - github-repo-management
-    - google-workspace
-    - hermes-agent
-    - hermes-agent-skill-authoring
-    - himalaya
-    - huggingface-hub
-    - humanizer
-    - imessage
-    - inspecting-hermes-desktop-dom
-    - llama-cpp
-    - llm-wiki
-    - manim-video
-    - maps
-    - meeting-action-items
-    - merge-reconciler
-    - nano-pdf
-    - node-inspect-debugger
-    - notion
-    - obsidian
-    - opencode
-    - openhue
-    - p5js
-    - plan
-    - popular-web-designs
-    - pretext
-    - product-price-monitor
-    - python-debugpy
-    - requesting-code-review
-    - research-paper-writing
-    - sdlc-review
-    - serving-llms-vllm
-    - simplify-code
-    - sketch
-    - songsee
-    - songwriting-and-ai-music
-    - spike
-    - systematic-debugging
-    - teams-meeting-pipeline
-    - test-driven-development
-    - touchdesigner-mcp
-    - weekly-review-planning
-    - weights-and-biases
-    - xurl
-    - youtube-content
 platforms:
   wecom:
     enabled: true

@@ -1,4 +1,4 @@
-version: datasage-mini-receivable-semantics/v6
+version: datasage-mini-receivable-semantics/v7
 domain: receivable
 contract_role: plugin_physical_execution
 
@@ -522,6 +522,7 @@ metrics:
     time_field: bill_date
     time_policy: required
     time_granularity: month
+    required_time_bucket: month
     required_filters: {}
     allowed_dimensions: *snapshot_dimensions
     answer_note: 历史欠款趋势必须显式提供月份范围，并按 bill_date 月份解释。

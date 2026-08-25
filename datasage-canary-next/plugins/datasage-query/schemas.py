@@ -9,7 +9,6 @@ from .capability_contract import (
     query_request_schema_conditions,
 )
 from .evidence import ANALYSIS_INTENTS, EVIDENCE_ROLES
-from .references import SECTION_IDS_BY_SOURCE, SOURCE_IDS
 
 DOMAINS = list(SUPPORTED_DOMAINS)
 
@@ -478,7 +477,7 @@ CALCULATION = {
                 "Closed arithmetic operation over two successful, untruncated scalar request results. "
                 "difference and ratio require the same registered metric, governed non-time scope, filters, "
                 "and unit; their periods may differ, and ratio requires a nonzero denominator. Arithmetic remains "
-                "visible when calendar coverage differs, but analytical_compatibility then prevents treating it as "
+                "visible when calendar coverage differs, but period_compatibility then prevents treating it as "
                 "a formal period trend. share requires "
                 "the same metric, period, and unit; left must be a proven strict additive-partition subset of "
                 "right, right must be positive, and 0 <= left <= right. Free-form formulas are never accepted."
@@ -646,57 +645,33 @@ DATASAGE_CATALOG = {
             },
         },
         "required": ["requests"],
-    },
-}
-
-
-DATASAGE_REFERENCE = {
-    "name": "datasage_reference",
-    "description": (
-        "Read a small, approved DataSage analytical reference when evidence semantics, a claim boundary, "
-        "or entity ambiguity requires context not present in the metric catalog. "
-        "Use mode=index only to discover fixed source_id/section_id pairs, then mode=read for at most three exact "
-        "sections. This tool is non-authorizing and read-only: it cannot accept paths, filenames, URLs, globs, "
-        "offsets, SQL, or user documents; it never reads plugin-private execution contracts and never accesses a "
-        "database or network. Returned source and section hashes make the content auditable."
-    ),
-    "parameters": {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "mode": {"type": "string", "enum": ["index", "read"]},
-            "requests": {
-                "type": "array",
-                "minItems": 1,
-                "maxItems": 3,
-                "items": {
-                    "oneOf": [
-                        {
-                            "type": "object",
-                            "additionalProperties": False,
+        "oneOf": [
+            {
+                "properties": {
+                    "requests": {
+                        "maxItems": 1,
+                        "items": {
                             "properties": {
-                                "source_id": {"const": source_id},
-                                "section_id": {
-                                    "type": "string",
-                                    "enum": list(SECTION_IDS_BY_SOURCE[source_id]),
-                                },
+                                "view": {"const": "performance_scorecard"},
                             },
-                            "required": ["source_id", "section_id"],
-                        }
-                        for source_id in SOURCE_IDS
-                    ],
+                            "required": ["view"],
+                        },
+                    },
                 },
             },
-        },
-        "required": ["mode"],
-        "allOf": [
             {
-                "if": {"properties": {"mode": {"const": "read"}}},
-                "then": {"required": ["requests"]},
-            },
-            {
-                "if": {"properties": {"mode": {"const": "index"}}},
-                "then": {"not": {"required": ["requests"]}},
+                "properties": {
+                    "requests": {
+                        "items": {
+                            "not": {
+                                "properties": {
+                                    "view": {"const": "performance_scorecard"},
+                                },
+                                "required": ["view"],
+                            },
+                        },
+                    },
+                },
             },
         ],
     },

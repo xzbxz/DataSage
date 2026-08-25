@@ -431,6 +431,26 @@ def _validate_metric_detail_gate(
             )
     _validate_detail_request_capabilities(request, metric)
     normalized = dict(request)
+    required_time_bucket = metric.get("required_time_bucket")
+    if required_time_bucket is not None:
+        if (
+            required_time_bucket not in {"day", "month"}
+            or not isinstance(metric.get("time_field"), str)
+        ):
+            raise QueryFailure(
+                "CONTRACT_UNAVAILABLE",
+                "指标的必需时间分组合同无效。",
+                stage="contract_load",
+            )
+        requested_time_bucket = normalized.get("time_bucket")
+        if requested_time_bucket is None:
+            normalized["time_bucket"] = required_time_bucket
+        elif requested_time_bucket != required_time_bucket:
+            raise QueryFailure(
+                "INVALID_PLAN",
+                "请求的时间分组与指标合同不一致。",
+                stage="input_validation",
+            )
     normalized.pop("detail_receipt", None)
     return normalized
 
@@ -861,14 +881,16 @@ def _business_today() -> date:
     return datetime.now(_BUSINESS_TIME_ZONE).date()
 
 
-def _default_time_range(policy: str) -> tuple[str, str] | None:
+def _default_time_range(
+    policy: str, observed_on: date | None = None
+) -> tuple[str, str] | None:
     if policy != "current_month":
         return None
-    today = _business_today()
+    today = observed_on or _business_today()
     return date(today.year, today.month, 1).isoformat(), _next_month_start(today).isoformat()
 
 
-_PERIOD_EVIDENCE_VERSION = "calendar-period-evidence/v1"
+_PERIOD_EVIDENCE_VERSION = "calendar-period-evidence/v2"
 _PERIOD_OBSERVATION_BASIS = "business_clock_query_observation"
 
 
@@ -887,7 +909,7 @@ def _period_boundary_date(value: Any) -> date | None:
     return None
 
 
-def _period_evidence(
+def _calendar_period_evidence(
     start: Any,
     end: Any,
     observed_on: date,
@@ -900,52 +922,79 @@ def _period_evidence(
         return None
     if end_date <= observed_on:
         period_state = "completed"
-        coverage_state = "complete"
     elif start_date > observed_on:
         period_state = "not_started"
-        coverage_state = "none"
     else:
         period_state = "in_progress"
-        coverage_state = "partial"
     return {
         "version": _PERIOD_EVIDENCE_VERSION,
-        "data_as_of": observed_on.isoformat(),
-        "data_as_of_basis": _PERIOD_OBSERVATION_BASIS,
+        "observed_on": observed_on.isoformat(),
+        "observation_basis": _PERIOD_OBSERVATION_BASIS,
         "period_state": period_state,
-        "coverage": {
-            "state": coverage_state,
-            "basis": "calendar_elapsed",
-            "source_freshness": "not_proven",
-        },
+        "source_freshness": "not_proven",
     }
 
 
 def _period_state(value: Any) -> str | None:
     if not isinstance(value, Mapping):
         return None
-    state = value.get("period_state")
+    calendar_evidence = value.get("calendar_evidence")
+    evidence = (
+        calendar_evidence
+        if isinstance(calendar_evidence, Mapping)
+        else value
+    )
+    state = evidence.get("period_state")
     return state if state in {"completed", "in_progress", "not_started"} else None
 
 
-def _comparison_compatibility(value: Any) -> dict[str, Any] | None:
-    """Assess only calendar coverage; metric and population checks stay separate."""
+def _is_snapshot_period(value: Mapping[str, Any]) -> bool:
+    return value.get("source") in _SNAPSHOT_TIME_SOURCES
 
-    if not isinstance(value, Mapping):
+
+def assess_period_compatibility(
+    left: Any, right: Any
+) -> dict[str, Any] | None:
+    """Assess period evidence only; metric and population checks stay separate."""
+
+    if not isinstance(left, Mapping) or not isinstance(right, Mapping):
         return None
-    current = value.get("current")
-    comparison = value.get("comparison")
-    if not isinstance(current, Mapping) or not isinstance(comparison, Mapping):
+    left_snapshot = _is_snapshot_period(left)
+    right_snapshot = _is_snapshot_period(right)
+    if left_snapshot or right_snapshot:
+        if not (left_snapshot and right_snapshot):
+            return {
+                "status": "not_assessable",
+                "reason_codes": ["PERIOD_COMPARABILITY_NOT_ASSESSABLE"],
+            }
+        left_resolved = (
+            left.get("resolution_state") == "resolved"
+            and isinstance(left.get("snapshot_month"), str)
+        )
+        right_resolved = (
+            right.get("resolution_state") == "resolved"
+            and isinstance(right.get("snapshot_month"), str)
+        )
+        if left_resolved and right_resolved:
+            return {"status": "compatible", "reason_codes": []}
+        return {
+            "status": "not_assessable",
+            "reason_codes": ["PERIOD_COMPARABILITY_NOT_ASSESSABLE"],
+        }
+
+    if left == right:
+        return {"status": "compatible", "reason_codes": []}
+
+    left_state = _period_state(left)
+    right_state = _period_state(right)
+    if left_state is None and right_state is None:
         return None
-    current_state = _period_state(current)
-    comparison_state = _period_state(comparison)
-    if current_state is None and comparison_state is None:
-        return None
-    if current_state == comparison_state == "completed":
+    if left_state == right_state == "completed":
         status = "compatible"
         reasons: list[str] = []
-    elif "not_started" in {current_state, comparison_state} or None in {
-        current_state,
-        comparison_state,
+    elif "not_started" in {left_state, right_state} or None in {
+        left_state,
+        right_state,
     }:
         status = "not_assessable"
         reasons = ["PERIOD_COMPARABILITY_NOT_ASSESSABLE"]
@@ -960,16 +1009,20 @@ def _annotate_period_evidence(value: Any, observed_on: date) -> Any:
 
     if not isinstance(value, Mapping):
         return value
-    evidence = _period_evidence(value.get("start"), value.get("end"), observed_on)
+    evidence = _calendar_period_evidence(
+        value.get("start"), value.get("end"), observed_on
+    )
     if evidence is not None:
-        return {**dict(value), **evidence}
+        return {**dict(value), "calendar_evidence": evidence}
     annotated = {
         key: _annotate_period_evidence(item, observed_on)
         if isinstance(item, Mapping)
         else copy.deepcopy(item)
         for key, item in value.items()
     }
-    compatibility = _comparison_compatibility(annotated)
+    compatibility = assess_period_compatibility(
+        annotated.get("current"), annotated.get("comparison")
+    )
     if compatibility is not None:
         annotated["comparison_compatibility"] = compatibility
     return annotated
@@ -2080,6 +2133,7 @@ def _build_metric_core(
     semantics: Mapping[str, Any],
     *,
     sign: int = 1,
+    observed_on: date | None = None,
 ) -> tuple[str, list[Any], dict[str, Any]]:
     if sign not in {-1, 1}:
         raise QueryFailure("CONTRACT_UNAVAILABLE", "复合指标符号只能是 1 或 -1。")
@@ -2323,7 +2377,7 @@ def _build_metric_core(
         where_params.extend([start, end])
         applied_time = {"start": start, "end": end, "source": "explicit"}
     else:
-        default_range = _default_time_range(time_policy)
+        default_range = _default_time_range(time_policy, observed_on)
         if default_range and time_field:
             default_range = _metric_time_bounds(metric, default_range[0], default_range[1])
             default_range = _validate_time_bounds(
@@ -2551,6 +2605,8 @@ def _build_comparison_metric_query(
     datasets_contract: Mapping[str, Any],
     semantics: Mapping[str, Any],
     limit: int,
+    *,
+    observed_on: date | None = None,
 ) -> tuple[str, list[Any], dict[str, Any]]:
     comparison = request.get("comparison")
     if not isinstance(comparison, dict) or request.get("time_bucket") is not None:
@@ -2598,24 +2654,50 @@ def _build_comparison_metric_query(
 
     if metric.get("ratio") is not None:
         current_sql, current_params, current_scope = _build_ratio_metric_core(
-            current_request, metric, datasets_contract, semantics
+            current_request,
+            metric,
+            datasets_contract,
+            semantics,
+            observed_on=observed_on,
         )
         prior_sql, prior_params, prior_scope = _build_ratio_metric_core(
-            prior_request, metric, datasets_contract, semantics
+            prior_request,
+            metric,
+            datasets_contract,
+            semantics,
+            observed_on=observed_on,
         )
     elif metric.get("components") is not None:
         current_sql, current_params, current_scope = _build_composite_metric_core(
-            current_request, metric, datasets_contract, semantics
+            current_request,
+            metric,
+            datasets_contract,
+            semantics,
+            observed_on=observed_on,
         )
         prior_sql, prior_params, prior_scope = _build_composite_metric_core(
-            prior_request, metric, datasets_contract, semantics
+            prior_request,
+            metric,
+            datasets_contract,
+            semantics,
+            observed_on=observed_on,
         )
     else:
         current_sql, current_params, current_scope = _build_metric_core(
-            current_request, metric, metric, datasets_contract, semantics
+            current_request,
+            metric,
+            metric,
+            datasets_contract,
+            semantics,
+            observed_on=observed_on,
         )
         prior_sql, prior_params, prior_scope = _build_metric_core(
-            prior_request, metric, metric, datasets_contract, semantics
+            prior_request,
+            metric,
+            metric,
+            datasets_contract,
+            semantics,
+            observed_on=observed_on,
         )
     dimensions = current_scope["dimension_outputs"]
     if prior_scope["dimension_outputs"] != dimensions:
@@ -2824,6 +2906,8 @@ def _validate_pre_entity_metric_plan(
     request: Mapping[str, Any],
     datasets_contract: Mapping[str, Any],
     semantics: Mapping[str, Any],
+    *,
+    observed_on: date | None = None,
 ) -> None:
     """Compile the governed plan before entity lookup so pure failures are DB-free."""
 
@@ -2832,11 +2916,17 @@ def _validate_pre_entity_metric_plan(
         datasets_contract,
         semantics,
         _metric_query_limit(request),
+        observed_on=observed_on,
     )
 
 
 def _build_metric_query(
-    request: Mapping[str, Any], datasets_contract: Mapping[str, Any], semantics: Mapping[str, Any], limit: int
+    request: Mapping[str, Any],
+    datasets_contract: Mapping[str, Any],
+    semantics: Mapping[str, Any],
+    limit: int,
+    *,
+    observed_on: date | None = None,
 ) -> tuple[str, list[Any], dict[str, Any]]:
     metric_code = request.get("metric")
     metrics = semantics.get("metrics")
@@ -2904,7 +2994,12 @@ def _build_metric_query(
             raise QueryFailure("INVALID_PLAN", "该分析指标不支持请求中的时间分组参数。")
         try:
             sql, params, scope = build_analytical_metric_query(
-                request, metric, datasets_contract, semantics, limit
+                request,
+                metric,
+                datasets_contract,
+                semantics,
+                limit,
+                observed_on=observed_on,
             )
             scope["inventory_scope"] = applied_inventory_scope
             return sql, params, scope
@@ -2912,13 +3007,25 @@ def _build_metric_query(
             raise QueryFailure(exc.code, exc.message) from exc
 
     if request.get("comparison") is not None:
-        return _build_comparison_metric_query(request, metric, datasets_contract, semantics, limit)
+        return _build_comparison_metric_query(
+            request,
+            metric,
+            datasets_contract,
+            semantics,
+            limit,
+            observed_on=observed_on,
+        )
 
     ratio = metric.get("ratio")
     components = metric.get("components")
     if ratio is None and components is None:
         sql, params, scope = _build_metric_core(
-            request, metric, metric, datasets_contract, semantics
+            request,
+            metric,
+            metric,
+            datasets_contract,
+            semantics,
+            observed_on=observed_on,
         )
         note = metric.get("answer_note")
         if isinstance(note, str) and note not in scope["warnings"]:
@@ -2935,11 +3042,19 @@ def _build_metric_query(
 
     if ratio is not None:
         sql, params, scope = _build_ratio_metric_core(
-            request, metric, datasets_contract, semantics
+            request,
+            metric,
+            datasets_contract,
+            semantics,
+            observed_on=observed_on,
         )
     else:
         sql, params, scope = _build_composite_metric_core(
-            request, metric, datasets_contract, semantics
+            request,
+            metric,
+            datasets_contract,
+            semantics,
+            observed_on=observed_on,
         )
     sql += _metric_order_clause(request, scope["dimension_outputs"])
     sql += " LIMIT %s"
@@ -2953,6 +3068,8 @@ def _build_composite_metric_core(
     metric: Mapping[str, Any],
     datasets_contract: Mapping[str, Any],
     semantics: Mapping[str, Any],
+    *,
+    observed_on: date | None = None,
 ) -> tuple[str, list[Any], dict[str, Any]]:
     metric_code = request.get("metric")
     metrics = semantics.get("metrics")
@@ -2988,6 +3105,7 @@ def _build_composite_metric_core(
             datasets_contract,
             semantics,
             sign=component.get("sign"),
+            observed_on=observed_on,
         )
         core_sql.append(sql)
         params.extend(component_params)
@@ -3058,6 +3176,8 @@ def _build_ratio_metric_core(
     metric: Mapping[str, Any],
     datasets_contract: Mapping[str, Any],
     semantics: Mapping[str, Any],
+    *,
+    observed_on: date | None = None,
 ) -> tuple[str, list[Any], dict[str, Any]]:
     metric_code = request.get("metric")
     metrics = semantics.get("metrics")
@@ -3090,10 +3210,20 @@ def _build_ratio_metric_core(
             base_metric["dimension_overrides"] = {**base_overrides, **inherited_overrides}
 
     numerator_sql, numerator_params, numerator_scope = _build_metric_core(
-        request, numerator_metric, metric, datasets_contract, semantics
+        request,
+        numerator_metric,
+        metric,
+        datasets_contract,
+        semantics,
+        observed_on=observed_on,
     )
     denominator_sql, denominator_params, denominator_scope = _build_metric_core(
-        request, denominator_metric, metric, datasets_contract, semantics
+        request,
+        denominator_metric,
+        metric,
+        datasets_contract,
+        semantics,
+        observed_on=observed_on,
     )
     dimensions = numerator_scope["dimension_outputs"]
     if denominator_scope["dimension_outputs"] != dimensions:
@@ -3433,6 +3563,28 @@ def _evidence_rows_and_state(
                 except Exception:
                     pass
     return public_rows, "rows"
+
+
+def _validate_required_time_bucket_rows(
+    metric: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]
+) -> None:
+    """Fail closed when a contract-required series loses its period grain."""
+
+    required_time_bucket = metric.get("required_time_bucket")
+    if required_time_bucket is None or not rows:
+        return
+    if required_time_bucket not in {"day", "month"}:
+        raise QueryFailure(
+            "CONTRACT_UNAVAILABLE",
+            "指标的必需时间分组合同无效。",
+            stage="result_validation",
+        )
+    if any(_safe_display_value(row.get("period")) is None for row in rows):
+        raise QueryFailure(
+            "CONTRACT_UNAVAILABLE",
+            "时间序列结果缺少合同要求的期间维度。",
+            stage="result_validation",
+        )
 
 
 def _execute_with_source(
@@ -6476,14 +6628,20 @@ def _scope_texts(value: Any) -> list[str]:
                     f"{start_date.strftime('%Y-%m-%d')} 至 "
                     f"{inclusive_end.strftime('%Y-%m-%d')}"
                 )
-            observed_on = value.get("data_as_of")
-            if value.get("period_state") == "in_progress" and isinstance(
+            calendar_evidence = value.get("calendar_evidence")
+            calendar_evidence = (
+                calendar_evidence
+                if isinstance(calendar_evidence, Mapping)
+                else {}
+            )
+            observed_on = calendar_evidence.get("observed_on")
+            if calendar_evidence.get("period_state") == "in_progress" and isinstance(
                 observed_on, str
             ):
                 rendered += (
                     f"（查询日 {observed_on}，期间进行中；数据新鲜度未证明）"
                 )
-            elif value.get("period_state") == "not_started":
+            elif calendar_evidence.get("period_state") == "not_started":
                 rendered += "（期间尚未开始）"
             return [rendered]
         except ValueError:
@@ -6497,16 +6655,16 @@ def _scope_texts(value: Any) -> list[str]:
     snapshot_month = value.get("snapshot_month")
     if isinstance(snapshot_month, str):
         if source == "latest_non_null_snapshot":
-            return [f"{snapshot_month} 最新有值业务快照"]
+            return [f"{snapshot_month} 最新有值业务月度快照"]
         if source == "latest_snapshot_offset" and isinstance(
             value.get("months_before"), int
         ):
             return [
-                f"{snapshot_month} 月末业务快照"
+                f"{snapshot_month} 业务月度快照"
                 f"（距最新快照 {value['months_before']} 个月）"
             ]
         if source == "latest_snapshot":
-            return [f"{snapshot_month} 月末业务快照"]
+            return [f"{snapshot_month} 业务月度快照"]
     if source == "current_snapshot":
         if value.get("resolution_state") in {
             "as_of_date_unavailable",
@@ -6516,7 +6674,7 @@ def _scope_texts(value: Any) -> list[str]:
             return ["当前业务快照截至日期证据不可用"]
         return ["当前业务快照"]
     if source == "latest_snapshot":
-        return ["业务月末快照月份证据不可用"]
+        return ["业务月度快照月份证据不可用"]
     if source == "latest_non_null_snapshot":
         if value.get("resolution_state") == "required_value_unavailable":
             return ["最新有值业务快照不可用"]
@@ -6524,7 +6682,7 @@ def _scope_texts(value: Any) -> list[str]:
     if source == "latest_complete_accounting_months" and isinstance(value.get("months"), int):
         return [f"最近 {value['months']} 个完整会计月"]
     if source == "latest_snapshot_offset" and isinstance(value.get("months_before"), int):
-        return [f"月末业务快照月份证据不可用（偏移 {value['months_before']} 个月）"]
+        return [f"业务月度快照月份证据不可用（偏移 {value['months_before']} 个月）"]
     rendered: list[str] = []
     for nested in value.values():
         if not isinstance(nested, Mapping):
@@ -7668,7 +7826,10 @@ def _calculation_operand(
 def _build_governed_calculations(
     calculations: Sequence[Mapping[str, str]],
     results: Sequence[Mapping[str, Any]],
+    *,
+    observed_on: date | None = None,
 ) -> list[dict[str, Any]]:
+    calculation_observed_on = observed_on or _business_today()
     result_by_id = {
         str(result.get("request_id")): result
         for result in results
@@ -7697,48 +7858,19 @@ def _build_governed_calculations(
                     "未登记单位代数时，计算操作数必须使用相同单位。",
                 )
             operation = calculation["operation"]
-            if operation == "share" or same_period:
-                analytical_compatibility = {
-                    "status": "compatible",
-                    "reason_codes": [],
-                }
-            else:
-                left_state = _period_state(left["period"])
-                right_state = _period_state(right["period"])
-                if left_state is None:
-                    left_evidence = _period_evidence(
-                        left["period"].get("start"),
-                        left["period"].get("end"),
-                        _business_today(),
-                    )
-                    left_state = _period_state(left_evidence)
-                if right_state is None:
-                    right_evidence = _period_evidence(
-                        right["period"].get("start"),
-                        right["period"].get("end"),
-                        _business_today(),
-                    )
-                    right_state = _period_state(right_evidence)
-                if left_state == right_state == "completed":
-                    analytical_compatibility = {
-                        "status": "compatible",
-                        "reason_codes": [],
-                    }
-                elif "not_started" in {left_state, right_state} or None in {
-                    left_state,
-                    right_state,
-                }:
-                    analytical_compatibility = {
-                        "status": "not_assessable",
-                        "reason_codes": [
-                            "PERIOD_COMPARABILITY_NOT_ASSESSABLE"
-                        ],
-                    }
-                else:
-                    analytical_compatibility = {
-                        "status": "coverage_mismatch",
-                        "reason_codes": ["PERIOD_COVERAGE_MISMATCH"],
-                    }
+            left_period_evidence = _annotate_period_evidence(
+                left["period"], calculation_observed_on
+            )
+            right_period_evidence = _annotate_period_evidence(
+                right["period"], calculation_observed_on
+            )
+            period_compatibility = assess_period_compatibility(
+                left_period_evidence,
+                right_period_evidence,
+            ) or {
+                "status": "not_assessable",
+                "reason_codes": ["PERIOD_COMPARABILITY_NOT_ASSESSABLE"],
+            }
             if operation in {"difference", "ratio"}:
                 if not (same_metric_basis and same_filter_scope):
                     raise QueryFailure(
@@ -7840,12 +7972,12 @@ def _build_governed_calculations(
                 "value": _json_value(value),
                 "unit": output_unit,
                 "scope_compatibility": scope_compatibility,
-                "analytical_compatibility": analytical_compatibility,
+                "period_compatibility": period_compatibility,
                 "limitations": [
                     "NOT_A_REGISTERED_METRIC",
                     "NOT_STRUCTURAL_CONTRIBUTION",
                     "NOT_CAUSAL_EVIDENCE",
-                    *analytical_compatibility["reason_codes"],
+                    *period_compatibility["reason_codes"],
                 ],
                 "error": None,
             }
@@ -7910,7 +8042,7 @@ _MODEL_WIRE_CALCULATION_FIELDS = (
     "value",
     "unit",
     "scope_compatibility",
-    "analytical_compatibility",
+    "period_compatibility",
     "limitations",
     "error",
 )
@@ -7999,7 +8131,7 @@ def _model_wire_calculation_projection(
                     if key in value
                 }
             continue
-        if field == "analytical_compatibility":
+        if field == "period_compatibility":
             if isinstance(value, Mapping):
                 projected[field] = {
                     key: copy.deepcopy(value[key])
@@ -8123,6 +8255,8 @@ def _model_wire_calculations(
 
 def _validate_request_plan_without_entities(
     raw_request: Any,
+    *,
+    observed_on: date | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Validate one branch through the last database-free planning boundary."""
 
@@ -8138,7 +8272,12 @@ def _validate_request_plan_without_entities(
         raise _at_stage(exc, "contract_load")
     try:
         request = _validate_metric_detail_gate(request, semantics)
-        _validate_pre_entity_metric_plan(request, datasets, semantics)
+        _validate_pre_entity_metric_plan(
+            request,
+            datasets,
+            semantics,
+            observed_on=observed_on,
+        )
     except QueryFailure as exc:
         raise _at_stage(exc, "input_validation")
     return request, datasets, semantics
@@ -8151,6 +8290,7 @@ def _prepare_one(
     resolution_cache: dict[tuple[str, str], Any],
     max_unique_lookups: int,
     preflight_stats: dict[str, Any],
+    period_observed_on: date | None = None,
 ) -> dict[str, Any]:
     if deadline_at is not None and time.monotonic() >= deadline_at:
         raise QueryFailure(
@@ -8160,7 +8300,8 @@ def _prepare_one(
             stage="batch_deadline",
         )
     request, datasets, semantics = _validate_request_plan_without_entities(
-        raw_request
+        raw_request,
+        observed_on=period_observed_on,
     )
     resolved_entities: list[dict[str, Any]] = []
     if request["mode"] == "metric":
@@ -8286,7 +8427,11 @@ def _run_one(
         current_stage = "query_planning"
         limit = _metric_query_limit(request)
         sql, params, scope = _build_metric_query(
-            request, datasets, semantics, limit
+            request,
+            datasets,
+            semantics,
+            limit,
+            observed_on=period_observed_on,
         )
         private_time_range = scope.get("time_range")
         applied_time_range = _public_time_range(private_time_range)
@@ -8370,6 +8515,7 @@ def _run_one(
                 "CONTRACT_UNAVAILABLE",
                 "指标合同不可用。",
             )
+        _validate_required_time_bucket_rows(metric_definition, public_rows)
         domain_dimensions = semantics.get("dimensions")
         if not isinstance(domain_dimensions, Mapping) or any(
             not isinstance(code, str)
@@ -8704,6 +8850,7 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
                     resolution_cache=resolution_cache,
                     max_unique_lookups=max_unique_lookups,
                     preflight_stats=stats,
+                    period_observed_on=period_observed_on,
                 )
             except QueryFailure as exc:
                 failure = exc
@@ -8767,6 +8914,7 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
                         resolution_cache=resolution_cache,
                         max_unique_lookups=max_unique_lookups,
                         preflight_stats=stats,
+                        period_observed_on=period_observed_on,
                     )
                     if request_id in complete_dimensions_by_overall:
                         _validate_complete_decomposition_capability(
@@ -8968,6 +9116,7 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
                         resolution_cache=resolution_cache,
                         max_unique_lookups=max_unique_lookups,
                         preflight_stats=stats,
+                        period_observed_on=period_observed_on,
                     )
                     if request_id in complete_dimensions_by_overall:
                         _validate_complete_decomposition_capability(
@@ -9046,6 +9195,7 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
         calculation_results = _build_governed_calculations(
             calculations,
             results,
+            observed_on=period_observed_on,
         )
         successful = sum(1 for result in results if result["status"] == "success")
         failed_calculations = sum(
@@ -9165,6 +9315,7 @@ def runtime_guarded_datasage_query(
     """Official runtime facade: keep the schema visible, then fail closed."""
 
     started = time.monotonic()
+    period_observed_on = _business_today()
     try:
         if (
             not isinstance(args, dict)
@@ -9244,7 +9395,10 @@ def runtime_guarded_datasage_query(
         for request in guarded_requests:
             branch_failure = failure
             try:
-                _validate_request_plan_without_entities(request)
+                _validate_request_plan_without_entities(
+                    request,
+                    observed_on=period_observed_on,
+                )
             except QueryFailure as exc:
                 branch_failure = exc
             results.append(
@@ -9287,6 +9441,7 @@ def runtime_guarded_datasage_query(
         calculation_results = _build_governed_calculations(
             calculations,
             results,
+            observed_on=period_observed_on,
         )
         logger.warning(
             "datasage_query readiness_blocked reason_code=%s "

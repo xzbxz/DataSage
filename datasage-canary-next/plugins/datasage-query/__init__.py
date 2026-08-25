@@ -4,7 +4,6 @@ from . import (
     contracts,
     entitlements,
     entities,
-    references,
     schemas,
     tools,
     wire,
@@ -48,19 +47,6 @@ def register(ctx) -> None:
             ),
         ),
         description=schemas.DATASAGE_ENTITY_RESOLVE["description"],
-    )
-    ctx.register_tool(
-        name="datasage_reference",
-        toolset="datasage-query",
-        schema=schemas.DATASAGE_REFERENCE,
-        handler=entitlements.guard(
-            "datasage_reference",
-            wire.bounded_json_handler(
-                "datasage_reference",
-                references.datasage_reference,
-            ),
-        ),
-        description=schemas.DATASAGE_REFERENCE["description"],
     )
     ctx.register_tool(
         name="datasage_query",

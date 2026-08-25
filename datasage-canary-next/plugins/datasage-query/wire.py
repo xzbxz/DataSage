@@ -151,13 +151,16 @@ def _compact_catalog_result(
                     raw_candidate.get("detail"), Mapping
                 ):
                     continue
-                compact_candidates.append(
-                    _compact_metric_detail(
-                        raw_candidate["detail"],
-                        detail_receipt=raw_candidate.get("detail_receipt"),
-                        value_policies=value_policies,
-                    )
+                candidate = _compact_metric_detail(
+                    raw_candidate["detail"],
+                    detail_receipt=raw_candidate.get("detail_receipt"),
+                    value_policies=value_policies,
                 )
+                # The metric already publishes allowed dimension codes. Keep
+                # shared value policies once at the catalog top level instead
+                # of replaying full dimension metadata for every candidate.
+                candidate.pop("dimensions", None)
+                compact_candidates.append(candidate)
             metric_count += len(compact_candidates)
             compact_lens = {
                 key: value
@@ -204,7 +207,7 @@ def _compact_catalog_result(
 def compact_catalog_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """Project full internal catalog contracts to a compact model surface."""
 
-    if payload.get("model_wire_version") == "datasage-catalog-model-wire/v2":
+    if payload.get("model_wire_version") == "datasage-catalog-model-wire/v3":
         return payload
     results = payload.get("results")
     if not isinstance(results, list):
@@ -220,7 +223,7 @@ def compact_catalog_payload(payload: dict[str, Any]) -> dict[str, Any]:
         for key, value in payload.items()
         if key not in {"results"}
     }
-    compact["model_wire_version"] = "datasage-catalog-model-wire/v2"
+    compact["model_wire_version"] = "datasage-catalog-model-wire/v3"
     compact["results"] = compact_results
     if value_policies:
         compact["dimension_value_policies"] = value_policies
@@ -274,7 +277,6 @@ def _compact_evidence_bundle(bundle: Any) -> dict[str, Any]:
             "coverage": bundle.get("coverage"),
             "items": items,
             "evidence_gaps": bundle.get("evidence_gaps", []),
-            "answer_guardrails": bundle.get("answer_guardrails", {}),
         }.items()
         if value not in (None, {}, [])
     }
@@ -283,7 +285,7 @@ def _compact_evidence_bundle(bundle: Any) -> dict[str, Any]:
 def _query_answer_constraints(
     results: list[Mapping[str, Any]],
     evidence_bundle: Mapping[str, Any],
-    metric_contexts: Any,
+    calculations: Any,
 ) -> dict[str, Any]:
     items = {
         item.get("request_id"): item
@@ -298,92 +300,72 @@ def _query_answer_constraints(
     reconciliation_missing: list[str] = []
     benchmark_request_ids: list[str] = []
     in_progress_periods: list[str] = []
+    not_started_periods: list[str] = []
     coverage_mismatches: list[str] = []
-    for result in results:
-        request_id = result.get("request_id")
-        period = result.get("applied_time_range")
-        if not isinstance(request_id, str) or not isinstance(period, Mapping):
-            continue
-        period_nodes = (
-            [period]
-            if "period_state" in period
-            else [value for value in period.values() if isinstance(value, Mapping)]
-        )
-        if any(node.get("period_state") == "in_progress" for node in period_nodes):
-            in_progress_periods.append(request_id)
-        compatibility = period.get("comparison_compatibility")
-        if (
-            isinstance(compatibility, Mapping)
-            and compatibility.get("status") != "compatible"
-        ):
-            coverage_mismatches.append(request_id)
     for request_id, item in items.items():
         limitations = item.get("limitations")
         limitations = limitations if isinstance(limitations, list) else []
-        if any("RECONCIL" in str(value) for value in limitations):
+        if "STRUCTURAL_CONTRIBUTION_NOT_RECONCILED" in limitations:
             reconciliation_missing.append(request_id)
+        if "PERIOD_IN_PROGRESS" in limitations:
+            in_progress_periods.append(request_id)
+        if "PERIOD_NOT_STARTED" in limitations:
+            not_started_periods.append(request_id)
+        if "PERIOD_COVERAGE_MISMATCH" in limitations:
+            coverage_mismatches.append(request_id)
         supports = item.get("supports")
         supports = supports if isinstance(supports, list) else []
-        # A period/change comparison supports a neutral relative fact, but it
-        # does not authorize words such as healthy, normal, controllable, or
-        # on-target.  Only an explicitly governed benchmark/target does.
-        if item.get("evidence_role") == "benchmark" or any(
+        if any(
             value in {"target_status", "benchmark"} for value in supports
         ):
             benchmark_request_ids.append(request_id)
-    successful_request_ids = [
-        str(result.get("request_id"))
-        for result in results
-        if result.get("status") == "success"
-        and isinstance(result.get("request_id"), str)
-    ]
-    benchmark_missing_request_ids = [
-        request_id
-        for request_id in successful_request_ids
-        if request_id not in benchmark_request_ids
-    ]
-    metric_count = len(metric_contexts) if isinstance(metric_contexts, list) else 0
+
+    compatibility_proofs: list[dict[str, Any]] = []
+    if isinstance(calculations, list):
+        for calculation in calculations:
+            if (
+                not isinstance(calculation, Mapping)
+                or calculation.get("status") != "success"
+                or not isinstance(calculation.get("scope_compatibility"), Mapping)
+                or not isinstance(calculation.get("calculation_id"), str)
+            ):
+                continue
+            operands = calculation.get("operands")
+            request_ids = sorted(
+                {
+                    str(operand.get("request_id"))
+                    for operand in operands
+                    if isinstance(operand, Mapping)
+                    and isinstance(operand.get("request_id"), str)
+                }
+            ) if isinstance(operands, list) else []
+            if not request_ids:
+                continue
+            compatibility_proofs.append(
+                {
+                    "calculation_id": calculation["calculation_id"],
+                    "request_ids": request_ids,
+                }
+            )
+
     return {
         "truncated_population": {
-            "request_ids": truncated,
-            "rule": (
-                "Returned Top-N rows authorize only the returned ranking, never a "
-                "complete-population or concentration statement."
-            ),
+            "request_ids": sorted(set(truncated)),
         },
-        "benchmark_missing": {
-            "value": bool(benchmark_missing_request_ids),
-            "request_ids": benchmark_missing_request_ids,
-            "benchmark_request_ids": benchmark_request_ids,
-            "rule": "Normative judgments require a compatible governed benchmark.",
+        "benchmark_evidence": {
+            "request_ids": sorted(set(benchmark_request_ids)),
         },
         "reconciliation_missing": {
-            "request_ids": reconciliation_missing,
-            "rule": (
-                "Do not claim structural contribution, offset, lift, or drag for "
-                "these requests without a reconciled receipt."
-            ),
+            "request_ids": sorted(set(reconciliation_missing)),
         },
         "scope_compatibility": {
-            "status": (
-                "not_proven_across_metrics"
-                if metric_count > 1
-                else "single_metric_or_not_applicable"
-            ),
-            "rule": (
-                "Cross-metric comparisons require compatible period, population, "
-                "unit, currency, filters, and business scope."
-            ),
+            "proofs": compatibility_proofs,
         },
         "period_coverage": {
             "request_ids": sorted(set(in_progress_periods)),
+            "not_started_request_ids": sorted(set(not_started_periods)),
             "comparison_mismatch_request_ids": sorted(
                 set(coverage_mismatches)
-            ),
-            "rule": (
-                "An in-progress window is incomplete; query date is not source "
-                "freshness. Coverage mismatch allows arithmetic, not a formal "
-                "trend or final-period judgment."
             ),
         },
     }
@@ -392,7 +374,7 @@ def _query_answer_constraints(
 def compact_query_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """Remove repeated proof envelopes after their integrity has been checked."""
 
-    if payload.get("model_wire_version") == "datasage-query-model-wire/v2":
+    if payload.get("model_wire_version") == "datasage-query-model-wire/v3":
         return payload
     raw_results = payload.get("results")
     if not isinstance(raw_results, list) or not any(
@@ -483,12 +465,12 @@ def compact_query_payload(payload: dict[str, Any]) -> dict[str, Any]:
         for key, value in payload.items()
         if key not in {"results", "evidence_bundle"}
     }
-    compact["model_wire_version"] = "datasage-query-model-wire/v2"
+    compact["model_wire_version"] = "datasage-query-model-wire/v3"
     compact["evidence_bundle"] = evidence_bundle
     compact["answer_constraints"] = _query_answer_constraints(
         [result for result in raw_results if isinstance(result, Mapping)],
         evidence_bundle,
-        payload.get("metric_contexts"),
+        payload.get("calculations"),
     )
     compact["disclosures"] = list(disclosures.values())
     compact["results"] = compact_results
@@ -569,7 +551,7 @@ def _partial_results_payload(
         if isinstance(bundle, Mapping):
             filtered_bundle = {
                 key: bundle[key]
-                for key in ("version", "answer_guardrails")
+                for key in ("version",)
                 if key in bundle
             }
             for field in ("items", "evidence_gaps"):
@@ -609,45 +591,6 @@ def _partial_results_payload(
                     "role_labels_authorize_claims": False,
                 }
             current["evidence_bundle"] = filtered_bundle
-        constraints = payload.get("answer_constraints")
-        if isinstance(constraints, Mapping):
-            filtered_constraints = json.loads(json.dumps(constraints))
-            for value in filtered_constraints.values():
-                if isinstance(value, dict) and isinstance(value.get("request_ids"), list):
-                    value["request_ids"] = [
-                        request_id
-                        for request_id in value["request_ids"]
-                        if request_id in request_ids
-                    ]
-                if isinstance(value, dict) and isinstance(
-                    value.get("benchmark_request_ids"), list
-                ):
-                    value["benchmark_request_ids"] = [
-                        request_id
-                        for request_id in value["benchmark_request_ids"]
-                        if request_id in request_ids
-                    ]
-                if isinstance(value, dict) and isinstance(
-                    value.get("comparison_mismatch_request_ids"), list
-                ):
-                    value["comparison_mismatch_request_ids"] = [
-                        request_id
-                        for request_id in value[
-                            "comparison_mismatch_request_ids"
-                        ]
-                        if request_id in request_ids
-                    ]
-            benchmark = filtered_constraints.get("benchmark_missing")
-            if isinstance(benchmark, dict):
-                benchmark["value"] = bool(benchmark.get("request_ids"))
-            compatibility = filtered_constraints.get("scope_compatibility")
-            if isinstance(compatibility, dict):
-                compatibility["status"] = (
-                    "not_proven_across_metrics"
-                    if len(metric_refs) > 1
-                    else "single_metric_or_not_applicable"
-                )
-            current["answer_constraints"] = filtered_constraints
         disclosures = payload.get("disclosures")
         if isinstance(disclosures, list):
             filtered_disclosures = []
@@ -683,6 +626,11 @@ def _partial_results_payload(
             if retained_calculations:
                 current["calculation_count"] = len(retained_calculations)
                 current["calculations"] = retained_calculations
+        current["answer_constraints"] = _query_answer_constraints(
+            [item for item in selected if isinstance(item, Mapping)],
+            current.get("evidence_bundle", {}),
+            current.get("calculations", []),
+        )
         return current
 
     prioritized_results = [

@@ -1,9 +1,5 @@
 # Shared query rules
 
-> Maintainer specification. Runtime enforcement comes from the versioned
-> planner and execution contracts. This document does not classify ordinary
-> conversation or authorize a query by itself.
-
 ## Intent and catalog discovery
 
 - Hermes decides from natural language and conversation history whether current

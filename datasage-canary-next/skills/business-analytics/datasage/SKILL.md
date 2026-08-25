@@ -1,7 +1,7 @@
 ---
 name: datasage
-description: "Canonical skill_view name: datasage (bare name). Use governed internal company metrics to answer, diagnose, compare, and advise."
-version: 0.15.0-rc3
+description: Analyze governed company metrics for business decisions.
+version: 0.15.0-rc4
 author: datasage
 platforms: [windows]
 metadata:
@@ -44,8 +44,11 @@ Choose the route adaptively; this is not a mandatory call sequence.
    sequential so each result can change the next step.
 7. Call `datasage_entity_resolve` only for a genuine entity-only question,
    type ambiguity, or a query preflight error that requests resolution.
-8. Use `datasage_reference` only for a missing boundary or stable definition.
-   Read indexed source/section pairs; references never prescribe a query plan.
+8. When a stable analytical boundary is missing, load only the relevant file
+   with `skill_view(name="datasage", file_path="references/<file>")`:
+   `answer-boundary.md`, `query-rules.md`, `entity-guidance.md`, or
+   `planning-semantics.yaml`. References guide interpretation but never
+   authorize a metric, prescribe a query plan, or override returned evidence.
 9. Stop when the conclusion is decision-useful or the remaining uncertainty
    cannot be resolved with available governed operations.
 
@@ -74,9 +77,9 @@ Choose the route adaptively; this is not a mandatory call sequence.
 - Structural contribution requires an explicitly reconciled decomposition.
   Correlation and decomposition alone never authorize causality.
 - Bind every comparative or evaluative summary to a returned registered metric
-  and scope. When returned `scope_compatibility` is not `proven`, summarize each
-  metric separately rather than synthesizing an umbrella conclusion about
-  overall size, ranking, performance, or health.
+  and scope. Without a returned compatible proof that binds the metrics and
+  scopes, summarize each metric separately rather than synthesizing an umbrella
+  conclusion about overall size, ranking, performance, or health.
 - Without returned causal authorization, report only the returned relationship
   or transparent basic arithmetic. Do not infer the intent or appropriateness
   of target setting, or present a denominator relationship as a business
@@ -84,9 +87,10 @@ Choose the route adaptively; this is not a mandatory call sequence.
 - Health, normality, controllability, and target-status language requires a
   compatible governed target or benchmark. A prior-period change alone does
   not authorize an absolute quality judgment.
-- `period_state` and `coverage` describe evidence scope, not source freshness.
-  On mismatch, keep facts and arithmetic but not formal MoM/YoY, final trend, or
-  forecast. Query matched elapsed windows when material and expressible.
+- `calendar_evidence.period_state` describes the requested calendar window, not
+  source freshness. Formal MoM/YoY also requires returned comparison
+  compatibility. On mismatch, keep scoped facts and arithmetic but not a final
+  trend or forecast. Query matched elapsed windows when material and expressible.
 - Uniqueness, extrema, or population-wide claims require a complete compatible
   population. Advice and forecasts cannot exceed their supporting evidence.
 - If one branch fails, preserve valid independent evidence and state the local

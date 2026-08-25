@@ -23,6 +23,9 @@ from tools.registry import ToolRegistry, registry as hermes_registry
 
 PROFILE_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = PROFILE_ROOT / "plugins" / "datasage-query"
+SKILL_PATH = (
+    PROFILE_ROOT / "skills" / "business-analytics" / "datasage" / "SKILL.md"
+)
 PACKAGE_NAME = "_datasage_query_integration_tests"
 HERMES_CORE_TOOL_NAMES = hermes_tool_search._core_tool_names()
 
@@ -62,7 +65,6 @@ settings = _load_module("settings")
 db_security = _load_module("db_security")
 runtime_health = _load_module("runtime_health")
 entitlements = _load_module("entitlements")
-skill_prompt = _load_module("skill_prompt")
 schemas = _load_module("schemas")
 
 
@@ -389,7 +391,7 @@ class StrictSessionIdentityTests(unittest.TestCase):
         allowed = invoke(full_rule)
         self.assertEqual("success", allowed["status"], allowed)
         self.assertEqual(
-            "datasage-catalog-model-wire/v2", allowed["model_wire_version"]
+            "datasage-catalog-model-wire/v3", allowed["model_wire_version"]
         )
         denied_rule = copy.deepcopy(full_rule)
         first_domain = str(specs[0]["domain"])
@@ -399,29 +401,8 @@ class StrictSessionIdentityTests(unittest.TestCase):
 
 
 class GitGovernedSkillTests(unittest.TestCase):
-    def _profile_with_skill(self, root: Path, payload: bytes = b"# Skill\n") -> None:
-        skill_directory = root / "skills" / "datasage" / "datasage"
-        skill_directory.mkdir(parents=True)
-        (skill_directory / "SKILL.md").write_bytes(payload)
-
-    def test_skill_loads_without_release_manifest(self):
-        with tempfile.TemporaryDirectory() as raw_root:
-            root = Path(raw_root)
-            self._profile_with_skill(root, "# 数字专家\n".encode("utf-8"))
-            self.assertEqual("# 数字专家\n", skill_prompt.load_main_skill(root))
-            self.assertFalse((root / ".release").exists())
-
-    def test_skill_loader_fails_closed_on_invalid_encoding_or_size(self):
-        for payload in (b"\xff", b"x" * (64 * 1024 + 1)):
-            with self.subTest(size=len(payload)):
-                with tempfile.TemporaryDirectory() as raw_root:
-                    root = Path(raw_root)
-                    self._profile_with_skill(root, payload)
-                    with self.assertRaises(skill_prompt.SkillPromptIntegrityError):
-                        skill_prompt.load_main_skill(root)
-
     def test_plugin_exposes_skill_and_no_answer_mutation_hooks(self):
-        main_skill = skill_prompt.load_main_skill(PROFILE_ROOT)
+        main_skill = SKILL_PATH.read_text(encoding="utf-8")
         registration = (PLUGIN_ROOT / "__init__.py").read_text(encoding="utf-8")
         manifest = yaml.safe_load(
             (PLUGIN_ROOT / "plugin.yaml").read_text(encoding="utf-8")
@@ -432,12 +413,11 @@ class GitGovernedSkillTests(unittest.TestCase):
                 "datasage_catalog",
                 "datasage_entity_resolve",
                 "datasage_query",
-                "datasage_reference",
             },
             set(manifest["provides_tools"]),
         )
         self.assertNotIn("provides_hooks", manifest)
-        self.assertEqual(4, registration.count("ctx.register_tool("))
+        self.assertEqual(3, registration.count("ctx.register_tool("))
         self.assertEqual(1, registration.count("ctx.register_system_prompt_section("))
         self.assertNotIn("ctx.register_hook(", registration)
         self.assertNotIn("answer_guard", registration)
@@ -454,7 +434,7 @@ class GitGovernedSkillTests(unittest.TestCase):
         self.assertIn("The DataSage plugin owns metric definitions", normalized)
         self.assertIn("permissions", normalized)
         self.assertIn("If one branch fails", (
-            PROFILE_ROOT / "skills/datasage/datasage/SKILL.md"
+            SKILL_PATH
         ).read_text(encoding="utf-8"))
         self.assertNotIn("DATA_ENTITLEMENT_DENIED", normalized)
 
@@ -496,7 +476,6 @@ class GitGovernedSkillTests(unittest.TestCase):
                     "datasage_catalog",
                     "datasage_entity_resolve",
                     "datasage_query",
-                    "datasage_reference",
                 },
                 manager._plugin_tool_names,
             )
@@ -1471,13 +1450,15 @@ class DistributionBoundaryTests(unittest.TestCase):
             path_parts = set(relative.split("/"))
             self.assertTrue({"dsrt", ".release"}.isdisjoint(path_parts), relative)
 
-    def test_current_distribution_restores_hermes_bundled_skill_seeding(self):
+    def test_current_distribution_uses_official_bundled_skill_opt_out(self):
         distribution = (PROFILE_ROOT / "distribution.yaml").read_text(
             encoding="utf-8"
         )
-        self.assertNotIn(".no-bundled-skills", distribution)
+        self.assertIn("- .no-bundled-skills", distribution)
         self.assertNotIn("- .release", distribution)
-        self.assertFalse((PROFILE_ROOT / ".no-bundled-skills").exists())
+        marker = PROFILE_ROOT / ".no-bundled-skills"
+        self.assertTrue(marker.is_file())
+        self.assertIn("hermes skills opt-out", marker.read_text(encoding="utf-8"))
 
     def test_wecom_restores_official_host_surface_and_adds_datasage(self):
         config = (PROFILE_ROOT / "config.yaml").read_text(encoding="utf-8")

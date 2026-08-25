@@ -97,7 +97,5 @@ def performance_scorecard_manifest() -> dict[str, Any]:
                 "unassessed and limits any umbrella conclusion."
             ),
             "Period flows and current or latest snapshots have different time scopes.",
-            "Normative judgments require a returned governed benchmark.",
-            "Cross-metric comparisons require compatible populations, periods, units, and scope.",
         ],
     }

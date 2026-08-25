@@ -1,5 +1,5 @@
 name: datasage-query
-version: "0.15.0-rc3"
+version: "0.15.0-rc4"
 manifest_version: 2
 api_version: 1
 description: "Hermes-native governed business evidence and analysis tools for DataSage Expert."
@@ -9,7 +9,6 @@ tags: [data, analytics, business-intelligence, read-only]
 provides_tools:
   - datasage_catalog
   - datasage_entity_resolve
-  - datasage_reference
   - datasage_query
 requires_env:
   - name: DATA_QUERY_MYSQL_HOST

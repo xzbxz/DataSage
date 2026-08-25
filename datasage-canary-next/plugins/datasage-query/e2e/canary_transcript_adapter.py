@@ -53,7 +53,6 @@ LEGACY_SOURCE_SECURITY_DOMAIN = b"datasage-query-source-evidence/v1\x00"
 PUBLIC_TOOLS = {
     "datasage_catalog",
     "datasage_entity_resolve",
-    "datasage_reference",
     "datasage_query",
 }
 MAX_JSON_CHARS = 2_000_000
@@ -408,7 +407,10 @@ def _is_bound_metric_detail_catalog_call(
             )
         ):
             return False
-    elif model_wire_version == "datasage-catalog-model-wire/v2":
+    elif model_wire_version in {
+        "datasage-catalog-model-wire/v2",
+        "datasage-catalog-model-wire/v3",
+    }:
         if set(payload) != compact_keys:
             return False
         detail_receipt = results[0].get("detail_receipt")
@@ -502,8 +504,6 @@ def _normalize(
             for entity_type in args.get("entity_types") or []:
                 _ordered_add(dimensions, entity_type)
             _ordered_add(operations, "entity_preflight")
-        elif name == "datasage_reference" and payload.get("status") == "success":
-            _ordered_add(receipts, "reference")
         elif name == "datasage_query":
             if expected_business_database_ref_sha256 is not None:
                 reference = payload.get("source_evidence_ref")
@@ -585,7 +585,10 @@ def _normalize(
             })
             bundle = payload.get("evidence_bundle")
             if isinstance(bundle, dict):
-                if payload.get("model_wire_version") == "datasage-query-model-wire/v2":
+                if payload.get("model_wire_version") in {
+                    "datasage-query-model-wire/v2",
+                    "datasage-query-model-wire/v3",
+                }:
                     items = bundle.get("items")
                     if isinstance(items, list):
                         for item in items:

@@ -58,19 +58,16 @@ __pycache__/
 node_modules/
 
 # Hermes seeds many bundled Skills into the live Profile. Track only this
-# distribution's two owned Skill surfaces.
+# distribution's owned host-native Skill surface.
 skills/*
-!skills/common-data-foundation/
-!skills/datasage/
-skills/common-data-foundation/*
-!skills/common-data-foundation/SKILL.md
-!skills/common-data-foundation/references/
-skills/common-data-foundation/references/*
-!skills/common-data-foundation/references/answer-boundary.md
-!skills/common-data-foundation/references/entity-rules.md
-!skills/common-data-foundation/references/expert-playbooks.yaml
-!skills/common-data-foundation/references/query-rules.md
-skills/datasage/*
-!skills/datasage/datasage/
-skills/datasage/datasage/*
-!skills/datasage/datasage/SKILL.md
+!skills/business-analytics/
+skills/business-analytics/*
+!skills/business-analytics/datasage/
+skills/business-analytics/datasage/*
+!skills/business-analytics/datasage/SKILL.md
+!skills/business-analytics/datasage/references/
+skills/business-analytics/datasage/references/*
+!skills/business-analytics/datasage/references/answer-boundary.md
+!skills/business-analytics/datasage/references/entity-guidance.md
+!skills/business-analytics/datasage/references/planning-semantics.yaml
+!skills/business-analytics/datasage/references/query-rules.md

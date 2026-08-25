@@ -1,8 +1,5 @@
 # Answer boundary
 
-> Maintainer specification for data-backed claims. It does not govern ordinary
-> conversation and does not replace Hermes' final language generation.
-
 ## Five evidence types
 
 - **Verified fact**: directly supported by a current successful tool result,

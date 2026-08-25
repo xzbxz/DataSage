@@ -19,6 +19,9 @@ import yaml
 
 PROFILE_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = PROFILE_ROOT / "plugins" / "datasage-query"
+SKILL_PATH = (
+    PROFILE_ROOT / "skills" / "business-analytics" / "datasage" / "SKILL.md"
+)
 os.environ["HERMES_HOME"] = str(PROFILE_ROOT)
 TEST_PACKAGE = "datasage_query_contract_tests"
 package = types.ModuleType(TEST_PACKAGE)
@@ -26,15 +29,17 @@ package.__path__ = [str(PLUGIN_ROOT)]
 sys.modules[TEST_PACKAGE] = package
 
 contracts = importlib.import_module(f"{TEST_PACKAGE}.contracts")
-references = importlib.import_module(f"{TEST_PACKAGE}.references")
 schemas = importlib.import_module(f"{TEST_PACKAGE}.schemas")
-skill_prompt = importlib.import_module(f"{TEST_PACKAGE}.skill_prompt")
 tools = importlib.import_module(f"{TEST_PACKAGE}.tools")
 wire = importlib.import_module(f"{TEST_PACKAGE}.wire")
 runtime_health = importlib.import_module(f"{TEST_PACKAGE}.runtime_health")
 canary_transcript_adapter = importlib.import_module(
     f"{TEST_PACKAGE}.e2e.canary_transcript_adapter"
 )
+
+
+def _main_skill() -> str:
+    return SKILL_PATH.read_text(encoding="utf-8")
 
 
 class BusinessContractTests(unittest.TestCase):
@@ -616,13 +621,11 @@ class BusinessContractTests(unittest.TestCase):
     def test_user_visible_datasage_skill_survives_eager_schema_and_curation(self) -> None:
         config = yaml.safe_load((PROFILE_ROOT / "config.yaml").read_text(encoding="utf-8"))
         self.assertEqual("off", config["tools"]["tool_search"]["enabled"])
-        content = (PROFILE_ROOT / "skills/datasage/datasage/SKILL.md").read_text(
-            encoding="utf-8"
-        )
+        content = _main_skill()
         self.assertIn("requires_toolsets: [datasage-query]", content)
         self.assertIn("requires_tools: [datasage_catalog, datasage_query]", content)
-        self.assertIn("common-data-foundation", set(config["skills"]["disabled"]))
-        self.assertNotIn("datasage-query-patterns", set(config["skills"]["disabled"]))
+        self.assertTrue((PROFILE_ROOT / ".no-bundled-skills").is_file())
+        self.assertNotIn("disabled", config["skills"])
         self.assertFalse(
             (
                 PROFILE_ROOT
@@ -633,23 +636,19 @@ class BusinessContractTests(unittest.TestCase):
         )
 
     def test_user_visible_skills_declare_the_official_tool_search_bridge(self) -> None:
-        main_skill = (PROFILE_ROOT / "skills/datasage/datasage/SKILL.md").read_text(
-            encoding="utf-8"
-        )
+        main_skill = _main_skill()
         for bridge_name in ("`tool_search`", "`tool_describe`", "`tool_call`"):
             self.assertNotIn(bridge_name, main_skill)
         for direct_tool in (
             "`datasage_catalog`",
             "`datasage_query`",
             "`datasage_entity_resolve`",
-            "`datasage_reference`",
         ):
             self.assertIn(direct_tool, main_skill)
+        self.assertNotIn("`datasage_reference`", main_skill)
 
     def test_main_skill_top_n_disclosure_depends_on_returned_state(self) -> None:
-        content = (PROFILE_ROOT / "skills/datasage/datasage/SKILL.md").read_text(
-            encoding="utf-8"
-        )
+        content = _main_skill()
         normalized = " ".join(content.split())
         self.assertIn("A Top-N result describes only the returned ranking", normalized)
         for field in ("`requested_limit`", "`effective_limit`", "`has_more`"):
@@ -669,9 +668,7 @@ class BusinessContractTests(unittest.TestCase):
     def test_complete_change_finalization_reports_noncausal_structural_contribution(
         self,
     ) -> None:
-        skill = (PROFILE_ROOT / "skills/datasage/datasage/SKILL.md").read_text(
-            encoding="utf-8"
-        )
+        skill = _main_skill()
         self.assertIn(
             "Structural contribution requires an explicitly reconciled decomposition",
             skill,
@@ -1004,7 +1001,7 @@ class BusinessContractTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual("datasage-mini-receivable-semantics/v6", receivable["version"])
+        self.assertEqual("datasage-mini-receivable-semantics/v7", receivable["version"])
         for code in ("positive_debt_amount", "overdue_receivable_amount"):
             self.assertNotIn("change_decomposition", receivable["metrics"][code])
 
@@ -1645,12 +1642,13 @@ class BusinessContractTests(unittest.TestCase):
                 )
 
     def test_domain_planner_recipes_are_not_model_visible(self) -> None:
-        self.assertFalse(
-            any(source_id.startswith("planner_") for source_id in references._SECTION_SPECS)
+        skill_surface = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in [SKILL_PATH, *(SKILL_PATH.parent / "references").iterdir()]
+            if path.is_file()
         )
-        self.assertFalse(
-            any(source_id.startswith("planner_") for source_id in references._SOURCE_PATHS)
-        )
+        self.assertNotIn("planner_", skill_surface)
+        self.assertFalse((PLUGIN_ROOT / "references.py").exists())
 
     def test_receipt_detail_gate_and_required_answer_scope_survive_model_wire(
         self,
@@ -1747,10 +1745,13 @@ class BusinessContractTests(unittest.TestCase):
         self.assertEqual("2026-07-01", result["applied_time_range"]["start"])
         self.assertEqual("2026-08-01", result["applied_time_range"]["end"])
         self.assertEqual("explicit", result["applied_time_range"]["source"])
-        self.assertEqual("completed", result["applied_time_range"]["period_state"])
+        self.assertEqual(
+            "completed",
+            result["applied_time_range"]["calendar_evidence"]["period_state"],
+        )
         self.assertEqual(
             "not_proven",
-            result["applied_time_range"]["coverage"]["source_freshness"],
+            result["applied_time_range"]["calendar_evidence"]["source_freshness"],
         )
         self.assertEqual(
             "查询范围：2026-07-01 至 2026-07-31",
@@ -2011,7 +2012,7 @@ class BusinessContractTests(unittest.TestCase):
             schemas.REQUEST["properties"]["time_range"]["description"],
         )
 
-        main_skill = skill_prompt.load_main_skill(PROFILE_ROOT)
+        main_skill = _main_skill()
         normalized = " ".join(main_skill.split())
         self.assertIn("copy that result's `detail_receipt`", normalized)
         self.assertIn("Never reuse it for another metric", normalized)
@@ -2141,9 +2142,7 @@ class BusinessContractTests(unittest.TestCase):
         query_description = schemas.DATASAGE_QUERY["description"]
         self.assertIn("content_hash", query_description)
         self.assertIn("before any database access", query_description)
-        skill_content = (
-            PROFILE_ROOT / "skills" / "datasage" / "datasage" / "SKILL.md"
-        ).read_text(encoding="utf-8")
+        skill_content = _main_skill()
         self.assertIn("`detail_receipt`", skill_content)
         self.assertIn("Never reuse it for another metric", skill_content)
         self.assertNotIn("copy its `content_hash`", skill_content)
@@ -3776,7 +3775,7 @@ class BusinessContractTests(unittest.TestCase):
         self.assertIn("customer-risk.delivery-receipt.scope-asymmetry", delivery_receipt_ids)
         self.assertNotIn(formal_dso_disclosure_id, delivery_receipt_ids)
 
-        main_skill = skill_prompt.load_main_skill(PROFILE_ROOT)
+        main_skill = _main_skill()
         self.assertLess(len(main_skill), 6_000)
         self.assertIn("Preserve typed states", main_skill)
         self.assertIn("Never invent or substitute a metric", main_skill)
@@ -4002,7 +4001,7 @@ class BusinessContractTests(unittest.TestCase):
         self.assertTrue(
             tools.evidence.claim_is_valid_for_result(latest_claim, latest_result)
         )
-        self.assertEqual("查询范围：2026-07 月末业务快照", latest_payload["answer_scope_line"])
+        self.assertEqual("查询范围：2026-07 业务月度快照", latest_payload["answer_scope_line"])
         self.assertNotIn("__snapshot_month", json.dumps(latest_result))
 
         non_null_payload, non_null_result, non_null_sql = run_query(
@@ -4200,7 +4199,7 @@ class BusinessContractTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual("datasage-mini-receivable-semantics/v6", semantics["version"])
+        self.assertEqual("datasage-mini-receivable-semantics/v7", semantics["version"])
         current_snapshot_evidence_metrics = {
             metric_code
             for metric_code, definition in semantics["metrics"].items()
@@ -5686,7 +5685,7 @@ class BusinessContractTests(unittest.TestCase):
         architecture = (PROFILE_ROOT / "ARCHITECTURE.md").read_text(
             encoding="utf-8"
         )
-        main_skill = skill_prompt.load_main_skill(PROFILE_ROOT)
+        main_skill = _main_skill()
 
         version = str(distribution["version"])
         hermes_version = str(distribution["hermes_requires"]).removeprefix("==")
@@ -5696,7 +5695,7 @@ class BusinessContractTests(unittest.TestCase):
         self.assertIn(f"`{hermes_version}`", architecture)
 
     def test_skill_keeps_adaptive_planning_and_evidence_boundaries(self) -> None:
-        main_skill = skill_prompt.load_main_skill(PROFILE_ROOT)
+        main_skill = _main_skill()
         normalized = " ".join(main_skill.split())
 
         self.assertIn("Choose the route adaptively", normalized)
@@ -5708,12 +5707,10 @@ class BusinessContractTests(unittest.TestCase):
             "answer template",
         ):
             self.assertNotIn(forbidden, normalized.casefold())
-        self.assertTrue(callable(skill_prompt.load_main_skill))
-        self.assertFalse(hasattr(skill_prompt, "build_wecom_skill_hook"))
-        self.assertFalse(hasattr(skill_prompt, "frozen_wecom_skill_hook"))
+        self.assertTrue(SKILL_PATH.is_file())
 
         registration = (PLUGIN_ROOT / "__init__.py").read_text(encoding="utf-8")
-        self.assertEqual(4, registration.count("ctx.register_tool("))
+        self.assertEqual(3, registration.count("ctx.register_tool("))
         self.assertEqual(1, registration.count("ctx.register_system_prompt_section("))
         self.assertNotIn("ctx.register_hook(", registration)
         self.assertNotIn("answer_guard", registration)
@@ -5736,15 +5733,43 @@ class BusinessContractTests(unittest.TestCase):
             observed_on,
         )
 
-        self.assertEqual("in_progress", current["period_state"])
-        self.assertEqual("partial", current["coverage"]["state"])
-        self.assertEqual("not_proven", current["coverage"]["source_freshness"])
-        self.assertEqual("completed", completed["period_state"])
-        self.assertEqual("complete", completed["coverage"]["state"])
-        self.assertEqual("not_started", future["period_state"])
-        self.assertEqual("none", future["coverage"]["state"])
+        self.assertNotIn("period_state", current)
+        self.assertNotIn("coverage", current)
+        self.assertEqual(
+            "in_progress", current["calendar_evidence"]["period_state"]
+        )
+        self.assertEqual(
+            "not_proven", current["calendar_evidence"]["source_freshness"]
+        )
+        self.assertEqual(
+            "completed", completed["calendar_evidence"]["period_state"]
+        )
+        self.assertEqual(
+            "not_started", future["calendar_evidence"]["period_state"]
+        )
         self.assertIn("期间进行中", tools._scope_texts(current)[0])
         self.assertIn("数据新鲜度未证明", tools._scope_texts(current)[0])
+
+    def test_evidence_projects_dynamic_relations_only_from_valid_claim_seals(self) -> None:
+        result = self._scalar_calculation_result(
+            "causal_relation", "90", period=("2026-07-01", "2026-08-01")
+        )
+        claim = result["claim_ledger"][0]
+        claim["allowed_relations"] = ["observation", "causal_conclusion"]
+        tools.evidence.seal_claim(claim)
+        request = {
+            "request_id": "causal_relation",
+            "analysis_intent": "change_diagnosis",
+        }
+
+        bundle = tools.evidence.build_evidence_bundle([request], [result])
+        self.assertIn("causal_conclusion", bundle["items"][0]["supports"])
+        self.assertNotIn("answer_guardrails", bundle)
+
+        tampered = copy.deepcopy(result)
+        tampered["claim_ledger"][0]["allowed_relations"].append("forged_relation")
+        tampered_bundle = tools.evidence.build_evidence_bundle([request], [tampered])
+        self.assertEqual([], tampered_bundle["items"][0]["supports"])
 
     def test_coverage_mismatch_keeps_values_without_period_comparison_authority(self) -> None:
         observed_on = date(2026, 8, 25)
@@ -5800,7 +5825,9 @@ class BusinessContractTests(unittest.TestCase):
         }
         self.assertTrue(tools.evidence.claim_is_valid_for_result(claims[0], result))
         tampered = copy.deepcopy(claims[0])
-        tampered["period"]["current"]["period_state"] = "completed"
+        tampered["period"]["current"]["calendar_evidence"][
+            "period_state"
+        ] = "completed"
         tools.evidence.seal_claim(tampered)
         self.assertFalse(tools.evidence.claim_is_valid_for_result(tampered, result))
 
@@ -5829,19 +5856,20 @@ class BusinessContractTests(unittest.TestCase):
                 }
             ],
             [left, right],
+            observed_on=observed_on,
         )
         calculation = calculations[0]
         self.assertEqual("success", calculation["status"])
         self.assertEqual("-10", calculation["value"])
         self.assertEqual(
             "coverage_mismatch",
-            calculation["analytical_compatibility"]["status"],
+            calculation["period_compatibility"]["status"],
         )
         self.assertIn("PERIOD_COVERAGE_MISMATCH", calculation["limitations"])
         projected = tools._model_wire_calculations(calculations, [left, right])[0]
         self.assertEqual(
-            calculation["analytical_compatibility"],
-            projected["analytical_compatibility"],
+            calculation["period_compatibility"],
+            projected["period_compatibility"],
         )
 
     def test_compact_wire_retains_period_scope_and_generic_answer_constraint(self) -> None:
@@ -5867,7 +5895,9 @@ class BusinessContractTests(unittest.TestCase):
         compact = wire.compact_query_payload(payload)
         self.assertEqual(
             "in_progress",
-            compact["results"][0]["applied_time_range"]["period_state"],
+            compact["results"][0]["applied_time_range"]["calendar_evidence"][
+                "period_state"
+            ],
         )
         self.assertEqual(
             ["open_period"],
@@ -5878,15 +5908,211 @@ class BusinessContractTests(unittest.TestCase):
             compact["evidence_bundle"]["items"][0]["limitations"],
         )
 
-    def test_live_host_resolves_bare_and_qualified_datasage_skill(self) -> None:
+    def test_debt_balance_trend_reuses_required_month_bucket_and_rejects_conflict(
+        self,
+    ) -> None:
+        detail = json.loads(
+            contracts.datasage_catalog(
+                {"requests": [{"domain": "receivable", "metric": "debt_balance_trend"}]}
+            )
+        )["results"][0]
+        self.assertEqual("month", detail["metric"]["required_time_bucket"])
+        self.assertEqual([], detail["metric"]["comparison_kinds"])
+        raw_request = {
+            "request_id": "debt_trend_required_bucket",
+            "domain": "receivable",
+            "mode": "metric",
+            "purpose": "contract-required monthly debt trend",
+            "metric": "debt_balance_trend",
+            "dimensions": [],
+            "time_range": {"start": "2026-01-01", "end": "2026-09-01"},
+            "detail_receipt": self._metric_detail_receipt(
+                "receivable", "debt_balance_trend"
+            ),
+        }
+        request = tools._validate_request(raw_request)
+        datasets, semantics = tools._contracts("receivable")
+        request = tools._validate_metric_detail_gate(request, semantics)
+        self.assertEqual("month", request["time_bucket"])
+        sql, params, scope = tools._build_metric_query(
+            request,
+            datasets,
+            semantics,
+            tools._metric_query_limit(request),
+            observed_on=date(2026, 8, 25),
+        )
+        self.assertIn("AS `period`", sql)
+        self.assertIn("GROUP BY `f`.`bill_date`", sql)
+        self.assertEqual("period", scope["dimension_outputs"][0])
+        self.assertIn("2026-01", params)
+        self.assertIn("2026-09", params)
+
+        conflicting = tools._validate_request(
+            {**raw_request, "request_id": "debt_trend_conflict", "time_bucket": "day"}
+        )
+        with self.assertRaises(tools.QueryFailure) as caught:
+            tools._validate_metric_detail_gate(conflicting, semantics)
+        self.assertEqual("INVALID_PLAN", caught.exception.code)
+
+    def test_debt_balance_trend_success_requires_period_in_every_returned_row(
+        self,
+    ) -> None:
+        request = {
+            "request_id": "debt_trend_period_proof",
+            "domain": "receivable",
+            "mode": "metric",
+            "purpose": "monthly debt trend period proof",
+            "metric": "debt_balance_trend",
+            "dimensions": [],
+            "time_range": {"start": "2026-07-01", "end": "2026-09-01"},
+            "detail_receipt": self._metric_detail_receipt(
+                "receivable", "debt_balance_trend"
+            ),
+        }
+
+        def execute_good(_sql, _params, _limit, **_kwargs):
+            return (
+                [
+                    {
+                        "period": "2026-07",
+                        "metric_value": "100.00",
+                        tools._INTERNAL_MATCH_COUNT: 1,
+                    },
+                    {
+                        "period": "2026-08",
+                        "metric_value": "90.00",
+                        tools._INTERNAL_MATCH_COUNT: 1,
+                    },
+                ],
+                False,
+                self._read_only_source_evidence(),
+            )
+
+        with mock.patch.object(tools, "_execute_with_source", side_effect=execute_good):
+            good = json.loads(tools.datasage_query({"requests": [request]}))
+        self.assertEqual("success", good["status"])
+        period_values = [
+            dimension["value"]
+            for row in good["results"][0]["claim_ledger"]
+            for dimension in row["dimensions"]
+            if dimension["label"] == "期间"
+        ]
+        self.assertEqual(["2026-07", "2026-08"], period_values)
+
+        def execute_bad(_sql, _params, _limit, **_kwargs):
+            return (
+                [{"metric_value": "190.00", tools._INTERNAL_MATCH_COUNT: 2}],
+                False,
+                self._read_only_source_evidence(),
+            )
+
+        bad_request = {**request, "request_id": "debt_trend_missing_period"}
+        with mock.patch.object(tools, "_execute_with_source", side_effect=execute_bad):
+            bad = json.loads(tools.datasage_query({"requests": [bad_request]}))
+        self.assertEqual("failed", bad["status"])
+        self.assertEqual("CONTRACT_UNAVAILABLE", bad["results"][0]["error"]["code"])
+
+    def test_one_observed_on_controls_target_plan_and_calendar_evidence(self) -> None:
+        observed_on = date(2031, 12, 31)
+        raw_request = {
+            "request_id": "target_frozen_observed_on",
+            "domain": "target",
+            "mode": "metric",
+            "purpose": "frozen batch clock proof",
+            "metric": "delivery_target_completion",
+            "dimensions": [],
+            "attribution_mode": "transaction_detail",
+            "time_bucket": "month",
+            "time_range": {"start": "2031-12-01", "end": "2032-02-01"},
+            "detail_receipt": self._metric_detail_receipt(
+                "target", "delivery_target_completion"
+            ),
+        }
+        request = tools._validate_request(raw_request)
+        datasets, semantics = tools._contracts("target")
+        request = tools._validate_metric_detail_gate(request, semantics)
+        sql, _params, scope = tools._build_metric_query(
+            request,
+            datasets,
+            semantics,
+            tools._metric_query_limit(request),
+            observed_on=observed_on,
+        )
+        self.assertIn("k.`period` > '2031-12'", sql)
+        self.assertIn("AS period_state", sql)
+        period = tools._annotate_period_evidence(scope["time_range"], observed_on)
+        self.assertEqual(
+            "2031-12-31", period["calendar_evidence"]["observed_on"]
+        )
+        self.assertEqual(
+            "in_progress", period["calendar_evidence"]["period_state"]
+        )
+
+    def test_unresolved_snapshot_period_is_not_calendar_evidence_and_stays_wire_safe(
+        self,
+    ) -> None:
+        observed_on = date(2026, 8, 25)
+        periods = (
+            {"source": "latest_snapshot", "resolution_state": "evidence_unavailable"},
+            {
+                "source": "latest_snapshot_offset",
+                "months_before": 1,
+                "resolution_state": "evidence_unavailable",
+            },
+        )
+        self.assertNotIn(
+            "calendar_evidence",
+            tools._annotate_period_evidence(periods[0], observed_on),
+        )
+        self.assertEqual(
+            "not_assessable",
+            tools.assess_period_compatibility(*periods)["status"],
+        )
+        left = self._scalar_calculation_result(
+            "snapshot_left", "90", period=("2026-08-01", "2026-09-01")
+        )
+        right = self._scalar_calculation_result(
+            "snapshot_right", "100", period=("2026-07-01", "2026-08-01")
+        )
+        for result, period in zip((left, right), periods):
+            result["applied_time_range"] = copy.deepcopy(period)
+            result["claim_ledger"][0]["period"] = copy.deepcopy(period)
+            tools.evidence.seal_claim(result["claim_ledger"][0])
+        calculations = tools._build_governed_calculations(
+            [
+                {
+                    "calculation_id": "unresolved_snapshot_delta",
+                    "operation": "difference",
+                    "left_request_id": "snapshot_left",
+                    "right_request_id": "snapshot_right",
+                }
+            ],
+            [left, right],
+            observed_on=observed_on,
+        )
+        self.assertEqual(
+            "not_assessable",
+            calculations[0]["period_compatibility"]["status"],
+        )
+        projected = tools._model_wire_calculations(calculations, [left, right])[0]
+        self.assertEqual(
+            calculations[0]["period_compatibility"],
+            projected["period_compatibility"],
+        )
+
+    def test_live_host_resolves_only_the_bare_datasage_skill_name(self) -> None:
         host_root = PROFILE_ROOT.parent.parent / "hermes-agent"
         host_python = host_root / "venv" / "Scripts" / "python.exe"
         if not host_python.is_file():
             self.skipTest("Hermes host runtime is unavailable")
         code = (
             "import json; from tools.skills_tool import skill_view; "
-            "print(json.dumps([json.loads(skill_view('datasage', preprocess=False)), "
-            "json.loads(skill_view('datasage:datasage', preprocess=False))], ensure_ascii=False))"
+            "files=['references/answer-boundary.md','references/entity-guidance.md',"
+            "'references/planning-semantics.yaml','references/query-rules.md']; "
+            "print(json.dumps({'bare':json.loads(skill_view('datasage', preprocess=False)), "
+            "'qualified':json.loads(skill_view('datasage:datasage', preprocess=False)), "
+            "'references':[json.loads(skill_view('datasage', file_path=f, preprocess=False)) "
+            "for f in files]}, ensure_ascii=False))"
         )
         environment = dict(os.environ)
         environment.update(
@@ -5907,10 +6133,15 @@ class BusinessContractTests(unittest.TestCase):
             check=True,
         )
         resolved = json.loads(completed.stdout.strip().splitlines()[-1])
-        self.assertTrue(all(item.get("success") is True for item in resolved), resolved)
-        self.assertTrue(all("# DataSage" in item.get("content", "") for item in resolved))
-        main_skill = skill_prompt.load_main_skill(PROFILE_ROOT)
-        self.assertIn("Canonical skill_view name: datasage (bare name)", main_skill)
+        self.assertTrue(resolved["bare"].get("success"), resolved)
+        self.assertIn("# DataSage", resolved["bare"].get("content", ""))
+        self.assertFalse(resolved["qualified"].get("success"), resolved)
+        self.assertTrue(
+            all(item.get("success") is True for item in resolved["references"]),
+            resolved,
+        )
+        main_skill = _main_skill()
+        self.assertIn("skill_view(name=\"datasage\", file_path=", main_skill)
         self.assertIn("successfully queried lenses", main_skill)
 
 

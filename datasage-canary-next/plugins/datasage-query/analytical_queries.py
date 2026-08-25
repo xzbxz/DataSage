@@ -105,7 +105,11 @@ def _add_months(value: date, months: int) -> date:
         raise AnalysisQueryError("INVALID_PLAN", "分析期间超出支持的日期边界。") from exc
 
 
-def _time_window(request: Mapping[str, Any], policy: str) -> tuple[str, str, dict[str, Any]]:
+def _time_window(
+    request: Mapping[str, Any],
+    policy: str,
+    observed_on: date | None = None,
+) -> tuple[str, str, dict[str, Any]]:
     supplied = request.get("time_range")
     if isinstance(supplied, dict):
         start, end = supplied.get("start"), supplied.get("end")
@@ -119,7 +123,7 @@ def _time_window(request: Mapping[str, Any], policy: str) -> tuple[str, str, dic
         return start_date.isoformat(), end_date.isoformat(), {
             "start": start_date.isoformat(), "end": end_date.isoformat(), "source": "explicit"
         }
-    current_month = _business_today().replace(day=1)
+    current_month = (observed_on or _business_today()).replace(day=1)
     if policy == "current_month":
         start_date, end_date = current_month, _add_months(current_month, 1)
     elif policy == "last_12_completed_months":
@@ -555,6 +559,8 @@ def _settlement_query(
     datasets_contract: Mapping[str, Any],
     semantics: Mapping[str, Any],
     limit: int,
+    *,
+    observed_on: date | None = None,
 ) -> tuple[str, list[Any], dict[str, Any]]:
     table = metric.get("table")
     dataset = _dataset(table, datasets_contract)
@@ -585,7 +591,9 @@ def _settlement_query(
     for column, spec in (metric.get("required_filters") or {}).items():
         where.append(_filter_clause("f", _approved(column, dataset), spec, params))
     where.append(f"{_qualified('f', completion_time)} IS NOT NULL")
-    start, end, applied_time = _time_window(request, str(metric.get("time_policy") or ""))
+    start, end, applied_time = _time_window(
+        request, str(metric.get("time_policy") or ""), observed_on
+    )
     where.extend([f"{_qualified('f', completion_time)} >= %s", f"{_qualified('f', completion_time)} < %s"])
     params.extend([start, end])
 
@@ -912,7 +920,9 @@ def _aggregate_components(
 
 
 def _formal_dso_query(
-    request: Mapping[str, Any], metric: Mapping[str, Any], datasets_contract: Mapping[str, Any], limit: int
+    request: Mapping[str, Any], metric: Mapping[str, Any], datasets_contract: Mapping[str, Any], limit: int,
+    *,
+    observed_on: date | None = None,
 ) -> tuple[str, list[Any], dict[str, Any]]:
     debt_table, delivery_table = metric.get("debt_table"), metric.get("delivery_table")
     debt_dataset, delivery_dataset = _dataset(debt_table, datasets_contract), _dataset(delivery_table, datasets_contract)
@@ -934,7 +944,9 @@ def _formal_dso_query(
     for code in [*selected, *request_filters.keys()]:
         if code not in allowed or code not in mappings:
             raise AnalysisQueryError("UNSUPPORTED_DIMENSION", "正式周转天数不支持请求中的维度。")
-    start, end, applied_time = _time_window(request, str(metric.get("time_policy") or ""))
+    start, end, applied_time = _time_window(
+        request, str(metric.get("time_policy") or ""), observed_on
+    )
     start_date, end_date = date.fromisoformat(start), date.fromisoformat(end)
     if start_date.day != 1 or end_date.day != 1:
         raise AnalysisQueryError("INVALID_PLAN", "正式周转天数必须使用完整自然月。")
@@ -1068,7 +1080,9 @@ def _formal_dso_query(
 
 
 def _paired_amounts_query(
-    request: Mapping[str, Any], metric: Mapping[str, Any], datasets_contract: Mapping[str, Any], limit: int
+    request: Mapping[str, Any], metric: Mapping[str, Any], datasets_contract: Mapping[str, Any], limit: int,
+    *,
+    observed_on: date | None = None,
 ) -> tuple[str, list[Any], dict[str, Any]]:
     left, right = metric.get("left") or {}, metric.get("right") or {}
     selected = request.get("dimensions") or []
@@ -1085,7 +1099,9 @@ def _paired_amounts_query(
     for code in [*selected, *request_filters.keys()]:
         if code not in allowed or code not in mappings:
             raise AnalysisQueryError("UNSUPPORTED_DIMENSION", "出库收款对照不支持请求中的维度。")
-    start, end, applied_time = _time_window(request, str(metric.get("time_policy") or ""))
+    start, end, applied_time = _time_window(
+        request, str(metric.get("time_policy") or ""), observed_on
+    )
 
     def aggregate(
         alias: str,
@@ -1212,6 +1228,8 @@ def _allocated_amount_query(
     datasets_contract: Mapping[str, Any],
     semantics: Mapping[str, Any],
     limit: int,
+    *,
+    observed_on: date | None = None,
 ) -> tuple[str, list[Any], dict[str, Any]]:
     selected = request.get("dimensions") or []
     request_filters = request.get("metric_filters") or {}
@@ -1238,7 +1256,9 @@ def _allocated_amount_query(
     if any(code not in allowed for code in requested_codes):
         raise AnalysisQueryError("UNSUPPORTED_DIMENSION", "分摊净额不支持请求中的维度。")
 
-    start, end, applied_time = _time_window(request, str(metric.get("time_policy") or ""))
+    start, end, applied_time = _time_window(
+        request, str(metric.get("time_policy") or ""), observed_on
+    )
     actual = path.get("actual") or {}
     sql, params, _keys, outputs, source_tables = _aggregate_components(
         actual,
@@ -1273,8 +1293,11 @@ def _allocated_amount_query(
 
 
 def _target_completion_query(
-    request: Mapping[str, Any], metric: Mapping[str, Any], datasets_contract: Mapping[str, Any], limit: int
+    request: Mapping[str, Any], metric: Mapping[str, Any], datasets_contract: Mapping[str, Any], limit: int,
+    *,
+    observed_on: date | None = None,
 ) -> tuple[str, list[Any], dict[str, Any]]:
+    query_observed_on = observed_on or _business_today()
     selected = request.get("dimensions") or []
     request_filters = request.get("metric_filters") or {}
     bindings = _entity_bindings(request)
@@ -1306,7 +1329,7 @@ def _target_completion_query(
     target_time = _approved(target.get("time_field"), target_dataset)
 
     if time_bucket == "month" and request.get("time_range") is None:
-        current_month = _business_today().replace(day=1)
+        current_month = query_observed_on.replace(day=1)
         trend_start = _add_months(current_month, -5)
         trend_end = _add_months(current_month, 1)
         start, end = trend_start.isoformat(), trend_end.isoformat()
@@ -1316,9 +1339,11 @@ def _target_completion_query(
             "source": "latest_6_natural_months_including_current",
         }
     else:
-        start, end, applied_time = _time_window(request, str(metric.get("time_policy") or ""))
+        start, end, applied_time = _time_window(
+            request, str(metric.get("time_policy") or ""), query_observed_on
+        )
     if time_bucket is None:
-        current_month = _business_today().replace(day=1)
+        current_month = query_observed_on.replace(day=1)
         next_month = _add_months(current_month, 1)
         start_date, end_date = date.fromisoformat(start), date.fromisoformat(end)
         if start_date < next_month and end_date > next_month:
@@ -1499,14 +1524,14 @@ def _target_completion_query(
     actual_rows = "COALESCE(a.__matched_row_count, 0)"
     target_nulls = "COALESCE(t.__target_null_count, 0)"
     if time_bucket == "month":
-        current_period = _business_today().strftime("%Y-%m")
+        current_period = query_observed_on.strftime("%Y-%m")
         period_state = (
             f"CASE WHEN k.`period` > '{current_period}' THEN 'not_started' "
             f"WHEN k.`period` = '{current_period}' THEN 'in_progress' "
             "ELSE 'completed' END"
         )
     else:
-        current_month = _business_today().replace(day=1)
+        current_month = query_observed_on.replace(day=1)
         next_month = _add_months(current_month, 1)
         start_date, end_date = date.fromisoformat(start), date.fromisoformat(end)
         if start_date >= next_month:
@@ -1604,18 +1629,53 @@ def build_analytical_metric_query(
     datasets_contract: Mapping[str, Any],
     semantics: Mapping[str, Any],
     limit: int,
+    *,
+    observed_on: date | None = None,
 ) -> tuple[str, list[Any], dict[str, Any]]:
+    query_observed_on = observed_on or _business_today()
     kind = metric.get("query_kind")
     if kind == "settlement_days":
-        return _settlement_query(request, metric, datasets_contract, semantics, limit)
+        return _settlement_query(
+            request,
+            metric,
+            datasets_contract,
+            semantics,
+            limit,
+            observed_on=query_observed_on,
+        )
     if kind == "formal_dso":
-        return _formal_dso_query(request, metric, datasets_contract, limit)
+        return _formal_dso_query(
+            request,
+            metric,
+            datasets_contract,
+            limit,
+            observed_on=query_observed_on,
+        )
     if kind == "paired_amounts":
-        return _paired_amounts_query(request, metric, datasets_contract, limit)
+        return _paired_amounts_query(
+            request,
+            metric,
+            datasets_contract,
+            limit,
+            observed_on=query_observed_on,
+        )
     if kind == "allocated_amount":
-        return _allocated_amount_query(request, metric, datasets_contract, semantics, limit)
+        return _allocated_amount_query(
+            request,
+            metric,
+            datasets_contract,
+            semantics,
+            limit,
+            observed_on=query_observed_on,
+        )
     if kind == "target_completion":
-        return _target_completion_query(request, metric, datasets_contract, limit)
+        return _target_completion_query(
+            request,
+            metric,
+            datasets_contract,
+            limit,
+            observed_on=query_observed_on,
+        )
     if kind == "inventory_turnover_days":
         return _inventory_turnover_query(request, metric, datasets_contract, semantics, limit)
     raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "分析指标类型不受支持。")

@@ -14,6 +14,9 @@ import yaml
 
 PROFILE_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = PROFILE_ROOT / "plugins" / "datasage-query"
+SKILL_PATH = (
+    PROFILE_ROOT / "skills" / "business-analytics" / "datasage" / "SKILL.md"
+)
 os.environ["HERMES_HOME"] = str(PROFILE_ROOT)
 PACKAGE = "datasage_expert_architecture_tests"
 package = types.ModuleType(PACKAGE)
@@ -21,7 +24,6 @@ package.__path__ = [str(PLUGIN_ROOT)]
 sys.modules[PACKAGE] = package
 
 contracts = importlib.import_module(f"{PACKAGE}.contracts")
-references = importlib.import_module(f"{PACKAGE}.references")
 schemas = importlib.import_module(f"{PACKAGE}.schemas")
 tools = importlib.import_module(f"{PACKAGE}.tools")
 wire = importlib.import_module(f"{PACKAGE}.wire")
@@ -45,16 +47,13 @@ class ExpertArchitectureTests(unittest.TestCase):
         plugin = yaml.safe_load(
             (PLUGIN_ROOT / "plugin.yaml").read_text(encoding="utf-8")
         )
-        skill = _frontmatter(
-            PROFILE_ROOT / "skills" / "datasage" / "datasage" / "SKILL.md"
-        )
+        skill = _frontmatter(SKILL_PATH)
         self.assertEqual(str(distribution["version"]), str(plugin["version"]))
         self.assertEqual(str(distribution["version"]), str(skill["version"]))
         self.assertRegex(config["model"]["default"], r"^[a-z0-9][a-z0-9._-]+$")
         self.assertEqual("off", config["tools"]["tool_search"]["enabled"])
-        disabled = set(config["skills"]["disabled"])
-        self.assertNotIn("datasage", disabled)
-        self.assertNotIn("datasage-query-patterns", disabled)
+        self.assertNotIn("disabled", config["skills"])
+        self.assertTrue((PROFILE_ROOT / ".no-bundled-skills").is_file())
         self.assertFalse(
             (PROFILE_ROOT / "skills" / "datasage" / "datasage-query-patterns").exists()
         )
@@ -68,12 +67,11 @@ class ExpertArchitectureTests(unittest.TestCase):
         manifest = yaml.safe_load(
             (PLUGIN_ROOT / "plugin.yaml").read_text(encoding="utf-8")
         )
-        self.assertEqual(4, source.count("ctx.register_tool("))
+        self.assertEqual(3, source.count("ctx.register_tool("))
         self.assertEqual(
             [
                 "datasage_catalog",
                 "datasage_entity_resolve",
-                "datasage_reference",
                 "datasage_query",
             ],
             manifest["provides_tools"],
@@ -87,7 +85,7 @@ class ExpertArchitectureTests(unittest.TestCase):
         self.assertNotIn("frozen_wecom_skill_hook", source)
 
     def test_datasage_skill_is_compact_native_and_tool_gated(self):
-        path = PROFILE_ROOT / "skills" / "datasage" / "datasage" / "SKILL.md"
+        path = SKILL_PATH
         content = path.read_text(encoding="utf-8")
         metadata = _frontmatter(path)
         hermes = metadata["metadata"]["hermes"]
@@ -102,17 +100,24 @@ class ExpertArchitectureTests(unittest.TestCase):
         intent = schemas.REQUEST["properties"]["analysis_intent"]
         self.assertEqual(set(tools.evidence.ANALYSIS_INTENTS), set(intent["enum"]))
 
-    def test_reference_schema_couples_each_source_to_its_sections(self):
-        variants = schemas.DATASAGE_REFERENCE["parameters"]["properties"]["requests"]["items"]["oneOf"]
-        self.assertEqual(set(references.SOURCE_IDS), {
-            variant["properties"]["source_id"]["const"] for variant in variants
-        })
-        for variant in variants:
-            source_id = variant["properties"]["source_id"]["const"]
-            self.assertEqual(
-                set(references.SECTION_IDS_BY_SOURCE[source_id]),
-                set(variant["properties"]["section_id"]["enum"]),
-            )
+    def test_references_use_the_native_skill_surface(self):
+        linked = {
+            path.name
+            for path in (SKILL_PATH.parent / "references").iterdir()
+            if path.is_file()
+        }
+        self.assertEqual(
+            {
+                "answer-boundary.md",
+                "entity-guidance.md",
+                "planning-semantics.yaml",
+                "query-rules.md",
+            },
+            linked,
+        )
+        skill = SKILL_PATH.read_text(encoding="utf-8")
+        self.assertIn('skill_view(name="datasage", file_path=', skill)
+        self.assertFalse(hasattr(schemas, "DATASAGE_REFERENCE"))
 
     def test_batch_metric_details_return_independent_receipts(self):
         selections: list[tuple[str, str]] = []
@@ -155,7 +160,7 @@ class ExpertArchitectureTests(unittest.TestCase):
             ],
             "evidence_bundle": {"large": "y" * 300},
         }
-        with mock.patch.object(wire, "tool_result_char_limit", return_value=750):
+        with mock.patch.object(wire, "tool_result_char_limit", return_value=900):
             result = json.loads(wire.enforce_tool_result_budget("datasage_query", payload))
         self.assertEqual("partial", result["status"])
         self.assertGreater(len(result["results"]), 0)

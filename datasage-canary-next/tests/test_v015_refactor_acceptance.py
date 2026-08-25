@@ -7,6 +7,7 @@ host-compaction fixture and are not claimed as Profile-owned fixes here.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import importlib
 import importlib.util
@@ -216,6 +217,75 @@ class IntelligenceBoundaryAcceptanceTests(unittest.TestCase):
             )
         )
 
+    def test_reviewed_live_idk_answers_are_frozen_as_semantic_failures(self):
+        scorer = _golden_scorer()
+        suite = json.loads(
+            (PLUGIN_ROOT / "e2e" / "golden_expert_cases.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        cases = {case["id"]: case for case in suite["cases"]}
+        reviewed_failures = {
+            "ambiguity_07_live_idk_scorecard": {
+                "final_answer_sha256": (
+                    "d97fd099d0502ac7b72005389d6be29045ac3d7a403f558074ea440188a158ca"
+                ),
+                "conclusions": [
+                    "infer_ungoverned_overall_health_or_strength",
+                    "claim_formal_trend_from_partial_period_mismatch",
+                    "claim_benchmarkless_risk_level",
+                    "claim_scope_incompatible_cross_metric_strength",
+                    "predict_in_progress_period_outcome",
+                    "relabel_time_series_scalar_as_current_snapshot",
+                ],
+            },
+            "multiturn_07_live_balance_correction": {
+                "final_answer_sha256": (
+                    "54161a6d3ccedbe0146bc8155833d37475bf410faf771e37d1c061d924f2e5f6"
+                ),
+                "conclusions": [
+                    "retain_unsupported_risk_level",
+                    "label_snapshot_as_month_end_without_proof",
+                ],
+            },
+        }
+        for case_id, reviewed in reviewed_failures.items():
+            with self.subTest(case_id=case_id):
+                self.assertRegex(reviewed["final_answer_sha256"], r"^[0-9a-f]{64}$")
+                case = cases[case_id]
+                plan = {
+                    key: copy.deepcopy(value)
+                    for key, value in case["plan_constraints"].items()
+                    if not key.startswith("must_not_")
+                }
+                observed = {
+                    "plan": plan,
+                    "conclusions": [
+                        *case["required_conclusions"],
+                        *reviewed["conclusions"],
+                    ],
+                    "evidence": {
+                        "receipts": case["evidence_requirements"]["required_receipts"],
+                        "successful_queries": max(
+                            1,
+                            case["evidence_requirements"][
+                                "minimum_successful_queries"
+                            ],
+                        ),
+                        "failed_queries": 0,
+                        "truncated": False,
+                        "reconciled": False,
+                        "query_attempted": True,
+                        "error_codes": [],
+                    },
+                }
+                errors = scorer._score_case(case, observed)
+                for label in reviewed["conclusions"]:
+                    self.assertTrue(
+                        any(label in error for error in errors),
+                        f"reviewed forbidden conclusion was not rejected: {label}",
+                    )
+
     def test_release_path_has_no_exact_plan_or_fixed_answer_scorer(self):
         scorer_source = (
             PLUGIN_ROOT / "e2e" / "golden_expert_scorer.py"
@@ -236,12 +306,18 @@ class IntelligenceBoundaryAcceptanceTests(unittest.TestCase):
         )
 
     def test_model_visible_references_do_not_publish_fixed_planner_recipes(self):
-        references = _module("references")
-        self.assertFalse(
-            any(source_id.startswith("planner_") for source_id in references._SECTION_SPECS)
+        references = (
+            PROFILE_ROOT
+            / "skills"
+            / "business-analytics"
+            / "datasage"
+            / "references"
         )
-        self.assertFalse(
-            any(source_id.startswith("planner_") for source_id in references._SOURCE_PATHS)
+        self.assertFalse((references / "expert-playbooks.yaml").exists())
+        self.assertFalse((references / "entity-rules.md").exists())
+        self.assertTrue((references / "entity-guidance.md").is_file())
+        self.assertTrue(
+            (PLUGIN_ROOT / "contracts" / "entity-rules-maintainer.md").is_file()
         )
 
 
@@ -257,7 +333,11 @@ class ReleaseAndHostBoundaryAcceptanceTests(unittest.TestCase):
             (PLUGIN_ROOT / "plugin.yaml").read_text(encoding="utf-8")
         )
         skill_text = (
-            PROFILE_ROOT / "skills" / "datasage" / "datasage" / "SKILL.md"
+            PROFILE_ROOT
+            / "skills"
+            / "business-analytics"
+            / "datasage"
+            / "SKILL.md"
         ).read_text(
             encoding="utf-8"
         )
