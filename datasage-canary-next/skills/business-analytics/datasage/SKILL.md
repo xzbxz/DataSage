@@ -1,7 +1,7 @@
 ---
 name: datasage
 description: Analyze governed company metrics for business decisions.
-version: 0.15.0-rc4
+version: 0.15.0-rc5
 author: datasage
 platforms: [windows]
 metadata:
@@ -26,29 +26,25 @@ Choose the route adaptively; this is not a mandatory call sequence.
 
 1. Frame the decision, metric meaning, period, grain, and material scope.
 2. For a broad operating-performance review, load `performance_scorecard` with
-   `datasage_catalog` first; do not precede it with `expert_index`. Choose its material subset,
-   keep flows separate from snapshots, and disclose unavailable profitability.
-   Only successfully queried lenses are evidence. Unqueried, failed, or
-   unavailable material lenses remain unassessed and limit the headline.
-   Use `expert_index` afterward only for one unresolved material question.
-   Answer after a sufficient batch; reopen planning only for ambiguity, local
-   failure, or one necessary missing fact.
+   `datasage_catalog` first, without preceding it with `expert_index`. Choose a
+   material subset, keep flows separate from snapshots, and disclose unavailable
+   profitability. Only successfully queried lenses are evidence; other material
+   lenses remain unassessed and limit the headline. Replan only for ambiguity,
+   local failure, or one necessary missing fact.
 3. Reuse the selected domain, metric, and valid detail receipt from the current
    session. A new turn alone is not a reason to reload them.
 4. Outside broad review, use the likely domain's `expert_index` only when the
    metric is unknown. Read a few candidate details before asking the user.
-5. For an explicit period, filter, dimension, comparison, ranking, or
-   decomposition, load the selected metric detail and copy that result's
-   `detail_receipt` into `datasage_query`. Never reuse it for another metric.
+5. For explicit qualifiers or analysis, load the selected metric detail and copy
+   that result's `detail_receipt` into `datasage_query`.
+   Never reuse it for another metric.
 6. Batch independent, scope-compatible requests. Keep dependent diagnosis
    sequential so each result can change the next step.
 7. Call `datasage_entity_resolve` only for a genuine entity-only question,
    type ambiguity, or a query preflight error that requests resolution.
-8. When a stable analytical boundary is missing, load only the relevant file
-   with `skill_view(name="datasage", file_path="references/<file>")`:
-   `answer-boundary.md`, `query-rules.md`, `entity-guidance.md`, or
-   `planning-semantics.yaml`. References guide interpretation but never
-   authorize a metric, prescribe a query plan, or override returned evidence.
+8. When a stable boundary is missing, load only its relevant reference with
+   `skill_view(name="datasage", file_path="references/<file>")`. References
+   guide interpretation; they never authorize metrics or prescribe a plan.
 9. Stop when the conclusion is decision-useful or the remaining uncertainty
    cannot be resolved with available governed operations.
 
@@ -65,6 +61,9 @@ Choose the route adaptively; this is not a mandatory call sequence.
 - Use governed calculations when available. If you perform transparent basic
   arithmetic on returned values, label it as a derived observation rather than
   a registered metric.
+- Governed calculation operands must come from the same `datasage_query` call.
+  For compatible scalar evidence already present,
+  prefer explicitly labeled transparent arithmetic over a query made only to repeat it.
 
 ## Evidence boundaries
 
@@ -76,25 +75,35 @@ Choose the route adaptively; this is not a mandatory call sequence.
   `requested_limit`, `effective_limit`, and `has_more` when present.
 - Structural contribution requires an explicitly reconciled decomposition.
   Correlation and decomposition alone never authorize causality.
-- Bind every comparative or evaluative summary to a returned registered metric
-  and scope. Without a returned compatible proof that binds the metrics and
-  scopes, summarize each metric separately rather than synthesizing an umbrella
-  conclusion about overall size, ranking, performance, or health.
-- Without returned causal authorization, report only the returned relationship
-  or transparent basic arithmetic. Do not infer the intent or appropriateness
-  of target setting, or present a denominator relationship as a business
-  mechanism.
+- Bind comparative or evaluative summaries to returned metrics and scopes.
+  Without compatible proof, report each metric separately instead of an
+  umbrella conclusion about size, ranking, performance, or health.
+- Without causal authorization, report only returned relationships or
+  transparent arithmetic; do not turn target design or a denominator into a
+  business mechanism.
 - Health, normality, controllability, and target-status language requires a
   compatible governed target or benchmark. A prior-period change alone does
   not authorize an absolute quality judgment.
-- `calendar_evidence.period_state` describes the requested calendar window, not
-  source freshness. Formal MoM/YoY also requires returned comparison
-  compatibility. On mismatch, keep scoped facts and arithmetic but not a final
-  trend or forecast. Query matched elapsed windows when material and expressible.
+- `calendar_evidence.period_state` describes the window, not source freshness.
+  Formal MoM/YoY requires comparison compatibility. On mismatch, keep scoped
+  facts but not a final trend or forecast; use matched elapsed windows when useful.
 - Uniqueness, extrema, or population-wide claims require a complete compatible
   population. Advice and forecasts cannot exceed their supporting evidence.
 - If one branch fails, preserve valid independent evidence and state the local
   gap. Do not discard the whole answer.
+
+## Persistent memory
+
+Conversation history, not persistent memory, carries transient analysis. Do not
+save query or empty results, temporary or candidate entity mappings, single-turn
+scope, receipts, or operating status. Propose memory only for a stable
+cross-session preference or user-confirmed durable fact. User correction wins.
+
+## Tool-turn completion
+
+A message that contains `tool_calls` is interim. After the last tool result, send
+a tool-free assistant message with the complete answer to the user's current
+business question. Never let a memory approval or tool status replace it.
 
 ## Answer shape
 
@@ -103,6 +112,5 @@ supporting facts. For diagnosis, use: conclusion, evidence, hypotheses,
 recommended action, and uncertainty. Do not expose receipts, seals, or tool
 orchestration unless the user asks for an audit.
 
-Before drafting, check once: benchmark for quality, scope compatibility across
-metrics, authorization for causality, and queried-lens coverage for a broad
-headline. If any fails, use scoped facts or transparent arithmetic; do not loop.
+Before drafting, check benchmark, scope compatibility, causal authorization, and
+broad-review lens coverage once. If any fails, use scoped facts; do not loop.

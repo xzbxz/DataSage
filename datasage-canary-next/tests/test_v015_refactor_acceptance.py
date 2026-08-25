@@ -217,7 +217,7 @@ class IntelligenceBoundaryAcceptanceTests(unittest.TestCase):
             )
         )
 
-    def test_reviewed_live_idk_answers_are_frozen_as_semantic_failures(self):
+    def test_reviewed_live_answers_are_frozen_as_semantic_failures(self):
         scorer = _golden_scorer()
         suite = json.loads(
             (PLUGIN_ROOT / "e2e" / "golden_expert_cases.json").read_text(
@@ -248,10 +248,52 @@ class IntelligenceBoundaryAcceptanceTests(unittest.TestCase):
                     "label_snapshot_as_month_end_without_proof",
                 ],
             },
+            "ambiguity_08_live_vietnam_scorecard": {
+                "final_answer_sha256": (
+                    "0785c3f1d0ed41b9dbb7846c43dd191817ce04641f5f3b6a5948ccf27eab89ed"
+                ),
+                "assistant_message_id": 3937,
+                "tool_message_ids": [3932, 3936],
+                "conclusions": [
+                    "infer_ungoverned_overall_health_or_strength",
+                    "infer_demand_health_without_demand_evidence",
+                    "claim_monotonic_trend_from_nonmonotonic_series",
+                    "claim_cross_metric_synchrony_without_aligned_series",
+                    "claim_formal_trend_from_partial_period_mismatch",
+                    "claim_scope_incompatible_cross_metric_strength",
+                ],
+            },
+            "ambiguity_09_live_thai_kim_scorecard": {
+                "final_answer_sha256": (
+                    "fca6927851f092b4efc3dbf2ba2c035e66d6129c96e575115cd948755042de73"
+                ),
+                "assistant_message_id": 3971,
+                "tool_message_ids": [3970],
+                "conclusions": [
+                    "claim_benchmarkless_risk_level",
+                    "recommend_no_intervention_without_action_evidence",
+                    "claim_cross_metric_synchrony_without_aligned_series",
+                    "claim_formal_trend_from_partial_period_mismatch",
+                    "claim_scope_incompatible_cross_metric_strength",
+                    "predict_in_progress_period_outcome",
+                ],
+            },
         }
         for case_id, reviewed in reviewed_failures.items():
             with self.subTest(case_id=case_id):
-                self.assertRegex(reviewed["final_answer_sha256"], r"^[0-9a-f]{64}$")
+                if "final_answer_sha256" in reviewed:
+                    self.assertRegex(
+                        reviewed["final_answer_sha256"], r"^[0-9a-f]{64}$"
+                    )
+                if "assistant_message_id" in reviewed:
+                    self.assertIsInstance(reviewed["assistant_message_id"], int)
+                    self.assertTrue(reviewed["tool_message_ids"])
+                    self.assertTrue(
+                        all(
+                            isinstance(message_id, int)
+                            for message_id in reviewed["tool_message_ids"]
+                        )
+                    )
                 case = cases[case_id]
                 plan = {
                     key: copy.deepcopy(value)

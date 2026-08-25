@@ -14,6 +14,7 @@ import types
 import unittest
 from unittest import mock
 
+import jsonschema
 import yaml
 
 
@@ -5794,8 +5795,8 @@ class BusinessContractTests(unittest.TestCase):
         )
         claims = tools._claim_ledger(
             "period_mismatch",
-            "delivery.delivery_amount",
-            "净出库金额",
+            "metric_calculation_fixture",
+            "计算测试指标",
             "人民币元",
             [],
             mismatched_period,
@@ -5814,16 +5815,24 @@ class BusinessContractTests(unittest.TestCase):
         self.assertEqual("-10", claims[0]["facts"]["delta_value"])
         self.assertNotIn("period_comparison", claims[0]["allowed_relations"])
         tools.evidence.seal_claim(claims[0])
-        result = {
-            "request_id": "period_mismatch",
-            "status": "success",
-            "business_metric_ref": "delivery.delivery_amount",
-            "scope_fingerprint": "scope_period_mismatch",
-            "projection_fingerprint": "projection_period_mismatch",
-            "truncated": False,
-            "applied_time_range": mismatched_period,
-        }
+        result = self._scalar_calculation_result(
+            "period_mismatch",
+            "90",
+            period=("2026-08-01", "2026-09-01"),
+        )
+        result["applied_time_range"] = mismatched_period
+        result["claim_ledger"] = claims
         self.assertTrue(tools.evidence.claim_is_valid_for_result(claims[0], result))
+        projected_result = tools._model_wire_result(result)
+        projected_facts = projected_result["claim_ledger"][0]["facts"]
+        self.assertEqual("90", projected_facts["metric_value"])
+        self.assertEqual("100", projected_facts["comparison_value"])
+        self.assertNotIn("delta_value", projected_facts)
+        self.assertNotIn("change_rate", projected_facts)
+        self.assertNotIn(
+            "period_comparison",
+            projected_result["claim_ledger"][0]["allowed_relations"],
+        )
         tampered = copy.deepcopy(claims[0])
         tampered["period"]["current"]["calendar_evidence"][
             "period_state"
@@ -5867,9 +5876,14 @@ class BusinessContractTests(unittest.TestCase):
         )
         self.assertIn("PERIOD_COVERAGE_MISMATCH", calculation["limitations"])
         projected = tools._model_wire_calculations(calculations, [left, right])[0]
+        self.assertEqual("failed", projected["status"])
+        self.assertEqual("PERIOD_COVERAGE_MISMATCH", projected["error"]["code"])
+        self.assertEqual([], projected["allowed_relations"])
+        self.assertNotIn("value", projected)
+        self.assertNotIn("calculation_seal", projected)
         self.assertEqual(
-            calculation["period_compatibility"],
-            projected["period_compatibility"],
+            [{"request_id": "current_open"}, {"request_id": "prior_closed"}],
+            projected["operands"],
         )
 
     def test_compact_wire_retains_period_scope_and_generic_answer_constraint(self) -> None:
@@ -6095,10 +6109,162 @@ class BusinessContractTests(unittest.TestCase):
             calculations[0]["period_compatibility"]["status"],
         )
         projected = tools._model_wire_calculations(calculations, [left, right])[0]
+        self.assertEqual("failed", projected["status"])
         self.assertEqual(
-            calculations[0]["period_compatibility"],
-            projected["period_compatibility"],
+            "PERIOD_COMPARABILITY_NOT_ASSESSABLE",
+            projected["error"]["code"],
         )
+        self.assertNotIn("value", projected)
+
+    def test_partial_ytd_entity_arithmetic_is_not_a_model_visible_yoy_claim(
+        self,
+    ) -> None:
+        observed_on = date(2026, 8, 25)
+        result_pairs: list[tuple[dict[str, object], dict[str, object]]] = []
+        calculations: list[dict[str, str]] = []
+        for entity_id, filter_scope, values in (
+            ("vietnam", {"country": "Vietnam"}, ("120", "100")),
+            ("thai_kim", {"customer": "Thai Kim"}, ("90", "75")),
+        ):
+            current = self._scalar_calculation_result(
+                f"{entity_id}_2026_ytd",
+                values[0],
+                period=("2026-01-01", "2026-09-01"),
+                filter_scope=filter_scope,
+            )
+            prior = self._scalar_calculation_result(
+                f"{entity_id}_2025_full",
+                values[1],
+                period=("2025-01-01", "2025-09-01"),
+                filter_scope=filter_scope,
+            )
+            for result in (current, prior):
+                annotated = tools._annotate_period_evidence(
+                    result["applied_time_range"], observed_on
+                )
+                result["applied_time_range"] = annotated
+                result["claim_ledger"][0]["period"] = copy.deepcopy(annotated)
+                tools.evidence.seal_claim(result["claim_ledger"][0])
+            result_pairs.append((current, prior))
+            calculations.append(
+                {
+                    "calculation_id": f"{entity_id}_returned_value_ratio",
+                    "operation": "ratio",
+                    "left_request_id": str(current["request_id"]),
+                    "right_request_id": str(prior["request_id"]),
+                }
+            )
+
+        results = [result for pair in result_pairs for result in pair]
+        derived = tools._build_governed_calculations(
+            calculations,
+            results,
+            observed_on=observed_on,
+        )
+        self.assertEqual(["success", "success"], [item["status"] for item in derived])
+        self.assertTrue(all(item["value"] is not None for item in derived))
+        self.assertTrue(all(item["allowed_relations"] == [] for item in derived))
+        self.assertTrue(
+            all(
+                item["period_compatibility"]["status"] == "coverage_mismatch"
+                for item in derived
+            )
+        )
+
+        public_results = [tools._model_wire_result(result) for result in results]
+        projected = tools._model_wire_calculations(derived, public_results)
+        self.assertEqual(["failed", "failed"], [item["status"] for item in projected])
+        self.assertTrue(
+            all(item["error"]["code"] == "PERIOD_COVERAGE_MISMATCH" for item in projected)
+        )
+        self.assertTrue(all("value" not in item for item in projected))
+        self.assertEqual(
+            ["120", "100", "90", "75"],
+            [
+                result["claim_ledger"][0]["facts"]["metric_value"]
+                for result in public_results
+            ],
+        )
+        current_evidence = public_results[0]["applied_time_range"]["calendar_evidence"]
+        self.assertEqual("in_progress", current_evidence["period_state"])
+        self.assertEqual("not_proven", current_evidence["source_freshness"])
+
+    def test_public_time_range_uses_date_boundaries_across_runtime_paths(self) -> None:
+        base = {
+            "request_id": "month_boundary_not_public",
+            "domain": "delivery",
+            "mode": "metric",
+            "purpose": "public schema and runtime contract parity",
+            "metric": "delivery_amount",
+            "dimensions": [],
+            "time_range": {"start": "2026-01", "end": "2026-09"},
+        }
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.validate(
+                {"requests": [base]},
+                schemas.DATASAGE_QUERY["parameters"],
+            )
+
+        for domain, metric in (
+            ("delivery", "delivery_amount"),
+            ("receipt", "net_receipt_amount"),
+            ("target", "delivery_target_completion"),
+        ):
+            with self.subTest(domain=domain):
+                request = {**base, "domain": domain, "metric": metric}
+                if domain == "target":
+                    request["attribution_mode"] = "transaction_detail"
+                with self.assertRaises(tools.QueryFailure) as caught:
+                    tools._validate_request(request)
+                self.assertEqual("INVALID_INPUT", caught.exception.code)
+
+        accepted = {
+            **base,
+            "request_id": "date_boundary_public",
+            "time_range": {"start": "2026-01-01", "end": "2026-09-01"},
+        }
+        jsonschema.validate(
+            {"requests": [accepted]},
+            schemas.DATASAGE_QUERY["parameters"],
+        )
+        self.assertEqual(
+            accepted["time_range"],
+            tools._validate_request(accepted)["time_range"],
+        )
+        for domain, metric in (
+            ("delivery", "delivery_amount"),
+            ("receipt", "net_receipt_amount"),
+            ("target", "delivery_target_completion"),
+        ):
+            with self.subTest(compiled_domain=domain):
+                request = {
+                    **accepted,
+                    "request_id": f"{domain}_date_boundary_public",
+                    "domain": domain,
+                    "metric": metric,
+                    "detail_receipt": self._metric_detail_receipt(domain, metric),
+                }
+                if domain == "target":
+                    request["attribution_mode"] = "transaction_detail"
+                normalized = tools._validate_request(request)
+                datasets, semantics = tools._contracts(domain)
+                normalized = tools._validate_metric_detail_gate(
+                    normalized, semantics
+                )
+                _sql, _params, scope = tools._build_metric_query(
+                    normalized,
+                    datasets,
+                    semantics,
+                    tools._metric_query_limit(normalized),
+                    observed_on=date(2026, 8, 25),
+                )
+                self.assertEqual(
+                    accepted["time_range"],
+                    {
+                        "start": scope["time_range"]["start"],
+                        "end": scope["time_range"]["end"],
+                    },
+                )
 
     def test_live_host_resolves_only_the_bare_datasage_skill_name(self) -> None:
         host_root = PROFILE_ROOT.parent.parent / "hermes-agent"
@@ -6143,6 +6309,27 @@ class BusinessContractTests(unittest.TestCase):
         main_skill = _main_skill()
         self.assertIn("skill_view(name=\"datasage\", file_path=", main_skill)
         self.assertIn("successfully queried lenses", main_skill)
+
+    def test_main_skill_keeps_transient_analysis_out_of_memory_and_finishes_tool_turns(
+        self,
+    ) -> None:
+        main_skill = _main_skill()
+        normalized = " ".join(main_skill.split())
+        self.assertIn("Conversation history, not persistent memory", normalized)
+        self.assertIn("temporary or candidate entity mappings", normalized)
+        self.assertIn("stable cross-session preference", normalized)
+        self.assertIn("contains `tool_calls` is interim", normalized)
+        self.assertIn("tool-free assistant message", normalized)
+        self.assertIn(
+            "complete answer to the user's current business question", normalized
+        )
+        self.assertIn("Never let a memory approval", normalized)
+
+    def test_main_skill_states_the_governed_calculation_batch_boundary(self) -> None:
+        main_skill = _main_skill()
+        self.assertIn("same `datasage_query` call", main_skill)
+        self.assertIn("compatible scalar evidence already present", main_skill)
+        self.assertIn("explicitly labeled transparent arithmetic", main_skill)
 
 
 if __name__ == "__main__":

@@ -181,26 +181,19 @@ REQUEST = {
                 "It must satisfy the versioned common query policy returned by datasage_catalog."
             ),
             "properties": {
-                "start": {"type": "string"},
-                "end": {"type": "string"},
+                "start": {
+                    "type": "string",
+                    "pattern": r"^\d{4}-\d{2}-\d{2}$",
+                },
+                "end": {
+                    "type": "string",
+                    "pattern": r"^\d{4}-\d{2}-\d{2}$",
+                },
             },
             "required": ["start", "end"],
-            "oneOf": [
-                {
-                    "properties": {
-                        "start": {"pattern": r"^\d{4}-\d{2}$"},
-                        "end": {"pattern": r"^\d{4}-\d{2}$"},
-                    }
-                },
-                {
-                    "properties": {
-                        "start": {"pattern": r"^\d{4}-\d{2}-\d{2}$"},
-                        "end": {"pattern": r"^\d{4}-\d{2}-\d{2}$"},
-                    }
-                },
-            ],
             "description": (
-                "Start-inclusive and end-exclusive governed metric range. Supplying time_range is an explicit, "
+                "Start-inclusive and end-exclusive governed metric range using YYYY-MM-DD boundaries. "
+                "Use calendar_month for one typed full calendar month. Supplying time_range is an explicit, "
                 "non-default qualifier and requires the selected metric detail before datasage_query. The result "
                 "returns calendar period state and coverage; its query-date observation is not a source freshness "
                 "watermark."

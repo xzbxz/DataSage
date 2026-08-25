@@ -1483,6 +1483,10 @@ class DistributionBoundaryTests(unittest.TestCase):
         )
         self.assertIn("skills:\n", config)
         self.assertIn("write_approval: true", config)
+        self.assertEqual(
+            {"write_approval": True},
+            parsed_config["memory"],
+        )
         approvals = parsed_config.get("approvals")
         self.assertIsInstance(approvals, dict)
         self.assertEqual(
@@ -1492,7 +1496,6 @@ class DistributionBoundaryTests(unittest.TestCase):
         self.assertIs(approvals["destructive_slash_confirm"], False)
         for host_global_block in (
             "terminal:",
-            "memory:",
             "sessions:",
             "streaming:",
             "onboarding:",

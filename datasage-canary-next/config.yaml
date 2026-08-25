@@ -81,6 +81,9 @@ plugins:
               allow_type_neutral_entity_resolution: true
               allow_entity_resolution_all_rows: true
               allow_all_rows: true
+memory:
+  # Business-analysis evidence is transient unless the user approves a durable fact.
+  write_approval: true
 skills:
   # Git is authoritative; tracked expert guidance requires operator approval.
   write_approval: true

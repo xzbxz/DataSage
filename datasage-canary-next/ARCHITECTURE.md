@@ -1,6 +1,6 @@
 # DataSage Expert 0.15 架构
 
-版本：`0.15.0-rc4`
+版本：`0.15.0-rc5`
 运行基线：Hermes `0.20.5`
 
 ## 唯一目标
@@ -125,13 +125,14 @@ logs 或用户 Memory。部署、启动、业务数据库查询和企微发消�
 
 ## 当前验证状态
 
-- 当前完整离线运行 `113/113 OK`，耗时 `30.172s`；故障注入测试中的
+- 当前完整离线运行 `118/118 OK`，耗时 `37.461s`；故障注入测试中的
   synthetic traceback 是预期日志。
 - capability/schema-runtime 等价、mixed partial、物理预算局部失败、complete
   内部 ID 隔离、compact-before-budget、success-first subset、coverage 重建、
   candidate scorecard、planner 删除链和内容发布身份均有回归测试。
-- 本轮只读复盘了指定 canary 的两轮真实企微会话，并将错误结论固化为语义
-  Golden；未访问业务数据库配置、企微凭据或发送企微消息。
-- 尚未完成 Hermes 宿主 compaction 集成、真实企微 raw-vs-delivered 对照、真实
-  业务题每题三次稳定性、P50/P90 和成本验收。因此 `0.15.0-rc4` 是可审查的
-  离线重构候选，不是已获准部署或扩大流量的版本。
+- 本轮只读复盘了指定 canary 的真实企微会话，比较模型消息与实际回包，并将
+  越南、Thai Kim 两条错误回答按消息 ID、工具证据和正文哈希固化为语义
+  Golden；未读取业务数据库配置或企微凭据，也未发送企微消息。
+- 尚未完成 Hermes 宿主 compaction 集成、rc5 重启后的真实企微复测、业务题
+  每题三次稳定性、P50/P90 和成本验收。因此 `0.15.0-rc5` 是可审查的 canary
+  候选，不是已获准扩大流量的版本。

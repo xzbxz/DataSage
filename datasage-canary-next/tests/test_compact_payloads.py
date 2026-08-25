@@ -346,6 +346,12 @@ class CompactPayloadTests(unittest.TestCase):
             [],
             compact["answer_constraints"]["scope_compatibility"]["proofs"],
         )
+        self.assertEqual(
+            [],
+            compact["answer_constraints"]["scope_compatibility"][
+                "incompatibilities"
+            ],
+        )
         self.assertNotIn("answer_guardrails", compact["evidence_bundle"])
         self.assertNotIn('"rule":', rendered)
         self.assertEqual(1, compact["calculation_count"])
@@ -379,6 +385,7 @@ class CompactPayloadTests(unittest.TestCase):
         compact = json.loads(wire.enforce_tool_result_budget("datasage_query", payload))
         compatibility = compact["answer_constraints"]["scope_compatibility"]
         self.assertEqual([], compatibility["proofs"])
+        self.assertEqual([], compatibility["incompatibilities"])
         self.assertNotIn("status", compatibility)
 
         payload["calculations"][0].update(
@@ -409,8 +416,63 @@ class CompactPayloadTests(unittest.TestCase):
             compact["answer_constraints"]["scope_compatibility"]["proofs"],
         )
 
+    def test_scope_compatibility_projects_only_typed_scope_mismatch_failures(self):
+        payload = _query_payload()
+        payload["calculations"][0].update(
+            {
+                "status": "failed",
+                "operands": [
+                    {"request_id": "ranked"},
+                    {"request_id": "structure"},
+                ],
+                "error": {
+                    "code": "CALCULATION_SCOPE_MISMATCH",
+                    "message": "typed failure",
+                    "retryable": False,
+                },
+            }
+        )
+        compact = json.loads(wire.enforce_tool_result_budget("datasage_query", payload))
+        compatibility = compact["answer_constraints"]["scope_compatibility"]
+        self.assertEqual([], compatibility["proofs"])
+        self.assertEqual(
+            [
+                {
+                    "calculation_id": "c1",
+                    "request_ids": ["ranked", "structure"],
+                    "reason_code": "CALCULATION_SCOPE_MISMATCH",
+                }
+            ],
+            compatibility["incompatibilities"],
+        )
+
+        payload["calculations"][0]["error"]["code"] = (
+            "CALCULATION_DIVISION_BY_ZERO"
+        )
+        compact = json.loads(wire.enforce_tool_result_budget("datasage_query", payload))
+        self.assertEqual(
+            [],
+            compact["answer_constraints"]["scope_compatibility"][
+                "incompatibilities"
+            ],
+        )
+
     def test_partial_query_prefix_filters_batch_metadata_to_returned_requests(self):
         payload = _query_payload()
+        payload["calculations"][0].update(
+            {
+                "status": "failed",
+                "operands": [
+                    {"request_id": "ranked"},
+                    {"request_id": "structure"},
+                ],
+                "error": {
+                    "code": "CALCULATION_SCOPE_MISMATCH",
+                    "message": "typed failure",
+                    "retryable": False,
+                },
+            }
+        )
         with mock.patch.object(wire, "tool_result_char_limit", return_value=8_000):
             compact = json.loads(
                 wire.enforce_tool_result_budget("datasage_query", payload)
@@ -440,6 +502,10 @@ class CompactPayloadTests(unittest.TestCase):
             set(coverage["unspecified_request_ids"]) <= returned_ids
         )
         self.assertIn("answer_constraints", compact)
+        compatibility = compact["answer_constraints"]["scope_compatibility"]
+        for field in ("proofs", "incompatibilities"):
+            for item in compatibility[field]:
+                self.assertTrue(set(item["request_ids"]) <= returned_ids)
 
     def test_partial_budget_skips_one_oversized_success_and_keeps_later_success(self):
         huge = _query_result("huge", truncated=False, structural_limitation=False)

@@ -524,11 +524,7 @@ def _validate_governed_request_time_range(request: Mapping[str, Any]) -> None:
     start, end = supplied.get("start"), supplied.get("end")
     if not isinstance(start, str) or not isinstance(end, str):
         raise QueryFailure("INVALID_PLAN", "时间范围格式无效。")
-    if re.fullmatch(r"\d{4}-\d{2}", start) and re.fullmatch(
-        r"\d{4}-\d{2}", end
-    ):
-        granularity = "month"
-    elif re.fullmatch(r"\d{4}-\d{2}-\d{2}", start) and re.fullmatch(
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", start) and re.fullmatch(
         r"\d{4}-\d{2}-\d{2}", end
     ):
         granularity = "date"
@@ -1205,11 +1201,7 @@ def _validate_request(request: Any) -> dict[str, Any]:
         start, end = time_range.get("start"), time_range.get("end")
         if not isinstance(start, str) or not isinstance(end, str):
             raise QueryFailure("INVALID_INPUT", "time_range 边界必须是字符串。")
-        if re.fullmatch(r"\d{4}-\d{2}", start) and re.fullmatch(
-            r"\d{4}-\d{2}", end
-        ):
-            time_format = "%Y-%m"
-        elif re.fullmatch(r"\d{4}-\d{2}-\d{2}", start) and re.fullmatch(
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", start) and re.fullmatch(
             r"\d{4}-\d{2}-\d{2}", end
         ):
             time_format = "%Y-%m-%d"
@@ -7374,6 +7366,40 @@ def _fail_closed_structural_model_wire(projected: dict[str, Any]) -> None:
         _mark_model_wire_evidence_integrity_failure(projected)
 
 
+def _fail_closed_period_comparison_model_wire(projected: dict[str, Any]) -> None:
+    """Project raw period observations without an unauthorized derived comparison."""
+
+    period = projected.get("applied_time_range")
+    compatibility = (
+        period.get("comparison_compatibility")
+        if isinstance(period, Mapping)
+        else None
+    )
+    if (
+        not isinstance(compatibility, Mapping)
+        or compatibility.get("status") == "compatible"
+    ):
+        return
+    claims = projected.get("claim_ledger")
+    if not isinstance(claims, list):
+        return
+    for claim in claims:
+        if not isinstance(claim, dict):
+            continue
+        relations = claim.get("allowed_relations")
+        if isinstance(relations, list):
+            claim["allowed_relations"] = [
+                relation
+                for relation in relations
+                if relation != "period_comparison"
+            ]
+        facts = claim.get("facts")
+        if isinstance(facts, dict):
+            facts.pop("delta_value", None)
+            facts.pop("change_rate", None)
+        evidence.seal_claim(claim)
+
+
 def _model_wire_result(result: Mapping[str, Any]) -> dict[str, Any]:
     """Project private execution state to the minimal model-visible result."""
 
@@ -7383,6 +7409,7 @@ def _model_wire_result(result: Mapping[str, Any]) -> dict[str, Any]:
         if field in result
     }
     _filter_model_wire_evidence(projected)
+    _fail_closed_period_comparison_model_wire(projected)
     _fail_closed_formal_dso_model_wire(projected)
     _fail_closed_structural_model_wire(projected)
     if "change_reconciliation" in projected:
@@ -7962,7 +7989,11 @@ def _build_governed_calculations(
                 "calculation_id": calculation["calculation_id"],
                 "operation": operation,
                 "status": "success",
-                "allowed_relations": ["derived_observation"],
+                "allowed_relations": (
+                    ["derived_observation"]
+                    if period_compatibility.get("status") == "compatible"
+                    else []
+                ),
                 "relation_semantics": {
                     "derived_observation": (
                         "arithmetic_not_registered_metric_or_causal_evidence"
@@ -8027,6 +8058,63 @@ def _model_wire_calculation_integrity_failure(
         "error": {
             "code": "CALCULATION_SOURCE_INTEGRITY_INVALID",
             "message": "计算引用的查询证据未通过完整性校验。",
+            "retryable": False,
+        },
+    }
+
+
+def _model_wire_calculation_period_failure(
+    calculation: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Keep source observations visible while withholding an unauthorized comparison."""
+
+    compatibility = calculation.get("period_compatibility")
+    reason_codes = (
+        [
+            str(reason)
+            for reason in compatibility.get("reason_codes", [])
+            if isinstance(reason, str) and reason
+        ]
+        if isinstance(compatibility, Mapping)
+        else []
+    )
+    if not reason_codes:
+        reason_codes = ["PERIOD_COMPARABILITY_NOT_ASSESSABLE"]
+    operands = calculation.get("operands")
+    return {
+        "calculation_id": calculation.get("calculation_id"),
+        "operation": calculation.get("operation"),
+        "status": "failed",
+        "allowed_relations": [],
+        "operands": [
+            {"request_id": operand["request_id"]}
+            for operand in operands
+            if isinstance(operand, Mapping)
+            and isinstance(operand.get("request_id"), str)
+        ]
+        if isinstance(operands, list)
+        else [],
+        "period_compatibility": {
+            "status": (
+                compatibility.get("status")
+                if isinstance(compatibility, Mapping)
+                else "not_assessable"
+            ),
+            "reason_codes": reason_codes,
+        },
+        "limitations": sorted(
+            {
+                *[
+                    str(item)
+                    for item in calculation.get("limitations", [])
+                    if isinstance(item, str) and item
+                ],
+                *reason_codes,
+            }
+        ),
+        "error": {
+            "code": reason_codes[0],
+            "message": "期间证据不授权把该算术结果作为正式期间比较。",
             "retryable": False,
         },
     }
@@ -8240,12 +8328,21 @@ def _model_wire_calculations(
                 valid = False
                 break
         if valid:
-            projected.append(
-                _model_wire_calculation_projection(
-                    calculation,
-                    seal_success=True,
+            period_compatibility = calculation.get("period_compatibility")
+            if (
+                not isinstance(period_compatibility, Mapping)
+                or period_compatibility.get("status") != "compatible"
+            ):
+                projected.append(
+                    _model_wire_calculation_period_failure(calculation)
                 )
-            )
+            else:
+                projected.append(
+                    _model_wire_calculation_projection(
+                        calculation,
+                        seal_success=True,
+                    )
+                )
         else:
             projected.append(
                 _model_wire_calculation_integrity_failure(calculation)

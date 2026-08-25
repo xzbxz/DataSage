@@ -321,13 +321,11 @@ def _query_answer_constraints(
             benchmark_request_ids.append(request_id)
 
     compatibility_proofs: list[dict[str, Any]] = []
+    compatibility_failures: list[dict[str, Any]] = []
     if isinstance(calculations, list):
         for calculation in calculations:
-            if (
-                not isinstance(calculation, Mapping)
-                or calculation.get("status") != "success"
-                or not isinstance(calculation.get("scope_compatibility"), Mapping)
-                or not isinstance(calculation.get("calculation_id"), str)
+            if not isinstance(calculation, Mapping) or not isinstance(
+                calculation.get("calculation_id"), str
             ):
                 continue
             operands = calculation.get("operands")
@@ -341,12 +339,30 @@ def _query_answer_constraints(
             ) if isinstance(operands, list) else []
             if not request_ids:
                 continue
-            compatibility_proofs.append(
-                {
-                    "calculation_id": calculation["calculation_id"],
-                    "request_ids": request_ids,
-                }
-            )
+            if (
+                calculation.get("status") == "success"
+                and isinstance(calculation.get("scope_compatibility"), Mapping)
+            ):
+                compatibility_proofs.append(
+                    {
+                        "calculation_id": calculation["calculation_id"],
+                        "request_ids": request_ids,
+                    }
+                )
+                continue
+            error = calculation.get("error")
+            if (
+                calculation.get("status") == "failed"
+                and isinstance(error, Mapping)
+                and error.get("code") == "CALCULATION_SCOPE_MISMATCH"
+            ):
+                compatibility_failures.append(
+                    {
+                        "calculation_id": calculation["calculation_id"],
+                        "request_ids": request_ids,
+                        "reason_code": "CALCULATION_SCOPE_MISMATCH",
+                    }
+                )
 
     return {
         "truncated_population": {
@@ -360,6 +376,7 @@ def _query_answer_constraints(
         },
         "scope_compatibility": {
             "proofs": compatibility_proofs,
+            "incompatibilities": compatibility_failures,
         },
         "period_coverage": {
             "request_ids": sorted(set(in_progress_periods)),

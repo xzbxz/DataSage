@@ -103,6 +103,7 @@ datasage-canary-next/*
 !datasage-canary-next/release/datasage-v015-rc2-release-receipt.json
 !datasage-canary-next/release/datasage-v015-rc3-release-receipt.json
 !datasage-canary-next/release/datasage-v015-rc4-release-receipt.json
+!datasage-canary-next/release/datasage-v015-rc5-release-receipt.json
 !datasage-canary-next/skills/business-analytics/datasage/references/answer-boundary.md
 !datasage-canary-next/skills/business-analytics/datasage/references/entity-guidance.md
 !datasage-canary-next/skills/business-analytics/datasage/references/planning-semantics.yaml
