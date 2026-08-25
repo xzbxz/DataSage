@@ -3,9 +3,14 @@
 from .capability_contract import (
     ATTRIBUTION_MODES,
     DELIVERY_SCOPES,
+    MATCHED_ELAPSED_COVERAGE,
     INVENTORY_SCOPES,
+    PREVIOUS_PERIOD_COMPARISON,
     PUBLIC_REQUEST_LIMIT,
+    PUBLIC_COMPARISON_KINDS,
+    SNAPSHOT_MONTHS_BEFORE_COMPARISON,
     SUPPORTED_DOMAINS,
+    YEAR_OVER_YEAR_COMPARISON,
     query_request_schema_conditions,
 )
 from .evidence import ANALYSIS_INTENTS, EVIDENCE_ROLES
@@ -222,29 +227,61 @@ REQUEST = {
             "properties": {
                 "kind": {
                     "type": "string",
-                    "enum": ["previous_period", "snapshot_months_before"],
+                    "enum": list(PUBLIC_COMPARISON_KINDS),
                 },
                 "months": {"type": "integer", "minimum": 1, "maximum": 24},
+                "coverage": {
+                    "type": "string",
+                    "enum": [MATCHED_ELAPSED_COVERAGE],
+                },
             },
             "required": ["kind"],
             "allOf": [
                 {
                     "if": {
                         "properties": {
-                            "kind": {"const": "snapshot_months_before"}
+                            "kind": {"const": SNAPSHOT_MONTHS_BEFORE_COMPARISON}
                         }
                     },
-                    "then": {"required": ["months"]},
+                    "then": {
+                        "required": ["months"],
+                        "not": {"required": ["coverage"]},
+                    },
                 },
                 {
                     "if": {
-                        "properties": {"kind": {"const": "previous_period"}}
+                        "properties": {
+                            "kind": {"const": PREVIOUS_PERIOD_COMPARISON}
+                        }
                     },
-                    "then": {"not": {"required": ["months"]}},
+                    "then": {
+                        "not": {
+                            "anyOf": [
+                                {"required": ["months"]},
+                                {"required": ["coverage"]},
+                            ]
+                        }
+                    },
+                },
+                {
+                    "if": {
+                        "properties": {
+                            "kind": {"const": YEAR_OVER_YEAR_COMPARISON}
+                        }
+                    },
+                    "then": {
+                        "required": ["coverage"],
+                        "properties": {
+                            "coverage": {"const": MATCHED_ELAPSED_COVERAGE}
+                        },
+                        "not": {"required": ["months"]},
+                    },
                 },
             ],
             "description": (
                 "Governed comparison. previous_period requires exactly one of time_range or calendar_month; "
+                "year_over_year with coverage=matched_elapsed aligns the same calendar window one year earlier "
+                "and clips an in-progress current window and its prior-year window to the same elapsed coverage; "
                 "snapshot_months_before uses the latest monthly snapshot and a month offset. A previous_period "
                 "result already returns current, prior-period, absolute change, and change rate for that metric and "
                 "scope; do not add explicit current/prior requests solely to duplicate them. Other metrics or "
@@ -280,8 +317,8 @@ REQUEST = {
             "required": ["dimension"],
             "description": (
                 "Explicitly request a complete change decomposition. When comparison is omitted, the operation "
-                "defaults to previous_period. An explicit comparison may use previous_period with one period "
-                "or snapshot_months_before with no explicit period. "
+                "defaults to previous_period. An explicit comparison may use previous_period or matched-elapsed "
+                "year_over_year with one period, or snapshot_months_before with no explicit period. "
                 "Do not combine it with dimensions, order_by, limit, or "
                 "decomposition_of_request_id. The tool never infers this operation or "
                 "chooses its metric or dimension. It already includes the same-scope overall comparison; do not "
@@ -360,7 +397,14 @@ REQUEST = {
                 "properties": {
                     "comparison": {
                         "required": ["kind"],
-                        "properties": {"kind": {"const": "previous_period"}},
+                        "properties": {
+                            "kind": {
+                                "enum": [
+                                    PREVIOUS_PERIOD_COMPARISON,
+                                    YEAR_OVER_YEAR_COMPARISON,
+                                ]
+                            }
+                        },
                     }
                 },
             },
@@ -378,7 +422,9 @@ REQUEST = {
                     "comparison": {
                         "required": ["kind"],
                         "properties": {
-                            "kind": {"const": "snapshot_months_before"}
+                            "kind": {
+                                "const": SNAPSHOT_MONTHS_BEFORE_COMPARISON
+                            }
                         },
                     }
                 },
@@ -401,7 +447,9 @@ REQUEST = {
                         "properties": {
                             "comparison": {
                                 "properties": {
-                                    "kind": {"const": "snapshot_months_before"}
+                                    "kind": {
+                                        "const": SNAPSHOT_MONTHS_BEFORE_COMPARISON
+                                    }
                                 }
                             }
                         },
@@ -610,7 +658,6 @@ DATASAGE_CATALOG = {
                     "oneOf": [
                         {
                             "required": ["domain"],
-                            "not": {"required": ["metric", "view"]},
                             "properties": {
                                 "view": {"enum": ["expert_index", "full", "audit"]},
                             },
@@ -627,7 +674,14 @@ DATASAGE_CATALOG = {
                                 ]
                             },
                         },
-                    ]
+                    ],
+                    "allOf": [
+                        {
+                            "not": {
+                                "required": ["metric", "view"],
+                            }
+                        }
+                    ],
                 },
                 "description": (
                     "One request per relevant domain, or one cross-domain view=performance_scorecard request. "

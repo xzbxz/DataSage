@@ -15,6 +15,8 @@ import yaml
 from .capability_contract import (
     DOMAIN_SOURCES,
     CapabilityContractError,
+    FLOW_COMPARISON_KINDS,
+    SNAPSHOT_MONTHS_BEFORE_COMPARISON,
     assert_capability_boundary,
 )
 from .scorecard import performance_scorecard_manifest
@@ -43,7 +45,7 @@ def metric_comparison_kinds(definition: Mapping[str, Any]) -> list[str]:
     time_policy = definition.get("time_policy")
     time_field = definition.get("time_field")
     if time_policy == "latest_snapshot" and isinstance(time_field, str) and time_field:
-        return ["snapshot_months_before"]
+        return [SNAPSHOT_MONTHS_BEFORE_COMPARISON]
     if time_policy not in {
         None,
         "",
@@ -51,7 +53,7 @@ def metric_comparison_kinds(definition: Mapping[str, Any]) -> list[str]:
         "latest_snapshot",
         "latest_non_null_snapshot",
     }:
-        return ["previous_period"]
+        return list(FLOW_COMPARISON_KINDS)
     return []
 _QUERY_POLICY_PATH = (
     "plugins/datasage-query/contracts/query-policy.yaml"

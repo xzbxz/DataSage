@@ -1,0 +1,392 @@
+{
+  "schema": "datasage-release-receipt/v2",
+  "name": "datasage-canary-next",
+  "version": "0.15.0-rc6",
+  "content_sha256": "68ff404b8265a9f786b8d25ca69a8c2098cce4797d09d77662bc38fa274e6886",
+  "file_count": 76,
+  "files": [
+    {
+      "path": ".no-bundled-skills",
+      "sha256": "fa5c85c7520feb407969843aed2a173527d8243731c87d9fcfb14ae83d10d11f",
+      "bytes": 141
+    },
+    {
+      "path": "ARCHITECTURE.md",
+      "sha256": "4bd30e8f2ee627dc71407807208bc1673be9535ea176663e660c91b0fd892d49",
+      "bytes": 8598
+    },
+    {
+      "path": "REFACTOR_CHARTER.md",
+      "sha256": "a7e282fbea340beeee2a918d265a2e96af76dc5b95804a309bbdefa7ec56f3aa",
+      "bytes": 3900
+    },
+    {
+      "path": "REFACTOR_DESIGN.md",
+      "sha256": "f209cf0b41c6b4d365091977ce82a39a4b4574fd74d78c70effac9d7c28142fe",
+      "bytes": 3713
+    },
+    {
+      "path": "SOUL.md",
+      "sha256": "b33b671d5242dc2bb2a77cfa47b302ca01bc277af159013de2c3ee8fab941d1b",
+      "bytes": 2615
+    },
+    {
+      "path": "build_release_receipt.py",
+      "sha256": "5ca7737817e28627d71d8db2cff7bfefae4b9e5a47b1efec27f23642c94e937c",
+      "bytes": 4533
+    },
+    {
+      "path": "config.yaml",
+      "sha256": "30d46f0fe837e737a457216c5fdbd7bff94860c57d124ebd6e045138918f400e",
+      "bytes": 3637
+    },
+    {
+      "path": "distribution.yaml",
+      "sha256": "28a6d26c0fbb548e35a79b28b9ea158db9eb1440ab0873e1f3277ef11905f11e",
+      "bytes": 1549,
+      "normalization": "hermes-install-metadata/v1"
+    },
+    {
+      "path": "plugins/datasage-query/__init__.py",
+      "sha256": "c9888c7f8abb2dad232a84e6168d24a8e3fc7abed31c498cfe76b590dbd1e44e",
+      "bytes": 2673
+    },
+    {
+      "path": "plugins/datasage-query/analytical_queries.py",
+      "sha256": "72ae291e62fbe497f31a3f84a7add7bc256a5fc6764af5fda4f5335d134a70ff",
+      "bytes": 77565
+    },
+    {
+      "path": "plugins/datasage-query/capability_contract.py",
+      "sha256": "d5a807691580cca79e1f873a4cb474967b0e6f254cd7cbec81657f0a78712f01",
+      "bytes": 7594
+    },
+    {
+      "path": "plugins/datasage-query/contracts.py",
+      "sha256": "20dc998a912570384c8be63f6e801f35af1a7034090631f5c7c8adfded1c1468",
+      "bytes": 52004
+    },
+    {
+      "path": "plugins/datasage-query/contracts/customer_risk-semantics.yaml",
+      "sha256": "4375a681f5c00451f40b7f9c2c3b423e1ca002101231e25183242b1d05434525",
+      "bytes": 16891
+    },
+    {
+      "path": "plugins/datasage-query/contracts/datasets.yaml",
+      "sha256": "a70f01d3461714517e8b5bedb9f51ff04a3d57157aab83a9c8d8cbbc4653d208",
+      "bytes": 33787
+    },
+    {
+      "path": "plugins/datasage-query/contracts/delivery-semantics.yaml",
+      "sha256": "c362075defa15790618e0aaf5429ce03991cc8f9ee385d2a1fe62da45dbc5c76",
+      "bytes": 60726
+    },
+    {
+      "path": "plugins/datasage-query/contracts/entity-registry.yaml",
+      "sha256": "583d46c58d2189a52f6c724821559414d7aa44aed5d5515f40bfa646664a61f7",
+      "bytes": 5035
+    },
+    {
+      "path": "plugins/datasage-query/contracts/entity-rules-maintainer.md",
+      "sha256": "e34c3cf46198418a72281382ca4f393871d578ba3579e91e70e76eac7c20bc08",
+      "bytes": 2399
+    },
+    {
+      "path": "plugins/datasage-query/contracts/inventory-semantics.yaml",
+      "sha256": "4b3a920d579dd1bc8e6a53923c2535ec86bfbea4cce551a7d933516794b509e7",
+      "bytes": 24767
+    },
+    {
+      "path": "plugins/datasage-query/contracts/query-policy.yaml",
+      "sha256": "41b39fd830d0e384d6e5be55726fa640e8d7a2ebae8de6a2ed0acef12e69063e",
+      "bytes": 184
+    },
+    {
+      "path": "plugins/datasage-query/contracts/receipt-semantics.yaml",
+      "sha256": "c6d06ac4cf6d76500cd0142225745094abb2656992802395cfb03bc91696c3d7",
+      "bytes": 21587
+    },
+    {
+      "path": "plugins/datasage-query/contracts/receivable-semantics.yaml",
+      "sha256": "f96711dd348794a3f09b39e6582bed466ca37b87408c61ed4a9b55837fa15c50",
+      "bytes": 45125
+    },
+    {
+      "path": "plugins/datasage-query/contracts/target-gap-decomposition.yaml",
+      "sha256": "82aeed99c5936ba373dab63df869e5d8554d72d165b1402c95037a5cdab9d049",
+      "bytes": 1995
+    },
+    {
+      "path": "plugins/datasage-query/contracts/target-semantics.yaml",
+      "sha256": "55d4e0558fbd2029a86dec365482ae356174a115e8ce91a125a9627929fd704d",
+      "bytes": 20464
+    },
+    {
+      "path": "plugins/datasage-query/db_security.py",
+      "sha256": "7df117a6a6145c78d15d625679eef26e101ec4ad18c8c301e48b8eb9b53039f1",
+      "bytes": 18559
+    },
+    {
+      "path": "plugins/datasage-query/e2e/canary_transcript_adapter.py",
+      "sha256": "deeb1246298329955fec612bd36ddfeb36ed9d1bbec34c75ab91203971bd9a3d",
+      "bytes": 57411
+    },
+    {
+      "path": "plugins/datasage-query/e2e/golden_expert_cases.json",
+      "sha256": "df4ea60c928e2f2055d79369981ae78fe7f1afe0b58c7e8cc39e7d1812222937",
+      "bytes": 53322
+    },
+    {
+      "path": "plugins/datasage-query/e2e/golden_expert_scorer.py",
+      "sha256": "cec9cc88a165d5a379b1413adae3bdea655c0157e9951656bb8f3f6f3fb2a50b",
+      "bytes": 26156
+    },
+    {
+      "path": "plugins/datasage-query/entities.py",
+      "sha256": "1e7b3001954346eed6490e0010aadcec49ed30a40a028a1de10b7a17d91e707a",
+      "bytes": 54080
+    },
+    {
+      "path": "plugins/datasage-query/entitlements.py",
+      "sha256": "5de34c3559f9ba3c9a34beaa66fcdb5e1164e76fcf2a1fc57dc76cbe620c322a",
+      "bytes": 10909
+    },
+    {
+      "path": "plugins/datasage-query/evidence.py",
+      "sha256": "65c61fa83665b23108fbf01d2f5ac86b1b666dbc5d9f93be846928e5cd250ff7",
+      "bytes": 30215
+    },
+    {
+      "path": "plugins/datasage-query/plugin.yaml",
+      "sha256": "ab19371bb84f9055d6f0ca1fe111fab8f7a6920ee50ddfd7bdc9c32fe8a971d4",
+      "bytes": 2681
+    },
+    {
+      "path": "plugins/datasage-query/requirements.txt",
+      "sha256": "9d9ac4ae527afad3f581e9bc541c32b04a3e41a30f8cf6e2dd86970e310dea30",
+      "bytes": 94
+    },
+    {
+      "path": "plugins/datasage-query/runtime_health.py",
+      "sha256": "55f83ca610426848c3131b403ef68d4104bf5ed5f8360b8556b8298ae1ef1172",
+      "bytes": 10376
+    },
+    {
+      "path": "plugins/datasage-query/schemas.py",
+      "sha256": "609601c5e0d1a52238408ef31414329da2f42819b85f249083262bc876247c30",
+      "bytes": 36694
+    },
+    {
+      "path": "plugins/datasage-query/scorecard.py",
+      "sha256": "dd6960fab11a9939a9f8d5d001869bdaa9f323874bd2792608c4ff19c396a97a",
+      "bytes": 3603
+    },
+    {
+      "path": "plugins/datasage-query/settings.py",
+      "sha256": "13760af3df85c5895a984a519636b29c5e0b247f87f4885369da59527c8ec0e6",
+      "bytes": 1827
+    },
+    {
+      "path": "plugins/datasage-query/tools.py",
+      "sha256": "5f65717efe5104e5edcb31d63e6221738219661b0e151ea06217d09429b275ba",
+      "bytes": 386543
+    },
+    {
+      "path": "plugins/datasage-query/vendor/pymysql-1.2.0.dist-info/INSTALLER",
+      "sha256": "e6184ce10e266134fdcfa401e8f1a95005bcd4f18d16b62b757323e2833fe9a9",
+      "bytes": 2
+    },
+    {
+      "path": "plugins/datasage-query/vendor/pymysql-1.2.0.dist-info/METADATA",
+      "sha256": "a3256c895206725e3930f1c9f9fc4e6cf6662c9933c498759c0ed992250cf57f",
+      "bytes": 4306
+    },
+    {
+      "path": "plugins/datasage-query/vendor/pymysql-1.2.0.dist-info/RECORD",
+      "sha256": "b19d889bb56b2c3bdb225168296edd4404dfcae6884835f96bf60a2a945daea8",
+      "bytes": 1993
+    },
+    {
+      "path": "plugins/datasage-query/vendor/pymysql-1.2.0.dist-info/REQUESTED",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "plugins/datasage-query/vendor/pymysql-1.2.0.dist-info/WHEEL",
+      "sha256": "69e6228a0d35958183cc1812f07c565ce837b95eb51bd8a33acba9fa4f68d6c9",
+      "bytes": 91
+    },
+    {
+      "path": "plugins/datasage-query/vendor/pymysql-1.2.0.dist-info/licenses/LICENSE",
+      "sha256": "314120dc65f0800f738a4b31400c76ee14decd1fbe77ce9c3540a421b86ea7b6",
+      "bytes": 1070
+    },
+    {
+      "path": "plugins/datasage-query/vendor/pymysql-1.2.0.dist-info/top_level.txt",
+      "sha256": "20a955f9fe28f74b0e76731de8706fa349769ea7c938653393065e684106b918",
+      "bytes": 8
+    },
+    {
+      "path": "plugins/datasage-query/vendor/pymysql/__init__.py",
+      "sha256": "ccd6a6c1edebfd58d3952fb3d1baa5a4d4f872518f8d22de2a17c6f10ddf659f",
+      "bytes": 4262
+    },
+    {
+      "path": "plugins/datasage-query/vendor/pymysql/_auth.py",
+      "sha256": "edb2059c9ee526b14484a2c49c71a8d7e87b139727641db6d75284d6f6ad0404",
+      "bytes": 7638
+    },
+    {
+      "path": "plugins/datasage-query/vendor/pymysql/charset.py",
+      "sha256": "6381a0303c67d18cfef7d370b2d7c22de09fa1115dc32c16a07ae7e469ef8219",
+      "bytes": 10258
+    },
+    {
+      "path": "plugins/datasage-query/vendor/pymysql/connections.py",
+      "sha256": "649bb1e0c3e3e797b2b6cd4aa35b2084edd75c4b2f6c5b1900ae696285b9acce",
+      "bytes": 55738
+    },
+    {
+      "path": "plugins/datasage-query/vendor/pymysql/constants/CLIENT.py",
+      "sha256": "492bcc14f6424d5314d5459ae333ab7e160c0dd476c06da64b41391b32610ec8",
+      "bytes": 878
+    },
+    {
+      "path": "plugins/datasage-query/vendor/pymysql/constants/COMMAND.py",
+      "sha256": "4c621301470d5a5ab61b0836c2fe542b6ca47537782d84e4fc470924e0a91887",
+      "bytes": 679
+    },
+    {
+      "path": "plugins/datasage-query/vendor/pymysql/constants/CR.py",
+      "sha256": "424df915644cc511dde926bd0822004cc87b8de811df19cb76b75a0424f47534",
+      "bytes": 2320
+    },
+    {
+      "path": "plugins/datasage-query/vendor/pymysql/constants/ER.py",
+      "sha256": "9f0a97febd28e2698de02c66ecd551c89393568bffe466e5e697867baa33e5f9",
+      "bytes": 12357
+    },
+    {
+      "path": "plugins/datasage-query/vendor/pymysql/constants/FIELD_TYPE.py",
+      "sha256": "cad1738009c699bf61bddb019672baf2a759bff6ba8d81485d3e954806fad33f",
+      "bytes": 370
+    },
+    {
+      "path": "plugins/datasage-query/vendor/pymysql/constants/FLAG.py",
+      "sha256": "172f8fac22e7508edfc7fa395b2a589d403358033413d779c8bf1f15154a7df6",
+      "bytes": 214
+    },
+    {
+      "path": "plugins/datasage-query/vendor/pymysql/constants/SERVER_STATUS.py",
+      "sha256": "9b6f08ab92460850962e169f13bdfe88ebf0ffd8031aa9f2b56dcd907a5bba00",
+      "bytes": 333
+    },
+    {
+      "path": "plugins/datasage-query/vendor/pymysql/constants/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "plugins/datasage-query/vendor/pymysql/converters.py",
+      "sha256": "f37107d6a14a2c54a5903010c976c750352655ac26bdcea3408aaafaac104dec",
+      "bytes": 9630
+    },
+    {
+      "path": "plugins/datasage-query/vendor/pymysql/cursors.py",
+      "sha256": "bb302b0e6f59813ecbddf03ce6cac205dbe1a92cd0d394e9368f2d248508cdf7",
+      "bytes": 16045
+    },
+    {
+      "path": "plugins/datasage-query/vendor/pymysql/err.py",
+      "sha256": "6d1bdc7ec7a195d5ec9fc746b30e0d74f959026f03173459038a86496e0e8eb5",
+      "bytes": 4230
+    },
+    {
+      "path": "plugins/datasage-query/vendor/pymysql/optionfile.py",
+      "sha256": "790a33e9ce37caf987b69e4c23d4c1d863d176882038b7a6714580064b1fbad9",
+      "bytes": 651
+    },
+    {
+      "path": "plugins/datasage-query/vendor/pymysql/protocol.py",
+      "sha256": "683f8f18f45873091223a649a095995512a7f47fc0d1fef429f3c3bbae6dab4a",
+      "bytes": 11812
+    },
+    {
+      "path": "plugins/datasage-query/vendor/pymysql/times.py",
+      "sha256": "fea5e00da630b079edbe920a48a5e9d6bad8220b6ae99f692f22e73b65cda0bd",
+      "bytes": 360
+    },
+    {
+      "path": "plugins/datasage-query/wire.py",
+      "sha256": "e232ea03f5f5b355869bb3428912867db46afcc80cfbcf8d3fe7f6ee0dd3d404",
+      "bytes": 26767
+    },
+    {
+      "path": "profile.yaml",
+      "sha256": "9f2b957b3645a76d2b02ea505d9f89f1a640d23d26120f5a93b1d8dc604e6af1",
+      "bytes": 177
+    },
+    {
+      "path": "skills/business-analytics/datasage/SKILL.md",
+      "sha256": "3ba2ffd1fa811f8a103c378ebd457d7ef9d06380731f2b25ca4592b161e19028",
+      "bytes": 5942
+    },
+    {
+      "path": "skills/business-analytics/datasage/references/answer-boundary.md",
+      "sha256": "286cbeec0254c30abb21234803acfe7fd363be4ed4b192ee9f4469898d65d4fb",
+      "bytes": 5852
+    },
+    {
+      "path": "skills/business-analytics/datasage/references/entity-guidance.md",
+      "sha256": "805f12ef2c1a61808aa3172385ee98008c887f44270f5f4c9778e06099a53c99",
+      "bytes": 597
+    },
+    {
+      "path": "skills/business-analytics/datasage/references/planning-semantics.yaml",
+      "sha256": "daf5cfe2cddaf6145e00a709b5165e65fdb2a9eaa56e160bdb5353533299a35d",
+      "bytes": 1094
+    },
+    {
+      "path": "skills/business-analytics/datasage/references/query-rules.md",
+      "sha256": "a9ce62d8172bb539b817bcac3fadb177d4045989f606d1704ee63e7b7810c059",
+      "bytes": 6632
+    },
+    {
+      "path": "tests/HOST_COMPACTION_INTEGRATION.md",
+      "sha256": "05722c8e7153824331edfbdb5321c59a69ec13c5abe9c9f51a596af322866acb",
+      "bytes": 700
+    },
+    {
+      "path": "tests/fixtures/host_compaction_ordering.json",
+      "sha256": "659fc47a686745555c9d33d2b48e9fb7d8da986b44cc0dc3ed6c222431f2c802",
+      "bytes": 1294
+    },
+    {
+      "path": "tests/test_business_contracts.py",
+      "sha256": "719445a4d084907644667a03b5682bee3024c219676d68d09f02cddc0573eaa3",
+      "bytes": 269556
+    },
+    {
+      "path": "tests/test_compact_payloads.py",
+      "sha256": "86b2f6a05cf197c78bf690e728dce106a0e6b80f77cf71578ad6af2bf0c1ef64",
+      "bytes": 23356
+    },
+    {
+      "path": "tests/test_expert_architecture.py",
+      "sha256": "f4c6e460ce48f533434de8ca5276ffad984af65aebaef9843ca87733f857723a",
+      "bytes": 6921
+    },
+    {
+      "path": "tests/test_integration_boundaries.py",
+      "sha256": "5de33c9bd5014ec6a5ecc0972f482a9aea3952a4a7e40c6da53f16d3b85a7f53",
+      "bytes": 60667
+    },
+    {
+      "path": "tests/test_v015_refactor_acceptance.py",
+      "sha256": "f775546cb64b42c10a647ada194fc0b23a3e72d1b149b55b41f5d30fcbbbfd87",
+      "bytes": 24271
+    }
+  ],
+  "identity_scope": "distribution-owned-content/v1",
+  "excludes_runtime_state": true
+}

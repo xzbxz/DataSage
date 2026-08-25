@@ -39,6 +39,18 @@ DELIVERY_SCOPES = ("default_net", "explicit_gross", "order_delivery_alignment")
 INVENTORY_SCOPES = ("total", "on_hand", "available", "allocated", "in_transit")
 PUBLIC_REQUEST_LIMIT = 10
 PHYSICAL_EXECUTION_BUDGET = 10
+PREVIOUS_PERIOD_COMPARISON = "previous_period"
+YEAR_OVER_YEAR_COMPARISON = "year_over_year"
+SNAPSHOT_MONTHS_BEFORE_COMPARISON = "snapshot_months_before"
+MATCHED_ELAPSED_COVERAGE = "matched_elapsed"
+FLOW_COMPARISON_KINDS = (
+    PREVIOUS_PERIOD_COMPARISON,
+    YEAR_OVER_YEAR_COMPARISON,
+)
+PUBLIC_COMPARISON_KINDS = (
+    *FLOW_COMPARISON_KINDS,
+    SNAPSHOT_MONTHS_BEFORE_COMPARISON,
+)
 
 
 class CapabilityContractError(ValueError):

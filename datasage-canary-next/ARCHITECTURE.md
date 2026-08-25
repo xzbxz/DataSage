@@ -1,6 +1,6 @@
 # DataSage Expert 0.15 架构
 
-版本：`0.15.0-rc5`
+版本：`0.15.0-rc6`
 运行基线：Hermes `0.20.5`
 
 ## 唯一目标
@@ -98,6 +98,23 @@ Hermes 宿主的上下文压缩顺序不在 Profile 插件控制范围内。本�
 fixture，要求压缩后保留用户纠正、当前 period/scope/entity/metric 和事实/假设
 区分；在宿主 E2E 通过前不得宣称该能力已由 Profile 自身修复。
 
+未知自然语言地域不能由维度枚举自动升级为受控筛选值。枚举值只证明数据库中
+观察到了哪些标签，不证明国家、区域代码或部门之间的别名关系，也不能成为
+长期 Memory 事实。缺少稳定映射时由 Hermes 请求用户选择或提供映射；插件不
+维护事件型国家到区域代码候选表。
+
+## 期间比较合同
+
+流量指标公开支持 `year_over_year + matched_elapsed`。该能力使用一次批次冻结的
+`observed_on`，把尚在进行中的当前窗口和上年窗口裁剪到同一历年边界，并在
+公开证据中保留请求结束日、有效结束日、裁剪状态和数据新鲜度未证明状态。
+只有统一 period compatibility 合同验证为 `compatible` 时，模型 wire 才授权
+正式期间比较；两个独立查询加透明算术不能绕过这项授权。
+
+Catalog 的 metric detail 与 domain view 在公开 schema 和运行时都机械互斥，
+避免模型得到“schema 可表达、运行时却拒绝”的伪能力。上述合同同样贯通完整
+变化分解的 overall 与 partition 分支，并保留既有逐分支 partial-success 语义。
+
 ## 发布身份与回滚
 
 `build_release_receipt.py` 根据 `distribution_owned` 的实际文件内容计算 SHA-256；
@@ -125,14 +142,15 @@ logs 或用户 Memory。部署、启动、业务数据库查询和企微发消�
 
 ## 当前验证状态
 
-- 当前完整离线运行 `118/118 OK`，耗时 `37.461s`；故障注入测试中的
+- 当前完整离线运行 `127/127 OK`，耗时 `29.959s`；故障注入测试中的
   synthetic traceback 是预期日志。
 - capability/schema-runtime 等价、mixed partial、物理预算局部失败、complete
   内部 ID 隔离、compact-before-budget、success-first subset、coverage 重建、
   candidate scorecard、planner 删除链和内容发布身份均有回归测试。
-- 本轮只读复盘了指定 canary 的真实企微会话，比较模型消息与实际回包，并将
-  越南、Thai Kim 两条错误回答按消息 ID、工具证据和正文哈希固化为语义
-  Golden；未读取业务数据库配置或企微凭据，也未发送企微消息。
-- 尚未完成 Hermes 宿主 compaction 集成、rc5 重启后的真实企微复测、业务题
-  每题三次稳定性、P50/P90 和成本验收。因此 `0.15.0-rc5` 是可审查的 canary
+- 本轮只读复盘了 rc5 的真实企微会话，确认模型最终文本与企微 outbound 字符数
+  一致，并将“越南今年的经营情况”“泰国呢”两条语义失败按真实消息 ID 纳入
+  同一 Golden/replay gate。字符数只作交付元数据，不冒充正文语义绑定。
+- 尚未完成 rc6 重启后的真实企微复测、每题三次稳定性、Hermes 宿主 compaction
+  集成、P50/P90 和成本验收。因此离线 semantic fixture 通过不能解除
+  `blocked_pending_live_model_replay`；`0.15.0-rc6` 是可审查的 canary
   候选，不是已获准扩大流量的版本。

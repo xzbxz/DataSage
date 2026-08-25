@@ -1,5 +1,5 @@
 name: datasage-query
-version: "0.15.0-rc5"
+version: "0.15.0-rc6"
 manifest_version: 2
 api_version: 1
 description: "Hermes-native governed business evidence and analysis tools for DataSage Expert."

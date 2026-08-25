@@ -1,7 +1,7 @@
 ---
 name: datasage
 description: Analyze governed company metrics for business decisions.
-version: 0.15.0-rc5
+version: 0.15.0-rc6
 author: datasage
 platforms: [windows]
 metadata:

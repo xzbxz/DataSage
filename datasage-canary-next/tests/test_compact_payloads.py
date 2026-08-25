@@ -237,7 +237,8 @@ class CompactPayloadTests(unittest.TestCase):
         self.assertTrue(detail["dimensions"])
         self.assertIn("allowed_dimensions", detail["metric"])
         self.assertEqual(
-            ["previous_period"], detail["metric"]["comparison_kinds"]
+            ["previous_period", "year_over_year"],
+            detail["metric"]["comparison_kinds"],
         )
         self.assertIn("complete_change_decomposition", detail["metric"]["operation_summary"])
         self.assertTrue(compact["dimension_value_policies"])

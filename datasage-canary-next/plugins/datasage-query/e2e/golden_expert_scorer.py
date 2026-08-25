@@ -422,6 +422,73 @@ def _score_case(
     return errors
 
 
+def select_suite(suite: dict[str, Any], case_ids: list[str]) -> dict[str, Any]:
+    """Select a release-gate subset without creating a second scorer contract."""
+
+    suite_errors = validate_suite(suite)
+    if suite_errors:
+        raise ValueError("invalid golden suite: " + "; ".join(suite_errors))
+    if (
+        not isinstance(case_ids, list)
+        or not case_ids
+        or any(not isinstance(case_id, str) or not case_id for case_id in case_ids)
+        or len(case_ids) != len(set(case_ids))
+    ):
+        raise ValueError("case_ids must contain unique non-empty strings")
+    selected_ids = set(case_ids)
+    known_ids = {case["id"] for case in suite["cases"]}
+    unknown = selected_ids.difference(known_ids)
+    if unknown:
+        raise ValueError(f"unknown golden case IDs {sorted(unknown)!r}")
+    selected = [case for case in suite["cases"] if case["id"] in selected_ids]
+    categories = Counter(case["category"] for case in selected)
+    subset = {
+        **suite,
+        "suite": f"{suite['suite']}:selected-release-gate",
+        "minimum_case_count": len(selected),
+        "required_category_minimums": dict(sorted(categories.items())),
+        "cases": selected,
+    }
+    subset_errors = validate_suite(subset)
+    if subset_errors:
+        raise ValueError(
+            "selected golden cases do not form a valid conversation-complete suite: "
+            + "; ".join(subset_errors)
+        )
+    return subset
+
+
+def _validation_scope(
+    results: list[dict[str, Any]], live_ids: set[str]
+) -> dict[str, Any]:
+    semantic_results = [row for row in results if row.get("id") not in live_ids]
+    live_results = [row for row in results if row.get("id") in live_ids]
+
+    def fixture_status(rows: list[dict[str, Any]]) -> str:
+        if not rows:
+            return "not_applicable"
+        return "passed" if all(row.get("passed") is True for row in rows) else "failed"
+
+    live_status = "not_verified"
+    if live_results:
+        live_status = (
+            "passed_for_candidate"
+            if all(row.get("passed") is True for row in live_results)
+            else "failed"
+        )
+    return {
+        "semantic_fixture": {
+            "status": fixture_status(semantic_results),
+            "case_count": len(semantic_results),
+        },
+        "live_model_replay": {
+            "status": live_status,
+            "case_count": len(live_results),
+            "stability_claim": False,
+        },
+    }
+
+
 def score(suite: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
     suite_errors = validate_suite(suite)
     if suite_errors:
@@ -487,6 +554,7 @@ def score(suite: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
     passed = sum(row["passed"] for row in results)
     return {
         "schema": REPORT_SCHEMA,
+        "validation_scope": _validation_scope(results, live_ids),
         "summary": {
             "total": len(results),
             "passed": passed,
@@ -508,10 +576,22 @@ def score(suite: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cases", type=Path, default=HERE / "golden_expert_cases.json")
+    parser.add_argument(
+        "--case-id",
+        action="append",
+        dest="case_ids",
+        help=(
+            "Score a conversation-complete subset of the same Golden suite. "
+            "Repeat for each selected case."
+        ),
+    )
     parser.add_argument("--candidate", type=Path, required=True)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
-    report = score(_load(args.cases), _load(args.candidate))
+    suite = _load(args.cases)
+    if args.case_ids:
+        suite = select_suite(suite, args.case_ids)
+    report = score(suite, _load(args.candidate))
     rendered = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     if args.output:
         _write_text_atomic(args.output, rendered)

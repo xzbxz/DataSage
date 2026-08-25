@@ -30,6 +30,7 @@ package.__path__ = [str(PLUGIN_ROOT)]
 sys.modules[TEST_PACKAGE] = package
 
 contracts = importlib.import_module(f"{TEST_PACKAGE}.contracts")
+entities = importlib.import_module(f"{TEST_PACKAGE}.entities")
 schemas = importlib.import_module(f"{TEST_PACKAGE}.schemas")
 tools = importlib.import_module(f"{TEST_PACKAGE}.tools")
 wire = importlib.import_module(f"{TEST_PACKAGE}.wire")
@@ -802,7 +803,11 @@ class BusinessContractTests(unittest.TestCase):
 
     def test_catalog_comparison_capabilities_match_the_runtime(self) -> None:
         cases = (
-            ("delivery", "delivery_amount", ["previous_period"]),
+            (
+                "delivery",
+                "delivery_amount",
+                ["previous_period", "year_over_year"],
+            ),
             (
                 "inventory",
                 "month_end_inventory_cost_rmb",
@@ -861,6 +866,297 @@ class BusinessContractTests(unittest.TestCase):
                 normalized, datasets, semantics
             )
         self.assertEqual("INVALID_PLAN", failure.exception.code)
+
+    def test_year_over_year_matched_elapsed_is_typed_aligned_and_wire_authorized(
+        self,
+    ) -> None:
+        observed_on = date(2026, 8, 25)
+        request = {
+            "request_id": "matched_elapsed_yoy",
+            "domain": "delivery",
+            "mode": "metric",
+            "purpose": "typed matched-elapsed year-over-year proof",
+            "metric": "delivery_amount",
+            "dimensions": [],
+            "time_range": {"start": "2026-01-01", "end": "2026-09-01"},
+            "comparison": {
+                "kind": "year_over_year",
+                "coverage": "matched_elapsed",
+            },
+            "detail_receipt": self._metric_detail_receipt(
+                "delivery", "delivery_amount"
+            ),
+        }
+        jsonschema.validate(
+            {"requests": [request]},
+            schemas.DATASAGE_QUERY["parameters"],
+        )
+        normalized = tools._validate_request(request)
+        datasets, semantics = tools._contracts("delivery")
+        normalized = tools._validate_metric_detail_gate(normalized, semantics)
+        _sql, params, scope = tools._build_metric_query(
+            normalized,
+            datasets,
+            semantics,
+            tools._metric_query_limit(normalized),
+            observed_on=observed_on,
+        )
+        for boundary in (
+            "2026-01-01",
+            "2026-08-26",
+            "2025-01-01",
+            "2025-08-26",
+        ):
+            self.assertIn(boundary, params)
+        self.assertNotIn("2026-09-01", params)
+        self.assertEqual(
+            {"start": "2026-01-01", "end": "2026-08-26", "source": "explicit"},
+            scope["time_range"]["current"],
+        )
+        self.assertEqual(
+            {"start": "2025-01-01", "end": "2025-08-26", "source": "explicit"},
+            scope["time_range"]["comparison"],
+        )
+        alignment = scope["time_range"]["comparison_alignment"]
+        self.assertEqual("matched_elapsed", alignment["coverage"])
+        self.assertEqual("2026-09-01", alignment["requested_current_end"])
+        self.assertEqual("2026-08-26", alignment["effective_current_end"])
+        self.assertIs(alignment["current_was_clipped"], True)
+
+        public_period = tools._public_time_range(scope["time_range"])
+        annotated = tools._annotate_period_evidence(public_period, observed_on)
+        self.assertEqual(
+            "compatible",
+            annotated["comparison_compatibility"]["status"],
+        )
+        self.assertEqual(
+            "in_progress",
+            annotated["current"]["calendar_evidence"]["period_state"],
+        )
+        self.assertEqual(
+            "not_proven",
+            annotated["current"]["calendar_evidence"]["source_freshness"],
+        )
+
+        claims = tools._claim_ledger(
+            "matched_elapsed_yoy",
+            "metric_calculation_fixture",
+            "计算测试指标",
+            "人民币元",
+            [],
+            annotated,
+            "scope_matched_elapsed_yoy",
+            "projection_matched_elapsed_yoy",
+            False,
+            [
+                {
+                    "metric_value": "120",
+                    "comparison_value": "100",
+                    "delta_value": "20",
+                    "change_rate": "0.2",
+                }
+            ],
+        )
+        self.assertIn("period_comparison", claims[0]["allowed_relations"])
+        tools.evidence.seal_claim(claims[0])
+        result = self._scalar_calculation_result(
+            "matched_elapsed_yoy",
+            "120",
+            period=("2026-01-01", "2026-08-26"),
+        )
+        result["applied_time_range"] = annotated
+        result["claim_ledger"] = claims
+        projected = tools._model_wire_result(result)
+        self.assertEqual("20", projected["claim_ledger"][0]["facts"]["delta_value"])
+        self.assertEqual("0.2", projected["claim_ledger"][0]["facts"]["change_rate"])
+
+    def test_year_over_year_requires_matched_elapsed_contract(self) -> None:
+        base = {
+            "request_id": "invalid_yoy_contract",
+            "domain": "delivery",
+            "mode": "metric",
+            "purpose": "typed comparison validation proof",
+            "metric": "delivery_amount",
+            "dimensions": [],
+            "time_range": {"start": "2026-01-01", "end": "2026-09-01"},
+        }
+        invalid = {
+            **base,
+            "comparison": {"kind": "year_over_year"},
+        }
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.validate(
+                {"requests": [invalid]},
+                schemas.DATASAGE_QUERY["parameters"],
+            )
+        with self.assertRaises(tools.QueryFailure) as caught:
+            tools._validate_request(invalid)
+        self.assertEqual("INVALID_INPUT", caught.exception.code)
+
+        calendar_month = {
+            key: value for key, value in base.items() if key != "time_range"
+        }
+        calendar_month.update(
+            {
+                "request_id": "calendar_month_yoy_contract",
+                "calendar_month": "2026-08",
+                "comparison": {
+                    "kind": "year_over_year",
+                    "coverage": "matched_elapsed",
+                },
+            }
+        )
+        jsonschema.validate(
+            {"requests": [calendar_month]},
+            schemas.DATASAGE_QUERY["parameters"],
+        )
+        normalized = tools._validate_request(calendar_month)
+        self.assertEqual(
+            {"start": "2026-08-01", "end": "2026-09-01"},
+            normalized["time_range"],
+        )
+
+    def test_year_over_year_boundaries_are_frozen_completed_and_leap_safe(
+        self,
+    ) -> None:
+        completed_current, completed_prior, completed_alignment = (
+            tools._year_over_year_matched_elapsed_ranges(
+                "2025-01-01",
+                "2025-09-01",
+                date(2026, 8, 25),
+            )
+        )
+        self.assertEqual(
+            {"start": "2025-01-01", "end": "2025-09-01"},
+            completed_current,
+        )
+        self.assertEqual(
+            {"start": "2024-01-01", "end": "2024-09-01"},
+            completed_prior,
+        )
+        self.assertIs(completed_alignment["current_was_clipped"], False)
+
+        leap_current, leap_prior, leap_alignment = (
+            tools._year_over_year_matched_elapsed_ranges(
+                "2024-02-29",
+                "2024-03-10",
+                date(2024, 3, 1),
+            )
+        )
+        self.assertEqual(
+            {"start": "2024-02-29", "end": "2024-03-02"},
+            leap_current,
+        )
+        self.assertEqual(
+            {"start": "2023-02-28", "end": "2023-03-02"},
+            leap_prior,
+        )
+        leap_period = {
+            "current": {**leap_current, "source": "explicit"},
+            "comparison": {**leap_prior, "source": "explicit"},
+            "comparison_alignment": leap_alignment,
+        }
+        annotated = tools._annotate_period_evidence(
+            leap_period,
+            date(2024, 3, 1),
+        )
+        self.assertEqual(
+            "compatible",
+            annotated["comparison_compatibility"]["status"],
+        )
+
+        tampered = copy.deepcopy(annotated)
+        tampered["comparison_alignment"]["effective_current_end"] = "2024-03-03"
+        self.assertEqual(
+            "not_assessable",
+            tools.assess_period_compatibility(
+                tampered["current"],
+                tampered["comparison"],
+                comparison_alignment=tampered["comparison_alignment"],
+            )["status"],
+        )
+        with self.assertRaises(tools.QueryFailure) as not_started:
+            tools._year_over_year_matched_elapsed_ranges(
+                "2026-09-01",
+                "2026-10-01",
+                date(2026, 8, 25),
+            )
+        self.assertEqual("INVALID_PLAN", not_started.exception.code)
+
+    def test_complete_change_decomposition_reaches_matched_elapsed_yoy(self) -> None:
+        request = {
+            "request_id": "matched_elapsed_yoy_partition",
+            "domain": "delivery",
+            "mode": "metric",
+            "purpose": "complete matched-elapsed year-over-year decomposition",
+            "metric": "delivery_amount",
+            "time_range": {"start": "2026-01-01", "end": "2026-09-01"},
+            "comparison": {
+                "kind": "year_over_year",
+                "coverage": "matched_elapsed",
+            },
+            "complete_change_decomposition": {"dimension": "customer"},
+            "detail_receipt": self._metric_detail_receipt(
+                "delivery", "delivery_amount"
+            ),
+        }
+        jsonschema.validate(
+            {"requests": [request]},
+            schemas.DATASAGE_QUERY["parameters"],
+        )
+        expanded, partitions = tools._expand_complete_change_decompositions(
+            [request]
+        )
+        self.assertEqual(2, len(expanded))
+        self.assertEqual(
+            {"matched_elapsed_yoy_partition"},
+            set(partitions),
+        )
+        datasets, semantics = tools._contracts("delivery")
+        scopes = []
+        for branch in expanded:
+            normalized = tools._validate_request(branch)
+            normalized = tools._validate_metric_detail_gate(
+                normalized, semantics
+            )
+            _sql, params, scope = tools._build_metric_query(
+                normalized,
+                datasets,
+                semantics,
+                tools._metric_query_limit(normalized),
+                observed_on=date(2026, 8, 25),
+            )
+            self.assertIn("2026-08-26", params)
+            self.assertIn("2025-08-26", params)
+            annotated = tools._annotate_period_evidence(
+                tools._public_time_range(scope["time_range"]),
+                date(2026, 8, 25),
+            )
+            self.assertEqual(
+                "compatible",
+                annotated["comparison_compatibility"]["status"],
+            )
+            scopes.append(annotated)
+        self.assertEqual(scopes[0], scopes[1])
+
+    def test_catalog_metric_and_view_are_mechanically_exclusive(self) -> None:
+        invalid = {
+            "requests": [
+                {
+                    "domain": "delivery",
+                    "metric": "delivery_amount",
+                    "view": "expert_index",
+                }
+            ]
+        }
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.validate(
+                invalid,
+                schemas.DATASAGE_CATALOG["parameters"],
+            )
+        runtime = json.loads(contracts.datasage_catalog(invalid))
+        self.assertEqual("failed", runtime["status"])
+        self.assertEqual("INVALID_INPUT", runtime["error"]["code"])
 
     def test_ratio_comparison_preserves_undefined_values_as_null(self) -> None:
         request = {
@@ -6330,6 +6626,45 @@ class BusinessContractTests(unittest.TestCase):
         self.assertIn("same `datasage_query` call", main_skill)
         self.assertIn("compatible scalar evidence already present", main_skill)
         self.assertIn("explicitly labeled transparent arithmetic", main_skill)
+
+    def test_unknown_geography_never_auto_binds_a_governed_filter_value(self) -> None:
+        for token in ("泰国", "未注册地域名称"):
+            with self.subTest(token=token), mock.patch.object(
+                tools, "_execute", return_value=([], False)
+            ):
+                payload = json.loads(
+                    entities.datasage_entity_resolve({"token": token})
+                )
+            self.assertEqual("not_found", payload["status"])
+            self.assertTrue(payload["must_stop_business_query"])
+            self.assertEqual([], payload["candidates"])
+
+    def test_registered_bkk_remains_an_exact_department_alias(self) -> None:
+        stable_payload = json.loads(
+            entities.datasage_entity_resolve(
+                {"token": "BKK", "entity_types": ["department"]}
+            )
+        )
+        self.assertEqual("resolved", stable_payload["status"])
+        self.assertEqual("registered_exact", stable_payload["resolution_path"])
+
+    def test_dimension_labels_cannot_become_mapping_or_durable_memory_facts(
+        self,
+    ) -> None:
+        guidance = (
+            PROFILE_ROOT
+            / "skills"
+            / "business-analytics"
+            / "datasage"
+            / "references"
+            / "entity-guidance.md"
+        ).read_text(encoding="utf-8")
+        normalized = " ".join(guidance.split())
+        self.assertIn("Unknown natural-language geography must not bind", normalized)
+        self.assertIn("ask the user to choose or provide the mapping", normalized)
+        self.assertIn("dimension breakdown only enumerates observed labels", normalized)
+        self.assertIn("does not prove an alias or create a candidate mapping", normalized)
+        self.assertIn("must not become a durable Memory fact", normalized)
 
 
 if __name__ == "__main__":

@@ -35,8 +35,12 @@ from .analytical_queries import AnalysisQueryError, build_analytical_metric_quer
 from .capability_contract import (
     CapabilityContractError,
     DOMAIN_SOURCES,
+    MATCHED_ELAPSED_COVERAGE,
     PHYSICAL_EXECUTION_BUDGET,
+    PREVIOUS_PERIOD_COMPARISON,
+    SNAPSHOT_MONTHS_BEFORE_COMPARISON,
     SUPPORTED_DOMAINS,
+    YEAR_OVER_YEAR_COMPARISON,
     physical_request_cost,
     validate_request_field_contract,
 )
@@ -888,6 +892,7 @@ def _default_time_range(
 
 _PERIOD_EVIDENCE_VERSION = "calendar-period-evidence/v2"
 _PERIOD_OBSERVATION_BASIS = "business_clock_query_observation"
+_MATCHED_ELAPSED_COMPARISON_VERSION = "matched-elapsed-comparison/v1"
 
 
 def _period_boundary_date(value: Any) -> date | None:
@@ -949,7 +954,10 @@ def _is_snapshot_period(value: Mapping[str, Any]) -> bool:
 
 
 def assess_period_compatibility(
-    left: Any, right: Any
+    left: Any,
+    right: Any,
+    *,
+    comparison_alignment: Any = None,
 ) -> dict[str, Any] | None:
     """Assess period evidence only; metric and population checks stay separate."""
 
@@ -972,6 +980,75 @@ def assess_period_compatibility(
             and isinstance(right.get("snapshot_month"), str)
         )
         if left_resolved and right_resolved:
+            return {"status": "compatible", "reason_codes": []}
+        return {
+            "status": "not_assessable",
+            "reason_codes": ["PERIOD_COMPARABILITY_NOT_ASSESSABLE"],
+        }
+
+    if isinstance(comparison_alignment, Mapping):
+        required_alignment_fields = {
+            "version",
+            "kind",
+            "coverage",
+            "observed_on",
+            "requested_current_start",
+            "requested_current_end",
+            "effective_current_end",
+            "current_was_clipped",
+        }
+        observed_date = _period_boundary_date(
+            comparison_alignment.get("observed_on")
+        )
+        requested_start = _period_boundary_date(
+            comparison_alignment.get("requested_current_start")
+        )
+        requested_end = _period_boundary_date(
+            comparison_alignment.get("requested_current_end")
+        )
+        effective_end = _period_boundary_date(
+            comparison_alignment.get("effective_current_end")
+        )
+        left_start = _period_boundary_date(left.get("start"))
+        left_end = _period_boundary_date(left.get("end"))
+        right_start = _period_boundary_date(right.get("start"))
+        right_end = _period_boundary_date(right.get("end"))
+        left_calendar = left.get("calendar_evidence")
+        right_calendar = right.get("calendar_evidence")
+        clipped = comparison_alignment.get("current_was_clipped")
+        aligned = False
+        if (
+            set(comparison_alignment) == required_alignment_fields
+            and comparison_alignment.get("version")
+            == _MATCHED_ELAPSED_COMPARISON_VERSION
+            and comparison_alignment.get("kind") == YEAR_OVER_YEAR_COMPARISON
+            and comparison_alignment.get("coverage")
+            == MATCHED_ELAPSED_COVERAGE
+            and isinstance(clipped, bool)
+            and observed_date is not None
+            and requested_start is not None
+            and requested_end is not None
+            and effective_end is not None
+            and requested_start < effective_end <= requested_end
+            and effective_end <= observed_date + timedelta(days=1)
+            and clipped == (effective_end < requested_end)
+            and left_start == requested_start
+            and left_end == effective_end
+            and isinstance(left_calendar, Mapping)
+            and isinstance(right_calendar, Mapping)
+            and left_calendar.get("observed_on")
+            == comparison_alignment.get("observed_on")
+            and right_calendar.get("observed_on")
+            == comparison_alignment.get("observed_on")
+        ):
+            try:
+                aligned = (
+                    right_start == _shift_calendar_year(left_start, -1)
+                    and right_end == _shift_calendar_year(left_end, -1)
+                )
+            except (ValueError, OverflowError):
+                aligned = False
+        if aligned:
             return {"status": "compatible", "reason_codes": []}
         return {
             "status": "not_assessable",
@@ -1017,7 +1094,9 @@ def _annotate_period_evidence(value: Any, observed_on: date) -> Any:
         for key, item in value.items()
     }
     compatibility = assess_period_compatibility(
-        annotated.get("current"), annotated.get("comparison")
+        annotated.get("current"),
+        annotated.get("comparison"),
+        comparison_alignment=annotated.get("comparison_alignment"),
     )
     if compatibility is not None:
         annotated["comparison_compatibility"] = compatibility
@@ -1070,6 +1149,52 @@ def _comparison_period(start: str, end: str) -> tuple[str, str]:
         return (start_date - duration).isoformat(), start_date.isoformat()
     except (ValueError, OverflowError) as exc:
         raise QueryFailure("INVALID_PLAN", "期间比较超出支持的日期边界。") from exc
+
+
+def _shift_calendar_year(value: date, years: int) -> date:
+    target_year = value.year + years
+    return value.replace(
+        year=target_year,
+        day=min(value.day, calendar.monthrange(target_year, value.month)[1]),
+    )
+
+
+def _year_over_year_matched_elapsed_ranges(
+    start: str,
+    end: str,
+    observed_on: date,
+) -> tuple[dict[str, str], dict[str, str], dict[str, Any]]:
+    try:
+        start_date = datetime.strptime(start, "%Y-%m-%d").date()
+        end_date = datetime.strptime(end, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise QueryFailure(
+            "INVALID_PLAN",
+            "同比期间必须使用 YYYY-MM-DD。",
+        ) from exc
+    if start_date >= end_date:
+        raise QueryFailure("INVALID_PLAN", "同比期间范围无效。")
+    effective_end = min(end_date, observed_on + timedelta(days=1))
+    if effective_end <= start_date:
+        raise QueryFailure("INVALID_PLAN", "同比当前期间尚未开始。")
+    try:
+        prior_start = _shift_calendar_year(start_date, -1)
+        prior_end = _shift_calendar_year(effective_end, -1)
+    except (ValueError, OverflowError) as exc:
+        raise QueryFailure("INVALID_PLAN", "同比期间超出支持的日期边界。") from exc
+    current = {"start": start_date.isoformat(), "end": effective_end.isoformat()}
+    prior = {"start": prior_start.isoformat(), "end": prior_end.isoformat()}
+    alignment = {
+        "version": _MATCHED_ELAPSED_COMPARISON_VERSION,
+        "kind": YEAR_OVER_YEAR_COMPARISON,
+        "coverage": MATCHED_ELAPSED_COVERAGE,
+        "observed_on": observed_on.isoformat(),
+        "requested_current_start": start_date.isoformat(),
+        "requested_current_end": end_date.isoformat(),
+        "effective_current_end": effective_end.isoformat(),
+        "current_was_clipped": effective_end < end_date,
+    }
+    return current, prior, alignment
 
 
 def _parse_time_boundary(value: Any, value_format: str) -> date:
@@ -1219,13 +1344,23 @@ def _validate_request(request: Any) -> dict[str, Any]:
         if not isinstance(comparison, Mapping):
             raise QueryFailure("INVALID_INPUT", "comparison 结构无效。")
         kind = comparison.get("kind")
-        if kind == "previous_period":
+        if kind == PREVIOUS_PERIOD_COMPARISON:
             if set(comparison) != {"kind"} or time_range is None:
                 raise QueryFailure(
                     "INVALID_INPUT",
                     "previous_period 必须且只能提供 kind，并同时提供 time_range。",
                 )
-        elif kind == "snapshot_months_before":
+        elif kind == YEAR_OVER_YEAR_COMPARISON:
+            if (
+                set(comparison) != {"kind", "coverage"}
+                or comparison.get("coverage") != MATCHED_ELAPSED_COVERAGE
+                or time_range is None
+            ):
+                raise QueryFailure(
+                    "INVALID_INPUT",
+                    "year_over_year 必须提供 coverage=matched_elapsed，并同时提供 time_range。",
+                )
+        elif kind == SNAPSHOT_MONTHS_BEFORE_COMPARISON:
             months = comparison.get("months")
             if (
                 set(comparison) != {"kind", "months"}
@@ -1276,23 +1411,34 @@ def _validate_request(request: Any) -> dict[str, Any]:
                     "INVALID_INPUT",
                     "complete_change_decomposition requires time_range or calendar_month.",
                 )
-            request["comparison"] = {"kind": "previous_period"}
+            request["comparison"] = {"kind": PREVIOUS_PERIOD_COMPARISON}
         elif (
             not isinstance(comparison, Mapping)
             or (
-                comparison.get("kind") == "previous_period"
+                comparison.get("kind") == PREVIOUS_PERIOD_COMPARISON
                 and set(comparison) != {"kind"}
             )
             or (
-                comparison.get("kind") == "snapshot_months_before"
+                comparison.get("kind") == YEAR_OVER_YEAR_COMPARISON
+                and (
+                    set(comparison) != {"kind", "coverage"}
+                    or comparison.get("coverage") != MATCHED_ELAPSED_COVERAGE
+                )
+            )
+            or (
+                comparison.get("kind") == SNAPSHOT_MONTHS_BEFORE_COMPARISON
                 and set(comparison) != {"kind", "months"}
             )
             or comparison.get("kind")
-            not in {"previous_period", "snapshot_months_before"}
+            not in {
+                PREVIOUS_PERIOD_COMPARISON,
+                YEAR_OVER_YEAR_COMPARISON,
+                SNAPSHOT_MONTHS_BEFORE_COMPARISON,
+            }
         ):
             raise QueryFailure(
                 "INVALID_INPUT",
-                "complete_change_decomposition only supports previous_period or snapshot_months_before comparison.",
+                "complete_change_decomposition comparison contract is invalid.",
             )
     complete_target_gap = request.get("complete_target_gap_decomposition")
     if complete_target_gap is not None:
@@ -2610,7 +2756,8 @@ def _build_comparison_metric_query(
     prior_request = dict(request)
     current_request.pop("comparison", None)
     prior_request.pop("comparison", None)
-    if kind == "previous_period":
+    comparison_alignment: dict[str, Any] | None = None
+    if kind == PREVIOUS_PERIOD_COMPARISON:
         if set(comparison) != {"kind"}:
             raise QueryFailure(
                 "INVALID_PLAN",
@@ -2624,7 +2771,31 @@ def _build_comparison_metric_query(
             raise QueryFailure("INVALID_PLAN", "上期比较时间范围无效。")
         prior_start, prior_end = _comparison_period(start, end)
         prior_request["time_range"] = {"start": prior_start, "end": prior_end}
-    elif kind == "snapshot_months_before":
+    elif kind == YEAR_OVER_YEAR_COMPARISON:
+        if (
+            set(comparison) != {"kind", "coverage"}
+            or comparison.get("coverage") != MATCHED_ELAPSED_COVERAGE
+        ):
+            raise QueryFailure(
+                "INVALID_PLAN",
+                "year_over_year 比较要求 coverage=matched_elapsed。",
+            )
+        current_range = request.get("time_range")
+        if not isinstance(current_range, dict):
+            raise QueryFailure("INVALID_PLAN", "同比必须提供当前期间。")
+        start, end = current_range.get("start"), current_range.get("end")
+        if not isinstance(start, str) or not isinstance(end, str):
+            raise QueryFailure("INVALID_PLAN", "同比时间范围无效。")
+        current_range, prior_range, comparison_alignment = (
+            _year_over_year_matched_elapsed_ranges(
+                start,
+                end,
+                observed_on or _business_today(),
+            )
+        )
+        current_request["time_range"] = current_range
+        prior_request["time_range"] = prior_range
+    elif kind == SNAPSHOT_MONTHS_BEFORE_COMPARISON:
         if set(comparison) != {"kind", "months"}:
             raise QueryFailure(
                 "INVALID_PLAN",
@@ -2856,6 +3027,8 @@ def _build_comparison_metric_query(
         "warnings": warnings,
         "dimension_outputs": dimensions,
     }
+    if comparison_alignment is not None:
+        scope["time_range"]["comparison_alignment"] = comparison_alignment
     if embedded_partition_proof:
         scope["embedded_complete_partition_proof"] = {
             "version": "same-statement-window-partition-proof/v1",
@@ -6428,6 +6601,41 @@ def _business_dimension_bindings(
     return bindings
 
 
+def _public_comparison_alignment(value: Any) -> dict[str, Any]:
+    fields = (
+        "version",
+        "kind",
+        "coverage",
+        "observed_on",
+        "requested_current_start",
+        "requested_current_end",
+        "effective_current_end",
+        "current_was_clipped",
+    )
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != set(fields)
+        or value.get("version") != _MATCHED_ELAPSED_COMPARISON_VERSION
+        or value.get("kind") != YEAR_OVER_YEAR_COMPARISON
+        or value.get("coverage") != MATCHED_ELAPSED_COVERAGE
+        or not isinstance(value.get("current_was_clipped"), bool)
+        or any(
+            _period_boundary_date(value.get(field)) is None
+            for field in (
+                "observed_on",
+                "requested_current_start",
+                "requested_current_end",
+                "effective_current_end",
+            )
+        )
+    ):
+        raise QueryFailure(
+            "CONTRACT_UNAVAILABLE",
+            "同比匹配覆盖证据无效。",
+        )
+    return {field: copy.deepcopy(value[field]) for field in fields}
+
+
 def _public_time_range(value: Any) -> dict[str, Any]:
     """Validate and remove implementation-only fields from time evidence."""
     if not isinstance(value, Mapping):
@@ -6449,7 +6657,11 @@ def _public_time_range(value: Any) -> dict[str, Any]:
     for key, item in value.items():
         if not isinstance(key, str) or not isinstance(item, Mapping):
             raise QueryFailure("CONTRACT_UNAVAILABLE", "查询时间范围结构无效。")
-        nested[key] = _public_time_range(item)
+        nested[key] = (
+            _public_comparison_alignment(item)
+            if key == "comparison_alignment"
+            else _public_time_range(item)
+        )
     if nested:
         return nested
     raise QueryFailure("CONTRACT_UNAVAILABLE", "查询结果缺少明确的时间或快照范围。")

@@ -15,6 +15,50 @@
     "causal_boundary": 3,
     "unsupported_metric": 1
   },
+  "release_validation": {
+    "schema": "datasage-live-replay-manifest/v1",
+    "release_target": "0.15.0-rc6",
+    "source_release": "0.15.0-rc5",
+    "transcript_source": "wecom",
+    "session_id": "20260825_200011_809a2f82",
+    "semantic_fixture_status": "reviewed_failure_frozen",
+    "live_model_replay_status": "not_verified_after_rc6",
+    "release_gate_status": "blocked_pending_live_model_replay",
+    "turns": [
+      {
+        "test_id": "ambiguity_10_rc5_vietnam_scorecard",
+        "user_message_id": 3972,
+        "final_message_id": 3986,
+        "final_content_chars": 584,
+        "outbound_content_chars": 584,
+        "lengths_match": true,
+        "lengths_are_semantic_binding": false,
+        "cryptographic_binding_status": "pending_trusted_capture",
+        "review_labels": ["claim_formal_trend_from_partial_period_mismatch", "claim_complete_business_review_without_inventory_evidence", "claim_cross_metric_synchrony_without_aligned_series", "infer_ungoverned_overall_health_or_strength"]
+      },
+      {
+        "test_id": "multiturn_08_rc5_thailand_followup",
+        "user_message_id": 3988,
+        "final_message_id": 4003,
+        "final_content_chars": 660,
+        "outbound_content_chars": 660,
+        "lengths_match": true,
+        "lengths_are_semantic_binding": false,
+        "cryptographic_binding_status": "pending_trusted_capture",
+        "review_labels": ["assume_thailand_equals_bkk_without_confirmation", "claim_benchmarkless_absolute_scale_is_small", "claim_cross_scope_magnitude_ratio_without_compatible_population", "claim_opposite_trends_without_aligned_period_series", "claim_formal_trend_from_partial_period_mismatch", "claim_scope_incompatible_cross_metric_strength"]
+      }
+    ],
+    "memory_observation": {"message_id": 4002, "status": "staged_pending", "pending_id_prefix": "a96d4677", "authorizes_business_conclusions": false, "counts_as_live_replay_pass": false},
+    "trusted_replay_gate": {
+      "binding_schema": "datasage-canary-bindings/v2-live-fixture",
+      "adapter": "plugins/datasage-query/e2e/canary_transcript_adapter.py",
+      "scorer": "plugins/datasage-query/e2e/golden_expert_scorer.py",
+      "case_ids": ["ambiguity_10_rc5_vietnam_scorecard", "multiturn_08_rc5_thailand_followup"],
+      "required_replay_runs_per_case": 3,
+      "semantic_fixture_pass_is_live_model_pass": false,
+      "require_outbound_delivery_verification": true
+    }
+  },
   "cases": [
     {
       "id": "change_01_delivery_department", "category": "change_diagnosis", "conversation_id": "change_01", "turn": 1,
@@ -384,6 +428,24 @@
       "allowed_conclusions": ["report_metrics_individually", "report_governed_target_status", "disclose_period_flow_and_snapshot_scopes", "disclose_partial_period_comparison_limit", "report_available_evidence", "state_cross_metric_scope_not_proven", "request_independent_evidence", "disclose_data_limits", "state_noncausal"],
       "forbidden_conclusions": ["claim_benchmarkless_risk_level", "recommend_no_intervention_without_action_evidence", "claim_cross_metric_synchrony_without_aligned_series", "claim_formal_trend_from_partial_period_mismatch", "claim_scope_incompatible_cross_metric_strength", "predict_in_progress_period_outcome"],
       "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage"], "minimum_successful_queries": 1, "allow_partial_failure": true, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
+    },
+    {
+      "id": "ambiguity_10_rc5_vietnam_scorecard", "category": "ambiguity", "conversation_id": "rc5_live_20260825_200011", "turn": 1,
+      "prompt": "越南今年的经营情况",
+      "plan_constraints": {"domains": [], "metrics": [], "dimensions": ["department"], "operations": ["performance_scorecard_first"], "time_semantics": "2026_ytd_flows_with_separate_snapshots", "context_action": "new", "must_not_metrics": [], "must_not_operations": ["fixed_scorecard_bundle", "fixed_metric_count", "fixed_call_order"]},
+      "required_conclusions": ["report_metrics_individually", "report_governed_target_status", "report_inventory_or_disclose_missing_capability", "disclose_period_flow_and_snapshot_scopes", "disclose_partial_period_comparison_limit"],
+      "allowed_conclusions": ["report_metrics_individually", "report_governed_target_status", "report_inventory_or_disclose_missing_capability", "disclose_period_flow_and_snapshot_scopes", "disclose_partial_period_comparison_limit", "report_available_evidence", "state_cross_metric_scope_not_proven", "request_independent_evidence", "disclose_data_limits", "state_noncausal"],
+      "forbidden_conclusions": ["claim_formal_trend_from_partial_period_mismatch", "claim_complete_business_review_without_inventory_evidence", "claim_cross_metric_synchrony_without_aligned_series", "infer_ungoverned_overall_health_or_strength", "invent_result"],
+      "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage"], "minimum_successful_queries": 1, "allow_partial_failure": true, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
+    },
+    {
+      "id": "multiturn_08_rc5_thailand_followup", "category": "multiturn", "conversation_id": "rc5_live_20260825_200011", "turn": 2,
+      "prompt": "泰国呢",
+      "plan_constraints": {"domains": [], "metrics": [], "dimensions": ["department"], "operations": ["clarify_entity_mapping"], "time_semantics": "2026_ytd_pending_entity_confirmation", "context_action": "preserve", "must_not_metrics": [], "must_not_operations": ["paired_comparison", "fixed_scorecard_bundle", "fixed_metric_count", "fixed_call_order"]},
+      "required_conclusions": ["ask_entity_clarification", "state_no_unconfirmed_entity_substitution"],
+      "allowed_conclusions": ["ask_entity_clarification", "state_no_unconfirmed_entity_substitution", "report_entity_candidates", "disclose_data_limits"],
+      "forbidden_conclusions": ["assume_thailand_equals_bkk_without_confirmation", "claim_benchmarkless_absolute_scale_is_small", "claim_cross_scope_magnitude_ratio_without_compatible_population", "claim_opposite_trends_without_aligned_period_series", "claim_formal_trend_from_partial_period_mismatch", "claim_scope_incompatible_cross_metric_strength", "invent_result"],
+      "evidence_requirements": {"required_receipts": ["catalog", "entity_resolution", "context_transition"], "minimum_successful_queries": 0, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": true, "required_error_codes": ["ENTITY_AMBIGUOUS"]}
     }
   ]
 }

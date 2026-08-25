@@ -1,5 +1,5 @@
 name: datasage-canary-next
-version: 0.15.0-rc5
+version: 0.15.0-rc6
 description: Hermes-native digital expert with adaptive analysis and governed evidence
   contracts.
 hermes_requires: ==0.20.5

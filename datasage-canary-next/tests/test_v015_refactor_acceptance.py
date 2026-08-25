@@ -328,6 +328,122 @@ class IntelligenceBoundaryAcceptanceTests(unittest.TestCase):
                         f"reviewed forbidden conclusion was not rejected: {label}",
                     )
 
+    def test_rc6_reviewed_failures_use_existing_golden_and_trusted_replay_gate(self):
+        scorer = _golden_scorer()
+        suite = json.loads(
+            (PLUGIN_ROOT / "e2e" / "golden_expert_cases.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        manifest = suite["release_validation"]
+        self.assertEqual("reviewed_failure_frozen", manifest["semantic_fixture_status"])
+        self.assertEqual("not_verified_after_rc6", manifest["live_model_replay_status"])
+        self.assertEqual(
+            "blocked_pending_live_model_replay", manifest["release_gate_status"]
+        )
+        self.assertFalse(
+            manifest["trusted_replay_gate"][
+                "semantic_fixture_pass_is_live_model_pass"
+            ]
+        )
+        self.assertEqual(
+            "plugins/datasage-query/e2e/canary_transcript_adapter.py",
+            manifest["trusted_replay_gate"]["adapter"],
+        )
+        self.assertEqual(
+            "plugins/datasage-query/e2e/golden_expert_scorer.py",
+            manifest["trusted_replay_gate"]["scorer"],
+        )
+        self.assertEqual(
+            {
+                "message_id": 4002,
+                "status": "staged_pending",
+                "pending_id_prefix": "a96d4677",
+                "authorizes_business_conclusions": False,
+                "counts_as_live_replay_pass": False,
+            },
+            manifest["memory_observation"],
+        )
+
+        cases = {case["id"]: case for case in suite["cases"]}
+        expected_endpoints = {
+            "ambiguity_10_rc5_vietnam_scorecard": (3972, 3986, 584),
+            "multiturn_08_rc5_thailand_followup": (3988, 4003, 660),
+        }
+        selected_ids = manifest["trusted_replay_gate"]["case_ids"]
+        selected = scorer.select_suite(suite, selected_ids)
+        self.assertEqual([], scorer.validate_suite(selected))
+        self.assertEqual(selected_ids, [case["id"] for case in selected["cases"]])
+        with self.assertRaisesRegex(ValueError, "conversation-complete"):
+            scorer.select_suite(
+                suite, ["multiturn_08_rc5_thailand_followup"]
+            )
+
+        for turn in manifest["turns"]:
+            case_id = turn["test_id"]
+            with self.subTest(case_id=case_id):
+                user_id, final_id, outbound_chars = expected_endpoints[case_id]
+                self.assertEqual(user_id, turn["user_message_id"])
+                self.assertEqual(final_id, turn["final_message_id"])
+                self.assertEqual(outbound_chars, turn["final_content_chars"])
+                self.assertEqual(outbound_chars, turn["outbound_content_chars"])
+                self.assertFalse(turn["lengths_are_semantic_binding"])
+                self.assertEqual(
+                    "pending_trusted_capture",
+                    turn["cryptographic_binding_status"],
+                )
+                case = cases[case_id]
+                self.assertTrue(
+                    set(turn["review_labels"]) <= set(case["forbidden_conclusions"])
+                )
+                observed = {
+                    "plan": {
+                        key: copy.deepcopy(value)
+                        for key, value in case["plan_constraints"].items()
+                        if not key.startswith("must_not_")
+                    },
+                    "conclusions": [
+                        *case["required_conclusions"],
+                        *turn["review_labels"],
+                    ],
+                    "evidence": {
+                        "receipts": case["evidence_requirements"][
+                            "required_receipts"
+                        ],
+                        "successful_queries": 0,
+                        "failed_queries": 0,
+                        "truncated": False,
+                        "reconciled": False,
+                        "query_attempted": False,
+                        "error_codes": case["evidence_requirements"][
+                            "required_error_codes"
+                        ],
+                    },
+                }
+                errors = scorer._score_case(case, observed)
+                for label in turn["review_labels"]:
+                    self.assertTrue(any(label in error for error in errors), label)
+
+        semantic_scope = scorer._validation_scope(
+            [
+                {"id": case_id, "passed": True}
+                for case_id in selected_ids
+            ],
+            set(),
+        )
+        self.assertEqual("passed", semantic_scope["semantic_fixture"]["status"])
+        self.assertEqual(
+            "not_verified", semantic_scope["live_model_replay"]["status"]
+        )
+        self.assertFalse(semantic_scope["live_model_replay"]["stability_claim"])
+
+        failed_live_scope = scorer._validation_scope(
+            [{"id": selected_ids[0], "passed": False}], {selected_ids[0]}
+        )
+        self.assertEqual(
+            "failed", failed_live_scope["live_model_replay"]["status"]
+        )
+
     def test_release_path_has_no_exact_plan_or_fixed_answer_scorer(self):
         scorer_source = (
             PLUGIN_ROOT / "e2e" / "golden_expert_scorer.py"
