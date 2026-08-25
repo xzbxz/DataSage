@@ -202,7 +202,9 @@ REQUEST = {
             ],
             "description": (
                 "Start-inclusive and end-exclusive governed metric range. Supplying time_range is an explicit, "
-                "non-default qualifier and requires the selected metric detail before datasage_query."
+                "non-default qualifier and requires the selected metric detail before datasage_query. The result "
+                "returns calendar period state and coverage; its query-date observation is not a source freshness "
+                "watermark."
             ),
         },
         "calendar_month": {
@@ -211,6 +213,8 @@ REQUEST = {
             "description": (
                 "Typed full calendar month. The runtime deterministically expands it to a start-inclusive, "
                 "end-exclusive range from the first day of this month to the first day of the next month. "
+                "The returned period state distinguishes an elapsed month from a month still in progress; "
+                "the latter is not a complete-period comparison. "
                 "Use either calendar_month or time_range, never both. Supplying calendar_month is an explicit, "
                 "non-default qualifier and requires the selected metric detail before datasage_query."
             ),
@@ -473,7 +477,9 @@ CALCULATION = {
             "description": (
                 "Closed arithmetic operation over two successful, untruncated scalar request results. "
                 "difference and ratio require the same registered metric, governed non-time scope, filters, "
-                "and unit; their periods may differ, and ratio requires a nonzero denominator. share requires "
+                "and unit; their periods may differ, and ratio requires a nonzero denominator. Arithmetic remains "
+                "visible when calendar coverage differs, but analytical_compatibility then prevents treating it as "
+                "a formal period trend. share requires "
                 "the same metric, period, and unit; left must be a proven strict additive-partition subset of "
                 "right, right must be positive, and 0 <= left <= right. Free-form formulas are never accepted."
             ),

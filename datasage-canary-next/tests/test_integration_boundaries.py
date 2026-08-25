@@ -400,7 +400,7 @@ class StrictSessionIdentityTests(unittest.TestCase):
 
 class GitGovernedSkillTests(unittest.TestCase):
     def _profile_with_skill(self, root: Path, payload: bytes = b"# Skill\n") -> None:
-        skill_directory = root / "skills" / "datasage"
+        skill_directory = root / "skills" / "datasage" / "datasage"
         skill_directory.mkdir(parents=True)
         (skill_directory / "SKILL.md").write_bytes(payload)
 
@@ -454,7 +454,7 @@ class GitGovernedSkillTests(unittest.TestCase):
         self.assertIn("The DataSage plugin owns metric definitions", normalized)
         self.assertIn("permissions", normalized)
         self.assertIn("If one branch fails", (
-            PROFILE_ROOT / "skills/datasage/SKILL.md"
+            PROFILE_ROOT / "skills/datasage/datasage/SKILL.md"
         ).read_text(encoding="utf-8"))
         self.assertNotIn("DATA_ENTITLEMENT_DENIED", normalized)
 

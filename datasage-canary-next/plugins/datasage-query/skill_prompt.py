@@ -6,7 +6,7 @@ from pathlib import Path
 import stat
 
 
-MAIN_SKILL_PATH = "skills/datasage/SKILL.md"
+MAIN_SKILL_PATH = "skills/datasage/datasage/SKILL.md"
 _MAX_MAIN_SKILL_BYTES = 64 * 1024
 
 
@@ -43,6 +43,7 @@ def load_main_skill(profile_root: Path | None = None) -> str:
         for candidate in (
             root / "skills",
             root / "skills" / "datasage",
+            root / "skills" / "datasage" / "datasage",
             skill_path,
         ):
             if _is_reparse(candidate):

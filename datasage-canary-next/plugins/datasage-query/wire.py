@@ -297,6 +297,26 @@ def _query_answer_constraints(
     ]
     reconciliation_missing: list[str] = []
     benchmark_request_ids: list[str] = []
+    in_progress_periods: list[str] = []
+    coverage_mismatches: list[str] = []
+    for result in results:
+        request_id = result.get("request_id")
+        period = result.get("applied_time_range")
+        if not isinstance(request_id, str) or not isinstance(period, Mapping):
+            continue
+        period_nodes = (
+            [period]
+            if "period_state" in period
+            else [value for value in period.values() if isinstance(value, Mapping)]
+        )
+        if any(node.get("period_state") == "in_progress" for node in period_nodes):
+            in_progress_periods.append(request_id)
+        compatibility = period.get("comparison_compatibility")
+        if (
+            isinstance(compatibility, Mapping)
+            and compatibility.get("status") != "compatible"
+        ):
+            coverage_mismatches.append(request_id)
     for request_id, item in items.items():
         limitations = item.get("limitations")
         limitations = limitations if isinstance(limitations, list) else []
@@ -353,6 +373,17 @@ def _query_answer_constraints(
             "rule": (
                 "Cross-metric comparisons require compatible period, population, "
                 "unit, currency, filters, and business scope."
+            ),
+        },
+        "period_coverage": {
+            "request_ids": sorted(set(in_progress_periods)),
+            "comparison_mismatch_request_ids": sorted(
+                set(coverage_mismatches)
+            ),
+            "rule": (
+                "An in-progress window is incomplete; query date is not source "
+                "freshness. Coverage mismatch allows arithmetic, not a formal "
+                "trend or final-period judgment."
             ),
         },
     }
@@ -594,6 +625,16 @@ def _partial_results_payload(
                     value["benchmark_request_ids"] = [
                         request_id
                         for request_id in value["benchmark_request_ids"]
+                        if request_id in request_ids
+                    ]
+                if isinstance(value, dict) and isinstance(
+                    value.get("comparison_mismatch_request_ids"), list
+                ):
+                    value["comparison_mismatch_request_ids"] = [
+                        request_id
+                        for request_id in value[
+                            "comparison_mismatch_request_ids"
+                        ]
                         if request_id in request_ids
                     ]
             benchmark = filtered_constraints.get("benchmark_missing")

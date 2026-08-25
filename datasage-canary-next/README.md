@@ -6,7 +6,7 @@ Git 只跟踪 `distribution_owned` 发行文件、测试、文档和 release rec
 `.env`、认证信息、状态库、会话、日志、Memory 及其他运行数据必须保持忽略，
 不得使用 `git add -f` 提交这些内容。
 
-当前版本：`0.15.0-rc2`  
+当前版本：`0.15.0-rc3`
 发行内容 SHA-256：`551382439ab3c00bb82ae36827d7f50c3e7e61df7103e6f101ecf785c675f30d`
 
 ## 推荐流程

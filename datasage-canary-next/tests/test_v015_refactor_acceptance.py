@@ -256,7 +256,9 @@ class ReleaseAndHostBoundaryAcceptanceTests(unittest.TestCase):
         plugin = yaml.safe_load(
             (PLUGIN_ROOT / "plugin.yaml").read_text(encoding="utf-8")
         )
-        skill_text = (PROFILE_ROOT / "skills" / "datasage" / "SKILL.md").read_text(
+        skill_text = (
+            PROFILE_ROOT / "skills" / "datasage" / "datasage" / "SKILL.md"
+        ).read_text(
             encoding="utf-8"
         )
         _, skill_frontmatter, _ = skill_text.split("---", 2)

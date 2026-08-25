@@ -71,4 +71,6 @@ skills/common-data-foundation/references/*
 !skills/common-data-foundation/references/expert-playbooks.yaml
 !skills/common-data-foundation/references/query-rules.md
 skills/datasage/*
-!skills/datasage/SKILL.md
+!skills/datasage/datasage/
+skills/datasage/datasage/*
+!skills/datasage/datasage/SKILL.md

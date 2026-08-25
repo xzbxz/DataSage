@@ -19,6 +19,7 @@ datasage-canary-next/*
 !datasage-canary-next/skills/customer-risk-query/
 !datasage-canary-next/skills/customer-risk-query/references/
 !datasage-canary-next/skills/datasage/
+!datasage-canary-next/skills/datasage/datasage/
 !datasage-canary-next/skills/datasage/datasage-query-patterns/
 !datasage-canary-next/skills/delivery-query/
 !datasage-canary-next/skills/delivery-query/references/
@@ -104,6 +105,7 @@ datasage-canary-next/*
 !datasage-canary-next/plugins/datasage-query/wire.py
 !datasage-canary-next/profile.yaml
 !datasage-canary-next/release/datasage-v015-rc2-release-receipt.json
+!datasage-canary-next/release/datasage-v015-rc3-release-receipt.json
 !datasage-canary-next/skills/common-data-foundation/references/answer-boundary.md
 !datasage-canary-next/skills/common-data-foundation/references/entity-rules.md
 !datasage-canary-next/skills/common-data-foundation/references/expert-playbooks.yaml
@@ -111,7 +113,7 @@ datasage-canary-next/*
 !datasage-canary-next/skills/common-data-foundation/SKILL.md
 !datasage-canary-next/skills/customer-risk-query/references/planner-contract.yaml
 !datasage-canary-next/skills/datasage/datasage-query-patterns/SKILL.md
-!datasage-canary-next/skills/datasage/SKILL.md
+!datasage-canary-next/skills/datasage/datasage/SKILL.md
 !datasage-canary-next/skills/delivery-query/references/planner-contract.yaml
 !datasage-canary-next/skills/inventory-query/references/planner-contract.yaml
 !datasage-canary-next/skills/receipt-query/references/planner-contract.yaml

@@ -280,6 +280,29 @@ def _limitations(
         and _reconciliation_status(result) != "reconciled"
     ):
         limitations.append("STRUCTURAL_CONTRIBUTION_NOT_RECONCILED")
+    period = result.get("applied_time_range")
+    if isinstance(period, Mapping):
+        compatibility = period.get("comparison_compatibility")
+        if isinstance(compatibility, Mapping):
+            reasons = compatibility.get("reason_codes")
+            if isinstance(reasons, list):
+                limitations.extend(
+                    str(reason)
+                    for reason in reasons
+                    if isinstance(reason, str) and reason
+                )
+        period_states = [
+            item.get("period_state")
+            for item in (
+                [period]
+                if "period_state" in period
+                else [value for value in period.values() if isinstance(value, Mapping)]
+            )
+        ]
+        if "in_progress" in period_states:
+            limitations.append("PERIOD_IN_PROGRESS")
+        if "not_started" in period_states:
+            limitations.append("PERIOD_NOT_STARTED")
     return sorted(set(limitations))
 
 
@@ -601,6 +624,18 @@ def _claim_is_validly_sealed(claim: Mapping[str, Any]) -> bool:
     )
 
 
+def _has_calendar_period_evidence(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    if value.get("version") == "calendar-period-evidence/v1":
+        return True
+    return any(
+        _has_calendar_period_evidence(item)
+        for item in value.values()
+        if isinstance(item, Mapping)
+    )
+
+
 def claim_is_valid_for_result(
     claim: Mapping[str, Any],
     result: Mapping[str, Any],
@@ -612,6 +647,7 @@ def claim_is_valid_for_result(
     scope_fingerprint = result.get("scope_fingerprint")
     projection_fingerprint = result.get("projection_fingerprint")
     truncated = result.get("truncated")
+    applied_time_range = result.get("applied_time_range")
     return (
         _claim_is_validly_sealed(claim)
         and isinstance(request_id, str)
@@ -628,6 +664,13 @@ def claim_is_valid_for_result(
         and claim.get("projection_fingerprint") == projection_fingerprint
         and isinstance(truncated, bool)
         and claim.get("source_truncated") is truncated
+        and (
+            not _has_calendar_period_evidence(applied_time_range)
+            or (
+                isinstance(applied_time_range, Mapping)
+                and claim.get("period") == applied_time_range
+            )
+        )
     )
 
 

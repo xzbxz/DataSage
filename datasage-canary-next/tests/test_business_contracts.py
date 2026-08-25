@@ -8,6 +8,7 @@ import json
 import importlib
 import os
 from pathlib import Path
+import subprocess
 import sys
 import types
 import unittest
@@ -29,6 +30,7 @@ references = importlib.import_module(f"{TEST_PACKAGE}.references")
 schemas = importlib.import_module(f"{TEST_PACKAGE}.schemas")
 skill_prompt = importlib.import_module(f"{TEST_PACKAGE}.skill_prompt")
 tools = importlib.import_module(f"{TEST_PACKAGE}.tools")
+wire = importlib.import_module(f"{TEST_PACKAGE}.wire")
 runtime_health = importlib.import_module(f"{TEST_PACKAGE}.runtime_health")
 canary_transcript_adapter = importlib.import_module(
     f"{TEST_PACKAGE}.e2e.canary_transcript_adapter"
@@ -614,7 +616,7 @@ class BusinessContractTests(unittest.TestCase):
     def test_user_visible_datasage_skill_survives_eager_schema_and_curation(self) -> None:
         config = yaml.safe_load((PROFILE_ROOT / "config.yaml").read_text(encoding="utf-8"))
         self.assertEqual("off", config["tools"]["tool_search"]["enabled"])
-        content = (PROFILE_ROOT / "skills/datasage/SKILL.md").read_text(
+        content = (PROFILE_ROOT / "skills/datasage/datasage/SKILL.md").read_text(
             encoding="utf-8"
         )
         self.assertIn("requires_toolsets: [datasage-query]", content)
@@ -631,7 +633,7 @@ class BusinessContractTests(unittest.TestCase):
         )
 
     def test_user_visible_skills_declare_the_official_tool_search_bridge(self) -> None:
-        main_skill = (PROFILE_ROOT / "skills/datasage/SKILL.md").read_text(
+        main_skill = (PROFILE_ROOT / "skills/datasage/datasage/SKILL.md").read_text(
             encoding="utf-8"
         )
         for bridge_name in ("`tool_search`", "`tool_describe`", "`tool_call`"):
@@ -645,7 +647,7 @@ class BusinessContractTests(unittest.TestCase):
             self.assertIn(direct_tool, main_skill)
 
     def test_main_skill_top_n_disclosure_depends_on_returned_state(self) -> None:
-        content = (PROFILE_ROOT / "skills/datasage/SKILL.md").read_text(
+        content = (PROFILE_ROOT / "skills/datasage/datasage/SKILL.md").read_text(
             encoding="utf-8"
         )
         normalized = " ".join(content.split())
@@ -667,7 +669,7 @@ class BusinessContractTests(unittest.TestCase):
     def test_complete_change_finalization_reports_noncausal_structural_contribution(
         self,
     ) -> None:
-        skill = (PROFILE_ROOT / "skills/datasage/SKILL.md").read_text(
+        skill = (PROFILE_ROOT / "skills/datasage/datasage/SKILL.md").read_text(
             encoding="utf-8"
         )
         self.assertIn(
@@ -1742,13 +1744,13 @@ class BusinessContractTests(unittest.TestCase):
         self.assertIn("2026-07-01", captured["params"])
         self.assertIn("2026-08-01", captured["params"])
         result = query_payload["results"][0]
+        self.assertEqual("2026-07-01", result["applied_time_range"]["start"])
+        self.assertEqual("2026-08-01", result["applied_time_range"]["end"])
+        self.assertEqual("explicit", result["applied_time_range"]["source"])
+        self.assertEqual("completed", result["applied_time_range"]["period_state"])
         self.assertEqual(
-            {
-                "start": "2026-07-01",
-                "end": "2026-08-01",
-                "source": "explicit",
-            },
-            result["applied_time_range"],
+            "not_proven",
+            result["applied_time_range"]["coverage"]["source_freshness"],
         )
         self.assertEqual(
             "查询范围：2026-07-01 至 2026-07-31",
@@ -2140,7 +2142,7 @@ class BusinessContractTests(unittest.TestCase):
         self.assertIn("content_hash", query_description)
         self.assertIn("before any database access", query_description)
         skill_content = (
-            PROFILE_ROOT / "skills" / "datasage" / "SKILL.md"
+            PROFILE_ROOT / "skills" / "datasage" / "datasage" / "SKILL.md"
         ).read_text(encoding="utf-8")
         self.assertIn("`detail_receipt`", skill_content)
         self.assertIn("Never reuse it for another metric", skill_content)
@@ -5718,6 +5720,198 @@ class BusinessContractTests(unittest.TestCase):
         self.assertNotIn("transform_llm_output", registration)
         self.assertNotIn("post_tool_call", registration)
         self.assertNotIn("pre_llm_call", registration)
+
+    def test_period_evidence_distinguishes_calendar_progress_from_freshness(self) -> None:
+        observed_on = date(2026, 8, 25)
+        current = tools._annotate_period_evidence(
+            {"start": "2026-08-01", "end": "2026-09-01", "source": "explicit"},
+            observed_on,
+        )
+        completed = tools._annotate_period_evidence(
+            {"start": "2026-07-01", "end": "2026-08-01", "source": "explicit"},
+            observed_on,
+        )
+        future = tools._annotate_period_evidence(
+            {"start": "2026-09-01", "end": "2026-10-01", "source": "explicit"},
+            observed_on,
+        )
+
+        self.assertEqual("in_progress", current["period_state"])
+        self.assertEqual("partial", current["coverage"]["state"])
+        self.assertEqual("not_proven", current["coverage"]["source_freshness"])
+        self.assertEqual("completed", completed["period_state"])
+        self.assertEqual("complete", completed["coverage"]["state"])
+        self.assertEqual("not_started", future["period_state"])
+        self.assertEqual("none", future["coverage"]["state"])
+        self.assertIn("期间进行中", tools._scope_texts(current)[0])
+        self.assertIn("数据新鲜度未证明", tools._scope_texts(current)[0])
+
+    def test_coverage_mismatch_keeps_values_without_period_comparison_authority(self) -> None:
+        observed_on = date(2026, 8, 25)
+        mismatched_period = tools._annotate_period_evidence(
+            {
+                "current": {
+                    "start": "2026-08-01",
+                    "end": "2026-09-01",
+                    "source": "explicit",
+                },
+                "comparison": {
+                    "start": "2026-07-01",
+                    "end": "2026-08-01",
+                    "source": "explicit",
+                },
+            },
+            observed_on,
+        )
+        self.assertEqual(
+            "coverage_mismatch",
+            mismatched_period["comparison_compatibility"]["status"],
+        )
+        claims = tools._claim_ledger(
+            "period_mismatch",
+            "delivery.delivery_amount",
+            "净出库金额",
+            "人民币元",
+            [],
+            mismatched_period,
+            "scope_period_mismatch",
+            "projection_period_mismatch",
+            False,
+            [
+                {
+                    "metric_value": "90",
+                    "comparison_value": "100",
+                    "delta_value": "-10",
+                    "change_rate": "-0.1",
+                }
+            ],
+        )
+        self.assertEqual("-10", claims[0]["facts"]["delta_value"])
+        self.assertNotIn("period_comparison", claims[0]["allowed_relations"])
+        tools.evidence.seal_claim(claims[0])
+        result = {
+            "request_id": "period_mismatch",
+            "status": "success",
+            "business_metric_ref": "delivery.delivery_amount",
+            "scope_fingerprint": "scope_period_mismatch",
+            "projection_fingerprint": "projection_period_mismatch",
+            "truncated": False,
+            "applied_time_range": mismatched_period,
+        }
+        self.assertTrue(tools.evidence.claim_is_valid_for_result(claims[0], result))
+        tampered = copy.deepcopy(claims[0])
+        tampered["period"]["current"]["period_state"] = "completed"
+        tools.evidence.seal_claim(tampered)
+        self.assertFalse(tools.evidence.claim_is_valid_for_result(tampered, result))
+
+    def test_governed_arithmetic_preserves_value_and_reports_period_compatibility(self) -> None:
+        observed_on = date(2026, 8, 25)
+        left = self._scalar_calculation_result(
+            "current_open", "90", period=("2026-08-01", "2026-09-01")
+        )
+        right = self._scalar_calculation_result(
+            "prior_closed", "100", period=("2026-07-01", "2026-08-01")
+        )
+        for result in (left, right):
+            annotated = tools._annotate_period_evidence(
+                result["applied_time_range"], observed_on
+            )
+            result["applied_time_range"] = annotated
+            result["claim_ledger"][0]["period"] = copy.deepcopy(annotated)
+            tools.evidence.seal_claim(result["claim_ledger"][0])
+        calculations = tools._build_governed_calculations(
+            [
+                {
+                    "calculation_id": "open_vs_closed",
+                    "operation": "difference",
+                    "left_request_id": "current_open",
+                    "right_request_id": "prior_closed",
+                }
+            ],
+            [left, right],
+        )
+        calculation = calculations[0]
+        self.assertEqual("success", calculation["status"])
+        self.assertEqual("-10", calculation["value"])
+        self.assertEqual(
+            "coverage_mismatch",
+            calculation["analytical_compatibility"]["status"],
+        )
+        self.assertIn("PERIOD_COVERAGE_MISMATCH", calculation["limitations"])
+        projected = tools._model_wire_calculations(calculations, [left, right])[0]
+        self.assertEqual(
+            calculation["analytical_compatibility"],
+            projected["analytical_compatibility"],
+        )
+
+    def test_compact_wire_retains_period_scope_and_generic_answer_constraint(self) -> None:
+        observed_on = date(2026, 8, 25)
+        result = self._scalar_calculation_result(
+            "open_period", "90", period=("2026-08-01", "2026-09-01")
+        )
+        annotated = tools._annotate_period_evidence(
+            result["applied_time_range"], observed_on
+        )
+        result["applied_time_range"] = annotated
+        result["claim_ledger"][0]["period"] = copy.deepcopy(annotated)
+        tools.evidence.seal_claim(result["claim_ledger"][0])
+        request = {"request_id": "open_period", "analysis_intent": "performance_review"}
+        payload = {
+            "status": "success",
+            "metric_contexts": [{"business_metric_ref": "metric_calculation_fixture"}],
+            "results": [result],
+            "evidence_bundle": tools.evidence.build_evidence_bundle(
+                [request], [result]
+            ),
+        }
+        compact = wire.compact_query_payload(payload)
+        self.assertEqual(
+            "in_progress",
+            compact["results"][0]["applied_time_range"]["period_state"],
+        )
+        self.assertEqual(
+            ["open_period"],
+            compact["answer_constraints"]["period_coverage"]["request_ids"],
+        )
+        self.assertIn(
+            "PERIOD_IN_PROGRESS",
+            compact["evidence_bundle"]["items"][0]["limitations"],
+        )
+
+    def test_live_host_resolves_bare_and_qualified_datasage_skill(self) -> None:
+        host_root = PROFILE_ROOT.parent.parent / "hermes-agent"
+        host_python = host_root / "venv" / "Scripts" / "python.exe"
+        if not host_python.is_file():
+            self.skipTest("Hermes host runtime is unavailable")
+        code = (
+            "import json; from tools.skills_tool import skill_view; "
+            "print(json.dumps([json.loads(skill_view('datasage', preprocess=False)), "
+            "json.loads(skill_view('datasage:datasage', preprocess=False))], ensure_ascii=False))"
+        )
+        environment = dict(os.environ)
+        environment.update(
+            {
+                "HERMES_HOME": str(PROFILE_ROOT),
+                "PYTHONPATH": str(host_root),
+                "PYTHONDONTWRITEBYTECODE": "1",
+            }
+        )
+        completed = subprocess.run(
+            [str(host_python), "-B", "-c", code],
+            cwd=host_root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+            check=True,
+        )
+        resolved = json.loads(completed.stdout.strip().splitlines()[-1])
+        self.assertTrue(all(item.get("success") is True for item in resolved), resolved)
+        self.assertTrue(all("# DataSage" in item.get("content", "") for item in resolved))
+        main_skill = skill_prompt.load_main_skill(PROFILE_ROOT)
+        self.assertIn("Canonical skill_view name: datasage (bare name)", main_skill)
+        self.assertIn("successfully queried lenses", main_skill)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 ---
 name: datasage
-description: Use governed internal company metrics to answer, diagnose, compare, and advise.
-version: 0.15.0-rc2
+description: "Canonical skill_view name: datasage (bare name). Use governed internal company metrics to answer, diagnose, compare, and advise."
+version: 0.15.0-rc3
 author: datasage
 platforms: [windows]
 metadata:
@@ -25,23 +25,18 @@ Choose the route adaptively; this is not a mandatory call sequence.
 ## Workflow
 
 1. Frame the decision, metric meaning, period, grain, and material scope.
-2. For a broad operating-performance review, load one
-   `performance_scorecard` catalog view first. This route takes precedence over
-   metric-unknown routing: do not call an `expert_index` before the scorecard
-   call completes. Query only its material subset, keep period flows separate
-   from current/latest snapshots, and disclose that profitability is
-   unavailable rather than inferring company-wide health. After the scorecard,
-   use an `expert_index` only for a material question it leaves unresolved, and
-   state why the extra lookup is necessary.
-   Once one successful batch returns all available material evidence selected
-   from the scorecard, answer immediately. Reopen catalog or route planning only
-   for returned ambiguity, a local failure, or one necessary fact still missing.
+2. For a broad operating-performance review, load `performance_scorecard` with
+   `datasage_catalog` first; do not precede it with `expert_index`. Choose its material subset,
+   keep flows separate from snapshots, and disclose unavailable profitability.
+   Only successfully queried lenses are evidence. Unqueried, failed, or
+   unavailable material lenses remain unassessed and limit the headline.
+   Use `expert_index` afterward only for one unresolved material question.
+   Answer after a sufficient batch; reopen planning only for ambiguity, local
+   failure, or one necessary missing fact.
 3. Reuse the selected domain, metric, and valid detail receipt from the current
    session. A new turn alone is not a reason to reload them.
-4. Only when the request is not a broad operating-performance review and the
-   metric is unknown, call `datasage_catalog` with the most likely domain's
-   `expert_index`. Read a small number of candidate details before asking the
-   user when their definitions can resolve the ambiguity.
+4. Outside broad review, use the likely domain's `expert_index` only when the
+   metric is unknown. Read a few candidate details before asking the user.
 5. For an explicit period, filter, dimension, comparison, ranking, or
    decomposition, load the selected metric detail and copy that result's
    `detail_receipt` into `datasage_query`. Never reuse it for another metric.
@@ -49,9 +44,8 @@ Choose the route adaptively; this is not a mandatory call sequence.
    sequential so each result can change the next step.
 7. Call `datasage_entity_resolve` only for a genuine entity-only question,
    type ambiguity, or a query preflight error that requests resolution.
-8. Use `datasage_reference` only when metric detail lacks a necessary evidence
-   boundary or stable business definition. Read only source/section pairs
-   returned by its index; references never prescribe a fixed query plan.
+8. Use `datasage_reference` only for a missing boundary or stable definition.
+   Read indexed source/section pairs; references never prescribe a query plan.
 9. Stop when the conclusion is decision-useful or the remaining uncertainty
    cannot be resolved with available governed operations.
 
@@ -90,6 +84,11 @@ Choose the route adaptively; this is not a mandatory call sequence.
 - Health, normality, controllability, and target-status language requires a
   compatible governed target or benchmark. A prior-period change alone does
   not authorize an absolute quality judgment.
+- `period_state` and `coverage` describe evidence scope, not source freshness.
+  On mismatch, keep facts and arithmetic but not formal MoM/YoY, final trend, or
+  forecast. Query matched elapsed windows when material and expressible.
+- Uniqueness, extrema, or population-wide claims require a complete compatible
+  population. Advice and forecasts cannot exceed their supporting evidence.
 - If one branch fails, preserve valid independent evidence and state the local
   gap. Do not discard the whole answer.
 
@@ -100,8 +99,6 @@ supporting facts. For diagnosis, use: conclusion, evidence, hypotheses,
 recommended action, and uncertainty. Do not expose receipts, seals, or tool
 orchestration unless the user asks for an audit.
 
-Before drafting, check once: does each quality judgment have a compatible
-benchmark; does each cross-metric summary have proven scope compatibility; and
-does each causal explanation have returned authorization? If any answer is no,
-fall back to metric-specific facts or transparent basic arithmetic. Do not loop
-back into route planning for this check.
+Before drafting, check once: benchmark for quality, scope compatibility across
+metrics, authorization for causality, and queried-lens coverage for a broad
+headline. If any fails, use scoped facts or transparent arithmetic; do not loop.

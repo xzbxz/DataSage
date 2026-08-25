@@ -45,7 +45,9 @@ class ExpertArchitectureTests(unittest.TestCase):
         plugin = yaml.safe_load(
             (PLUGIN_ROOT / "plugin.yaml").read_text(encoding="utf-8")
         )
-        skill = _frontmatter(PROFILE_ROOT / "skills" / "datasage" / "SKILL.md")
+        skill = _frontmatter(
+            PROFILE_ROOT / "skills" / "datasage" / "datasage" / "SKILL.md"
+        )
         self.assertEqual(str(distribution["version"]), str(plugin["version"]))
         self.assertEqual(str(distribution["version"]), str(skill["version"]))
         self.assertRegex(config["model"]["default"], r"^[a-z0-9][a-z0-9._-]+$")
@@ -85,7 +87,7 @@ class ExpertArchitectureTests(unittest.TestCase):
         self.assertNotIn("frozen_wecom_skill_hook", source)
 
     def test_datasage_skill_is_compact_native_and_tool_gated(self):
-        path = PROFILE_ROOT / "skills" / "datasage" / "SKILL.md"
+        path = PROFILE_ROOT / "skills" / "datasage" / "datasage" / "SKILL.md"
         content = path.read_text(encoding="utf-8")
         metadata = _frontmatter(path)
         hermes = metadata["metadata"]["hermes"]

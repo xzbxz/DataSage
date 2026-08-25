@@ -250,6 +250,12 @@ class CompactPayloadTests(unittest.TestCase):
         )
         self.assertEqual("not_available", profitability["status"])
         self.assertEqual([], profitability["candidates"])
+        self.assertTrue(
+            any(
+                "remains unassessed" in boundary
+                for boundary in scorecard["evidence_boundaries"]
+            )
+        )
         for forbidden in (
             "recommended_bundle",
             "recipe",

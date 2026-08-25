@@ -855,11 +855,134 @@ def _calendar_month_time_range(value: Any) -> dict[str, str]:
     return {"start": start.isoformat(), "end": end.isoformat()}
 
 
+def _business_today() -> date:
+    """Return one business-clock observation date, never a source watermark."""
+
+    return datetime.now(_BUSINESS_TIME_ZONE).date()
+
+
 def _default_time_range(policy: str) -> tuple[str, str] | None:
     if policy != "current_month":
         return None
-    today = datetime.now(_BUSINESS_TIME_ZONE).date()
+    today = _business_today()
     return date(today.year, today.month, 1).isoformat(), _next_month_start(today).isoformat()
+
+
+_PERIOD_EVIDENCE_VERSION = "calendar-period-evidence/v1"
+_PERIOD_OBSERVATION_BASIS = "business_clock_query_observation"
+
+
+def _period_boundary_date(value: Any) -> date | None:
+    """Parse a governed half-open date or month boundary."""
+
+    if not isinstance(value, str):
+        return None
+    try:
+        if re.fullmatch(r"\d{4}-\d{2}", value):
+            return datetime.strptime(value, "%Y-%m").date()
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    return None
+
+
+def _period_evidence(
+    start: Any,
+    end: Any,
+    observed_on: date,
+) -> dict[str, Any] | None:
+    """Describe calendar-window progress without claiming source freshness."""
+
+    start_date = _period_boundary_date(start)
+    end_date = _period_boundary_date(end)
+    if start_date is None or end_date is None or start_date >= end_date:
+        return None
+    if end_date <= observed_on:
+        period_state = "completed"
+        coverage_state = "complete"
+    elif start_date > observed_on:
+        period_state = "not_started"
+        coverage_state = "none"
+    else:
+        period_state = "in_progress"
+        coverage_state = "partial"
+    return {
+        "version": _PERIOD_EVIDENCE_VERSION,
+        "data_as_of": observed_on.isoformat(),
+        "data_as_of_basis": _PERIOD_OBSERVATION_BASIS,
+        "period_state": period_state,
+        "coverage": {
+            "state": coverage_state,
+            "basis": "calendar_elapsed",
+            "source_freshness": "not_proven",
+        },
+    }
+
+
+def _period_state(value: Any) -> str | None:
+    if not isinstance(value, Mapping):
+        return None
+    state = value.get("period_state")
+    return state if state in {"completed", "in_progress", "not_started"} else None
+
+
+def _comparison_compatibility(value: Any) -> dict[str, Any] | None:
+    """Assess only calendar coverage; metric and population checks stay separate."""
+
+    if not isinstance(value, Mapping):
+        return None
+    current = value.get("current")
+    comparison = value.get("comparison")
+    if not isinstance(current, Mapping) or not isinstance(comparison, Mapping):
+        return None
+    current_state = _period_state(current)
+    comparison_state = _period_state(comparison)
+    if current_state is None and comparison_state is None:
+        return None
+    if current_state == comparison_state == "completed":
+        status = "compatible"
+        reasons: list[str] = []
+    elif "not_started" in {current_state, comparison_state} or None in {
+        current_state,
+        comparison_state,
+    }:
+        status = "not_assessable"
+        reasons = ["PERIOD_COMPARABILITY_NOT_ASSESSABLE"]
+    else:
+        status = "coverage_mismatch"
+        reasons = ["PERIOD_COVERAGE_MISMATCH"]
+    return {"status": status, "reason_codes": reasons}
+
+
+def _annotate_period_evidence(value: Any, observed_on: date) -> Any:
+    """Attach one batch-frozen calendar observation to every flow range."""
+
+    if not isinstance(value, Mapping):
+        return value
+    evidence = _period_evidence(value.get("start"), value.get("end"), observed_on)
+    if evidence is not None:
+        return {**dict(value), **evidence}
+    annotated = {
+        key: _annotate_period_evidence(item, observed_on)
+        if isinstance(item, Mapping)
+        else copy.deepcopy(item)
+        for key, item in value.items()
+    }
+    compatibility = _comparison_compatibility(annotated)
+    if compatibility is not None:
+        annotated["comparison_compatibility"] = compatibility
+    return annotated
+
+
+def _period_comparison_authorized(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    compatibility = value.get("comparison_compatibility")
+    return (
+        not isinstance(compatibility, Mapping)
+        or compatibility.get("status") == "compatible"
+    )
 
 
 def _metric_time_bounds(metric: Mapping[str, Any], start: str, end: str) -> tuple[str, str]:
@@ -4430,7 +4553,10 @@ def _claim_ledger(
         ):
             dimensions.append({"label": "\u671f\u95f4", "value": period_value})
         relations = ["observation"]
-        if _comparison_is_complete(facts, states):
+        if (
+            _comparison_is_complete(facts, states)
+            and _period_comparison_authorized(period)
+        ):
             relations.append("period_comparison")
         if (
             ("completion_rate" in facts or "target_amount_rmb" in facts)
@@ -6342,13 +6468,24 @@ def _scope_texts(value: Any) -> list[str]:
         try:
             if re.fullmatch(r"\d{4}-\d{2}", start) and re.fullmatch(r"\d{4}-\d{2}", end):
                 inclusive_end = datetime.strptime(end, "%Y-%m") - timedelta(days=1)
-                return [f"{start} 至 {inclusive_end.strftime('%Y-%m')}"]
-            start_date = datetime.strptime(start, "%Y-%m-%d")
-            inclusive_end = datetime.strptime(end, "%Y-%m-%d") - timedelta(days=1)
-            return [
-                f"{start_date.strftime('%Y-%m-%d')} 至 "
-                f"{inclusive_end.strftime('%Y-%m-%d')}"
-            ]
+                rendered = f"{start} 至 {inclusive_end.strftime('%Y-%m')}"
+            else:
+                start_date = datetime.strptime(start, "%Y-%m-%d")
+                inclusive_end = datetime.strptime(end, "%Y-%m-%d") - timedelta(days=1)
+                rendered = (
+                    f"{start_date.strftime('%Y-%m-%d')} 至 "
+                    f"{inclusive_end.strftime('%Y-%m-%d')}"
+                )
+            observed_on = value.get("data_as_of")
+            if value.get("period_state") == "in_progress" and isinstance(
+                observed_on, str
+            ):
+                rendered += (
+                    f"（查询日 {observed_on}，期间进行中；数据新鲜度未证明）"
+                )
+            elif value.get("period_state") == "not_started":
+                rendered += "（期间尚未开始）"
+            return [rendered]
         except ValueError:
             return []
     source = value.get("source")
@@ -7560,6 +7697,48 @@ def _build_governed_calculations(
                     "未登记单位代数时，计算操作数必须使用相同单位。",
                 )
             operation = calculation["operation"]
+            if operation == "share" or same_period:
+                analytical_compatibility = {
+                    "status": "compatible",
+                    "reason_codes": [],
+                }
+            else:
+                left_state = _period_state(left["period"])
+                right_state = _period_state(right["period"])
+                if left_state is None:
+                    left_evidence = _period_evidence(
+                        left["period"].get("start"),
+                        left["period"].get("end"),
+                        _business_today(),
+                    )
+                    left_state = _period_state(left_evidence)
+                if right_state is None:
+                    right_evidence = _period_evidence(
+                        right["period"].get("start"),
+                        right["period"].get("end"),
+                        _business_today(),
+                    )
+                    right_state = _period_state(right_evidence)
+                if left_state == right_state == "completed":
+                    analytical_compatibility = {
+                        "status": "compatible",
+                        "reason_codes": [],
+                    }
+                elif "not_started" in {left_state, right_state} or None in {
+                    left_state,
+                    right_state,
+                }:
+                    analytical_compatibility = {
+                        "status": "not_assessable",
+                        "reason_codes": [
+                            "PERIOD_COMPARABILITY_NOT_ASSESSABLE"
+                        ],
+                    }
+                else:
+                    analytical_compatibility = {
+                        "status": "coverage_mismatch",
+                        "reason_codes": ["PERIOD_COVERAGE_MISMATCH"],
+                    }
             if operation in {"difference", "ratio"}:
                 if not (same_metric_basis and same_filter_scope):
                     raise QueryFailure(
@@ -7661,10 +7840,12 @@ def _build_governed_calculations(
                 "value": _json_value(value),
                 "unit": output_unit,
                 "scope_compatibility": scope_compatibility,
+                "analytical_compatibility": analytical_compatibility,
                 "limitations": [
                     "NOT_A_REGISTERED_METRIC",
                     "NOT_STRUCTURAL_CONTRIBUTION",
                     "NOT_CAUSAL_EVIDENCE",
+                    *analytical_compatibility["reason_codes"],
                 ],
                 "error": None,
             }
@@ -7729,6 +7910,7 @@ _MODEL_WIRE_CALCULATION_FIELDS = (
     "value",
     "unit",
     "scope_compatibility",
+    "analytical_compatibility",
     "limitations",
     "error",
 )
@@ -7814,6 +7996,14 @@ def _model_wire_calculation_projection(
                 projected[field] = {
                     key: copy.deepcopy(value[key])
                     for key in _MODEL_WIRE_SCOPE_COMPATIBILITY_FIELDS
+                    if key in value
+                }
+            continue
+        if field == "analytical_compatibility":
+            if isinstance(value, Mapping):
+                projected[field] = {
+                    key: copy.deepcopy(value[key])
+                    for key in ("status", "reason_codes")
                     if key in value
                 }
             continue
@@ -8052,6 +8242,7 @@ def _run_one(
         ..., tuple[list[dict[str, Any]], bool, dict[str, Any]]
     ] | None = None,
     snapshot_group_marker: str | None = None,
+    period_observed_on: date | None = None,
     preflight_source_evidence_refs: Sequence[Any] = (),
 ) -> dict[str, Any]:
     started = started_at if started_at is not None else time.monotonic()
@@ -8158,6 +8349,10 @@ def _run_one(
             if as_of_evidence_failed:
                 public_rows = [{"metric_value": None}]
                 truncated = False
+        applied_time_range = _annotate_period_evidence(
+            applied_time_range,
+            period_observed_on or _business_today(),
+        )
         elapsed_ms = int((time.monotonic() - started) * 1000)
         metric_ref = _business_metric_ref(request)
         metric_label = _business_metric_label(scope, semantics)
@@ -8391,6 +8586,7 @@ def _run_one(
 def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
     """Validate, execute, and return structured evidence for one to ten requests."""
     batch_started = time.monotonic()
+    period_observed_on = _business_today()
     query_slot_owned = bool(_kwargs.pop("_query_slot_owned", False))
     try:
         if (
@@ -8532,6 +8728,7 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
                         "source_evidence_refs", ()
                     ),
                     started_at=request_started,
+                    period_observed_on=period_observed_on,
                 ),
             )
 
@@ -8661,6 +8858,7 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
                     started_at=entry["started_at"],
                     execute_query=execute_query,
                     snapshot_group_marker=snapshot_group_marker,
+                    period_observed_on=period_observed_on,
                 )
 
             partitions_by_overall: dict[str, list[str]] = {}
@@ -8816,6 +9014,7 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
                             "source_evidence_refs", ()
                         ),
                         started_at=request_started,
+                        period_observed_on=period_observed_on,
                     )
                 )
         _authorize_change_decompositions(prepared_contexts, results)

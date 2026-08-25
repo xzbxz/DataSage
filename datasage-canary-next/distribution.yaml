@@ -1,5 +1,5 @@
 name: datasage-canary-next
-version: 0.15.0-rc2
+version: 0.15.0-rc3
 description: Hermes-native digital expert with adaptive analysis and governed evidence
   contracts.
 hermes_requires: ==0.20.5
@@ -43,4 +43,4 @@ distribution_owned:
   - skills/common-data-foundation/references/expert-playbooks.yaml
   - skills/common-data-foundation/references/query-rules.md
   - skills/common-data-foundation/SKILL.md
-  - skills/datasage/SKILL.md
+  - skills/datasage/datasage/SKILL.md
