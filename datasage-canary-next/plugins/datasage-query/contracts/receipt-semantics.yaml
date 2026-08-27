@@ -235,7 +235,7 @@ metrics:
     disclosures:
       - id: receipt.receipt_amount.legacy-note
         mode: contract_only
-        text: "本指标为收款金额，默认人民币并包含内部客户，仅排除 A 状态。未限定用途时包含全部收款用途；显式限定用途时只说明实际筛选范围，禁止仍声称全部用途。"
+        text: &answer_note_receipt_amount "本指标为收款金额，默认人民币并包含内部客户，仅排除 A 状态。未限定用途时包含全部收款用途；显式限定用途时只说明实际筛选范围，禁止仍声称全部用途。"
     label: 收款金额（人民币）
     business_definition: 所选收款期间内的人民币收款金额；默认包含内部客户，未限定用途时包含全部收款用途。
     unit: 人民币元
@@ -251,12 +251,12 @@ metrics:
       dimensions: [customer, salesperson, department, organization]
     reasoning_topics:
       [collection_timing, credit_or_settlement, customer_mix, external_event]
-    answer_note: 本指标为收款金额，默认人民币并包含内部客户，仅排除 A 状态。未限定用途时包含全部收款用途；显式限定用途时只说明实际筛选范围，禁止仍声称全部用途。
+    answer_note: *answer_note_receipt_amount
   actual_receipt_amount:
     disclosures:
       - id: receipt.actual_receipt_amount.legacy-note
         mode: contract_only
-        text: "实收按 detail_deal_amount × exchange_rate 逐明细换算人民币后汇总。"
+        text: &answer_note_actual_receipt_amount "实收按 detail_deal_amount × exchange_rate 逐明细换算人民币后汇总。"
     label: 实收金额（人民币）
     business_definition: 所选收款期间内，按治理汇率折算后的人民币实际收款金额。
     unit: 人民币元
@@ -268,12 +268,12 @@ metrics:
     time_policy: current_month
     required_filters: {bill_status: {op: ne, value: A}}
     allowed_dimensions: *receipt_dimensions
-    answer_note: 实收按 detail_deal_amount × exchange_rate 逐明细换算人民币后汇总。
+    answer_note: *answer_note_actual_receipt_amount
   receipt_bill_count:
     disclosures:
       - id: receipt.receipt_bill_count.legacy-note
         mode: contract_only
-        text: "收款单数按 bill_id 非重复计数。"
+        text: &answer_note_receipt_bill_count "收款单数按 bill_id 非重复计数。"
     label: 收款单数
     business_definition: 所选收款期间内的非重复收款单数量。
     unit: 单
@@ -284,7 +284,7 @@ metrics:
     time_policy: current_month
     required_filters: {bill_status: {op: ne, value: A}}
     allowed_dimensions: *receipt_dimensions
-    answer_note: 收款单数按 bill_id 非重复计数。
+    answer_note: *answer_note_receipt_bill_count
   receipt_amount_original:
     disclosures:
       - id: currency.original.no-cross-currency
@@ -292,7 +292,7 @@ metrics:
         text: "原币金额必须限定单一币种或按币种分组，不同币种不得直接相加。"
       - id: receipt.receipt_amount_original.legacy-note
         mode: contract_only
-        text: "原币不能跨币种直接汇总，必须限定或按 currency_no 分组。"
+        text: &answer_note_receipt_amount_original "原币不能跨币种直接汇总，必须限定或按 currency_no 分组。"
     label: 收款金额（原币）
     business_definition: 所选收款期间内的原币收款金额；必须按币种筛选或分组，不得跨币种相加。
     unit: 原币金额（按币种分别计量）
@@ -304,7 +304,7 @@ metrics:
     time_policy: current_month
     required_filters: {bill_status: {op: ne, value: A}}
     allowed_dimensions: *receipt_dimensions
-    answer_note: 原币不能跨币种直接汇总，必须限定或按 currency_no 分组。
+    answer_note: *answer_note_receipt_amount_original
   actual_receipt_amount_original:
     disclosures:
       - id: currency.original.no-cross-currency
@@ -312,7 +312,7 @@ metrics:
         text: "原币金额必须限定单一币种或按币种分组，不同币种不得直接相加。"
       - id: receipt.actual_receipt_amount_original.legacy-note
         mode: contract_only
-        text: "原币不能跨币种直接汇总，必须限定或按 currency_no 分组。"
+        text: &answer_note_actual_receipt_amount_original "原币不能跨币种直接汇总，必须限定或按 currency_no 分组。"
     label: 实收金额（原币）
     business_definition: 所选收款期间内的原币实际收款金额；必须按币种筛选或分组，不得跨币种相加。
     unit: 原币金额（按币种分别计量）
@@ -324,7 +324,7 @@ metrics:
     time_policy: current_month
     required_filters: {bill_status: {op: ne, value: A}}
     allowed_dimensions: *receipt_dimensions
-    answer_note: 原币不能跨币种直接汇总，必须限定或按 currency_no 分组。
+    answer_note: *answer_note_actual_receipt_amount_original
   refund_amount:
     disclosures:
       - id: receipt.refund.scope
@@ -332,7 +332,7 @@ metrics:
         text: "退款范围包含内部客户并排除A状态。"
       - id: receipt.refund_amount.legacy-note
         mode: contract_only
-        text: "本指标为退款人民币金额，包含内部客户及全部退款用途，仅排除 A 状态。"
+        text: &answer_note_refund_amount "本指标为退款人民币金额，包含内部客户及全部退款用途，仅排除 A 状态。"
     label: 退款金额（人民币）
     business_definition: 所选退款期间内的人民币退款金额；默认包含内部客户，未限定用途时包含全部退款用途。
     unit: 人民币元
@@ -347,12 +347,12 @@ metrics:
       mode: additive_partition
       dimensions: [customer, salesperson, department, organization]
     reasoning_topics: [customer_mix, external_event, return_activity]
-    answer_note: 本指标为退款人民币金额，包含内部客户及全部退款用途，仅排除 A 状态。
+    answer_note: *answer_note_refund_amount
   actual_refund_amount:
     disclosures:
       - id: receipt.actual_refund_amount.legacy-note
         mode: contract_only
-        text: "实退按退款明细 detail_deal_amount × exchange_rate 逐明细换算人民币后汇总。"
+        text: &answer_note_actual_refund_amount "实退按退款明细 detail_deal_amount × exchange_rate 逐明细换算人民币后汇总。"
     label: 实退金额（人民币）
     business_definition: 所选退款期间内，按治理汇率折算后的人民币实际退款金额。
     unit: 人民币元
@@ -364,12 +364,12 @@ metrics:
     time_policy: current_month
     required_filters: {bill_status: {op: ne, value: A}}
     allowed_dimensions: *refund_dimensions
-    answer_note: 实退按退款明细 detail_deal_amount × exchange_rate 逐明细换算人民币后汇总。
+    answer_note: *answer_note_actual_refund_amount
   refund_bill_count:
     disclosures:
       - id: receipt.refund_bill_count.legacy-note
         mode: contract_only
-        text: "退款单数按 bill_id 非重复计数。"
+        text: &answer_note_refund_bill_count "退款单数按 bill_id 非重复计数。"
     label: 退款单数
     business_definition: 所选退款期间内的非重复退款单数量。
     unit: 单
@@ -380,7 +380,7 @@ metrics:
     time_policy: current_month
     required_filters: {bill_status: {op: ne, value: A}}
     allowed_dimensions: *refund_dimensions
-    answer_note: 退款单数按 bill_id 非重复计数。
+    answer_note: *answer_note_refund_bill_count
   actual_refund_amount_original:
     disclosures:
       - id: currency.original.no-cross-currency
@@ -388,7 +388,7 @@ metrics:
         text: "原币金额必须限定单一币种或按币种分组，不同币种不得直接相加。"
       - id: receipt.actual_refund_amount_original.legacy-note
         mode: contract_only
-        text: "原币不能跨币种直接汇总，必须限定或按 currency_no 分组。"
+        text: &answer_note_actual_refund_amount_original "原币不能跨币种直接汇总，必须限定或按 currency_no 分组。"
     label: 实退金额（原币）
     business_definition: 所选退款期间内的原币实际退款金额；必须按币种筛选或分组，不得跨币种相加。
     unit: 原币金额（按币种分别计量）
@@ -400,7 +400,7 @@ metrics:
     time_policy: current_month
     required_filters: {bill_status: {op: ne, value: A}}
     allowed_dimensions: *refund_dimensions
-    answer_note: 原币不能跨币种直接汇总，必须限定或按 currency_no 分组。
+    answer_note: *answer_note_actual_refund_amount_original
   refund_amount_original:
     disclosures:
       - id: currency.original.no-cross-currency
@@ -408,7 +408,7 @@ metrics:
         text: "原币金额必须限定单一币种或按币种分组，不同币种不得直接相加。"
       - id: receipt.refund_amount_original.legacy-note
         mode: contract_only
-        text: "退款原币金额按 detail_return_amount 汇总；不同币种不得直接相加。"
+        text: &answer_note_refund_amount_original "退款原币金额按 detail_return_amount 汇总；不同币种不得直接相加。"
     label: 退款金额（原币）
     business_definition: 所选退款期间内的原币退款金额；必须按币种筛选或分组，不得跨币种相加。
     unit: 原币金额（按币种分别计量）
@@ -420,7 +420,7 @@ metrics:
     time_policy: current_month
     required_filters: {bill_status: {op: ne, value: A}}
     allowed_dimensions: *refund_dimensions
-    answer_note: 退款原币金额按 detail_return_amount 汇总；不同币种不得直接相加。
+    answer_note: *answer_note_refund_amount_original
   net_receipt_amount:
     disclosures:
       - id: receipt.net.scope
@@ -428,7 +428,7 @@ metrics:
         text: "净收款为收款人民币金额减退款人民币金额；收款和退款范围均包含内部客户并排除A状态。"
       - id: receipt.net_receipt_amount.legacy-note
         mode: contract_only
-        text: "净收款由查询工具按收款人民币金额减退款人民币金额计算，不由模型在回答阶段临时相减。"
+        text: &answer_note_net_receipt_amount "净收款由查询工具按收款人民币金额减退款人民币金额计算，不由模型在回答阶段临时相减。"
     label: 净收款金额（人民币）
     business_definition: 所选期间和维度范围内，人民币收款金额扣除人民币退款金额后的净流量。
     unit: 人民币元
@@ -443,7 +443,7 @@ metrics:
       dimensions: [customer, salesperson, department, organization]
     reasoning_topics:
       [collection_timing, credit_or_settlement, customer_mix, external_event, return_activity]
-    answer_note: 净收款由查询工具按收款人民币金额减退款人民币金额计算，不由模型在回答阶段临时相减。
+    answer_note: *answer_note_net_receipt_amount
   net_receipt_amount_original:
     disclosures:
       - id: currency.original.no-cross-currency
@@ -451,7 +451,7 @@ metrics:
         text: "原币金额必须限定单一币种或按币种分组，不同币种不得直接相加。"
       - id: receipt.net_receipt_amount_original.legacy-note
         mode: contract_only
-        text: "净收款原币必须限定单一 currency_no 或按 currency_no 分组，由查询工具计算收款原币减退款原币。"
+        text: &answer_note_net_receipt_amount_original "净收款原币必须限定单一 currency_no 或按 currency_no 分组，由查询工具计算收款原币减退款原币。"
     label: 净收款金额（原币）
     business_definition: 所选期间和维度范围内，同币种收款原币金额扣除退款原币金额后的净流量；必须按币种筛选或分组，不得跨币种相加。
     unit: 原币金额（按币种分别计量）
@@ -462,4 +462,4 @@ metrics:
     currency_policy: *original_currency_policy
     time_policy: current_month
     allowed_dimensions: *common_dimensions
-    answer_note: 净收款原币必须限定单一 currency_no 或按 currency_no 分组，由查询工具计算收款原币减退款原币。
+    answer_note: *answer_note_net_receipt_amount_original

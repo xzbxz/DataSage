@@ -1,4 +1,4 @@
-"""Semantics-driven analytical query builders for DataSage Mini.
+"""Semantics-driven analytical query builders for DataSage Expert.
 
 The ordinary metric builder handles one fact and one aggregation.  This module
 owns the small set of analytical shapes that genuinely require a different
@@ -9,21 +9,18 @@ aggregated facts compared at a governed dimension.
 from __future__ import annotations
 
 import calendar
-import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime
 from typing import Any, Mapping
 
+from . import capability_contract, sql_identifiers
 
-_COLUMN = re.compile(r"^[A-Za-z0-9_]+$")
-_TABLE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$")
 _OPS = {"eq": "=", "ne": "<>", "gt": ">", "gte": ">=", "lt": "<", "lte": "<="}
 _MYSQL_MONTH_FORMAT = "%%Y-%%m"
 _PERIOD_KEY = "__period__"
-_BUSINESS_TIME_ZONE = timezone(timedelta(hours=8))
 
 
 def _business_today() -> date:
-    return datetime.now(_BUSINESS_TIME_ZONE).date()
+    return capability_contract.business_today()
 
 
 class AnalysisQueryError(ValueError):
@@ -48,37 +45,33 @@ def _max_group_dimensions(metric: Mapping[str, Any]) -> int:
 
 
 def _ensure_available(definition: Mapping[str, Any]) -> None:
-    availability = definition.get("availability")
-    if availability is None:
-        return
-    if not isinstance(availability, dict):
-        raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "分析指标可用性定义无效。")
-    status = str(availability.get("status") or "available")
-    if status == "available":
-        return
-    if status not in {"blocked", "pending_validation"}:
-        raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "分析指标包含未知可用性状态。")
-    code = availability.get("error_code")
-    message = availability.get("message")
-    if not isinstance(code, str) or not code or not isinstance(message, str) or not message:
-        raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "不可用分析路径缺少结构化错误定义。")
-    raise AnalysisQueryError(code, "该指标当前不可用于回答。")
+    try:
+        capability_contract.ensure_available(definition)
+    except capability_contract.AvailabilityContractError as exc:
+        raise AnalysisQueryError(exc.code, exc.message) from exc
 
 
 def _quote_column(value: Any) -> str:
-    if not isinstance(value, str) or _COLUMN.fullmatch(value) is None:
-        raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "分析指标包含无效字段。")
-    return f"`{value}`"
+    try:
+        return sql_identifiers.quote_identifier(value)
+    except sql_identifiers.SqlIdentifierError as exc:
+        raise AnalysisQueryError(
+            "CONTRACT_UNAVAILABLE", "分析指标包含无效字段。"
+        ) from exc
 
 
 def _qualified(alias: str, column: Any) -> str:
-    return f"{_quote_column(alias)}.{_quote_column(column)}"
+    try:
+        return sql_identifiers.qualified_identifier(alias, column)
+    except sql_identifiers.SqlIdentifierError as exc:
+        raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "分析指标包含无效字段。") from exc
 
 
 def _quote_table(value: Any) -> str:
-    if not isinstance(value, str) or _TABLE.fullmatch(value) is None:
+    try:
+        return sql_identifiers.quote_table(value)
+    except sql_identifiers.SqlIdentifierError as exc:
         raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "分析指标包含无效数据集。")
-    return ".".join(_quote_column(part) for part in value.split("."))
 
 
 def _dataset(table: Any, datasets_contract: Mapping[str, Any]) -> Mapping[str, Any]:

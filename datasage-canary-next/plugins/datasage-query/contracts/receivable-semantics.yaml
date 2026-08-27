@@ -265,7 +265,7 @@ metrics:
         text: "应收发生额包含正负应收类型，并排除A状态和内部客户。"
       - id: receivable.receivable_occurrence_amount.legacy-note
         mode: contract_only
-        text: "应收发生额包含正负应收类型，排除 A 状态和内部客户，默认人民币。"
+        text: &answer_note_receivable_occurrence_amount "应收发生额包含正负应收类型，排除 A 状态和内部客户，默认人民币。"
     label: 应收发生额（人民币）
     business_definition: 所选应收发生期间内的人民币应收发生额，包含全部应收类型，并按治理范围排除无效状态和内部客户。
     unit: 人民币元
@@ -276,7 +276,7 @@ metrics:
     time_policy: current_month
     required_filters: {bill_status: {op: ne, value: A}}
     allowed_dimensions: *occurrence_dimensions
-    answer_note: 应收发生额包含正负应收类型，排除 A 状态和内部客户，默认人民币。
+    answer_note: *answer_note_receivable_occurrence_amount
   receivable_occurrence_amount_original:
     disclosures:
       - id: currency.original.no-cross-currency
@@ -284,7 +284,7 @@ metrics:
         text: "原币金额必须限定单一币种或按币种分组，不同币种不得直接相加。"
       - id: receivable.receivable_occurrence_amount_original.legacy-note
         mode: contract_only
-        text: "原币应收必须限定单一币种或按 currency_no 分组。"
+        text: &answer_note_receivable_occurrence_amount_original "原币应收必须限定单一币种或按 currency_no 分组。"
     label: 应收发生额（原币）
     business_definition: 所选应收发生期间内的原币应收发生额；必须按币种筛选或分组，不得跨币种相加。
     unit: 原币金额（按币种分别计量）
@@ -296,12 +296,12 @@ metrics:
     time_policy: current_month
     required_filters: {bill_status: {op: ne, value: A}}
     allowed_dimensions: *occurrence_dimensions
-    answer_note: 原币应收必须限定单一币种或按 currency_no 分组。
+    answer_note: *answer_note_receivable_occurrence_amount_original
   receivable_bill_count:
     disclosures:
       - id: receivable.receivable_bill_count.legacy-note
         mode: contract_only
-        text: "应收单数按 bill_id 非重复计数。"
+        text: &answer_note_receivable_bill_count "应收单数按 bill_id 非重复计数。"
     label: 应收单数
     business_definition: 所选应收发生期间和治理范围内的非重复应收单数量。
     unit: 单
@@ -312,7 +312,7 @@ metrics:
     time_policy: current_month
     required_filters: {bill_status: {op: ne, value: A}}
     allowed_dimensions: *occurrence_dimensions
-    answer_note: 应收单数按 bill_id 非重复计数。
+    answer_note: *answer_note_receivable_bill_count
   receivable_customer_count:
     disclosures: []
     label: 应收客户数
@@ -331,6 +331,21 @@ metrics:
       status: pending_validation
       error_code: SEMANTIC_UNIT_RECONCILIATION_REQUIRED
       message: 应收商品数量尚未提供可执行单位筛选或分组，完成单位口径核验前不可用于回答。
+      owner: datasage.data_governance.receivable
+      activation_gate:
+        state: blocked
+        required_evidence:
+          - executable_unit_filter_or_group_contract
+          - production_read_only_reconciliation
+          - mixed_unit_regression
+        activation_authority: owner_and_release_review
+      review:
+        cadence: every_release_candidate
+        triggers: [source_schema_change, unit_contract_change]
+      lifecycle:
+        state: pending_validation
+        activation_effect: remains_unavailable_until_gate_passes
+        retirement_rule: retire_if_owner_or_validation_plan_removed
     label: 应收商品数量
     business_definition: 所选应收发生期间和治理范围内的应收商品业务数量。
     unit_policy: 来源业务数量单位；当前合同不提供单位拆分，不得解释为可跨单位换算的统一物理数量
@@ -358,7 +373,7 @@ metrics:
     disclosures:
       - id: receivable.open_receivable_amount.legacy-note
         mode: contract_only
-        text: "未结清按 detail_unsettled_amount > 0 判定，不使用核销状态；该指标不是当前欠款余额。"
+        text: &answer_note_open_receivable_amount "未结清按 detail_unsettled_amount > 0 判定，不使用核销状态；该指标不是当前欠款余额。"
     label: 未结清应收（人民币）
     business_definition: 当前仍有正数未结清余额的应收项目，按治理汇率折算后的人民币金额；不等同于欠款快照余额。
     unit: 人民币元
@@ -368,7 +383,7 @@ metrics:
     time_policy: current_snapshot
     required_filters: {bill_status: {op: ne, value: A}, detail_unsettled_amount: {op: gt, value: 0}}
     allowed_dimensions: *occurrence_dimensions
-    answer_note: 未结清按 detail_unsettled_amount > 0 判定，不使用核销状态；该指标不是当前欠款余额。
+    answer_note: *answer_note_open_receivable_amount
   open_receivable_amount_original:
     disclosures:
       - id: currency.original.no-cross-currency
@@ -376,7 +391,7 @@ metrics:
         text: "原币金额必须限定单一币种或按币种分组，不同币种不得直接相加。"
       - id: receivable.open_receivable_amount_original.legacy-note
         mode: contract_only
-        text: "未结清原币必须限定单一币种或按 currency_no 分组。"
+        text: &answer_note_open_receivable_amount_original "未结清原币必须限定单一币种或按 currency_no 分组。"
     label: 未结清应收（原币）
     business_definition: 当前仍有正数未结清余额的应收项目原币金额；必须按币种筛选或分组，不得跨币种相加。
     unit: 原币金额（按币种分别计量）
@@ -387,7 +402,7 @@ metrics:
     time_policy: current_snapshot
     required_filters: {bill_status: {op: ne, value: A}, detail_unsettled_amount: {op: gt, value: 0}}
     allowed_dimensions: *occurrence_dimensions
-    answer_note: 未结清原币必须限定单一币种或按 currency_no 分组。
+    answer_note: *answer_note_open_receivable_amount_original
   open_receivable_bill_count:
     disclosures: []
     label: 未结清应收单数
@@ -425,7 +440,7 @@ metrics:
     disclosures:
       - id: receivable.debt_days.legacy-note
         mode: contract_only
-        text: "欠款天数按 DATEDIFF(CURDATE(), MIN(bill_time))，仅使用正数未结清应收明细。"
+        text: &answer_note_debt_days "欠款天数按 DATEDIFF(CURDATE(), MIN(bill_time))，仅使用正数未结清应收明细。"
     label: 欠款天数
     business_definition: 从当前最早一笔正数未结清应收的发生日期到今天的自然日数。
     unit: 自然日
@@ -435,7 +450,7 @@ metrics:
     time_policy: current_snapshot
     required_filters: {bill_status: {op: ne, value: A}, detail_unsettled_amount: {op: gt, value: 0}}
     allowed_dimensions: *occurrence_dimensions
-    answer_note: 欠款天数按 DATEDIFF(CURDATE(), MIN(bill_time))，仅使用正数未结清应收明细。
+    answer_note: *answer_note_debt_days
 
   current_debt_amount:
     disclosures:
@@ -444,7 +459,7 @@ metrics:
         text: "当前欠款是最新月签名净欠款，包含正数、负数和零值；负数不代表已经确认的具体业务原因。"
       - id: receivable.current_debt_amount.legacy-note
         mode: contract_only
-        text: "当前欠款默认是最新月签名净欠款，包含正数、负数和零值；负数不解释成具体原因。"
+        text: &answer_note_current_debt_amount "当前欠款默认是最新月签名净欠款，包含正数、负数和零值；负数不解释成具体原因。"
     label: 当前净欠款（人民币）
     business_definition: 最新可用欠款快照中的人民币净欠款余额，保留正数、负数和零的业务含义。
     unit: 人民币元
@@ -455,7 +470,7 @@ metrics:
     time_policy: latest_snapshot
     required_filters: {}
     allowed_dimensions: *snapshot_dimensions
-    answer_note: 当前欠款默认是最新月签名净欠款，包含正数、负数和零值；负数不解释成具体原因。
+    answer_note: *answer_note_current_debt_amount
   current_debt_amount_original:
     disclosures:
       - id: currency.original.no-cross-currency
@@ -463,7 +478,7 @@ metrics:
         text: "原币金额必须限定单一币种或按币种分组，不同币种不得直接相加。"
       - id: receivable.current_debt_amount_original.legacy-note
         mode: contract_only
-        text: "原币欠款必须限定单一币种或按 currency_no 分组。"
+        text: &answer_note_current_debt_amount_original "原币欠款必须限定单一币种或按 currency_no 分组。"
     label: 当前净欠款（原币）
     business_definition: 最新可用欠款快照中的原币净欠款余额，保留正负值；必须按币种筛选或分组，不得跨币种相加。
     unit: 原币金额（按币种分别计量）
@@ -475,12 +490,12 @@ metrics:
     time_policy: latest_snapshot
     required_filters: {}
     allowed_dimensions: *snapshot_dimensions
-    answer_note: 原币欠款必须限定单一币种或按 currency_no 分组。
+    answer_note: *answer_note_current_debt_amount_original
   positive_debt_amount:
     disclosures:
       - id: receivable.positive_debt_amount.legacy-note
         mode: contract_only
-        text: "“哪些客户欠我们”只看 debt_amount_rmb > 0，负数和零不进入名单及排名。"
+        text: &answer_note_positive_debt_amount "“哪些客户欠我们”只看 debt_amount_rmb > 0，负数和零不进入名单及排名。"
     label: 正欠款金额（人民币）
     business_definition: 最新可用欠款快照中，仅对正数欠款客户统计的人民币欠款金额；负数和零不纳入。
     unit: 人民币元
@@ -491,12 +506,12 @@ metrics:
     time_policy: latest_snapshot
     required_filters: {debt_amount_rmb: {op: gt, value: 0}}
     allowed_dimensions: *snapshot_dimensions
-    answer_note: “哪些客户欠我们”只看 debt_amount_rmb > 0，负数和零不进入名单及排名。
+    answer_note: *answer_note_positive_debt_amount
   debt_customer_count:
     disclosures:
       - id: receivable.debt_customer_count.legacy-note
         mode: contract_only
-        text: "欠款客户数是最新快照中正欠款客户 customer_id 的非重复计数。"
+        text: &answer_note_debt_customer_count "欠款客户数是最新快照中正欠款客户 customer_id 的非重复计数。"
     label: 欠款客户数
     business_definition: 最新可用欠款快照中存在正数欠款的非重复客户数量。
     unit: 客户
@@ -507,12 +522,12 @@ metrics:
     time_policy: latest_snapshot
     required_filters: {debt_amount_rmb: {op: gt, value: 0}}
     allowed_dimensions: *snapshot_dimensions
-    answer_note: 欠款客户数是最新快照中正欠款客户 customer_id 的非重复计数。
+    answer_note: *answer_note_debt_customer_count
   debt_balance_trend:
     disclosures:
       - id: receivable.debt_balance_trend.legacy-note
         mode: contract_only
-        text: "历史欠款趋势必须显式提供月份范围，并按 bill_date 月份解释。"
+        text: &answer_note_debt_balance_trend "历史欠款趋势必须显式提供月份范围，并按 bill_date 月份解释。"
     label: 欠款余额趋势（人民币）
     business_definition: 用户明确月份范围内，各月欠款快照人民币净余额的时间序列，保留正负值。
     unit: 人民币元
@@ -525,7 +540,7 @@ metrics:
     required_time_bucket: month
     required_filters: {}
     allowed_dimensions: *snapshot_dimensions
-    answer_note: 历史欠款趋势必须显式提供月份范围，并按 bill_date 月份解释。
+    answer_note: *answer_note_debt_balance_trend
 
   aging_total_amount:
     disclosures:
@@ -534,7 +549,7 @@ metrics:
         text: "账龄总额来自账龄口径，不替代当前欠款；与欠款快照比较时必须说明覆盖差异。"
       - id: receivable.aging_total_amount.legacy-note
         mode: contract_only
-        text: "账龄总额来自账龄表，不替代当前欠款；与欠款快照比较时需说明覆盖差异。"
+        text: &answer_note_aging_total_amount "账龄总额来自账龄表，不替代当前欠款；与欠款快照比较时需说明覆盖差异。"
     label: 账龄总额（人民币）
     business_definition: 最新可用账龄快照中各账龄分档人民币金额的合计；与欠款快照是独立证据来源。
     unit: 人民币元
@@ -545,7 +560,7 @@ metrics:
     time_policy: latest_snapshot
     required_filters: {}
     allowed_dimensions: *aging_dimensions
-    answer_note: 账龄总额来自账龄表，不替代当前欠款；与欠款快照比较时需说明覆盖差异。
+    answer_note: *answer_note_aging_total_amount
   aging_total_amount_original:
     disclosures: []
     label: 账龄总额（原币）
@@ -792,7 +807,7 @@ metrics:
         text: "逾期逐笔按客户、组织和币种授信天数判断；无授信或授信天数为空的明细不计入。"
       - id: receivable.overdue_receivable_amount.legacy-note
         mode: contract_only
-        text: "逾期按客户、组织、币种授信天数逐笔判断；无授信或授信天数为空的明细不计入，需说明覆盖范围。"
+        text: &answer_note_overdue_receivable_amount "逾期按客户、组织、币种授信天数逐笔判断；无授信或授信天数为空的明细不计入，需说明覆盖范围。"
     label: 逾期应收金额（人民币）
     business_definition: 截至数据库查询日，当前正数未结清应收中超过适用授信天数的部分按治理汇率折算后的人民币金额。
     unit: 人民币元
@@ -807,7 +822,7 @@ metrics:
       required_not_null: [credit_days]
       condition: {type: date_plus_days_before_today, date_column: bill_time, days_column: credit_days}
     allowed_dimensions: *occurrence_dimensions
-    answer_note: 逾期按客户、组织、币种授信天数逐笔判断；无授信或授信天数为空的明细不计入，需说明覆盖范围。
+    answer_note: *answer_note_overdue_receivable_amount
   overdue_receivable_amount_original:
     disclosures: []
     label: 逾期应收金额（原币）
@@ -843,7 +858,7 @@ metrics:
     disclosures:
       - id: receivable.overdue_days.legacy-note
         mode: contract_only
-        text: "逾期天数是最大逐笔逾期天数；无授信或授信天数为空的客户不进入计算。"
+        text: &answer_note_overdue_days "逾期天数是最大逐笔逾期天数；无授信或授信天数为空的客户不进入计算。"
     label: 逾期天数
     business_definition: 当前正数未结清应收超过适用授信天数的最大自然日数；未超过时不作为正逾期天数。
     unit: 自然日
@@ -858,7 +873,7 @@ metrics:
       required_not_null: [credit_days]
       condition: {type: date_plus_days_before_today, date_column: bill_time, days_column: credit_days}
     allowed_dimensions: *occurrence_dimensions
-    answer_note: 逾期天数是最大逐笔逾期天数；无授信或授信天数为空的客户不进入计算。
+    answer_note: *answer_note_overdue_days
 
   excess_credit_amount:
     disclosures:
@@ -916,7 +931,7 @@ metrics:
     disclosures:
       - id: receivable.uncredited_positive_debt_amount.legacy-note
         mode: contract_only
-        text: "本指标单列无授信记录的正欠款，不与超账期金额混算。"
+        text: &answer_note_uncredited_positive_debt_amount "本指标单列无授信记录的正欠款，不与超账期金额混算。"
     label: 无授信有欠款金额（人民币）
     business_definition: 最新欠款快照中存在正数欠款、但在相同客户组织与币种范围内没有授信记录的人民币金额。
     unit: 人民币元
@@ -930,12 +945,12 @@ metrics:
       <<: *credit_policy_join
       required_missing: id
     allowed_dimensions: *snapshot_dimensions
-    answer_note: 本指标单列无授信记录的正欠款，不与超账期金额混算。
+    answer_note: *answer_note_uncredited_positive_debt_amount
   uncredited_debt_customer_count:
     disclosures:
       - id: receivable.uncredited_debt_customer_count.legacy-note
         mode: contract_only
-        text: "按 customer_id 非重复计数；同一客户多个无授信币种仍只计一个客户。"
+        text: &answer_note_uncredited_debt_customer_count "按 customer_id 非重复计数；同一客户多个无授信币种仍只计一个客户。"
     label: 无授信有欠款客户数
     business_definition: 最新欠款快照中存在正数欠款、但在相同客户组织与币种范围内没有授信记录的非重复客户数量。
     unit: 客户
@@ -949,7 +964,7 @@ metrics:
       <<: *credit_policy_join
       required_missing: id
     allowed_dimensions: *snapshot_dimensions
-    answer_note: 按 customer_id 非重复计数；同一客户多个无授信币种仍只计一个客户。
+    answer_note: *answer_note_uncredited_debt_customer_count
   credit_amount_original:
     disclosures:
       - id: currency.original.no-cross-currency
@@ -957,7 +972,7 @@ metrics:
         text: "原币金额必须限定单一币种或按币种分组，不同币种不得直接相加。"
       - id: receivable.credit_amount_original.legacy-note
         mode: contract_only
-        text: "授信金额按客户、组织、币种维护，不同币种不得直接相加；当前内部客户按客户主数据排除。"
+        text: &answer_note_credit_amount_original "授信金额按客户、组织、币种维护，不同币种不得直接相加；当前内部客户按客户主数据排除。"
     label: 授信金额（原币）
     business_definition: 当前客户组织与币种范围内维护的原币授信金额；必须按币种筛选或分组，不得跨币种相加。
     unit: 原币金额（按币种分别计量）
@@ -969,12 +984,12 @@ metrics:
     required_filters: {}
     metric_join: *current_customer_scope_join
     allowed_dimensions: *credit_dimensions
-    answer_note: 授信金额按客户、组织、币种维护，不同币种不得直接相加；当前内部客户按客户主数据排除。
+    answer_note: *answer_note_credit_amount_original
   credit_days:
     disclosures:
       - id: receivable.credit_days.legacy-note
         mode: contract_only
-        text: "查询授信天数时应限定或按客户、组织、币种分组；空值表示未知，不按零处理；当前内部客户按客户主数据排除。"
+        text: &answer_note_credit_days "查询授信天数时应限定或按客户、组织、币种分组；空值表示未知，不按零处理；当前内部客户按客户主数据排除。"
     label: 授信天数
     business_definition: 当前客户组织与币种范围内维护的授信账期天数；缺失表示未知，不按零处理。
     unit: 自然日
@@ -985,4 +1000,4 @@ metrics:
     required_filters: {}
     metric_join: *current_customer_scope_join
     allowed_dimensions: *credit_dimensions
-    answer_note: 查询授信天数时应限定或按客户、组织、币种分组；空值表示未知，不按零处理；当前内部客户按客户主数据排除。
+    answer_note: *answer_note_credit_days

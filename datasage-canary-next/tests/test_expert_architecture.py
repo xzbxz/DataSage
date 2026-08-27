@@ -11,6 +11,8 @@ from unittest import mock
 
 import yaml
 
+from plugin_registration_probe import probe_registration
+
 
 PROFILE_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = PROFILE_ROOT / "plugins" / "datasage-query"
@@ -63,26 +65,23 @@ class ExpertArchitectureTests(unittest.TestCase):
         self.assertGreater(settings["max_tool_result_chars"], 0)
 
     def test_plugin_registers_tools_without_answer_state_hooks(self):
-        source = (PLUGIN_ROOT / "__init__.py").read_text(encoding="utf-8")
         manifest = yaml.safe_load(
             (PLUGIN_ROOT / "plugin.yaml").read_text(encoding="utf-8")
         )
-        self.assertEqual(3, source.count("ctx.register_tool("))
+        _, registration = probe_registration(
+            PLUGIN_ROOT,
+            package_name="datasage_expert_architecture_registration",
+        )
         self.assertEqual(
-            [
-                "datasage_catalog",
-                "datasage_entity_resolve",
-                "datasage_query",
-            ],
-            manifest["provides_tools"],
+            set(manifest["provides_tools"]),
+            {entry["name"] for entry in registration.tools},
         )
         self.assertNotIn("provides_hooks", manifest)
-        self.assertNotIn("ctx.register_hook(", source)
-        self.assertNotIn("answer_guard", source)
-        self.assertNotIn("transform_llm_output", source)
-        self.assertNotIn("post_tool_call", source)
-        self.assertNotIn("pre_llm_call", source)
-        self.assertNotIn("frozen_wecom_skill_hook", source)
+        self.assertEqual([], registration.hooks)
+        self.assertEqual(
+            ["datasage.evidence-boundaries"],
+            [entry["id"] for entry in registration.prompt_sections],
+        )
 
     def test_datasage_skill_is_compact_native_and_tool_gated(self):
         path = SKILL_PATH

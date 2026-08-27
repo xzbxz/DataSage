@@ -38,15 +38,6 @@ def get(key: str, default: Any = None) -> Any:
     return values[key] if key in values else default
 
 
-def get_bool(key: str, default: bool = False) -> bool:
-    value = get(key, default)
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return default
-
-
 def get_int(
     key: str,
     default: int,

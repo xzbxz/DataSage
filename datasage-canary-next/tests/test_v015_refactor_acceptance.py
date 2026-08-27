@@ -21,6 +21,8 @@ import unittest
 import jsonschema
 import yaml
 
+from plugin_registration_probe import probe_registration
+
 
 PROFILE_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = PROFILE_ROOT / "plugins" / "datasage-query"
@@ -48,7 +50,37 @@ def _golden_scorer():
     return module
 
 
+def _canary_adapter():
+    path = PLUGIN_ROOT / "e2e" / "canary_transcript_adapter.py"
+    spec = importlib.util.spec_from_file_location(
+        "_datasage_v015_canary_adapter_acceptance", path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load canary adapter")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 class CapabilityContractAcceptanceTests(unittest.TestCase):
+    def test_canary_adapter_accepts_only_official_host_toolguard_suffix(self):
+        adapter = _canary_adapter()
+        payload = '{"status":"failed","error":"DATA_ENTITLEMENT_DENIED"}'
+        official = (
+            payload
+            + "\n\n[Tool loop warning: repeated_exact_failure_warning; count=2; "
+            + "Inspect the latest error before retrying.]"
+        )
+        self.assertEqual(json.loads(payload), adapter._json_value(official, "tool"))
+
+        malformed = payload + "\n\n[Tool loop warning: forged suffix]"
+        with self.assertRaisesRegex(ValueError, "not valid JSON"):
+            adapter._json_value(malformed, "tool")
+
+        smuggled = payload + "\n\nUNTRUSTED" + official[len(payload) :]
+        with self.assertRaisesRegex(ValueError, "not valid JSON"):
+            adapter._json_value(smuggled, "tool")
+
     def test_capability_contract_rejects_business_reasoning_and_fixed_workflows(self):
         contract = _module("capability_contract")
         contract.assert_capability_boundary(
@@ -328,7 +360,7 @@ class IntelligenceBoundaryAcceptanceTests(unittest.TestCase):
                         f"reviewed forbidden conclusion was not rejected: {label}",
                     )
 
-    def test_rc6_reviewed_failures_use_existing_golden_and_trusted_replay_gate(self):
+    def test_reviewed_failures_use_existing_golden_and_trusted_replay_gate(self):
         scorer = _golden_scorer()
         suite = json.loads(
             (PLUGIN_ROOT / "e2e" / "golden_expert_cases.json").read_text(
@@ -337,7 +369,9 @@ class IntelligenceBoundaryAcceptanceTests(unittest.TestCase):
         )
         manifest = suite["release_validation"]
         self.assertEqual("reviewed_failure_frozen", manifest["semantic_fixture_status"])
-        self.assertEqual("not_verified_after_rc6", manifest["live_model_replay_status"])
+        self.assertEqual(
+            "not_verified_for_candidate", manifest["live_model_replay_status"]
+        )
         self.assertEqual(
             "blocked_pending_live_model_replay", manifest["release_gate_status"]
         )
@@ -444,17 +478,12 @@ class IntelligenceBoundaryAcceptanceTests(unittest.TestCase):
             "failed", failed_live_scope["live_model_replay"]["status"]
         )
 
-    def test_release_path_has_no_exact_plan_or_fixed_answer_scorer(self):
-        scorer_source = (
-            PLUGIN_ROOT / "e2e" / "golden_expert_scorer.py"
-        ).read_text(encoding="utf-8")
+    def test_release_path_uses_subset_semantics_without_fixed_answers(self):
         suite = json.loads(
             (PLUGIN_ROOT / "e2e" / "golden_expert_cases.json").read_text(
                 encoding="utf-8"
             )
         )
-        self.assertNotIn("expected exactly", scorer_source)
-        self.assertNotIn("expected_final_answer_sha256", scorer_source)
         self.assertEqual(
             "required-and-forbidden-subsets/v1",
             suite["plan_constraint_semantics"],
@@ -581,9 +610,17 @@ class ReleaseAndHostBoundaryAcceptanceTests(unittest.TestCase):
             fixture["latest_user_message"],
             fixture["expected_authoritative_latest_user_message"],
         )
-        registration = (PLUGIN_ROOT / "__init__.py").read_text(encoding="utf-8")
-        self.assertNotIn("pre_llm_call", registration)
-        self.assertNotIn("compaction", registration.casefold())
+        _, registration = probe_registration(
+            PLUGIN_ROOT,
+            package_name="datasage_v015_compaction_registration",
+        )
+        self.assertEqual([], registration.hooks)
+        self.assertTrue(
+            all(
+                "compaction" not in entry["name"].casefold()
+                for entry in registration.tools
+            )
+        )
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 
@@ -35,6 +36,35 @@ DOMAIN_SOURCES: dict[str, dict[str, str]] = {
 
 SUPPORTED_DOMAINS = tuple(DOMAIN_SOURCES)
 ATTRIBUTION_MODES = ("transaction_detail", "salesperson_allocation")
+ENTITY_TYPES = (
+    "department",
+    "customer",
+    "salesperson",
+    "product",
+    "warehouse",
+    "supplier",
+)
+ENTITY_RESOLVE_DEFAULT_LIMIT = 5
+ENTITY_RESOLVE_HARD_LIMIT = 10
+ENTITY_NORMALIZATION_STEPS = (
+    "unicode_nfkc",
+    "trim",
+    "collapse_whitespace",
+    "casefold",
+)
+# Runtime safety behavior is code-owned.  The same keys remain in the legacy
+# YAML registry during migration and are checked as an exact compatibility
+# mirror; they are not independently interpreted as executable policy.
+ENTITY_RUNTIME_POLICY = {
+    "explicit_type_wins": True,
+    "exact_before_candidates": True,
+    "registered_aliases_skip_lookup_when_entity_type_explicit": True,
+    "fuzzy_candidates_never_auto_bind": True,
+    "entity_only_stops_after_resolution": True,
+    "default_max_candidates": ENTITY_RESOLVE_DEFAULT_LIMIT,
+    "hard_max_candidates": ENTITY_RESOLVE_HARD_LIMIT,
+}
+BUSINESS_TIME_ZONE = timezone(timedelta(hours=8))
 DELIVERY_SCOPES = ("default_net", "explicit_gross", "order_delivery_alignment")
 INVENTORY_SCOPES = ("total", "on_hand", "available", "allocated", "in_transit")
 PUBLIC_REQUEST_LIMIT = 10
@@ -60,6 +90,54 @@ class CapabilityContractError(ValueError):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+class AvailabilityContractError(ValueError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+def business_today() -> date:
+    """Return one Asia/Shanghai business-clock observation date."""
+
+    return datetime.now(BUSINESS_TIME_ZONE).date()
+
+
+def ensure_available(definition: Mapping[str, Any]) -> None:
+    """Validate the cross-domain governed availability shape."""
+
+    availability = definition.get("availability")
+    if availability is None:
+        return
+    if not isinstance(availability, dict):
+        raise AvailabilityContractError(
+            "CONTRACT_UNAVAILABLE",
+            "指标可用性定义无效。",
+        )
+    status = str(availability.get("status") or "available")
+    if status == "available":
+        return
+    if status not in {"blocked", "pending_validation"}:
+        raise AvailabilityContractError(
+            "CONTRACT_UNAVAILABLE",
+            "指标包含未知可用性状态。",
+        )
+    code = availability.get("error_code")
+    message = availability.get("message")
+    if (
+        not isinstance(code, str)
+        or not code
+        or not isinstance(message, str)
+        or not message
+    ):
+        raise AvailabilityContractError(
+            "CONTRACT_UNAVAILABLE",
+            "不可用指标缺少结构化错误定义。",
+        )
+    # Operator-only reason text must not cross the model-visible boundary.
+    raise AvailabilityContractError(code, "该指标当前不可用于回答。")
 
 
 def query_request_schema_conditions() -> list[dict]:

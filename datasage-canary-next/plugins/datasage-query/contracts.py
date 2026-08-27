@@ -1,16 +1,11 @@
-"""Read-only model-facing semantic catalog for DataSage Mini."""
+"""Read-only model-facing semantic catalog for DataSage Expert."""
 
 from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-from functools import lru_cache
-from pathlib import Path
 from typing import Any, Mapping
-
-import yaml
 
 from .capability_contract import (
     DOMAIN_SOURCES,
@@ -19,6 +14,7 @@ from .capability_contract import (
     SNAPSHOT_MONTHS_BEFORE_COMPARISON,
     assert_capability_boundary,
 )
+from . import contract_store
 from .scorecard import performance_scorecard_manifest
 
 _MODEL_PROJECTION_VERSION = "datasage-model-semantic-projection/v5"
@@ -112,40 +108,31 @@ class ContractFailure(Exception):
         self.message = message
 
 
-def _profile_root() -> Path:
-    configured = os.environ.get("HERMES_HOME", "").strip()
-    if configured:
-        return Path(configured).resolve()
-    return Path(__file__).resolve().parents[2]
-
-
-def _trusted_path(relative_path: str) -> Path:
-    root = _profile_root()
-    path = (root / relative_path).resolve()
-    try:
-        path.relative_to(root)
-    except ValueError as exc:
-        raise ContractFailure("CONTRACT_UNAVAILABLE", "语义合同路径不安全。") from exc
-    return path
-
-
-@lru_cache(maxsize=64)
-def _parse_yaml_cached(path_text: str, modified_ns: int, size: int) -> dict[str, Any]:
-    del modified_ns, size
-    value = yaml.safe_load(Path(path_text).read_text(encoding="utf-8"))
-    if not isinstance(value, dict):
-        raise ContractFailure("CONTRACT_UNAVAILABLE", "语义合同格式无效。")
-    return value
-
-
 def _read_yaml(relative_path: str) -> dict[str, Any]:
     try:
-        path = _trusted_path(relative_path)
-        stat = path.stat()
-        value = _parse_yaml_cached(str(path), stat.st_mtime_ns, stat.st_size)
-    except (OSError, yaml.YAMLError) as exc:
+        return contract_store.read_yaml(relative_path)
+    except contract_store.ContractStoreError as exc:
+        if "escapes" in exc.message:
+            raise ContractFailure(
+                "CONTRACT_UNAVAILABLE", "语义合同路径不安全。"
+            ) from exc
+        if "mapping" in exc.message:
+            raise ContractFailure(
+                "CONTRACT_UNAVAILABLE", "语义合同格式无效。"
+            ) from exc
         raise ContractFailure("CONTRACT_UNAVAILABLE", "暂时无法读取语义合同。") from exc
-    return value
+
+
+def execution_contracts(domain: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Load executor-facing datasets and semantics from the shared store."""
+
+    source = DOMAIN_SOURCES.get(domain)
+    if not isinstance(source, Mapping):
+        raise ContractFailure("CONTRACT_UNAVAILABLE", "业务域语义合同不存在。")
+    return (
+        _read_yaml("plugins/datasage-query/contracts/datasets.yaml"),
+        _read_yaml(str(source["semantics"])),
+    )
 
 
 def _query_policy_projection() -> dict[str, Any]:

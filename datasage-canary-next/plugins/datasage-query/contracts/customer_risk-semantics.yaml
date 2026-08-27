@@ -83,7 +83,7 @@ metrics:
         text: "历史结算天数仅覆盖已完成且通过异常校验的应收单，不代表当前未结算压力。"
       - id: customer-risk.average_settlement_days.legacy-note
         mode: contract_only
-        text: "按非重复应收单计算；排除结算天数为负以及结算完成后仍有正数未结余额的异常单据。"
+        text: &answer_note_average_settlement_days "按非重复应收单计算；排除结算天数为负以及结算完成后仍有正数未结余额的异常单据。"
     label: 平均实际结算天数
     business_definition: 在所选已完成结算应收单范围内，从应收发生日期到结算完成日期的自然日数平均值；未结清应收不纳入。
     unit: 自然日
@@ -100,7 +100,7 @@ metrics:
       bill_status: {op: ne, value: A}
       is_inner_cus: {op: eq, value: n}
     allowed_dimensions: *settlement_dimensions
-    answer_note: 按非重复应收单计算；排除结算天数为负以及结算完成后仍有正数未结余额的异常单据。
+    answer_note: *answer_note_average_settlement_days
 
   maximum_settlement_days:
     disclosures:
@@ -109,7 +109,7 @@ metrics:
         text: "历史结算天数仅覆盖已完成且通过异常校验的应收单，不代表当前未结算压力。"
       - id: customer-risk.maximum_settlement_days.legacy-note
         mode: contract_only
-        text: "最大值只反映已完成结算单据；不能替代当前未结算压力。"
+        text: &answer_note_maximum_settlement_days "最大值只反映已完成结算单据；不能替代当前未结算压力。"
     label: 最大实际结算天数
     business_definition: 在所选已完成结算应收单范围内，单笔实际结算自然日数的最大值；未结清应收不纳入。
     unit: 自然日
@@ -126,7 +126,7 @@ metrics:
       bill_status: {op: ne, value: A}
       is_inner_cus: {op: eq, value: n}
     allowed_dimensions: *settlement_dimensions
-    answer_note: 最大值只反映已完成结算单据；不能替代当前未结算压力。
+    answer_note: *answer_note_maximum_settlement_days
 
   settlement_days_distribution:
     disclosures:
@@ -135,7 +135,7 @@ metrics:
         text: "历史结算天数仅覆盖已完成且通过异常校验的应收单，不代表当前未结算压力。"
       - id: customer-risk.settlement_days_distribution.legacy-note
         mode: contract_only
-        text: "分布按应收单而不是明细行计数；未结算单据不进入历史结算分布。"
+        text: &answer_note_settlement_days_distribution "分布按应收单而不是明细行计数；未结算单据不进入历史结算分布。"
     label: 实际结算天数分布
     business_definition: 将所选已完成结算应收单按实际结算自然日数分档，并统计各档的非重复应收单数量。
     unit_policy: 结算时长按自然日；各分档计数单位为应收单
@@ -152,7 +152,7 @@ metrics:
       bill_status: {op: ne, value: A}
       is_inner_cus: {op: eq, value: n}
     allowed_dimensions: *settlement_dimensions
-    answer_note: 分布按应收单而不是明细行计数；未结算单据不进入历史结算分布。
+    answer_note: *answer_note_settlement_days_distribution
 
   formal_receivable_turnover_days:
     disclosures:
@@ -167,7 +167,7 @@ metrics:
         text: "正式应收周转天数按平均月末净欠款除以同期毛出库金额，再乘期间自然日数计算。"
       - id: customer-risk.formal_receivable_turnover_days.legacy-note
         mode: contract_only
-        text: "默认最近12个完整自然月并要求连续13个月末净欠款快照；没有公司目标天数，不得与30天或其他假设目标比较。"
+        text: &answer_note_formal_receivable_turnover_days "默认最近12个完整自然月并要求连续13个月末净欠款快照；没有公司目标天数，不得与30天或其他假设目标比较。"
     label: 正式应收周转天数
     business_definition: 在指定完整期间内，以平均净经营欠款与有效出库规模衡量的正式应收周转速度，结果按自然日表示。
     answer_contract:
@@ -225,7 +225,7 @@ metrics:
         debt_outputs:
           - {column: org_name, alias: org_name}
         delivery_outputs: []
-    answer_note: 默认最近12个完整自然月并要求连续13个月末净欠款快照；没有公司目标天数，不得与30天或其他假设目标比较。
+    answer_note: *answer_note_formal_receivable_turnover_days
 
   delivery_receipt_comparison:
     disclosures:
@@ -234,7 +234,7 @@ metrics:
         text: "净出库侧排除内部客户，净收款侧包含内部客户；两侧业务范围并不对称。"
       - id: customer-risk.delivery_receipt_comparison.legacy-note
         mode: contract_only
-        text: "左侧为排除内部客户的当期流量净出库，右侧为包含内部客户的净收款；这是经确认的非对称业务范围，回答必须披露。净出库小于等于零时收款覆盖率为空，不解释为零；两侧净额允许为负。"
+        text: &answer_note_delivery_receipt_comparison "左侧为排除内部客户的当期流量净出库，右侧为包含内部客户的净收款；这是经确认的非对称业务范围，回答必须披露。净出库小于等于零时收款覆盖率为空，不解释为零；两侧净额允许为负。"
     label: 出库与收款对照
     business_definition: 对照同期净出库与净收款的金额、两者差额及收款覆盖比例；两侧保留各自治理客户范围。
     unit_policy: 净出库、净收款与差额为人民币元；收款覆盖率为比例（可大于1，展示为百分比时可超过100%）
@@ -312,7 +312,7 @@ metrics:
           - {column: org_name, alias: org_name}
         right_outputs:
           - {column: org_name, alias: org_name}
-    answer_note: 左侧为排除内部客户的当期流量净出库，右侧为包含内部客户的净收款；这是经确认的非对称业务范围，回答必须披露。净出库小于等于零时收款覆盖率为空，不解释为零；两侧净额允许为负。
+    answer_note: *answer_note_delivery_receipt_comparison
 
 evidence_axes:
   exposure: [positive_debt_amount, current_debt_amount]

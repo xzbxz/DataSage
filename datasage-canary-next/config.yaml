@@ -9,7 +9,7 @@ model:
 agent:
   reasoning_effort: high
 tools:
-  # DataSage adds four non-core tools to the standard Hermes host surface.
+  # DataSage adds three non-core tools to the standard Hermes host surface.
   # Keep this small deferrable set eager: deferral added a describe/search round
   # trip to most real turns without enough schema savings to justify it.
   tool_search:
@@ -22,15 +22,10 @@ platform_toolsets:
   wecom:
     - hermes-wecom
     - datasage-query
-  cron:
-    - datasage-query
 privacy:
   redact_pii: true
 security:
   redact_secrets: true
-hooks:
-  output_spill:
-    max_chars: 16000
 plugins:
   enabled:
     - datasage-query

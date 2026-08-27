@@ -17,6 +17,8 @@ from unittest import mock
 import jsonschema
 import yaml
 
+from plugin_registration_probe import probe_registration
+
 
 PROFILE_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = PROFILE_ROOT / "plugins" / "datasage-query"
@@ -6006,14 +6008,20 @@ class BusinessContractTests(unittest.TestCase):
             self.assertNotIn(forbidden, normalized.casefold())
         self.assertTrue(SKILL_PATH.is_file())
 
-        registration = (PLUGIN_ROOT / "__init__.py").read_text(encoding="utf-8")
-        self.assertEqual(3, registration.count("ctx.register_tool("))
-        self.assertEqual(1, registration.count("ctx.register_system_prompt_section("))
-        self.assertNotIn("ctx.register_hook(", registration)
-        self.assertNotIn("answer_guard", registration)
-        self.assertNotIn("transform_llm_output", registration)
-        self.assertNotIn("post_tool_call", registration)
-        self.assertNotIn("pre_llm_call", registration)
+        _, registration = probe_registration(
+            PLUGIN_ROOT,
+            package_name="datasage_business_contract_registration",
+        )
+        self.assertEqual(
+            {
+                schemas.DATASAGE_CATALOG["name"],
+                schemas.DATASAGE_ENTITY_RESOLVE["name"],
+                schemas.DATASAGE_QUERY["name"],
+            },
+            {entry["name"] for entry in registration.tools},
+        )
+        self.assertEqual([], registration.hooks)
+        self.assertEqual(1, len(registration.prompt_sections))
 
     def test_period_evidence_distinguishes_calendar_progress_from_freshness(self) -> None:
         observed_on = date(2026, 8, 25)

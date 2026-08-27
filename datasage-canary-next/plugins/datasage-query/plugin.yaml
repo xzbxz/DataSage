@@ -1,7 +1,11 @@
 name: datasage-query
-version: "0.15.0-rc6"
+version: "0.15.0-rc7"
 manifest_version: 2
 api_version: 1
+# Python dependency ownership is deliberately single-source: PyMySQL 1.2.0 is
+# vendored under vendor/ and content-bound by the release receipt. Hermes 0.20.5
+# does not install isolated plugin dependencies, so do not add requirements.txt
+# or python_dependencies while the vendored loader remains authoritative.
 description: "Hermes-native governed business evidence and analysis tools for DataSage Expert."
 author: "datasage"
 license: "Proprietary"

@@ -8,18 +8,21 @@ import unicodedata
 from functools import lru_cache
 from typing import Any, Mapping, Sequence
 
-from . import contracts
+from . import contract_store, contracts, db_runtime, sql_identifiers
+from .capability_contract import (
+    ATTRIBUTION_MODES,
+    DOMAIN_SOURCES,
+    ENTITY_NORMALIZATION_STEPS,
+    ENTITY_RESOLVE_DEFAULT_LIMIT,
+    ENTITY_RESOLVE_HARD_LIMIT,
+    ENTITY_RUNTIME_POLICY,
+    ENTITY_TYPES,
+    SUPPORTED_DOMAINS,
+)
 
 
 _REGISTRY_PATH = "plugins/datasage-query/contracts/entity-registry.yaml"
-_DOMAINS = {
-    "delivery",
-    "receipt",
-    "receivable",
-    "target",
-    "customer_risk",
-    "inventory",
-}
+_DOMAINS = set(SUPPORTED_DOMAINS)
 _ARGUMENTS = {
     "token",
     "entity_types",
@@ -29,12 +32,7 @@ _ARGUMENTS = {
     "limit",
 }
 _SEMANTIC_PATHS = {
-    "delivery": "plugins/datasage-query/contracts/delivery-semantics.yaml",
-    "receipt": "plugins/datasage-query/contracts/receipt-semantics.yaml",
-    "receivable": "plugins/datasage-query/contracts/receivable-semantics.yaml",
-    "target": "plugins/datasage-query/contracts/target-semantics.yaml",
-    "customer_risk": "plugins/datasage-query/contracts/customer_risk-semantics.yaml",
-    "inventory": "plugins/datasage-query/contracts/inventory-semantics.yaml",
+    domain: DOMAIN_SOURCES[domain]["semantics"] for domain in SUPPORTED_DOMAINS
 }
 _REGISTRY_DEPENDENCIES = (
     _REGISTRY_PATH,
@@ -54,7 +52,7 @@ def _registry() -> dict[str, Any]:
     signature = []
     try:
         for relative_path in _REGISTRY_DEPENDENCIES:
-            stat = contracts._trusted_path(relative_path).stat()
+            stat = contract_store.trusted_path(relative_path).stat()
             signature.append((relative_path, stat.st_mtime_ns, stat.st_size))
     except OSError as exc:
         raise EntityFailure("CONTRACT_UNAVAILABLE", "实体注册表依赖不可用。") from exc
@@ -81,16 +79,17 @@ def _validate_registry(registry: Mapping[str, Any]) -> None:
     entity_types = registry["entity_types"]
     candidate_sources = registry["candidate_sources"]
     policy = registry.get("policy")
-    required_policy = {
-        "explicit_type_wins": True,
-        "exact_before_candidates": True,
-        "registered_aliases_skip_lookup_when_entity_type_explicit": True,
-        "fuzzy_candidates_never_auto_bind": True,
-        "entity_only_stops_after_resolution": True,
-    }
-    if not isinstance(policy, Mapping) or any(
-        policy.get(key) is not expected for key, expected in required_policy.items()
-    ):
+    if set(entity_types) != set(ENTITY_TYPES):
+        raise EntityFailure(
+            "CONTRACT_UNAVAILABLE",
+            "实体注册表类型与公共能力合同不一致。",
+        )
+    if tuple(registry.get("normalization") or ()) != ENTITY_NORMALIZATION_STEPS:
+        raise EntityFailure(
+            "CONTRACT_UNAVAILABLE",
+            "实体标准化声明与运行时合同不一致。",
+        )
+    if not isinstance(policy, Mapping) or dict(policy) != ENTITY_RUNTIME_POLICY:
         raise EntityFailure("CONTRACT_UNAVAILABLE", "实体解析策略与运行时安全不变量不一致。")
     aliases: dict[tuple[str, str], tuple[str, tuple[str, ...]]] = {}
     input_roles: dict[str, str] = {}
@@ -435,35 +434,33 @@ def _validate_args(
         raise EntityFailure("INVALID_INPUT", "metric 必须与 domain 一起提供。")
     attribution_mode = args.get("attribution_mode")
     if attribution_mode is not None and (
-        not isinstance(attribution_mode, str)
-        or not 1 <= len(attribution_mode) <= 64
+        attribution_mode not in ATTRIBUTION_MODES
         or metric is None
     ):
         raise EntityFailure("INVALID_INPUT", "attribution_mode 必须与 metric 一起提供。")
-    registry_types = set(_registry()["entity_types"])
+    registry_types = set(ENTITY_TYPES)
     raw_types = args.get("entity_types")
     entity_types: set[str] | None = None
     if raw_types is not None:
         if (
             not isinstance(raw_types, list)
-            or not 1 <= len(raw_types) <= 6
+            or not 1 <= len(raw_types) <= len(ENTITY_TYPES)
             or any(not isinstance(item, str) or item not in registry_types for item in raw_types)
+            or len(raw_types) != len(set(raw_types))
         ):
             raise EntityFailure("INVALID_INPUT", "entity_types 包含不受支持的实体类型。")
         entity_types = set(raw_types)
-    policy = _registry().get("policy")
-    default_limit = policy.get("default_max_candidates", 5) if isinstance(policy, Mapping) else 5
-    hard_limit = policy.get("hard_max_candidates", 10) if isinstance(policy, Mapping) else 10
+    raw_limit = args.get("limit", ENTITY_RESOLVE_DEFAULT_LIMIT)
     if (
-        not isinstance(default_limit, int)
-        or not isinstance(hard_limit, int)
-        or not 1 <= default_limit <= hard_limit <= 10
+        not isinstance(raw_limit, int)
+        or isinstance(raw_limit, bool)
+        or not 1 <= raw_limit <= ENTITY_RESOLVE_HARD_LIMIT
     ):
-        raise EntityFailure("CONTRACT_UNAVAILABLE", "实体候选数量策略无效。")
-    raw_limit = args.get("limit", default_limit)
-    if not isinstance(raw_limit, int) or isinstance(raw_limit, bool):
-        raise EntityFailure("INVALID_INPUT", "limit 必须是整数。")
-    limit = max(1, min(hard_limit, raw_limit))
+        raise EntityFailure(
+            "INVALID_INPUT",
+            f"limit 必须是 1 到 {ENTITY_RESOLVE_HARD_LIMIT} 的整数。",
+        )
+    limit = raw_limit
     return token.strip(), entity_types, domain, metric, attribution_mode, limit
 
 
@@ -492,10 +489,29 @@ def _fuzzy_search_allowed(token: str) -> bool:
 def _build_candidate_query(
     token: str,
     entity_types: set[str],
-    tools: Any,
+    identifier_adapter: Any = sql_identifiers,
     *,
     exact_only: bool = False,
 ) -> tuple[str, list[Any]]:
+    raw_quote_table = getattr(identifier_adapter, "quote_table", None) or getattr(
+        identifier_adapter, "_quote_table"
+    )
+    raw_quote_identifier = getattr(
+        identifier_adapter, "quote_identifier", None
+    ) or getattr(identifier_adapter, "_quote_identifier")
+
+    def quote_table(value: str) -> str:
+        try:
+            return raw_quote_table(value)
+        except sql_identifiers.SqlIdentifierError as exc:
+            raise EntityFailure("INVALID_PLAN", "查询包含无效数据表标识。") from exc
+
+    def quote_identifier(value: str) -> str:
+        try:
+            return raw_quote_identifier(value)
+        except sql_identifiers.SqlIdentifierError as exc:
+            raise EntityFailure("INVALID_PLAN", "查询包含无效字段标识。") from exc
+
     branches: list[str] = []
     params: list[Any] = []
     sources = _registry()["candidate_sources"]
@@ -503,12 +519,12 @@ def _build_candidate_query(
         raw = sources.get(entity_type)
         if not isinstance(raw, Mapping):
             continue
-        table = tools._quote_table(str(raw.get("table") or ""))
-        id_column = tools._quote_identifier(str(raw.get("id_column") or ""))
-        display_column = tools._quote_identifier(str(raw.get("display_column") or ""))
+        table = quote_table(str(raw.get("table") or ""))
+        id_column = quote_identifier(str(raw.get("id_column") or ""))
+        display_column = quote_identifier(str(raw.get("display_column") or ""))
         code_value = raw.get("code_column")
         code_sql = (
-            f"CAST({tools._quote_identifier(str(code_value))} AS CHAR)"
+            f"CAST({quote_identifier(str(code_value))} AS CHAR)"
             if isinstance(code_value, str) and code_value
             else "NULL"
         )
@@ -516,7 +532,7 @@ def _build_candidate_query(
         if not isinstance(required, Mapping):
             raise EntityFailure("CONTRACT_UNAVAILABLE", "实体候选过滤定义无效。")
         required_sql = "".join(
-            f" AND {tools._quote_identifier(str(column))} = %s"
+            f" AND {quote_identifier(str(column))} = %s"
             for column in required
         )
         required_params = list(required.values())
@@ -535,7 +551,7 @@ def _build_candidate_query(
                 search_specs.append((code_value, True))
         search_specs.extend((str(column), False) for column in search_columns)
         for search_column, binary_identity in search_specs:
-            quoted_search = tools._quote_identifier(str(search_column))
+            quoted_search = quote_identifier(str(search_column))
             normalized_sql = f"LOWER(TRIM(CAST({quoted_search} AS CHAR)))"
             if exact_only:
                 comparison_sql = (
@@ -645,7 +661,8 @@ def _batchable_metric_lookup_keys(
 
 
 def _build_exact_lookup_batch_query(
-    lookups: Sequence[tuple[str, str, str]], tools: Any
+    lookups: Sequence[tuple[str, str, str]],
+    identifier_adapter: Any = sql_identifiers,
 ) -> tuple[str, list[Any]]:
     """Combine bounded exact-only token probes into one database round trip."""
 
@@ -655,7 +672,7 @@ def _build_exact_lookup_batch_query(
         inner_sql, inner_params = _build_candidate_query(
             token,
             {entity_type},
-            tools,
+            identifier_adapter,
             exact_only=True,
         )
         branches.append(
@@ -693,9 +710,7 @@ def prefetch_metric_entities(
             "ENTITY_PREFLIGHT_LIMIT_EXCEEDED",
             "本次请求包含过多不同实体，请缩小范围。",
         )
-    from . import tools
-
-    sql, params = _build_exact_lookup_batch_query(lookups, tools)
+    sql, params = _build_exact_lookup_batch_query(lookups)
     keys = [(entity_type, normalized) for entity_type, normalized, _token in lookups]
     try:
         rows, globally_truncated = exact_lookup(sql, params, 51 * len(lookups))
@@ -819,14 +834,12 @@ def _candidate_rows(
 def datasage_entity_resolve(args: dict[str, Any], **_kwargs: Any) -> str:
     """Resolve registered aliases or return bounded, non-binding candidates."""
 
-    from . import tools
-
     started = time.monotonic()
     try:
         token, entity_types, domain, metric, attribution_mode, limit = _validate_args(args)
         semantics = None
         if metric is not None:
-            _datasets, semantics = tools._contracts(str(domain))
+            _datasets, semantics = contracts.execution_contracts(str(domain))
             _metric_allowed_dimensions(
                 metric,
                 semantics,
@@ -907,10 +920,9 @@ def datasage_entity_resolve(args: dict[str, Any], **_kwargs: Any) -> str:
             sql, params = _build_candidate_query(
                 token,
                 source_types,
-                tools,
                 exact_only=bool(exact) or not fuzzy_allowed,
             )
-            rows, truncated = tools._execute(sql, params, 50)
+            rows, truncated = db_runtime.execute(sql, params, 50)
             candidates = _candidate_rows(
                 rows,
                 domain,
@@ -968,16 +980,25 @@ def datasage_entity_resolve(args: dict[str, Any], **_kwargs: Any) -> str:
             "error": {"code": failure.code, "message": failure.message},
             "must_stop_business_query": True,
         }
-    except tools.QueryFailure as failure:
+    except (contracts.ContractFailure, db_runtime.DatabaseRuntimeError) as failure:
         payload = {
             "status": "failed",
             "error": {"code": failure.code, "message": failure.message},
             "must_stop_business_query": True,
         }
-    except Exception:
+    except Exception as failure:
+        # The injected governed executor retains its public QueryFailure type
+        # in the orchestration layer.  Preserve that stable taxonomy without
+        # importing the higher-level module solely to name the exception.
+        code = getattr(failure, "code", None)
+        message = getattr(failure, "message", None)
         payload = {
             "status": "failed",
-            "error": {"code": "INTERNAL_ERROR", "message": "实体解析工具暂时不可用。"},
+            "error": (
+                {"code": code, "message": message}
+                if isinstance(code, str) and isinstance(message, str)
+                else {"code": "INTERNAL_ERROR", "message": "实体解析工具暂时不可用。"}
+            ),
             "must_stop_business_query": True,
         }
     payload["elapsed_ms"] = int((time.monotonic() - started) * 1000)
@@ -1152,12 +1173,9 @@ def canonicalize_metric_request(
                             "ENTITY_NOT_FOUND",
                             "未找到与输入完全一致的受控实体。",
                         )
-                    from . import tools
-
                     sql, params = _build_candidate_query(
                         value,
                         {entity_type},
-                        tools,
                         exact_only=True,
                     )
                     try:

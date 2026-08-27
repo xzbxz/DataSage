@@ -1,8 +1,9 @@
-"""Guarded query planning and execution for DataSage Mini.
+"""Guarded query planning and execution for DataSage Expert.
 
 The module intentionally exposes one handler and no lifecycle hooks. Business
-semantics live in versioned skill references; this module enforces the tool
-boundary and returns structured evidence.
+semantics live in the plugin's versioned governed contracts; Skill references
+only guide model workflow and answers. This module enforces the tool boundary
+and returns structured evidence.
 """
 
 from __future__ import annotations
@@ -11,28 +12,21 @@ import copy
 import hmac
 import json
 import hashlib
-import importlib
 import logging
 import math
-import os
 import re
-import ssl
-import sys
 import threading
 import time
 import uuid
 import calendar
 from concurrent.futures import ThreadPoolExecutor
-from functools import lru_cache
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
-
-import yaml
 
 from .analytical_queries import AnalysisQueryError, build_analytical_metric_query
 from .capability_contract import (
+    AvailabilityContractError,
     CapabilityContractError,
     DOMAIN_SOURCES,
     MATCHED_ELAPSED_COVERAGE,
@@ -41,24 +35,30 @@ from .capability_contract import (
     SNAPSHOT_MONTHS_BEFORE_COMPARISON,
     SUPPORTED_DOMAINS,
     YEAR_OVER_YEAR_COMPARISON,
+    business_today,
+    ensure_available,
     physical_request_cost,
     validate_request_field_contract,
 )
 from .db_security import (
     confirm_mysql_read_only_transaction,
     DatabaseSecurityError,
-    mysql_tls_kwargs,
     validate_mysql_source_evidence,
-    verify_mysql_read_only_grants,
-    verify_mysql_source_identity,
-    verify_mysql_tls,
 )
-from . import contracts, entities, evidence, settings
+from . import (
+    contract_store,
+    contracts,
+    db_runtime,
+    entities,
+    evidence,
+    request_contract,
+    settings,
+    sql_identifiers,
+)
 
 
 logger = logging.getLogger(__name__)
 _CAPABILITY_LOGGER = logging.getLogger(f"{__name__}.capabilities")
-_PYMYSQL_IMPORT_LOCK = threading.RLock()
 _QUERY_CONCURRENCY_LOCK = threading.Lock()
 _ACTIVE_QUERY_CALLS = 0
 
@@ -68,7 +68,6 @@ _SEMANTIC_PATHS = {
 }
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _COLUMN_IDENTIFIER = re.compile(r"^[A-Za-z0-9_]+$")
-_TABLE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$")
 _MYSQL_MONTH_FORMAT = "%%Y-%%m"
 _MYSQL_DAY_FORMAT = "%%Y-%%m-%%d"
 _QUERY_POLICY_PATH = (
@@ -118,8 +117,6 @@ _ORDER_DELIVERY_ALIGNMENT_METRICS = {
     "delivery_order_count",
 }
 _INVENTORY_SCOPES = {"total", "on_hand", "available", "allocated", "in_transit"}
-_MAX_METRIC_FILTERS = 12
-_MAX_FILTER_VALUES = 50
 _SNAPSHOT_TIME_SOURCES = {
     "latest_snapshot",
     "latest_non_null_snapshot",
@@ -157,7 +154,6 @@ _INTERNAL_RESULT_FIELDS = {
 }
 _DATABASE_CURRENT_DATE_EVIDENCE = "database_current_date"
 _DATABASE_QUERY_DATE_OBSERVATION = "database_query_date_observation"
-_BUSINESS_TIME_ZONE = timezone(timedelta(hours=8))
 _DETAIL_RECEIPT = re.compile(r"^[0-9a-f]{64}$")
 _DETAIL_QUALIFIER_FIELDS = {
     "time_range",
@@ -191,6 +187,8 @@ class QueryFailure(Exception):
         stage: str | None = None,
         retryable: bool | None = None,
         source_evidence_ref: Mapping[str, Any] | None = None,
+        path: str | None = None,
+        hint: str | None = None,
     ):
         super().__init__(message)
         self.code = code
@@ -198,11 +196,25 @@ class QueryFailure(Exception):
         self.timeout = timeout
         self.stage = stage
         self.retryable = retryable
+        self.path = path
+        self.hint = hint
         self.source_evidence_ref = (
             dict(source_evidence_ref)
             if isinstance(source_evidence_ref, Mapping)
             else None
         )
+
+
+def _validated_query_envelope(args: Any) -> request_contract.ValidatedQueryEnvelope:
+    try:
+        return request_contract.validate_query_envelope(args)
+    except request_contract.RequestContractError as exc:
+        raise QueryFailure(
+            exc.code,
+            exc.message,
+            path=exc.path,
+            hint=exc.hint,
+        ) from exc
 
 
 def _at_stage(failure: QueryFailure, stage: str) -> QueryFailure:
@@ -214,24 +226,10 @@ def _at_stage(failure: QueryFailure, stage: str) -> QueryFailure:
 
 
 def _ensure_metric_available(metric: Mapping[str, Any]) -> None:
-    availability = metric.get("availability")
-    if availability is None:
-        return
-    if not isinstance(availability, dict):
-        raise QueryFailure("CONTRACT_UNAVAILABLE", "指标可用性定义无效。")
-    status = str(availability.get("status") or "available")
-    if status == "available":
-        return
-    if status not in {"blocked", "pending_validation"}:
-        raise QueryFailure("CONTRACT_UNAVAILABLE", "指标包含未知可用性状态。")
-    code = availability.get("error_code")
-    message = availability.get("message")
-    if not isinstance(code, str) or not code or not isinstance(message, str) or not message:
-        raise QueryFailure("CONTRACT_UNAVAILABLE", "不可用指标缺少结构化错误定义。")
-    # Keep the operational reason in the private execution contract.  A caller
-    # that guesses a non-projected metric must not learn its pending rollout
-    # state, source wording, or business label through the model-visible error.
-    raise QueryFailure(code, "该指标当前不可用于回答。")
+    try:
+        ensure_available(metric)
+    except AvailabilityContractError as exc:
+        raise QueryFailure(exc.code, exc.message) from exc
 
 
 def _max_group_dimensions(metric: Mapping[str, Any]) -> int:
@@ -459,35 +457,17 @@ def _validate_metric_detail_gate(
     return normalized
 
 
-def _profile_root() -> Path:
-    configured = os.environ.get("HERMES_HOME", "").strip()
-    if configured:
-        return Path(configured).resolve()
-    return Path(__file__).resolve().parents[2]
-
-
-@lru_cache(maxsize=64)
-def _parse_yaml_cached(path_text: str, modified_ns: int, size: int) -> dict[str, Any]:
-    del modified_ns, size
-    value = yaml.safe_load(Path(path_text).read_text(encoding="utf-8"))
-    if not isinstance(value, dict):
-        raise QueryFailure("CONTRACT_UNAVAILABLE", "业务语义格式无效。")
-    return value
-
-
 def _read_yaml(relative_path: str) -> dict[str, Any]:
-    root = _profile_root()
-    path = (root / relative_path).resolve()
     try:
-        path.relative_to(root)
-    except ValueError as exc:
-        raise QueryFailure("CONTRACT_UNAVAILABLE", "语义文件路径不安全。") from exc
-    try:
-        stat = path.stat()
-        value = _parse_yaml_cached(str(path), stat.st_mtime_ns, stat.st_size)
-    except (OSError, yaml.YAMLError) as exc:
+        return contract_store.read_yaml(relative_path)
+    except contract_store.ContractStoreError as exc:
+        if "escapes" in exc.message:
+            raise QueryFailure(
+                "CONTRACT_UNAVAILABLE", "语义文件路径不安全。"
+            ) from exc
+        if "mapping" in exc.message:
+            raise QueryFailure("CONTRACT_UNAVAILABLE", "业务语义格式无效。") from exc
         raise QueryFailure("CONTRACT_UNAVAILABLE", "暂时无法读取业务语义。") from exc
-    return value
 
 
 def _max_metric_range_days() -> int:
@@ -543,8 +523,10 @@ def _validate_governed_request_time_range(request: Mapping[str, Any]) -> None:
 
 
 def _contracts(domain: str) -> tuple[dict[str, Any], dict[str, Any]]:
-    datasets = _read_yaml("plugins/datasage-query/contracts/datasets.yaml")
-    semantics = _read_yaml(_SEMANTIC_PATHS[domain])
+    try:
+        datasets, semantics = contracts.execution_contracts(domain)
+    except contracts.ContractFailure as exc:
+        raise QueryFailure(exc.code, exc.message, stage="contract_load") from exc
     _validate_value_contract_definitions(semantics)
     return datasets, semantics
 
@@ -807,45 +789,25 @@ def _release_query_slot() -> None:
         _ACTIVE_QUERY_CALLS -= 1
 
 
-def _connection_port() -> int:
-    """Read the connection endpoint from env without making it policy.
-
-    Fail-closed: an unset port defaults to 3306, but a non-numeric or
-    out-of-range value raises instead of silently falling back.
-    """
-
-    raw = os.environ.get("DATA_QUERY_MYSQL_PORT", "").strip()
-    if not raw:
-        return 3306
-    try:
-        value = int(raw)
-    except ValueError as exc:
-        raise QueryFailure(
-            "INVALID_INPUT",
-            "DATA_QUERY_MYSQL_PORT 不是有效端口号，请检查配置。",
-        ) from exc
-    if not 1 <= value <= 65535:
-        raise QueryFailure(
-            "INVALID_INPUT",
-            "DATA_QUERY_MYSQL_PORT 超出有效端口范围（1-65535）。",
-        )
-    return value
-
-
 def _quote_identifier(value: str) -> str:
-    if not isinstance(value, str) or _COLUMN_IDENTIFIER.fullmatch(value) is None:
+    try:
+        return sql_identifiers.quote_identifier(value)
+    except sql_identifiers.SqlIdentifierError as exc:
         raise QueryFailure("INVALID_PLAN", "查询包含无效字段标识。")
-    return f"`{value}`"
 
 
 def _quote_table(value: str) -> str:
-    if not isinstance(value, str) or _TABLE_IDENTIFIER.fullmatch(value) is None:
+    try:
+        return sql_identifiers.quote_table(value)
+    except sql_identifiers.SqlIdentifierError as exc:
         raise QueryFailure("INVALID_PLAN", "查询包含无效数据表标识。")
-    return ".".join(_quote_identifier(part) for part in value.split("."))
 
 
 def _qualified_identifier(alias: str, column: str) -> str:
-    return f"{_quote_identifier(alias)}.{_quote_identifier(column)}"
+    try:
+        return sql_identifiers.qualified_identifier(alias, column)
+    except sql_identifiers.SqlIdentifierError as exc:
+        raise QueryFailure("INVALID_PLAN", "查询包含无效字段标识。") from exc
 
 
 def _next_month_start(today: date) -> date:
@@ -878,7 +840,7 @@ def _calendar_month_time_range(value: Any) -> dict[str, str]:
 def _business_today() -> date:
     """Return one business-clock observation date, never a source watermark."""
 
-    return datetime.now(_BUSINESS_TIME_ZONE).date()
+    return business_today()
 
 
 def _default_time_range(
@@ -1230,55 +1192,131 @@ def _validate_time_bounds(
     return str(start), str(end)
 
 
-def _validate_request(request: Any) -> dict[str, Any]:
+def _validate_request(
+    request: Any,
+    *,
+    request_path: str | None = None,
+) -> dict[str, Any]:
+    def field_path(field: str | None = None) -> str | None:
+        if request_path is None:
+            return None
+        return request_path if field is None else f"{request_path}.{field}"
+
     if not isinstance(request, dict):
-        raise QueryFailure("INVALID_INPUT", "每个查询请求必须是对象。")
+        raise QueryFailure(
+            "INVALID_INPUT",
+            "每个查询请求必须是对象。",
+            path=field_path(),
+            hint="Replace this value with a request object.",
+        )
     request = dict(request)
     request_id = request.get("request_id")
     domain = request.get("domain")
     mode = request.get("mode")
     purpose = request.get("purpose")
-    if not isinstance(request_id, str) or not request_id.strip() or len(request_id) > 64:
-        raise QueryFailure("INVALID_INPUT", "request_id 无效。")
+    if not request_contract.valid_string(request_id, request_contract.REQUEST_ID):
+        raise QueryFailure(
+            "INVALID_INPUT",
+            "request_id 无效。",
+            path=field_path("request_id"),
+            hint="Use a unique non-blank request_id of at most 64 characters.",
+        )
     if domain not in _DOMAINS:
-        raise QueryFailure("INVALID_INPUT", "业务域不受支持。")
+        raise QueryFailure(
+            "INVALID_INPUT",
+            "业务域不受支持。",
+            path=field_path("domain"),
+            hint=f"Use one of: {', '.join(SUPPORTED_DOMAINS)}.",
+        )
     if mode == "dataset":
         raise QueryFailure(
             "DETAIL_CONTRACT_UNAVAILABLE",
             "当前发布版本尚未开放语义明细合同，请使用已登记指标和维度。",
         )
     if mode != "metric":
-        raise QueryFailure("INVALID_INPUT", "查询模式不受支持。")
-    if not isinstance(purpose, str) or not purpose.strip() or len(purpose) > 300:
-        raise QueryFailure("INVALID_INPUT", "查询目的无效。")
-    if set(request) - _METRIC_REQUEST_FIELDS:
-        raise QueryFailure("INVALID_INPUT", "请求包含当前模式不接受的字段。")
+        raise QueryFailure(
+            "INVALID_INPUT",
+            "查询模式不受支持。",
+            path=field_path("mode"),
+            hint="Use mode='metric'.",
+        )
+    if not request_contract.valid_string(purpose, request_contract.PURPOSE):
+        raise QueryFailure(
+            "INVALID_INPUT",
+            "查询目的无效。",
+            path=field_path("purpose"),
+            hint="Use a non-blank purpose of at most 300 characters.",
+        )
+    unexpected_fields = sorted(set(request) - _METRIC_REQUEST_FIELDS)
+    if unexpected_fields:
+        unexpected = unexpected_fields[0]
+        raise QueryFailure(
+            "INVALID_INPUT",
+            "请求包含当前模式不接受的字段。",
+            path=field_path(unexpected),
+            hint=(
+                "Move calculations to the top level beside requests."
+                if unexpected == "calculations"
+                else f"Remove unsupported request field '{unexpected}'."
+            ),
+        )
     try:
         validate_request_field_contract(request)
     except CapabilityContractError as exc:
         raise QueryFailure(exc.code, exc.message) from exc
-    if not isinstance(request.get("metric"), str):
-        raise QueryFailure("INVALID_INPUT", "指标模式缺少 metric。")
+    if not request_contract.valid_string(
+        request.get("metric"), request_contract.METRIC_CODE
+    ):
+        raise QueryFailure(
+            "INVALID_INPUT",
+            "指标模式缺少 metric。",
+            path=field_path("metric"),
+            hint="Use an exact metric code returned by datasage_catalog.",
+        )
+    dimensions = request.get("dimensions")
+    if dimensions is not None and (
+        not isinstance(dimensions, list)
+        or len(dimensions) > request_contract.MAX_GROUP_DIMENSIONS
+        or any(
+            not request_contract.valid_string(
+                dimension, request_contract.DIMENSION_CODE
+            )
+            for dimension in dimensions
+        )
+        or len(dimensions) != len(set(dimensions))
+    ):
+        raise QueryFailure(
+            "INVALID_INPUT",
+            "维度列表无效。",
+            path=field_path("dimensions"),
+            hint=(
+                f"Use at most {request_contract.MAX_GROUP_DIMENSIONS} unique governed dimension codes."
+            ),
+        )
     metric_filters = request.get("metric_filters")
     if metric_filters is not None:
         if (
             not isinstance(metric_filters, dict)
-            or len(metric_filters) > _MAX_METRIC_FILTERS
+            or len(metric_filters) > request_contract.MAX_METRIC_FILTERS
         ):
             raise QueryFailure(
                 "INVALID_INPUT",
-                f"metric_filters 最多接受 {_MAX_METRIC_FILTERS} 个受控筛选。",
+                f"metric_filters 最多接受 {request_contract.MAX_METRIC_FILTERS} 个受控筛选。",
+                path=field_path("metric_filters"),
+                hint="Use a JSON object containing only governed dimension filters.",
             )
-        for raw_value in metric_filters.values():
+        for filter_name, raw_value in metric_filters.items():
             values = raw_value if isinstance(raw_value, list) else [raw_value]
             if (
                 not values
-                or len(values) > _MAX_FILTER_VALUES
+                or len(values) > request_contract.MAX_FILTER_VALUES
                 or any(not _is_value_scalar(value) for value in values)
             ):
                 raise QueryFailure(
                     "INVALID_INPUT",
-                    f"每个指标筛选必须包含一到 {_MAX_FILTER_VALUES} 个标量值。",
+                    f"每个指标筛选必须包含一到 {request_contract.MAX_FILTER_VALUES} 个标量值。",
+                    path=field_path(f"metric_filters.{filter_name}"),
+                    hint="Use one scalar or a non-empty bounded scalar array.",
                 )
     analysis_intent = request.get("analysis_intent")
     if analysis_intent is not None and analysis_intent not in evidence.ANALYSIS_INTENTS:
@@ -1287,20 +1325,16 @@ def _validate_request(request: Any) -> dict[str, Any]:
     if evidence_role is not None and evidence_role not in evidence.EVIDENCE_ROLES:
         raise QueryFailure("INVALID_INPUT", "evidence_role 不受支持。")
     decomposition_of = request.get("decomposition_of_request_id")
-    if decomposition_of is not None and (
-        not isinstance(decomposition_of, str)
-        or not decomposition_of.strip()
-        or len(decomposition_of) > 64
+    if decomposition_of is not None and not request_contract.valid_string(
+        decomposition_of, request_contract.REQUEST_ID
     ):
         raise QueryFailure(
             "INVALID_INPUT",
             "decomposition_of_request_id 必须引用非空的同批整体请求 ID。",
         )
     target_gap_of = request.get("_target_gap_of_request_id")
-    if target_gap_of is not None and (
-        not isinstance(target_gap_of, str)
-        or not target_gap_of.strip()
-        or len(target_gap_of) > 64
+    if target_gap_of is not None and not request_contract.valid_string(
+        target_gap_of, request_contract.REQUEST_ID
     ):
         raise QueryFailure(
             "INVALID_INPUT",
@@ -1322,7 +1356,12 @@ def _validate_request(request: Any) -> dict[str, Any]:
             "start",
             "end",
         }:
-            raise QueryFailure("INVALID_INPUT", "time_range 结构无效。")
+            raise QueryFailure(
+                "INVALID_INPUT",
+                "time_range 结构无效。",
+                path=field_path("time_range"),
+                hint="Use exactly {'start': 'YYYY-MM-DD', 'end': 'YYYY-MM-DD'}.",
+            )
         start, end = time_range.get("start"), time_range.get("end")
         if not isinstance(start, str) or not isinstance(end, str):
             raise QueryFailure("INVALID_INPUT", "time_range 边界必须是字符串。")
@@ -1342,7 +1381,12 @@ def _validate_request(request: Any) -> dict[str, Any]:
     comparison = request.get("comparison")
     if comparison is not None:
         if not isinstance(comparison, Mapping):
-            raise QueryFailure("INVALID_INPUT", "comparison 结构无效。")
+            raise QueryFailure(
+                "INVALID_INPUT",
+                "comparison 结构无效。",
+                path=field_path("comparison"),
+                hint="Use a documented comparison object.",
+            )
         kind = comparison.get("kind")
         if kind == PREVIOUS_PERIOD_COMPARISON:
             if set(comparison) != {"kind"} or time_range is None:
@@ -1385,9 +1429,9 @@ def _validate_request(request: Any) -> dict[str, Any]:
         if (
             not isinstance(complete_decomposition, Mapping)
             or set(complete_decomposition) != {"dimension"}
-            or not isinstance(dimension, str)
-            or not dimension.strip()
-            or len(dimension) > 80
+            or not request_contract.valid_string(
+                dimension, request_contract.DIMENSION_CODE
+            )
         ):
             raise QueryFailure(
                 "INVALID_INPUT",
@@ -3476,179 +3520,33 @@ def _approved_column(column: Any, allowed: set[str], blocked: set[str]) -> str:
     return column
 
 
-def _validate_pymysql_module(module: Any, vendor_root: Path):
-    origin_text = str(getattr(module, "__file__", "") or "")
-    if not origin_text:
-        raise QueryFailure(
-            "DEPENDENCY_UNTRUSTED",
-            "PyMySQL 模块缺少可验证的制品来源。",
-        )
-    origin = Path(origin_text).resolve()
-    version = tuple(getattr(module, "VERSION", ())[:3])
-    connect = getattr(module, "connect", None)
-    cursors = getattr(module, "cursors", None)
-    if (
-        not origin.is_relative_to(vendor_root)
-        or version != (1, 2, 0)
-        or not callable(connect)
-        or cursors is None
-        or not hasattr(cursors, "SSDictCursor")
-    ):
-        raise QueryFailure(
-            "DEPENDENCY_UNTRUSTED",
-            "PyMySQL 来源、版本或模块完整性与制品清单不一致。",
-        )
-    return module
-
-
-def _load_pymysql():
-    vendor_root = (Path(__file__).resolve().parent / "vendor").resolve()
-    package_root = vendor_root / "pymysql"
-    if not package_root.is_dir():
-        raise QueryFailure(
-            "DEPENDENCY_UNAVAILABLE",
-            "查询组件缺少随制品分发的 PyMySQL，当前未连接数据库。",
-        )
-    with _PYMYSQL_IMPORT_LOCK:
-        loaded = sys.modules.get("pymysql")
-        if loaded is not None:
-            return _validate_pymysql_module(loaded, vendor_root)
-        sys.path.insert(0, str(vendor_root))
-        try:
-            pymysql = importlib.import_module("pymysql")
-        except ImportError as exc:
-            raise QueryFailure(
-                "DEPENDENCY_UNAVAILABLE",
-                "随制品分发的 PyMySQL 无法加载，当前未连接数据库。",
-            ) from exc
-        finally:
-            try:
-                sys.path.remove(str(vendor_root))
-            except ValueError:
-                pass
-        return _validate_pymysql_module(pymysql, vendor_root)
-
-
 def _connect(
     *,
     connect_timeout_seconds: int | None = None,
     read_timeout_seconds: int | None = None,
     timeout_seconds: int | None = None,
 ):
-    pymysql = _load_pymysql()
-
-    required = {
-        "host": os.environ.get("DATA_QUERY_MYSQL_HOST", "").strip(),
-        "database": os.environ.get("DATA_QUERY_MYSQL_DATABASE", "").strip(),
-        "user": os.environ.get("DATA_QUERY_MYSQL_USER", "").strip(),
-        "password": os.environ.get("DATA_QUERY_MYSQL_PASSWORD", ""),
-    }
-    if not all(required.values()):
-        raise QueryFailure("CONFIGURATION_MISSING", "数据库连接配置不完整。")
-    connect_timeout = _bounded_int("mysql_connect_timeout_seconds", 8, 1, 60)
-    query_timeout = _bounded_int("mysql_query_timeout_seconds", 30, 1, 300)
-    # Backward-compatible alias for source tests. Runtime call sites use the
-    # independent connect/read budgets below.
-    if timeout_seconds is not None:
-        connect_timeout = min(connect_timeout, timeout_seconds)
-        query_timeout = min(query_timeout, timeout_seconds)
-    if connect_timeout_seconds is not None:
-        connect_timeout = min(connect_timeout, connect_timeout_seconds)
-    if read_timeout_seconds is not None:
-        query_timeout = read_timeout_seconds
     try:
-        connection = pymysql.connect(
-            host=required["host"],
-            port=_connection_port(),
-            database=required["database"],
-            user=required["user"],
-            password=required["password"],
-            charset="utf8mb4",
-            autocommit=True,
-            connect_timeout=connect_timeout,
-            read_timeout=query_timeout,
-            write_timeout=query_timeout,
-            cursorclass=pymysql.cursors.SSDictCursor,
-            **mysql_tls_kwargs(),
+        return db_runtime.connect(
+            connect_timeout_seconds=connect_timeout_seconds,
+            read_timeout_seconds=read_timeout_seconds,
+            timeout_seconds=timeout_seconds,
         )
-        tls_evidence = verify_mysql_tls(connection)
-        grant_evidence = verify_mysql_read_only_grants(connection)
-        connection._datasage_security_evidence = {
-            **tls_evidence,
-            **grant_evidence,
-            "live_connection_verified": True,
+    except db_runtime.DatabaseRuntimeError as exc:
+        messages = {
+            "CONFIGURATION_MISSING": "数据库连接配置不完整。",
+            "INVALID_INPUT": "数据库连接配置无效。",
+            "DEPENDENCY_UNAVAILABLE": "查询组件缺少随制品分发的 PyMySQL，当前未连接数据库。",
+            "DEPENDENCY_UNTRUSTED": "PyMySQL 来源、版本或模块完整性与制品清单不一致。",
+            "DATABASE_TLS_CERTIFICATE_INVALID": "数据库 TLS 证书或服务端身份验证失败。",
+            "DATABASE_TLS_IDENTITY_INVALID": "数据库 TLS 证书或服务端身份验证失败。",
+            "DATABASE_TLS_NEGOTIATION_FAILED": "数据库服务端未完成强制 TLS 协商。",
         }
-        verify_mysql_source_identity(
-            connection,
-            tls_evidence=tls_evidence,
-            grant_evidence=grant_evidence,
-            configured_identity={
-                "host": required["host"],
-                "port": _connection_port(),
-                "database": required["database"],
-                "user": required["user"],
-            },
-        )
-        if tls_evidence["transport_mode"] == "plaintext":
-            logger.warning(
-                "datasage_database_plaintext_transport "
-                "production_mode=false tls_verified=false"
-            )
-        logger.info(
-            "datasage_database_security "
-            "transport_mode=%s tls_required=%s tls_configured=%s "
-            "tls_verified=%s tls_protocol=%s tls_cipher=%s "
-            "grants_verified=%s grant_policy=%s observed_privileges=%s",
-            tls_evidence["transport_mode"],
-            tls_evidence["tls_required"],
-            tls_evidence["tls_configured"],
-            tls_evidence["tls_verified"],
-            tls_evidence["tls_protocol"],
-            tls_evidence["tls_cipher"],
-            grant_evidence["grants_verified"],
-            grant_evidence.get("grant_policy", "strict_object_read_only"),
-            ",".join(
-                grant_evidence.get(
-                    "observed_privileges",
-                    grant_evidence["read_only_privileges"],
-                )
-            ),
-        )
-        return connection
-    except DatabaseSecurityError as exc:
-        if "connection" in locals():
-            connection.close()
-        raise QueryFailure(exc.code, str(exc), stage="database_security") from exc
-    except Exception as exc:
-        if "connection" in locals():
-            try:
-                connection.close()
-            except Exception:
-                pass
-        if isinstance(exc, ssl.SSLCertVerificationError):
-            detail = str(
-                getattr(exc, "verify_message", "") or exc
-            ).casefold()
-            code = (
-                "DATABASE_TLS_IDENTITY_INVALID"
-                if "hostname" in detail
-                or "ip address mismatch" in detail
-                or "doesn't match" in detail
-                else "DATABASE_TLS_CERTIFICATE_INVALID"
-            )
-            raise QueryFailure(
-                code,
-                "数据库 TLS 证书或服务端身份验证失败。",
-                stage="database_security",
-            ) from exc
-        errno = exc.args[0] if getattr(exc, "args", ()) else None
-        if errno == 2026:
-            raise QueryFailure(
-                "DATABASE_TLS_NEGOTIATION_FAILED",
-                "数据库服务端未完成强制 TLS 协商。",
-                stage="database_security",
-            ) from exc
-        raise
+        raise QueryFailure(
+            exc.code,
+            messages.get(exc.code, exc.message),
+            stage=exc.stage,
+        ) from exc
 
 
 def _json_value(value: Any) -> Any:
@@ -3857,6 +3755,17 @@ def _execute(
         sql, params, limit, deadline_at=deadline_at
     )
     return rows, truncated
+
+
+# Composition-root bridge: entities reuse the governed executor without a
+# lower-level module importing this orchestration module.  The lambda resolves
+# ``_execute`` at call time so existing monkeypatch-based compatibility tests
+# continue to intercept the boundary.
+db_runtime.install_query_executor(
+    lambda sql, params, limit, *, deadline_at=None: _execute(
+        sql, params, limit, deadline_at=deadline_at
+    )
+)
 
 
 def _database_query_failure(exc: Exception) -> QueryFailure:
@@ -4229,6 +4138,19 @@ def _retry_metadata(failure: QueryFailure) -> dict[str, Any]:
     if retry_after_seconds is not None:
         metadata["retry_after_seconds"] = retry_after_seconds
     return metadata
+
+
+def _public_error(failure: QueryFailure) -> dict[str, Any]:
+    error = {
+        "code": failure.code,
+        "message": failure.message,
+        **_retry_metadata(failure),
+    }
+    if failure.path is not None:
+        error["path"] = failure.path
+    if failure.hint is not None:
+        error["hint"] = failure.hint
+    return error
 
 
 def _business_metric_label(
@@ -7736,63 +7658,6 @@ def _model_wire_metric_contexts(
     return [contexts_by_ref[metric_ref] for metric_ref in ordered_refs]
 
 
-_CALCULATION_OPERATIONS = {"difference", "ratio", "share"}
-_CALCULATION_FIELDS = {
-    "calculation_id",
-    "operation",
-    "left_request_id",
-    "right_request_id",
-}
-
-
-def _validate_calculations(
-    raw_calculations: Any,
-    request_ids: Sequence[str],
-) -> list[dict[str, str]]:
-    if raw_calculations is None:
-        return []
-    if not isinstance(raw_calculations, list) or not 1 <= len(raw_calculations) <= 10:
-        raise QueryFailure(
-            "INVALID_INPUT",
-            "calculations 必须包含 1 到 10 个受治理计算。",
-        )
-    known_request_ids = set(request_ids)
-    normalized: list[dict[str, str]] = []
-    calculation_ids: set[str] = set()
-    for raw in raw_calculations:
-        if not isinstance(raw, Mapping) or set(raw) != _CALCULATION_FIELDS:
-            raise QueryFailure(
-                "INVALID_INPUT",
-                "每个 calculation 只接受固定操作和两个 request_id 引用。",
-            )
-        calculation = {key: raw.get(key) for key in _CALCULATION_FIELDS}
-        if any(
-            not isinstance(value, str) or not 1 <= len(value) <= 64
-            for value in calculation.values()
-        ):
-            raise QueryFailure(
-                "INVALID_INPUT",
-                "calculation 字段必须是 1 到 64 个字符的字符串。",
-            )
-        calculation_id = calculation["calculation_id"]
-        operation = calculation["operation"]
-        if operation not in _CALCULATION_OPERATIONS:
-            raise QueryFailure("INVALID_INPUT", "不支持该受治理计算操作。")
-        if calculation_id in calculation_ids:
-            raise QueryFailure("INVALID_INPUT", "calculation_id 必须唯一。")
-        if (
-            calculation["left_request_id"] not in known_request_ids
-            or calculation["right_request_id"] not in known_request_ids
-        ):
-            raise QueryFailure(
-                "INVALID_INPUT",
-                "计算操作数必须引用本批次中的 request_id。",
-            )
-        calculation_ids.add(calculation_id)
-        normalized.append(calculation)
-    return normalized
-
-
 def _calculation_failure(
     calculation: Mapping[str, str],
     failure: QueryFailure,
@@ -8566,12 +8431,15 @@ def _validate_request_plan_without_entities(
     raw_request: Any,
     *,
     observed_on: date | None = None,
+    request_path: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Validate one branch through the last database-free planning boundary."""
 
     try:
         request = _validate_inventory_metric_scope(
-            _validate_delivery_metric_scope(_validate_request(raw_request))
+            _validate_delivery_metric_scope(
+                _validate_request(raw_request, request_path=request_path)
+            )
         )
     except QueryFailure as exc:
         raise _at_stage(exc, "input_validation")
@@ -8590,6 +8458,56 @@ def _validate_request_plan_without_entities(
     except QueryFailure as exc:
         raise _at_stage(exc, "input_validation")
     return request, datasets, semantics
+
+
+def _validate_query_dispatch(
+    args: Any,
+    *,
+    observed_on: date,
+) -> request_contract.ValidatedQueryEnvelope:
+    """Finish all database-free validation before authorization/readiness."""
+
+    envelope = _validated_query_envelope(args)
+    for index, raw_request in enumerate(envelope.requests):
+        request_path = f"requests[{index}]"
+        try:
+            request, _datasets, semantics = _validate_request_plan_without_entities(
+                raw_request,
+                observed_on=observed_on,
+                request_path=request_path,
+            )
+            change_operation = request.get("complete_change_decomposition")
+            if isinstance(change_operation, Mapping):
+                _validate_complete_decomposition_capability(
+                    {"request": request, "semantics": semantics},
+                    str(change_operation.get("dimension") or ""),
+                )
+            target_operation = request.get("complete_target_gap_decomposition")
+            if isinstance(target_operation, Mapping):
+                _validate_target_gap_decomposition_capability(
+                    {"request": request, "semantics": semantics},
+                    str(target_operation.get("dimension") or ""),
+                )
+        except QueryFailure as exc:
+            if exc.path is None:
+                exc.path = (
+                    f"{request_path}.metric"
+                    if exc.code
+                    in {
+                        "METRIC_NOT_REGISTERED",
+                        "UNSUPPORTED_METRIC",
+                        "METRIC_NOT_AVAILABLE",
+                        "METRIC_DETAIL_REQUIRED",
+                    }
+                    else request_path
+                )
+            if exc.hint is None and exc.code in {
+                "METRIC_NOT_REGISTERED",
+                "UNSUPPORTED_METRIC",
+            }:
+                exc.hint = "Use an exact metric code returned by datasage_catalog."
+            raise
+    return envelope
 
 
 def _prepare_one(
@@ -9044,34 +8962,18 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
     period_observed_on = _business_today()
     query_slot_owned = bool(_kwargs.pop("_query_slot_owned", False))
     try:
-        if (
-            not isinstance(args, dict)
-            or "requests" not in args
-            or set(args) - {"requests", "calculations"}
+        validated_envelope = _kwargs.pop("_validated_query_envelope", None)
+        if validated_envelope is None:
+            validated_envelope = _validated_query_envelope(args)
+        elif not isinstance(
+            validated_envelope, request_contract.ValidatedQueryEnvelope
         ):
-            raise QueryFailure(
-                "INVALID_INPUT",
-                "查询参数只接受 requests 和可选 calculations。",
-            )
-        requests = args.get("requests")
-        if not isinstance(requests, list) or not 1 <= len(requests) <= 10:
-            raise QueryFailure("INVALID_INPUT", "requests 必须包含 1 到 10 个查询。")
-        request_ids = [
-            request.get("request_id") if isinstance(request, dict) else None
-            for request in requests
+            raise QueryFailure("INTERNAL_ERROR", "查询工具暂时不可用。")
+        requests = list(validated_envelope.requests)
+        request_ids = list(validated_envelope.request_ids)
+        calculations = [
+            dict(calculation) for calculation in validated_envelope.calculations
         ]
-        if any(
-            not isinstance(request_id, str)
-            or not 1 <= len(request_id) <= 64
-            for request_id in request_ids
-        ):
-            raise QueryFailure("INVALID_INPUT", "每个 request_id 必须是 1 到 64 个字符的字符串。")
-        if len(set(request_ids)) != len(request_ids):
-            raise QueryFailure("INVALID_INPUT", "同一次调用中的 request_id 必须唯一。")
-        calculations = _validate_calculations(
-            args.get("calculations"),
-            [str(request_id) for request_id in request_ids],
-        )
         public_requests = list(requests)
         requests, local_branch_failures = _allocate_public_request_branches(
             public_requests
@@ -9617,6 +9519,49 @@ def _readiness_retryable(reason_code: Any) -> bool:
     }
 
 
+def entitlement_guarded_datasage_query(
+    args: dict[str, Any],
+    **kwargs: Any,
+) -> str:
+    """Public composition root with validation ahead of authorization."""
+
+    observed_on = _business_today()
+    try:
+        validated_envelope = _validate_query_dispatch(
+            args,
+            observed_on=observed_on,
+        )
+    except QueryFailure as failure:
+        return json.dumps(
+            {
+                "status": "failed",
+                "request_count": 0,
+                "metric_contexts": [],
+                "results": [],
+                "error": _public_error(failure),
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+    # Authorization policy remains owned by entitlements.  This local import
+    # keeps module loading acyclic while making the public ordering explicit.
+    from . import entitlements
+
+    if not entitlements.authorized(
+        "datasage_query",
+        args,
+        validated_requests=validated_envelope.requests,
+    ):
+        return entitlements.denied_response()
+    return runtime_guarded_datasage_query(
+        args,
+        _validated_query_envelope=validated_envelope,
+        _period_observed_on=observed_on,
+        **kwargs,
+    )
+
+
 def runtime_guarded_datasage_query(
     args: dict[str, Any],
     **kwargs: Any,
@@ -9624,41 +9569,35 @@ def runtime_guarded_datasage_query(
     """Official runtime facade: keep the schema visible, then fail closed."""
 
     started = time.monotonic()
-    period_observed_on = _business_today()
+    period_observed_on = kwargs.pop("_period_observed_on", None)
+    if not isinstance(period_observed_on, date):
+        period_observed_on = _business_today()
     try:
-        if (
-            not isinstance(args, dict)
-            or "requests" not in args
-            or set(args) - {"requests", "calculations"}
+        validated_envelope = kwargs.pop("_validated_query_envelope", None)
+        if validated_envelope is None:
+            # Internal compatibility entrypoint: structural envelope checks
+            # remain here.  The model-visible composition root above performs
+            # the complete database-free business preflight before entitlement.
+            validated_envelope = _validated_query_envelope(args)
+        elif not isinstance(
+            validated_envelope,
+            request_contract.ValidatedQueryEnvelope,
         ):
-            raise QueryFailure(
-                "INVALID_INPUT",
-                "查询参数只接受 requests 和可选 calculations。",
-            )
-        requests = args.get("requests")
-        if not isinstance(requests, list) or not 1 <= len(requests) <= 10:
-            raise QueryFailure("INVALID_INPUT", "requests 必须包含 1 到 10 个查询。")
-        request_ids = [
-            request.get("request_id") if isinstance(request, dict) else None
-            for request in requests
+            raise QueryFailure("INTERNAL_ERROR", "查询工具暂时不可用。")
+        requests = list(validated_envelope.requests)
+        request_ids = list(validated_envelope.request_ids)
+        calculations = [
+            dict(calculation) for calculation in validated_envelope.calculations
         ]
-        if any(
-            not isinstance(request_id, str)
-            or not 1 <= len(request_id) <= 64
-            for request_id in request_ids
-        ):
-            raise QueryFailure("INVALID_INPUT", "每个 request_id 必须是 1 到 64 个字符的字符串。")
-        if len(set(request_ids)) != len(request_ids):
-            raise QueryFailure("INVALID_INPUT", "同一次调用中的 request_id 必须唯一。")
-        calculations = _validate_calculations(
-            args.get("calculations"),
-            [str(request_id) for request_id in request_ids],
-        )
         from . import runtime_health
 
         readiness = runtime_health.query_readiness_status()
         if readiness.get("ready"):
-            return datasage_query(args, **kwargs)
+            return datasage_query(
+                args,
+                _validated_query_envelope=validated_envelope,
+                **kwargs,
+            )
 
         internal_reason_code = str(
             readiness.get("reason_code") or "DATABASE_UNAVAILABLE"
@@ -9789,11 +9728,7 @@ def runtime_guarded_datasage_query(
             "request_count": 0,
             "metric_contexts": [],
             "results": [],
-            "error": {
-                "code": failure.code,
-                "message": failure.message,
-                **_retry_metadata(failure),
-            },
+            "error": _public_error(failure),
         }
     except Exception:
         logger.exception("datasage_query runtime guard failed")

@@ -1,4 +1,7 @@
-# DataSage v0.15 Frozen Refactor Design
+# DataSage v0.15 Frozen Refactor Design (Historical)
+
+> Historical implementation plan retained for audit. It is not shipped in the
+> runtime Profile and does not define current agent ownership.
 
 This design is frozen before implementation. Findings that do not violate the
 charter invariants go to a backlog.

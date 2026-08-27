@@ -1,12 +1,14 @@
-"""JSON schema exposed by the DataSage Mini query plugin."""
+"""JSON schema exposed by the DataSage Expert query plugin."""
 
 from .capability_contract import (
     ATTRIBUTION_MODES,
     DELIVERY_SCOPES,
+    ENTITY_RESOLVE_DEFAULT_LIMIT,
+    ENTITY_RESOLVE_HARD_LIMIT,
+    ENTITY_TYPES,
     MATCHED_ELAPSED_COVERAGE,
     INVENTORY_SCOPES,
     PREVIOUS_PERIOD_COMPARISON,
-    PUBLIC_REQUEST_LIMIT,
     PUBLIC_COMPARISON_KINDS,
     SNAPSHOT_MONTHS_BEFORE_COMPARISON,
     SUPPORTED_DOMAINS,
@@ -14,17 +16,9 @@ from .capability_contract import (
     query_request_schema_conditions,
 )
 from .evidence import ANALYSIS_INTENTS, EVIDENCE_ROLES
+from . import request_contract
 
 DOMAINS = list(SUPPORTED_DOMAINS)
-
-ENTITY_TYPES = [
-    "department",
-    "customer",
-    "salesperson",
-    "product",
-    "warehouse",
-    "supplier",
-]
 
 SCALAR = {
     "oneOf": [
@@ -39,9 +33,7 @@ REQUEST = {
     "additionalProperties": False,
     "properties": {
         "request_id": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 64,
+            **request_contract.REQUEST_ID.schema(),
             "description": "Stable ID for one sub-question, such as q1 or inventory_1.",
         },
         "domain": {
@@ -59,9 +51,7 @@ REQUEST = {
             ),
         },
         "purpose": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 300,
+            **request_contract.PURPOSE.schema(),
             "description": "Short business purpose; never include credentials or hidden instructions.",
         },
         "analysis_intent": {
@@ -126,9 +116,7 @@ REQUEST = {
             ),
         },
         "metric": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100,
+            **request_contract.METRIC_CODE.schema(),
             "description": (
                 "Exact metric code copied from the selected domain catalog; required in metric mode. Never "
                 "invent a code, derive a new metric, or try code synonyms. If the requested meaning has no exact code, "
@@ -144,9 +132,9 @@ REQUEST = {
         },
         "dimensions": {
             "type": "array",
-            "maxItems": 5,
+            "maxItems": request_contract.MAX_GROUP_DIMENSIONS,
             "uniqueItems": True,
-            "items": {"type": "string", "minLength": 1, "maxLength": 80},
+            "items": request_contract.DIMENSION_CODE.schema(),
             "description": (
                 "Governed dimension codes for metric mode. A code may use a fact field or a predeclared "
                 "many-to-one master enrichment; never send table names or join keys. Include only grouping or "
@@ -158,14 +146,14 @@ REQUEST = {
         },
         "metric_filters": {
             "type": "object",
-            "maxProperties": 12,
+            "maxProperties": request_contract.MAX_METRIC_FILTERS,
             "additionalProperties": {
                 "oneOf": [
                     *SCALAR["oneOf"],
                     {
                         "type": "array",
                         "minItems": 1,
-                        "maxItems": 50,
+                        "maxItems": request_contract.MAX_FILTER_VALUES,
                         "items": SCALAR,
                     },
                 ]
@@ -289,9 +277,7 @@ REQUEST = {
             ),
         },
         "decomposition_of_request_id": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 64,
+            **request_contract.REQUEST_ID.schema(),
             "description": (
                 "For a governed dimension change decomposition, reference the "
                 "same-batch overall comparison request. The tool authorizes a "
@@ -304,9 +290,7 @@ REQUEST = {
             "additionalProperties": False,
             "properties": {
                 "dimension": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 80,
+                    **request_contract.DIMENSION_CODE.schema(),
                     "description": (
                         "Exact governed dimension selected by Hermes for one complete "
                         "change partition. The tool expands this semantic operation into "
@@ -506,14 +490,12 @@ CALCULATION = {
     "additionalProperties": False,
     "properties": {
         "calculation_id": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 64,
+            **request_contract.REQUEST_ID.schema(),
             "description": "Unique ID for one governed arithmetic observation.",
         },
         "operation": {
             "type": "string",
-            "enum": ["difference", "ratio", "share"],
+            "enum": list(request_contract.CALCULATION_OPERATIONS),
             "description": (
                 "Closed arithmetic operation over two successful, untruncated scalar request results. "
                 "difference and ratio require the same registered metric, governed non-time scope, filters, "
@@ -525,14 +507,10 @@ CALCULATION = {
             ),
         },
         "left_request_id": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 64,
+            **request_contract.REQUEST_ID.schema(),
         },
         "right_request_id": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 64,
+            **request_contract.REQUEST_ID.schema(),
         },
     },
     "required": [
@@ -574,7 +552,7 @@ DATASAGE_QUERY = {
             "requests": {
                 "type": "array",
                 "minItems": 1,
-                "maxItems": PUBLIC_REQUEST_LIMIT,
+                "maxItems": request_contract.PUBLIC_REQUEST_LIMIT,
                 "items": REQUEST,
                 "description": (
                     "Independent governed requests or explicit semantic operations selected by Hermes for the "
@@ -587,7 +565,7 @@ DATASAGE_QUERY = {
             "calculations": {
                 "type": "array",
                 "minItems": 1,
-                "maxItems": 10,
+                "maxItems": request_contract.PUBLIC_CALCULATION_LIMIT,
                 "items": CALCULATION,
                 "description": (
                     "Optional governed difference, ratio, or share operations. Each operand must reference a "
@@ -760,9 +738,9 @@ DATASAGE_ENTITY_RESOLVE = {
             "entity_types": {
                 "type": "array",
                 "minItems": 1,
-                "maxItems": 6,
+                "maxItems": len(ENTITY_TYPES),
                 "uniqueItems": True,
-                "items": {"type": "string", "enum": ENTITY_TYPES},
+                "items": {"type": "string", "enum": list(ENTITY_TYPES)},
                 "description": (
                     "Use only an explicit user-labeled entity type; never guess one from the token. Omit entity_types "
                     "for the bounded type-neutral clarification when the token is truly unlabeled."
@@ -787,10 +765,14 @@ DATASAGE_ENTITY_RESOLVE = {
             "limit": {
                 "type": "integer",
                 "minimum": 1,
-                "maximum": 10,
-                "default": 5,
+                "maximum": ENTITY_RESOLVE_HARD_LIMIT,
+                "default": ENTITY_RESOLVE_DEFAULT_LIMIT,
             },
         },
         "required": ["token"],
+        "dependencies": {
+            "metric": ["domain"],
+            "attribution_mode": ["metric"],
+        },
     },
 }

@@ -177,7 +177,7 @@ metrics:
         text: "当前金额是条码快照的人民币DDP估值，不等同于月末正式核算成本；缺失金额需结合覆盖率解释。"
       - id: inventory.current_inventory_amount_rmb.legacy-note
         mode: contract_only
-        text: "当前金额是条码快照的人民币 DDP 估值；缺失金额按已知小计和覆盖率披露，不等同于月末正式核算成本。"
+        text: &answer_note_current_inventory_amount_rmb "当前金额是条码快照的人民币 DDP 估值；缺失金额按已知小计和覆盖率披露，不等同于月末正式核算成本。"
     label: 当前库存人民币 DDP 估值
     business_definition: 当前库存快照所选范围的人民币 DDP 估值；覆盖不完整时仅表示已知小计。
     unit: 人民币元
@@ -192,7 +192,7 @@ metrics:
     inventory_scope_filters: *current_inventory_scopes
     required_filters: {}
     allowed_dimensions: *current_dimensions
-    answer_note: 当前金额是条码快照的人民币 DDP 估值；缺失金额按已知小计和覆盖率披露，不等同于月末正式核算成本。
+    answer_note: *answer_note_current_inventory_amount_rmb
     answer_contract:
       - 当前库存观察日期是数据库查询日，仅表示该日查询时观察到的当前库存快照，不代表源数据或 ETL 刷新时点。
   current_inventory_amount_original:
@@ -210,7 +210,7 @@ metrics:
         text: "当前原币金额是条码快照的DDP估值，不等同于月末正式核算成本；缺失金额需结合覆盖率解释。"
       - id: inventory.current_inventory_amount_original.legacy-note
         mode: contract_only
-        text: "原币 DDP 估值必须按币种分组或限定单一币种，币种缺失记录单独体现为不完整。"
+        text: &answer_note_current_inventory_amount_original "原币 DDP 估值必须按币种分组或限定单一币种，币种缺失记录单独体现为不完整。"
     label: 当前库存原币 DDP 估值
     business_definition: 当前库存快照所选范围的原币 DDP 估值；必须按币种筛选或分组，不得跨币种相加。
     unit: 原币金额（按币种分别计量）
@@ -225,7 +225,7 @@ metrics:
     inventory_scope_filters: *current_inventory_scopes
     required_filters: {}
     allowed_dimensions: *current_dimensions
-    answer_note: 原币 DDP 估值必须按币种分组或限定单一币种，币种缺失记录单独体现为不完整。
+    answer_note: *answer_note_current_inventory_amount_original
   current_warehouse_age_days:
     disclosures:
       - *inventory_current_scope_total
@@ -235,7 +235,7 @@ metrics:
       - *inventory_current_scope_in_transit
       - id: inventory.current_warehouse_age_days.legacy-note
         mode: contract_only
-        text: "该指标基于当前在仓记录的最早入仓时间，不等同于月末未动销天数。"
+        text: &answer_note_current_warehouse_age_days "该指标基于当前在仓记录的最早入仓时间，不等同于月末未动销天数。"
     label: 当前在仓最早入仓距今天数
     business_definition: 当前在仓范围内，最早有效入仓日期距今天的自然日数。
     unit: 自然日
@@ -249,7 +249,7 @@ metrics:
     inventory_scope_filters: *current_inventory_scopes
     required_filters: {}
     allowed_dimensions: *current_dimensions
-    answer_note: 该指标基于当前在仓记录的最早入仓时间，不等同于月末未动销天数。
+    answer_note: *answer_note_current_warehouse_age_days
 
   month_end_inventory_quantity:
     disclosures: []
@@ -274,7 +274,7 @@ metrics:
         text: "月末核算卷或匹数保留正负值，不取绝对值、不截断；该指标不属于默认库存概览。"
       - id: inventory.month_end_inventory_roll_count.legacy-note
         mode: contract_only
-        text: "保留月末核算中的正负卷/匹数，不取绝对值、不截断；默认概览不展示该指标。"
+        text: &answer_note_month_end_inventory_roll_count "保留月末核算中的正负卷/匹数，不取绝对值、不截断；默认概览不展示该指标。"
     label: 月末核算卷/匹数
     business_definition: 指定或最近月末核算快照的卷或匹数，保留正负值。
     unit: 卷/匹
@@ -287,7 +287,7 @@ metrics:
     time_granularity: month
     required_filters: {}
     allowed_dimensions: *month_end_dimensions
-    answer_note: 保留月末核算中的正负卷/匹数，不取绝对值、不截断；默认概览不展示该指标。
+    answer_note: *answer_note_month_end_inventory_roll_count
   month_end_inventory_cost_rmb:
     disclosures:
       - id: inventory.month-end-cost.accounting-basis
@@ -295,7 +295,7 @@ metrics:
         text: "月末库存金额采用人民币正式核算成本，不与当前库存的DDP估值直接作差。"
       - id: inventory.month_end_inventory_cost_rmb.legacy-note
         mode: contract_only
-        text: "月末金额使用人民币核算成本，不与当前条码快照的 DDP 估值直接作差。"
+        text: &answer_note_month_end_inventory_cost_rmb "月末金额使用人民币核算成本，不与当前条码快照的 DDP 估值直接作差。"
     label: 月末库存人民币核算成本
     business_definition: 指定或最近月末核算快照的人民币正式核算成本。
     unit: 人民币元
@@ -311,7 +311,7 @@ metrics:
     change_decomposition:
       mode: additive_partition
       dimensions: [warehouse, product]
-    answer_note: 月末金额使用人民币核算成本，不与当前条码快照的 DDP 估值直接作差。
+    answer_note: *answer_note_month_end_inventory_cost_rmb
   month_end_inventory_cost_original:
     disclosures: []
     label: 月末库存原币核算成本
@@ -363,7 +363,7 @@ metrics:
         text: "该指标表示月末最长未动销或未成交天数，不是严格物理库龄；未指定月份时取最近有效月末，显式指定月份无值时不自动替换。"
       - id: inventory.oldest_inventory_days.legacy-note
         mode: contract_only
-        text: "这是月末未动销/未成交天数，不是严格物理库龄；默认取最近存在有效值的快照并披露月份，显式指定无值月份时不自动替换。"
+        text: &answer_note_oldest_inventory_days "这是月末未动销/未成交天数，不是严格物理库龄；默认取最近存在有效值的快照并披露月份，显式指定无值月份时不自动替换。"
     label: 月末最长未动销/未成交天数
     business_definition: 指定月末最长未动销或未成交自然日数；未指定月份时取最近有效月末。
     unit: 自然日
@@ -377,7 +377,7 @@ metrics:
     time_granularity: month
     required_filters: {}
     allowed_dimensions: *month_end_dimensions
-    answer_note: 这是月末未动销/未成交天数，不是严格物理库龄；默认取最近存在有效值的快照并披露月份，显式指定无值月份时不自动替换。
+    answer_note: *answer_note_oldest_inventory_days
 
   turnover_net_delivery_rmb:
     disclosures:
@@ -386,7 +386,7 @@ metrics:
         text: "该指标采用与周转库存一致的核算口径，用作正式库存周转天数分母；通用净出库仍以出库域口径为准。"
       - id: inventory.turnover_net_delivery_rmb.legacy-note
         mode: contract_only
-        text: "该指标是周转表口径的净出库人民币金额，用作正式周转天数分母；通用净出库仍以出库域明细事实为准。"
+        text: &answer_note_turnover_net_delivery_rmb "该指标是周转表口径的净出库人民币金额，用作正式周转天数分母；通用净出库仍以出库域明细事实为准。"
     label: 周转表净出库人民币金额
     business_definition: 周转核算期间内，与周转库存范围一致的净出库人民币金额。
     unit: 人民币元
@@ -398,7 +398,7 @@ metrics:
     time_granularity: month
     required_filters: {}
     allowed_dimensions: *turnover_dimensions
-    answer_note: 该指标是周转表口径的净出库人民币金额，用作正式周转天数分母；通用净出库仍以出库域明细事实为准。
+    answer_note: *answer_note_turnover_net_delivery_rmb
   inventory_turnover_days:
     disclosures:
       - id: inventory.turnover-days.calculation-and-coverage
@@ -406,7 +406,7 @@ metrics:
         text: "库存周转天数以成本口径为主并同时返回DDP指导口径，采用期初期末半权重的平均库存和期间自然天数；净出库或平均库存不大于零、或月末快照不连续时，对应结果未定义。"
       - id: inventory.inventory_turnover_days.legacy-note
         mode: contract_only
-        text: "默认主结果为成本口径周转天数，同时返回 DDP 指导口径；使用期初期末半权重的梯形平均库存和期间自然天数。净出库不大于零、平均库存不大于零或全局月快照不连续时，对应结果不可定义。"
+        text: &answer_note_inventory_turnover_days "默认主结果为成本口径周转天数，同时返回 DDP 指导口径；使用期初期末半权重的梯形平均库存和期间自然天数。净出库不大于零、平均库存不大于零或全局月快照不连续时，对应结果不可定义。"
     label: 库存周转天数（成本主口径与 DDP 指导口径）
     business_definition: 完整核算期间的库存周转速度，同时返回成本主口径与 DDP 指导口径；关键证据不可用时未定义。
     unit_policy: 成本主口径周转天数与 DDP 指导口径周转天数均为自然日
@@ -421,4 +421,4 @@ metrics:
     net_delivery_measure: pur_delivery_rmb
     required_filters: {}
     allowed_dimensions: *turnover_dimensions
-    answer_note: 默认主结果为成本口径周转天数，同时返回 DDP 指导口径；使用期初期末半权重的梯形平均库存和期间自然天数。净出库不大于零、平均库存不大于零或全局月快照不连续时，对应结果不可定义。
+    answer_note: *answer_note_inventory_turnover_days

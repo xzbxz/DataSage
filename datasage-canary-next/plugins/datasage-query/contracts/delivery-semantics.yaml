@@ -807,7 +807,7 @@ metrics:
         text: "真实物理维度毛出库金额使用出库记录自身金额，不与销售明细金额重复汇总。"
       - id: delivery.warehouse_gross_delivery_amount.legacy-note
         mode: contract_only
-        text: "使用条码事实自身金额，禁止连接销售明细后重复汇总销售明细金额。"
+        text: &answer_note_warehouse_gross_delivery_amount "使用条码事实自身金额，禁止连接销售明细后重复汇总销售明细金额。"
     label: 真实物理维度毛出库金额
     business_definition: 按仓库、批次、条码等受控实物流转维度统计的毛出库人民币金额，尚未扣除退货。
     unit: 人民币元
@@ -826,13 +826,28 @@ metrics:
       required_filters:
         bill_status: {op: eq, value: 6}
     allowed_dimensions: *physical_delivery_analysis
-    answer_note: 使用条码事实自身金额，禁止连接销售明细后重复汇总销售明细金额。
+    answer_note: *answer_note_warehouse_gross_delivery_amount
   warehouse_gross_delivery_quantity:
     disclosures: []
     availability: &quantity_pending_unit_reconciliation
       status: pending_validation
       error_code: SEMANTIC_UNIT_RECONCILIATION_REQUIRED
       message: 数量来源存在多计量单位，当前合同尚未提供可执行单位筛选或分组，核验前不可用于回答。
+      owner: datasage.data_governance.delivery
+      activation_gate:
+        state: blocked
+        required_evidence:
+          - executable_unit_filter_or_group_contract
+          - production_read_only_reconciliation
+          - mixed_unit_regression
+        activation_authority: owner_and_release_review
+      review:
+        cadence: every_release_candidate
+        triggers: [source_schema_change, unit_contract_change]
+      lifecycle:
+        state: pending_validation
+        activation_effect: remains_unavailable_until_gate_passes
+        retirement_rule: retire_if_owner_or_validation_plan_removed
     label: 真实物理维度毛出库数量
     business_definition: 按仓库、批次、条码等受控实物流转维度统计的毛出库业务数量，尚未扣除退货。
     unit_policy: 来源业务数量单位；不同计量单位不得换算或合并解释
@@ -879,7 +894,7 @@ metrics:
         text: "物理维度退货按实际退入仓或退货记录自身的批次、条码和次品项归属统计。"
       - id: delivery.warehouse_return_amount.legacy-note
         mode: contract_only
-        text: "不额外限制 is_delivery、is_check 或 is_account。仓库族按实际退入仓扣减；批次、条码和次品项按退货事实自身记录值扣减。"
+        text: &answer_note_warehouse_return_amount "不额外限制 is_delivery、is_check 或 is_account。仓库族按实际退入仓扣减；批次、条码和次品项按退货事实自身记录值扣减。"
     label: 物理维度退货金额
     business_definition: 按实际退入仓或退货记录自身的受控实物流转维度统计的有效销售退货人民币金额。
     unit: 人民币元
@@ -895,7 +910,7 @@ metrics:
       is_inner_cus: {op: eq, value: n}
     allowed_dimensions: *actual_warehouse_net_analysis
     dimension_overrides: *actual_return_warehouse_overrides
-    answer_note: 不额外限制 is_delivery、is_check 或 is_account。仓库族按实际退入仓扣减；批次、条码和次品项按退货事实自身记录值扣减。
+    answer_note: *answer_note_warehouse_return_amount
   warehouse_return_quantity:
     disclosures:
       - id: delivery.warehouse-return-quantity.attribution
@@ -903,7 +918,7 @@ metrics:
         text: "物理维度退货数量按实际退入仓或退货记录自身的批次、条码和次品项归属统计。"
       - id: delivery.warehouse_return_quantity.legacy-note
         mode: contract_only
-        text: "仓库族按实际退入仓扣减；批次、条码和次品项按退货事实自身记录值扣减。"
+        text: &answer_note_warehouse_return_quantity "仓库族按实际退入仓扣减；批次、条码和次品项按退货事实自身记录值扣减。"
     availability: *quantity_pending_unit_reconciliation
     label: 物理维度退货数量
     business_definition: 与物理维度退货金额相同业务范围内的退货业务数量。
@@ -916,7 +931,7 @@ metrics:
     required_filters: *warehouse_return_filters
     allowed_dimensions: *actual_warehouse_net_analysis
     dimension_overrides: *actual_return_warehouse_overrides
-    answer_note: 仓库族按实际退入仓扣减；批次、条码和次品项按退货事实自身记录值扣减。
+    answer_note: *answer_note_warehouse_return_quantity
   warehouse_return_roll_count:
     disclosures:
       - id: delivery.warehouse-return-roll-count.attribution
@@ -924,7 +939,7 @@ metrics:
         text: "物理维度退货卷数按实际退入仓或退货记录自身的批次、条码和次品项归属统计。"
       - id: delivery.warehouse_return_roll_count.legacy-note
         mode: contract_only
-        text: "仓库族按实际退入仓扣减；批次、条码和次品项按退货事实自身记录值扣减。"
+        text: &answer_note_warehouse_return_roll_count "仓库族按实际退入仓扣减；批次、条码和次品项按退货事实自身记录值扣减。"
     label: 物理维度退货卷数
     business_definition: 与物理维度退货金额相同业务范围内的退货卷数。
     unit: 卷
@@ -936,7 +951,7 @@ metrics:
     required_filters: *warehouse_return_filters
     allowed_dimensions: *actual_warehouse_net_analysis
     dimension_overrides: *actual_return_warehouse_overrides
-    answer_note: 仓库族按实际退入仓扣减；批次、条码和次品项按退货事实自身记录值扣减。
+    answer_note: *answer_note_warehouse_return_roll_count
   warehouse_return_amount_original:
     disclosures: []
     label: 原币物理维度退货金额
@@ -959,7 +974,7 @@ metrics:
         text: "未明确要求毛出库时采用期间净出库；退货按实际退入仓或退货记录归属扣减，结果允许为负数。"
       - id: delivery.warehouse_delivery_amount.legacy-note
         mode: contract_only
-        text: "未限定毛出库时继续采用期间净出库。仓库族退货按实际退入仓扣减；批次、条码和次品项按各自事实记录值扣减；结果允许为负数。"
+        text: &answer_note_warehouse_delivery_amount "未限定毛出库时继续采用期间净出库。仓库族退货按实际退入仓扣减；批次、条码和次品项按各自事实记录值扣减；结果允许为负数。"
     label: 物理维度净出库金额
     business_definition: 按受控实物流转维度统计的期间净出库人民币金额；毛出库按实际出库归属，退货按实际退入或退货记录归属扣减。
     unit: 人民币元
@@ -969,7 +984,7 @@ metrics:
       - {metric: warehouse_return_amount, sign: -1}
     time_policy: current_month
     allowed_dimensions: *actual_warehouse_net_analysis
-    answer_note: 未限定毛出库时继续采用期间净出库。仓库族退货按实际退入仓扣减；批次、条码和次品项按各自事实记录值扣减；结果允许为负数。
+    answer_note: *answer_note_warehouse_delivery_amount
   warehouse_delivery_quantity:
     disclosures:
       - id: delivery.warehouse-delivery-quantity.net-scope
@@ -977,7 +992,7 @@ metrics:
         text: "物理维度净出库数量以毛出库数量扣除同范围有效退货数量，退货按实际归属扣减，结果允许为负数。"
       - id: delivery.warehouse_delivery_quantity.legacy-note
         mode: contract_only
-        text: "仓库族退货按实际退入仓扣减；批次、条码和次品项按各自事实记录值扣减；结果允许为负数。"
+        text: &answer_note_warehouse_delivery_quantity "仓库族退货按实际退入仓扣减；批次、条码和次品项按各自事实记录值扣减；结果允许为负数。"
     availability: *quantity_pending_unit_reconciliation
     label: 物理维度净出库数量
     business_definition: 按受控实物流转维度统计的期间净出库业务数量；毛出库数量扣除同范围有效退货数量。
@@ -988,7 +1003,7 @@ metrics:
       - {metric: warehouse_return_quantity, sign: -1}
     time_policy: current_month
     allowed_dimensions: *actual_warehouse_net_analysis
-    answer_note: 仓库族退货按实际退入仓扣减；批次、条码和次品项按各自事实记录值扣减；结果允许为负数。
+    answer_note: *answer_note_warehouse_delivery_quantity
   warehouse_delivery_roll_count:
     disclosures:
       - id: delivery.warehouse-delivery-roll-count.net-scope
@@ -996,7 +1011,7 @@ metrics:
         text: "物理维度净出库卷数以毛出库卷数扣除同范围有效退货卷数，退货按实际归属扣减，结果允许为负数。"
       - id: delivery.warehouse_delivery_roll_count.legacy-note
         mode: contract_only
-        text: "仓库族退货按实际退入仓扣减；批次、条码和次品项按各自事实记录值扣减；结果允许为负数。"
+        text: &answer_note_warehouse_delivery_roll_count "仓库族退货按实际退入仓扣减；批次、条码和次品项按各自事实记录值扣减；结果允许为负数。"
     label: 物理维度净出库卷数
     business_definition: 按受控实物流转维度统计的期间净出库卷数；毛出库卷数扣除同范围有效退货卷数。
     unit: 卷
@@ -1006,7 +1021,7 @@ metrics:
       - {metric: warehouse_return_roll_count, sign: -1}
     time_policy: current_month
     allowed_dimensions: *actual_warehouse_net_analysis
-    answer_note: 仓库族退货按实际退入仓扣减；批次、条码和次品项按各自事实记录值扣减；结果允许为负数。
+    answer_note: *answer_note_warehouse_delivery_roll_count
   warehouse_delivery_amount_original:
     disclosures:
       - id: currency.original.no-cross-currency
@@ -1014,7 +1029,7 @@ metrics:
         text: "原币金额必须限定单一币种或按币种分组，不同币种不得直接相加。"
       - id: delivery.warehouse_delivery_amount_original.legacy-note
         mode: contract_only
-        text: "只说原币时按币种分组，明确币种时限定该币种；不同原币不得相加。仓库族退货按实际退入仓扣减，批次、条码和次品项按各自事实记录值扣减。"
+        text: &answer_note_warehouse_delivery_amount_original "只说原币时按币种分组，明确币种时限定该币种；不同原币不得相加。仓库族退货按实际退入仓扣减，批次、条码和次品项按各自事实记录值扣减。"
     label: 原币物理维度净出库金额
     business_definition: 按受控实物流转维度统计的期间净出库原币金额；必须按币种筛选或分组，同币种毛出库金额扣除同币种有效退货金额，不得跨币种相加。
     unit: 原币金额（按币种分别计量）
@@ -1025,7 +1040,7 @@ metrics:
     time_policy: current_month
     allowed_dimensions: *actual_warehouse_net_analysis
     currency_policy: {mode: original_currency, column: currency_no, require_filter_or_group: true, never_sum_mixed_currency: true}
-    answer_note: 只说原币时按币种分组，明确币种时限定该币种；不同原币不得相加。仓库族退货按实际退入仓扣减，批次、条码和次品项按各自事实记录值扣减。
+    answer_note: *answer_note_warehouse_delivery_amount_original
 
   gross_delivery_amount:
     disclosures: []
@@ -1092,7 +1107,7 @@ metrics:
         text: "退货金额按所选退货结算期间内已完成的有效销售退货统计。"
       - id: delivery.return_amount.legacy-note
         mode: contract_only
-        text: "按 statement_time 统计状态4的销售退货；不额外限制 is_delivery、is_check 或 is_account。"
+        text: &answer_note_return_amount "按 statement_time 统计状态4的销售退货；不额外限制 is_delivery、is_check 或 is_account。"
     label: 退货金额
     business_definition: 所选退货结算期间内已完成销售退货的人民币金额。
     unit: 人民币元
@@ -1112,7 +1127,7 @@ metrics:
       dimensions: [customer, salesperson, department, organization, product]
     reasoning_topics: [customer_mix, external_event, product_mix, return_activity]
     dimension_overrides: *return_dimension_overrides
-    answer_note: 按 statement_time 统计状态4的销售退货；不额外限制 is_delivery、is_check 或 is_account。
+    answer_note: *answer_note_return_amount
   return_amount_original:
     disclosures:
       - id: currency.original.no-cross-currency
@@ -1120,7 +1135,7 @@ metrics:
         text: "原币金额必须限定单一币种或按币种分组，不同币种不得直接相加。"
       - id: delivery.return_amount_original.legacy-note
         mode: contract_only
-        text: "只说原币时按币种分组，明确币种时限定该币种；不额外限制 is_delivery、is_check 或 is_account。"
+        text: &answer_note_return_amount_original "只说原币时按币种分组，明确币种时限定该币种；不额外限制 is_delivery、is_check 或 is_account。"
     label: 原币退货金额
     business_definition: 所选退货结算期间内已完成销售退货的原币金额；必须按币种筛选或分组，不得跨币种相加。
     unit: 原币金额（按币种分别计量）
@@ -1133,7 +1148,7 @@ metrics:
     allowed_dimensions: *net_delivery_analysis
     dimension_overrides: *return_dimension_overrides
     currency_policy: {mode: original_currency, column: currency_no, require_filter_or_group: true, never_sum_mixed_currency: true}
-    answer_note: 只说原币时按币种分组，明确币种时限定该币种；不额外限制 is_delivery、is_check 或 is_account。
+    answer_note: *answer_note_return_amount_original
   return_quantity:
     disclosures: []
     availability: *quantity_pending_unit_reconciliation
@@ -1196,7 +1211,7 @@ metrics:
         text: "该指标为当期流量净出库，即毛出库减退货；结果允许为负数。"
       - id: delivery.delivery_amount.legacy-note
         mode: contract_only
-        text: "默认出库金额为当期流量净出库；毛出库按 delivery_time，退货按 statement_time，结果允许为负数。"
+        text: &answer_note_delivery_amount "默认出库金额为当期流量净出库；毛出库按 delivery_time，退货按 statement_time，结果允许为负数。"
     label: 净出库金额
     business_definition: 所选期间毛出库人民币金额扣除同期有效退货人民币金额后的净流量。
     unit: 人民币元
@@ -1212,7 +1227,7 @@ metrics:
     reasoning_topics:
       [customer_mix, demand_timing, delivery_execution, external_event, product_mix, return_activity]
     dimension_overrides: *current_attribute_overrides
-    answer_note: 默认出库金额为当期流量净出库；毛出库按 delivery_time，退货按 statement_time，结果允许为负数。
+    answer_note: *answer_note_delivery_amount
     answer_contract:
       - "仅当返回的是完整变化分解且状态已对账时，才可称为结构贡献；凡实际报告结构贡献，必须在同段或紧邻句明确说明：这是净变化的结构分解，不代表业务原因或驱动。除该否定边界外，不得用原因、驱动或导致命名任何分区。"
   delivery_amount_original:
@@ -1222,7 +1237,7 @@ metrics:
         text: "原币金额必须限定单一币种或按币种分组，不同币种不得直接相加。"
       - id: delivery.delivery_amount_original.legacy-note
         mode: contract_only
-        text: "只说原币时按币种分组，明确币种时限定该币种；不同原币不得相加，结果允许为负数。"
+        text: &answer_note_delivery_amount_original "只说原币时按币种分组，明确币种时限定该币种；不同原币不得相加，结果允许为负数。"
     label: 原币净出库金额
     business_definition: 所选期间同币种毛出库原币金额扣除同期有效退货原币金额后的净流量；必须按币种筛选或分组，不得跨币种相加。
     unit: 原币金额（按币种分别计量）
@@ -1234,7 +1249,7 @@ metrics:
     allowed_dimensions: *net_delivery_analysis
     dimension_overrides: *current_attribute_overrides
     currency_policy: {mode: original_currency, column: currency_no, require_filter_or_group: true, never_sum_mixed_currency: true}
-    answer_note: 只说原币时按币种分组，明确币种时限定该币种；不同原币不得相加，结果允许为负数。
+    answer_note: *answer_note_delivery_amount_original
   delivery_quantity:
     disclosures:
       - id: delivery.net-flow.meaning
@@ -1242,7 +1257,7 @@ metrics:
         text: "该指标为当期流量净出库，即毛出库减退货；结果允许为负数。"
       - id: delivery.delivery_quantity.legacy-note
         mode: contract_only
-        text: "默认出库数量为当期流量净出库数量，结果允许为负数。"
+        text: &answer_note_delivery_quantity "默认出库数量为当期流量净出库数量，结果允许为负数。"
     availability: *quantity_pending_unit_reconciliation
     label: 净出库数量
     business_definition: 所选期间毛出库业务数量扣除同期有效退货业务数量后的净流量。
@@ -1254,7 +1269,7 @@ metrics:
     time_policy: current_month
     allowed_dimensions: *net_delivery_analysis
     dimension_overrides: *current_attribute_overrides
-    answer_note: 默认出库数量为当期流量净出库数量，结果允许为负数。
+    answer_note: *answer_note_delivery_quantity
   delivery_roll_count:
     disclosures:
       - id: delivery.net-flow.meaning
@@ -1262,7 +1277,7 @@ metrics:
         text: "该指标为当期流量净出库，即毛出库减退货；结果允许为负数。"
       - id: delivery.delivery_roll_count.legacy-note
         mode: contract_only
-        text: "默认出库卷数为当期流量净出库卷数，结果允许为负数。"
+        text: &answer_note_delivery_roll_count "默认出库卷数为当期流量净出库卷数，结果允许为负数。"
     label: 净出库卷数
     business_definition: 所选期间毛出库卷数扣除同期有效退货卷数后的净流量。
     unit: 卷
@@ -1273,7 +1288,7 @@ metrics:
     time_policy: current_month
     allowed_dimensions: *net_delivery_analysis
     dimension_overrides: *current_attribute_overrides
-    answer_note: 默认出库卷数为当期流量净出库卷数，结果允许为负数。
+    answer_note: *answer_note_delivery_roll_count
 
   return_amount_rate:
     disclosures:
@@ -1282,7 +1297,7 @@ metrics:
         text: "金额退货率以同期毛出库金额为分母；毛出库金额小于等于零时结果未定义，退货率允许超过100%。"
       - id: delivery.return_amount_rate.legacy-note
         mode: contract_only
-        text: "默认退货率为当期金额流量退货率；毛出库金额小于等于零时返回空值，退货率允许超过100%。"
+        text: &answer_note_return_amount_rate "默认退货率为当期金额流量退货率；毛出库金额小于等于零时返回空值，退货率允许超过100%。"
     label: 当期金额退货率
     business_definition: 所选期间退货人民币金额相对于同期毛出库人民币金额的比例；基数不可用时结果未定义。
     unit: 比例（可大于1；展示为百分比时可超过100%）
@@ -1291,7 +1306,7 @@ metrics:
     time_policy: current_month
     allowed_dimensions: *net_delivery_analysis
     dimension_overrides: *current_attribute_overrides
-    answer_note: 默认退货率为当期金额流量退货率；毛出库金额小于等于零时返回空值，退货率允许超过100%。
+    answer_note: *answer_note_return_amount_rate
   return_quantity_rate:
     disclosures:
       - id: delivery.return-quantity-rate.denominator
@@ -1299,7 +1314,7 @@ metrics:
         text: "数量退货率仅用于明确的数量口径，并以同期毛出库数量为分母；毛出库数量小于等于零时结果未定义。"
       - id: delivery.return_quantity_rate.legacy-note
         mode: contract_only
-        text: "仅在用户明确要求数量退货率时使用；毛出库数量小于等于零时返回空值。"
+        text: &answer_note_return_quantity_rate "仅在用户明确要求数量退货率时使用；毛出库数量小于等于零时返回空值。"
     availability: *quantity_pending_unit_reconciliation
     label: 当期数量退货率
     business_definition: 所选期间退货业务数量相对于同期毛出库业务数量的比例；基数不可用时结果未定义。
@@ -1309,7 +1324,7 @@ metrics:
     time_policy: current_month
     allowed_dimensions: *net_delivery_analysis
     dimension_overrides: *current_attribute_overrides
-    answer_note: 仅在用户明确要求数量退货率时使用；毛出库数量小于等于零时返回空值。
+    answer_note: *answer_note_return_quantity_rate
   return_roll_rate:
     disclosures:
       - id: delivery.return-roll-rate.denominator
@@ -1317,7 +1332,7 @@ metrics:
         text: "卷数退货率仅用于明确的卷数口径，并以同期毛出库卷数为分母；毛出库卷数小于等于零时结果未定义。"
       - id: delivery.return_roll_rate.legacy-note
         mode: contract_only
-        text: "仅在用户明确要求卷数退货率时使用；毛出库卷数小于等于零时返回空值。"
+        text: &answer_note_return_roll_rate "仅在用户明确要求卷数退货率时使用；毛出库卷数小于等于零时返回空值。"
     label: 当期卷数退货率
     business_definition: 所选期间退货卷数相对于同期毛出库卷数的比例；基数不可用时结果未定义。
     unit: 比例（可大于1；展示为百分比时可超过100%）
@@ -1326,7 +1341,7 @@ metrics:
     time_policy: current_month
     allowed_dimensions: *net_delivery_analysis
     dimension_overrides: *current_attribute_overrides
-    answer_note: 仅在用户明确要求卷数退货率时使用；毛出库卷数小于等于零时返回空值。
+    answer_note: *answer_note_return_roll_rate
 
   delivery_order_count:
     disclosures:
@@ -1335,7 +1350,7 @@ metrics:
         text: "出库订单数是产生有效毛出库的非重复订单数；退货不会反向减少订单计数，也不构造净订单数。"
       - id: delivery.delivery_order_count.legacy-note
         mode: contract_only
-        text: "订单数是毛出库订单数，不能用退货单或来源单数相减生成净订单数。"
+        text: &answer_note_delivery_order_count "订单数是毛出库订单数，不能用退货单或来源单数相减生成净订单数。"
     label: 出库订单数
     business_definition: 所选出库期间内产生有效毛出库的非重复出库订单数量；退货不会反向减少订单计数。
     unit: 单
@@ -1346,7 +1361,7 @@ metrics:
     time_policy: current_month
     required_filters: *delivery_filters
     allowed_dimensions: *delivery_analysis
-    answer_note: 订单数是毛出库订单数，不能用退货单或来源单数相减生成净订单数。
+    answer_note: *answer_note_delivery_order_count
   order_amount:
     disclosures: []
     label: 下单金额

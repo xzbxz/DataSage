@@ -1,5 +1,12 @@
 # Answer boundary
 
+Rule ID: `datasage.answer-boundary/v1`
+
+- Owner: DataSage Skill final-answer policy.
+- Consumers: Hermes after loading this reference; architecture inventory tests.
+- Lifecycle: version with the Skill. Plugin prompt text may cite this ID and
+  path, but must not become an independently versioned policy source.
+
 ## Five evidence types
 
 - **Verified fact**: directly supported by a current successful tool result,

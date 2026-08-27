@@ -8,7 +8,7 @@ policy in ``plugins.entries.datasage-query.settings.data_entitlements``.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from . import settings
@@ -80,6 +80,12 @@ def _deny() -> str:
         ensure_ascii=False,
         separators=(",", ":"),
     )
+
+
+def denied_response() -> str:
+    """Return the stable public denial without exposing policy internals."""
+
+    return _deny()
 
 
 def _string_set(value: Any, *, allow_wildcard: bool = True) -> set[str] | None:
@@ -257,9 +263,20 @@ def _rows_allowed(rule: Mapping[str, Any], request: Mapping[str, Any]) -> bool:
     return True
 
 
-def _query_allowed(rule: Mapping[str, Any], args: Any) -> bool:
-    requests = args.get("requests") if isinstance(args, Mapping) else None
-    if not isinstance(requests, list) or not requests:
+def _query_allowed(
+    rule: Mapping[str, Any],
+    args: Any,
+    *,
+    validated_requests: Sequence[Mapping[str, Any]] | None = None,
+) -> bool:
+    requests = (
+        validated_requests
+        if validated_requests is not None
+        else args.get("requests")
+        if isinstance(args, Mapping)
+        else None
+    )
+    if not isinstance(requests, Sequence) or isinstance(requests, (str, bytes)) or not requests:
         return False
     for request in requests:
         if not isinstance(request, Mapping):
@@ -274,7 +291,12 @@ def _query_allowed(rule: Mapping[str, Any], args: Any) -> bool:
     return True
 
 
-def authorized(tool_name: str, args: Any) -> bool:
+def authorized(
+    tool_name: str,
+    args: Any,
+    *,
+    validated_requests: Sequence[Mapping[str, Any]] | None = None,
+) -> bool:
     """Return whether trusted caller identity covers the requested scope."""
 
     if tool_name not in TOOL_NAMES:
@@ -290,7 +312,11 @@ def authorized(tool_name: str, args: Any) -> bool:
     if tool_name == "datasage_entity_resolve":
         return _entity_allowed(rule, args)
     if tool_name == "datasage_query":
-        return _query_allowed(rule, args)
+        return _query_allowed(
+            rule,
+            args,
+            validated_requests=validated_requests,
+        )
     return False
 
 

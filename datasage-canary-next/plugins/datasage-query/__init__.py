@@ -10,7 +10,8 @@ from . import (
 )
 
 
-DATASAGE_EVIDENCE_BOUNDARIES = """When answering from DataSage tool evidence:
+DATASAGE_EVIDENCE_BOUNDARIES = """datasage.answer-boundary/v1: references/answer-boundary.md
+When answering from DataSage tool evidence:
 - Preserve each result’s metric, unit, period, population, scope, typed state, truncation/has_more, and local failure. Do not widen partial or Top-N evidence to a total-population claim.
 - Report cross-metric or cross-population facts separately unless returned evidence explicitly proves scope compatibility.
 - Returned governed target_status authorizes only target status; without a compatible governed benchmark, do not make qualitative performance, health, or risk judgments.
@@ -52,12 +53,9 @@ def register(ctx) -> None:
         name="datasage_query",
         toolset="datasage-query",
         schema=schemas.DATASAGE_QUERY,
-        handler=entitlements.guard(
+        handler=wire.bounded_json_handler(
             "datasage_query",
-            wire.bounded_json_handler(
-                "datasage_query",
-                tools.runtime_guarded_datasage_query,
-            ),
+            tools.entitlement_guarded_datasage_query,
         ),
         requires_env=[
             "DATA_QUERY_MYSQL_HOST",

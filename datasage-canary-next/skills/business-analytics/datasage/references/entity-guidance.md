@@ -1,5 +1,12 @@
 # Entity guidance
 
+Rule ID: `datasage.entity-guidance/v1`
+
+- Owner: DataSage Skill's model-safe entity guidance.
+- Consumers: Hermes on demand; architecture inventory tests.
+- Lifecycle: version with the Skill. The plugin registry and domain semantics
+  own executable identities; this reference cannot create a mapping.
+
 - Do not fuzzy-select an ambiguous business entity. Unknown natural-language
   geography must not bind to any governed filter value; ask the user to choose
   or provide the mapping.

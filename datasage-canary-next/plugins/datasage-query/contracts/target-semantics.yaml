@@ -37,6 +37,22 @@ metrics:
       status: pending_validation
       error_code: DATA_RECONCILIATION_REQUIRED
       message: 业务员分摊数据尚未完成生产只读对账，当前不能用于回答。
+      owner: datasage.data_governance.target_allocation
+      activation_gate:
+        state: blocked
+        required_evidence:
+          - production_read_only_reconciliation
+          - attribution_completeness_validation
+          - trusted_live_replay
+          - semantic_inventory_regression
+        activation_authority: owner_and_release_review
+      review:
+        cadence: every_release_candidate
+        triggers: [allocation_source_change, attribution_contract_change]
+      lifecycle:
+        state: pending_validation
+        activation_effect: remains_unavailable_until_gate_passes
+        retirement_rule: retire_if_owner_or_validation_plan_removed
     label: 业务员分摊口径出库目标金额
     business_definition: 所选期间按业务员目标分摊归属统计的出库目标人民币金额；用于业务员目标、协作或分摊场景。
     unit: 人民币元
@@ -94,7 +110,7 @@ metrics:
     disclosures:
       - id: target.allocated_net_delivery_amount.legacy-note
         mode: contract_only
-        text: "分摊净出库为拆分毛出库减退货事实金额；退货按退货事实业务员100%归属，排除内部客户。"
+        text: &answer_note_allocated_net_delivery_amount "分摊净出库为拆分毛出库减退货事实金额；退货按退货事实业务员100%归属，排除内部客户。"
     availability: *allocation_pending_reconciliation
     label: 业务员分摊口径净出库金额
     business_definition: 所选期间按业务员分摊归属统计的净出库人民币实际金额；出库目标与实际均排除内部客户。
@@ -105,12 +121,12 @@ metrics:
     source_path: salesperson_allocation
     time_policy: current_month
     required_attribution_mode: salesperson_allocation
-    answer_note: 分摊净出库为拆分毛出库减退货事实金额；退货按退货事实业务员100%归属，排除内部客户。
+    answer_note: *answer_note_allocated_net_delivery_amount
   allocated_net_receipt_amount:
     disclosures:
       - id: target.allocated_net_receipt_amount.legacy-note
         mode: contract_only
-        text: "分摊净收款为收款拆分金额减退款拆分金额，包含内部客户。"
+        text: &answer_note_allocated_net_receipt_amount "分摊净收款为收款拆分金额减退款拆分金额，包含内部客户。"
     availability: *allocation_pending_reconciliation
     label: 业务员分摊口径净收款金额
     business_definition: 所选期间按业务员分摊归属统计的净收款人民币实际金额；收款目标与实际均包含内部客户。
@@ -121,7 +137,7 @@ metrics:
     source_path: salesperson_allocation
     time_policy: current_month
     required_attribution_mode: salesperson_allocation
-    answer_note: 分摊净收款为收款拆分金额减退款拆分金额，包含内部客户。
+    answer_note: *answer_note_allocated_net_receipt_amount
   delivery_target_completion:
     disclosures:
       - id: target.delivery-completion.period-scope
@@ -129,7 +145,7 @@ metrics:
         text: "目标和实际均排除内部客户；本月使用完整月目标与截至当前实际。"
       - id: target.delivery_target_completion.legacy-note
         mode: contract_only
-        text: "实际值为净出库。salesperson_allocation 使用拆分毛出库并按退货事实业务员直接扣减；transaction_detail 使用非拆分出库与退货事实。目标和实际均排除内部客户；本月使用完整月目标与截至当前实际；目标为零、无目标、目标不完整和未来期间均由结构化状态区分。"
+        text: &answer_note_delivery_target_completion "实际值为净出库。salesperson_allocation 使用拆分毛出库并按退货事实业务员直接扣减；transaction_detail 使用非拆分出库与退货事实。目标和实际均排除内部客户；本月使用完整月目标与截至当前实际；目标为零、无目标、目标不完整和未来期间均由结构化状态区分。"
     label: 出库目标完成情况
     business_definition: 对照所选期间同一归属口径下的出库目标与净出库实际，返回目标、实际、缺口、完成率及目标和期间状态；目标与实际均排除内部客户。
     unit_policy: 目标、实际与缺口为人民币元；完成率为比例（可为负，可超过1，不做截断）
@@ -137,7 +153,7 @@ metrics:
     max_group_dimensions: 2
     time_policy: current_month
     allowed_attribution_modes: [transaction_detail, salesperson_allocation]
-    answer_note: 实际值为净出库。salesperson_allocation 使用拆分毛出库并按退货事实业务员直接扣减；transaction_detail 使用非拆分出库与退货事实。目标和实际均排除内部客户；本月使用完整月目标与截至当前实际；目标为零、无目标、目标不完整和未来期间均由结构化状态区分。
+    answer_note: *answer_note_delivery_target_completion
     paths:
       salesperson_allocation:
         availability: *allocation_pending_reconciliation
@@ -203,7 +219,7 @@ metrics:
         text: "目标和实际均包含内部客户；本月使用完整月目标与截至当前实际。"
       - id: target.receipt_target_completion.legacy-note
         mode: contract_only
-        text: "实际值为净收款，即收款人民币减退款人民币。salesperson_allocation 使用收款拆分事实减退款拆分事实；transaction_detail 使用收款明细事实减退款明细事实。目标和实际均包含内部客户，部门统一按 customer_dept；本月使用完整月目标与截至当前实际；目标为零、无目标、目标不完整和未来期间均由结构化状态区分。"
+        text: &answer_note_receipt_target_completion "实际值为净收款，即收款人民币减退款人民币。salesperson_allocation 使用收款拆分事实减退款拆分事实；transaction_detail 使用收款明细事实减退款明细事实。目标和实际均包含内部客户，部门统一按 customer_dept；本月使用完整月目标与截至当前实际；目标为零、无目标、目标不完整和未来期间均由结构化状态区分。"
     label: 收款目标完成情况
     business_definition: 对照所选期间同一归属口径下的收款目标与净收款实际，返回目标、实际、缺口、完成率及目标和期间状态；目标与实际均包含内部客户。
     unit_policy: 目标、实际与缺口为人民币元；完成率为比例（可为负，可超过1，不做截断）
@@ -211,7 +227,7 @@ metrics:
     max_group_dimensions: 2
     time_policy: current_month
     allowed_attribution_modes: [transaction_detail, salesperson_allocation]
-    answer_note: 实际值为净收款，即收款人民币减退款人民币。salesperson_allocation 使用收款拆分事实减退款拆分事实；transaction_detail 使用收款明细事实减退款明细事实。目标和实际均包含内部客户，部门统一按 customer_dept；本月使用完整月目标与截至当前实际；目标为零、无目标、目标不完整和未来期间均由结构化状态区分。
+    answer_note: *answer_note_receipt_target_completion
     paths:
       salesperson_allocation:
         availability: *allocation_pending_reconciliation

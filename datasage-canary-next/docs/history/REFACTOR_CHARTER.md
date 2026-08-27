@@ -1,4 +1,7 @@
-# DataSage v0.15 Architecture Stabilization Charter
+# DataSage v0.15 Architecture Stabilization Charter (Historical)
+
+> Historical design input retained for audit. It is not shipped in the runtime
+> Profile and is not a current operator instruction.
 
 ## Objective
 

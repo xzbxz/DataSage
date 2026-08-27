@@ -1,5 +1,14 @@
 # Entity rules
 
+Authority ID: `datasage.entity-maintainer-rationale/v1`
+
+- Owner: DataSage plugin maintainers.
+- Consumers: maintainers and architecture inventory tests only.
+- Lifecycle: non-model, non-runtime rationale. A rule change takes effect only
+  after it is implemented in the registry or domain semantics and covered by
+  executable tests; this document is never imported by the plugin or loaded by
+  the Skill.
+
 > Maintainer-only rationale. This file is not a model or runtime contract and
 > must not be loaded as a second semantic authority. Runtime identity behavior
 > comes from `entity-registry.yaml` plus each domain's execution semantics;

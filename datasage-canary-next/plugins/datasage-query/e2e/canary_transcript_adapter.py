@@ -56,6 +56,10 @@ PUBLIC_TOOLS = {
     "datasage_query",
 }
 MAX_JSON_CHARS = 2_000_000
+_HOST_TOOL_GUARDRAIL_SUFFIX = re.compile(
+    r"\n\n\[(?:Tool loop warning|Tool loop hard stop): "
+    r"[a-z][a-z0-9_]*; count=[1-9][0-9]*; [^\r\n\]]+\]\Z"
+)
 
 
 def _canonical(value: Any) -> bytes:
@@ -214,6 +218,12 @@ def _json_value(raw: Any, label: str) -> Any:
     try:
         return json.loads(raw)
     except json.JSONDecodeError as exc:
+        match = _HOST_TOOL_GUARDRAIL_SUFFIX.search(raw)
+        if match is not None:
+            try:
+                return json.loads(raw[: match.start()])
+            except json.JSONDecodeError:
+                pass
         raise ValueError(f"{label} is not valid JSON") from exc
 
 
@@ -1338,6 +1348,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     bindings = json.loads(args.bindings.read_text(encoding="utf-8"))
     candidate = adapt(args.state_db, bindings)
+    if not verify_receipt(candidate):
+        raise RuntimeError("generated canary receipt failed self-verification")
     _write_json_atomic(args.output, candidate)
     return 0
 

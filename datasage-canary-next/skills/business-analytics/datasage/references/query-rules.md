@@ -1,5 +1,12 @@
 # Shared query rules
 
+Rule ID: `datasage.query-rules/v1`
+
+- Owner: DataSage Skill request-construction policy.
+- Consumers: Hermes on demand; architecture inventory tests.
+- Lifecycle: version with the Skill. Live plugin schema and catalog remain
+  authoritative for available fields, values, metrics, and capabilities.
+
 ## Intent and catalog discovery
 
 - Hermes decides from natural language and conversation history whether current

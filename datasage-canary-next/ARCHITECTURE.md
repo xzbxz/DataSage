@@ -1,6 +1,6 @@
 # DataSage Expert 0.15 架构
 
-版本：`0.15.0-rc6`
+版本：`0.15.0-rc7`
 运行基线：Hermes `0.20.5`
 
 ## 唯一目标
@@ -9,8 +9,9 @@
 而不是用注册表、规则、工作流或答案模板替代 Hermes 的判断。
 
 本版是边界重构，不增加数据库、不修改企微凭据、不引入路由引擎，也不
-迁移全部指标到新 DSL。完整冻结标准见 `REFACTOR_CHARTER.md`，实现决策见
-`REFACTOR_DESIGN.md`。
+迁移全部指标到新 DSL。历史冻结标准与实现计划仅供审计，见
+`docs/history/REFACTOR_CHARTER.md` 和 `docs/history/REFACTOR_DESIGN.md`；
+它们不随运行 Profile 发行，也不是当前操作指令。
 
 ## 四层职责
 
@@ -43,6 +44,28 @@ question type、固定 plan、业务判断或回答模板。
 证据压缩和披露。插件返回结构化证据，不读取、删改或重写 Hermes 的最终文本。
 SOUL 只保留专家身份与事实/假设/建议等高层原则；动态期间、scope、benchmark
 和兼容性只在工具证据中计算一次，wire 只做结构投影。
+
+## 规则所有权与生命周期
+
+下列清单是治理库存，不改变既有模型安全约束。一个规则文件可以被发行包携带，
+但只有列出的 consumer 可以把它当作语义输入：
+
+| 规则 ID / 资源 | Owner | Consumer | 生命周期与权威边界 |
+| --- | --- | --- | --- |
+| `SOUL.md` | Profile 身份层 | Hermes 启动上下文 | 高层身份与安全原则；不是指标、实体或查询事实源 |
+| `skills/business-analytics/datasage/SKILL.md` | Profile Skill | Hermes Skill loader | 激活、工作流与既有安全边界；随 Skill 版本发布 |
+| `datasage.query-rules/v1` | Skill 请求规则 | Hermes 按需加载、库存测试 | 请求构造方法；live schema/catalog 拥有可用字段和值 |
+| `datasage.entity-guidance/v1` | Skill 实体指导 | Hermes 按需加载、库存测试 | 模型安全投影；不能创建或覆盖实体映射 |
+| `datasage.planning-semantics/v1` | Skill 分析方法 | Hermes 按需加载、库存测试 | 可选规划参考；`evidence_role` 枚举以 live `datasage_query` schema 为准 |
+| `datasage.answer-boundary/v1` | Skill 最终回答策略 | Hermes 按需加载、插件安全锚点、库存测试 | 详细回答边界；插件 prompt 只提供不可独立演进的安全副本和规则 ID |
+| `datasage.entity-maintainer-rationale/v1` | 插件维护者 | 维护者、库存测试 | 源码仓库中的非模型、非运行时文档；不进入发行载荷，只有落入 registry/domain semantics 并有测试才生效 |
+| plugin contracts/schema/results | DataSage plugin | plugin runtime、Hermes tools | 指标能力、权限、执行与返回证据的确定性权威 |
+
+发行与模型权威是两回事：`entity-rules-maintainer.md` 只留在源码仓库供审计，
+不属于 `distribution_owned`；Skill 不得加载它，插件也不得 import 它。
+`planning-semantics.yaml` 只描述分析
+角色的使用方法，不复制或扩展 live schema 的枚举权威。库存测试负责机械检查
+这些 owner、consumer、lifecycle 和引用关系，防止无 consumer 的孤儿规则。
 
 ## 请求与失败域
 
@@ -94,6 +117,11 @@ Golden 测试改为“必需能力 + 禁止行为 + 语义结论”约束。它�
 Profile 只允许 Memory 保存稳定偏好和稳定事实，不保存 receipt、临时 period、
 临时 entity、工具步骤或模型草稿。
 
+Memory 永远不是查询语法、指标/实体 ID、别名、地域映射、catalog 能力或插件
+运行状态的权威来源；即使旧 Memory 中存在此类内容，Hermes 也不得采纳，必须
+重新以 live schema/catalog、实体 registry 或用户当前明确输入为准。清理已有
+持久内容属于用户数据变更，必须另获用户明确授权，不能由架构迁移静默完成。
+
 Hermes 宿主的上下文压缩顺序不在 Profile 插件控制范围内。本包提供宿主合同
 fixture，要求压缩后保留用户纠正、当前 period/scope/entity/metric 和事实/假设
 区分；在宿主 E2E 通过前不得宣称该能力已由 Profile 自身修复。
@@ -102,6 +130,15 @@ fixture，要求压缩后保留用户纠正、当前 period/scope/entity/metric 
 观察到了哪些标签，不证明国家、区域代码或部门之间的别名关系，也不能成为
 长期 Memory 事实。缺少稳定映射时由 Hermes 请求用户选择或提供映射；插件不
 维护事件型国家到区域代码候选表。
+
+### Hermes 内建 Skill 选择约束
+
+保留 `.no-bundled-skills`。对 Hermes `0.20.5` 的宿主实现检查显示，
+`skills.disabled` 是排除列表，profile 创建时的 `keep_skills` 只是一次性选择；
+当前没有能在后续更新/重新播种时仍精确保留指定内建 Skill 的持久 allowlist。
+因此本版不能删除 marker 后声称只复用一部分内建 Skill。TODO：宿主提供原生、
+持久、更新稳定的 allowlist 并有升级回归测试后，再评估以精确 allowlist 替代
+`.no-bundled-skills`；在此之前按需复用只能通过本 profile 自有、已盘点的 Skill。
 
 ## 期间比较合同
 
@@ -117,16 +154,22 @@ Catalog 的 metric detail 与 domain view 在公开 schema 和运行时都机械
 
 ## 发布身份与回滚
 
-`build_release_receipt.py` 根据 `distribution_owned` 的实际文件内容计算 SHA-256；
-`distribution.yaml` 中由 Hermes 安装器管理的 `name`、`source`、`installed_at`
-会先做显式归一化，因此源码候选和合法安装实例可比较同一内容身份
-身份，不再用模型名、绝对 source 路径、安装时间或一次答案哈希冒充版本证明。
-receipt 不读取 `.env`、数据库状态、sessions、logs、Memory 或企微凭据。
+Git commit/tag 是源码版本身份，`distribution.yaml` 是 Hermes 安装载荷与版本
+声明；安装、更新和实例信息由官方 `hermes profile install/update/info` 管理。
+Profile 不实现第二套安装器、版本解析器或回滚器。
 
-本候选只能先部署到隔离 canary。回滚方式是恢复上一份经过 receipt 记录的完整
-distribution-owned 文件集合；不得覆盖运行目标的 `.env`、`state.db`、sessions、
-logs 或用户 Memory。部署、启动、业务数据库查询和企微发消息均不属于本次离线
-重构授权。
+源码仓库中的 `build_release_receipt.py` 根据 `distribution_owned` 的运行文件计算
+SHA-256，把 DataSage 特有的 replay、compaction、交付和性能门禁绑定到一个受测
+载荷。Hermes 合法写入的 `name`、`source`、`installed_at` 会在计算时归一化；
+这个 checksum 不是发行版本身份，也不能替代 Git tag 或安装来源证明。receipt
+不读取 `.env`、数据库状态、sessions、logs、Memory 或企微凭据，并且构建脚本、
+测试、E2E scorer 与历史设计文档不进入运行载荷。
+
+本候选只能先安装到隔离 canary。回滚必须从上一份经过审查的 Git tag/commit
+重新应用官方 Profile Distribution，且不得覆盖 `.env`、`state.db`、sessions、
+logs 或用户 Memory。当前远程仓库的 manifest 位于子目录，尚不满足官方发行根
+布局；迁移方案和干净安装验证见 `README.md`，完成前不得宣称远程 install/update
+链路已可用。
 
 ## 验收门槛
 
@@ -136,21 +179,17 @@ logs 或用户 Memory。部署、启动、业务数据库查询和企微发消�
 - compact-before-budget 且 success-first；
 - scorecard 的指标选择、顺序和调用数可自适应；
 - planner/companion/fixed-answer scorer 不在发布路径；
-- 发布身份由内容计算；
+- Git commit/tag 与 Profile Distribution 提供发行/安装身份，receipt 只绑定领域质量证据；
 - 完整离线测试通过，并单独记录宿主 E2E、真实企微交付和三次稳定性测试的
   未验证状态，不能用单元测试替代。
 
-## 当前验证状态
+## 验证状态的事实源
 
-- 当前完整离线运行 `127/127 OK`，耗时 `29.959s`；故障注入测试中的
-  synthetic traceback 是预期日志。
-- capability/schema-runtime 等价、mixed partial、物理预算局部失败、complete
-  内部 ID 隔离、compact-before-budget、success-first subset、coverage 重建、
-  candidate scorecard、planner 删除链和内容发布身份均有回归测试。
-- 本轮只读复盘了 rc5 的真实企微会话，确认模型最终文本与企微 outbound 字符数
-  一致，并将“越南今年的经营情况”“泰国呢”两条语义失败按真实消息 ID 纳入
-  同一 Golden/replay gate。字符数只作交付元数据，不冒充正文语义绑定。
-- 尚未完成 rc6 重启后的真实企微复测、每题三次稳定性、Hermes 宿主 compaction
-  集成、P50/P90 和成本验收。因此离线 semantic fixture 通过不能解除
-  `blocked_pending_live_model_replay`；`0.15.0-rc6` 是可审查的 canary
-  候选，不是已获准扩大流量的版本。
+架构文档不记录测试数量、耗时、单次会话结论或候选是否通过；这些信息会随代码、
+模型和环境变化，嵌入本文会成为漂移的第二事实源。离线测试报告、不可变 candidate
+receipt、真实 gateway replay/delivery、宿主 compaction 以及性能/成本产物共同构成
+当次发布证据，`build_release_receipt.py --verify-candidate` 汇总其机器可读状态。
+
+任何缺失、目标版本不一致或未通过的 live/host/performance 证据都保持候选阻断。
+离线 semantic fixture、provider 接收或正文字符数都不能单独解除门禁；是否可以
+重启、切换或扩大流量必须读取当前证据，而不是引用本文件中的历史描述。

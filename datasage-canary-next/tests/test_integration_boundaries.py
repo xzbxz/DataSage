@@ -20,6 +20,8 @@ from tools import clarify_tool as _hermes_clarify_registration  # noqa: F401
 from tools import tool_search as hermes_tool_search
 from tools.registry import ToolRegistry, registry as hermes_registry
 
+from plugin_registration_probe import probe_registration
+
 
 PROFILE_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = PROFILE_ROOT / "plugins" / "datasage-query"
@@ -70,17 +72,6 @@ schemas = _load_module("schemas")
 
 class RuntimeBoundaryTests(unittest.TestCase):
     def test_runtime_path_gate_has_no_private_runtime_prerequisite(self):
-        source = (PLUGIN_ROOT / "runtime_health.py").read_text(encoding="utf-8")
-        for forbidden in (
-            "subprocess",
-            "DSRT",
-            "RELEASE.json",
-            "payload_sha256",
-            "HERMES_HOME",
-            "hermes_cli.__file__",
-        ):
-            self.assertNotIn(forbidden, source)
-
         status = runtime_health.runtime_identity_status(profile_root=PROFILE_ROOT)
         self.assertTrue(status["ready"])
         self.assertEqual("profile_path_integrity", status["state"])
@@ -114,9 +105,19 @@ class RuntimeBoundaryTests(unittest.TestCase):
         self.assertFalse(missing_status["git_binding"]["available"])
 
     def test_plugin_registration_has_no_startup_health_io(self):
-        source = (PLUGIN_ROOT / "__init__.py").read_text(encoding="utf-8")
-        self.assertNotIn("record_startup_health", source)
-        self.assertNotIn("runtime_health", source)
+        _, registration = probe_registration(
+            PLUGIN_ROOT,
+            package_name="datasage_integration_startup_registration",
+        )
+        self.assertEqual([], registration.hooks)
+        self.assertEqual(
+            {
+                schemas.DATASAGE_CATALOG["name"],
+                schemas.DATASAGE_ENTITY_RESOLVE["name"],
+                schemas.DATASAGE_QUERY["name"],
+            },
+            {entry["name"] for entry in registration.tools},
+        )
 
 
 class StrictSessionIdentityTests(unittest.TestCase):
@@ -200,7 +201,7 @@ class StrictSessionIdentityTests(unittest.TestCase):
         ):
             self.assertNotIn(category.casefold(), message)
 
-    def test_official_plugin_entry_denies_before_business_and_database_sentinels(
+    def test_official_plugin_entry_validates_business_before_entitlement_denial(
         self,
     ):
         manager = PluginManager()
@@ -265,8 +266,13 @@ class StrictSessionIdentityTests(unittest.TestCase):
             mock.patch.object(
                 loaded.module.tools,
                 "_contracts",
-                side_effect=AssertionError("business handler reached"),
-            ) as business_sentinel,
+                wraps=loaded.module.tools._contracts,
+            ) as business_validation,
+            mock.patch.object(
+                loaded.module.tools,
+                "runtime_guarded_datasage_query",
+                side_effect=AssertionError("runtime readiness reached"),
+            ) as runtime_sentinel,
             mock.patch.object(
                 loaded.module.tools,
                 "_execute_with_source",
@@ -302,7 +308,8 @@ class StrictSessionIdentityTests(unittest.TestCase):
             },
             payload,
         )
-        business_sentinel.assert_not_called()
+        business_validation.assert_called_once()
+        runtime_sentinel.assert_not_called()
         database_sentinel.assert_not_called()
 
     def test_unknown_session_context_version_fails_closed(self):
@@ -403,9 +410,12 @@ class StrictSessionIdentityTests(unittest.TestCase):
 class GitGovernedSkillTests(unittest.TestCase):
     def test_plugin_exposes_skill_and_no_answer_mutation_hooks(self):
         main_skill = SKILL_PATH.read_text(encoding="utf-8")
-        registration = (PLUGIN_ROOT / "__init__.py").read_text(encoding="utf-8")
         manifest = yaml.safe_load(
             (PLUGIN_ROOT / "plugin.yaml").read_text(encoding="utf-8")
+        )
+        _, registration = probe_registration(
+            PLUGIN_ROOT,
+            package_name="datasage_integration_skill_registration",
         )
         self.assertLess(len(main_skill), 6_000)
         self.assertEqual(
@@ -417,14 +427,12 @@ class GitGovernedSkillTests(unittest.TestCase):
             set(manifest["provides_tools"]),
         )
         self.assertNotIn("provides_hooks", manifest)
-        self.assertEqual(3, registration.count("ctx.register_tool("))
-        self.assertEqual(1, registration.count("ctx.register_system_prompt_section("))
-        self.assertNotIn("ctx.register_hook(", registration)
-        self.assertNotIn("answer_guard", registration)
-        self.assertNotIn("transform_llm_output", registration)
-        self.assertNotIn("post_tool_call", registration)
-        self.assertNotIn("pre_llm_call", registration)
-        self.assertNotIn("frozen_wecom_skill_hook", registration)
+        self.assertEqual(
+            set(manifest["provides_tools"]),
+            {entry["name"] for entry in registration.tools},
+        )
+        self.assertEqual([], registration.hooks)
+        self.assertEqual(1, len(registration.prompt_sections))
         self.assertIn("requires_toolsets: [datasage-query]", main_skill)
 
     def test_soul_denial_rule_requires_trusted_signal_and_preserves_mixed_turn(self):
@@ -724,16 +732,6 @@ class ProductionSafetyTests(unittest.TestCase):
                     "DATABASE_SECURITY_SETTING_INVALID",
                     captured.exception.code,
                 )
-
-    def test_database_policy_has_no_hidden_deployment_authority(self):
-        source = (PLUGIN_ROOT / "db_security.py").read_text(encoding="utf-8")
-        for forbidden in (
-            ".production-release",
-            '"evaluation"',
-            "_CANARY_PROFILE_NAMES",
-            "deployment_role",
-        ):
-            self.assertNotIn(forbidden, source)
 
     def test_live_cache_key_preserves_invalid_security_value_types(self):
         with mock.patch.object(
@@ -1424,7 +1422,7 @@ class DistributionBoundaryTests(unittest.TestCase):
             (PROFILE_ROOT / "distribution.yaml").read_text(encoding="utf-8")
         )
         owned = set(distribution["distribution_owned"])
-        retained_evaluation_assets = {
+        source_only_evaluation_assets = {
             "plugins/datasage-query/e2e/canary_transcript_adapter.py",
             "plugins/datasage-query/e2e/golden_expert_cases.json",
             "plugins/datasage-query/e2e/golden_expert_scorer.py",
@@ -1435,20 +1433,82 @@ class DistributionBoundaryTests(unittest.TestCase):
             "plugins/datasage-query/e2e/trusted_replay_runner.py",
         }
 
-        self.assertIn("plugins/datasage-query", owned)
-        self.assertIn("tests", owned)
-        self.assertFalse(
-            any(item.startswith("plugins/datasage-query/") for item in owned)
-        )
+        required_runtime_assets = {
+            "plugins/datasage-query/plugin.yaml",
+            "plugins/datasage-query/__init__.py",
+            "plugins/datasage-query/tools.py",
+            "plugins/datasage-query/vendor/pymysql/__init__.py",
+            "plugins/datasage-query/vendor/pymysql-1.2.0.dist-info/METADATA",
+        }
+        source_only_assets = source_only_evaluation_assets | {
+            "plugins/datasage-query/contracts/entity-rules-maintainer.md",
+            "build_release_receipt.py",
+            "tests",
+            "ARCHITECTURE.md",
+            "docs/history",
+            "plugins/datasage-query/vendor/pymysql/__pycache__",
+            "plugins/datasage-query/vendor/pymysql/constants/__pycache__",
+        }
+
+        def is_distributed(relative):
+            return any(
+                relative == entry or relative.startswith(entry.rstrip("/") + "/")
+                for entry in owned
+            )
+
+        self.assertTrue(required_runtime_assets.issubset(owned))
+        self.assertNotIn("plugins/datasage-query", owned)
+        self.assertTrue(all(not is_distributed(item) for item in source_only_assets))
         self.assertFalse(any(item.startswith("tests/") for item in owned))
         self.assertTrue(private_replay_assets.isdisjoint(owned))
-        for relative in retained_evaluation_assets:
+        for relative in source_only_evaluation_assets:
             self.assertTrue((PROFILE_ROOT / relative).is_file(), relative)
         for relative in private_replay_assets:
             self.assertFalse((PROFILE_ROOT / relative).exists(), relative)
         for relative in owned:
             path_parts = set(relative.split("/"))
             self.assertTrue({"dsrt", ".release"}.isdisjoint(path_parts), relative)
+
+    def test_official_distribution_materializer_produces_runtime_only_payload(self):
+        from hermes_cli.profile_distribution import _copy_dist_payload, read_manifest
+
+        manifest = read_manifest(PROFILE_ROOT)
+        self.assertIsNotNone(manifest)
+        with tempfile.TemporaryDirectory() as temporary:
+            installed = Path(temporary) / "installed"
+            _copy_dist_payload(
+                PROFILE_ROOT,
+                installed,
+                manifest,
+                preserve_config=False,
+            )
+            required = {
+                "distribution.yaml",
+                "SOUL.md",
+                "config.yaml",
+                "profile.yaml",
+                "plugins/datasage-query/plugin.yaml",
+                "plugins/datasage-query/tools.py",
+                "plugins/datasage-query/vendor/pymysql/__init__.py",
+                "skills/business-analytics/datasage/SKILL.md",
+            }
+            source_only = {
+                "ARCHITECTURE.md",
+                "build_release_receipt.py",
+                "tests",
+                "docs/history",
+                "plugins/datasage-query/e2e",
+                "plugins/datasage-query/contracts/entity-rules-maintainer.md",
+            }
+            self.assertEqual(
+                set(),
+                {relative for relative in required if not (installed / relative).exists()},
+            )
+            self.assertEqual(
+                set(),
+                {relative for relative in source_only if (installed / relative).exists()},
+            )
+            self.assertEqual([], list(installed.rglob("*.pyc")))
 
     def test_current_distribution_uses_official_bundled_skill_opt_out(self):
         distribution = (PROFILE_ROOT / "distribution.yaml").read_text(

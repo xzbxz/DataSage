@@ -1,17 +1,27 @@
 version: datasage-planning-semantics/v1
 
+authority:
+  id: datasage.planning-semantics/v1
+  owner: datasage_skill_planning_method
+  consumers:
+    - hermes_on_demand
+    - architecture_inventory_tests
+  lifecycle: optional_model_reference_versioned_with_skill
+  runtime_authority: false
+  metric_authority: false
+  evidence_role_enum_source: live_datasage_query_schema
+
+live_schema_projection:
+  source: datasage_query
+  field: evidence_role
+  projection: resolve_allowed_values_from_live_schema
+  local_enum: forbidden
+  lifecycle:
+    owner: datasage-query.public-schema
+    refresh_trigger: live_schema_version_change
+    failure_mode: omit_role_labels_and_preserve_claim_requirements
+
 planning_semantics:
   required_roles: Normal minimum for a fresh answer; clarification, already-returned compatible evidence, or an unavailable governed capability may reduce the new query plan.
   optional_roles: Add only when the role could change a decision-relevant conclusion.
   claim_requirements: Proof conditions remain mandatory even when a role label is present.
-
-evidence_roles:
-  outcome: Direct evidence for the requested measure or operating state.
-  comparison: A compatible baseline or comparison period.
-  benchmark: A governed target, norm, threshold, or peer reference.
-  offset: A governed counterflow or offset that helps interpret the outcome.
-  breadth: Evidence about how widely an observation is distributed.
-  composition: A governed dimensional decomposition of the outcome or change.
-  concentration: Evidence about whether results are concentrated in a bounded set.
-  anomaly: Evidence that an observation differs materially from a valid reference.
-  hypothesis_test: Evidence selected to distinguish plausible explanations.

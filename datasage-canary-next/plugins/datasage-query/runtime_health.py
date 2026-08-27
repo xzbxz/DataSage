@@ -18,7 +18,7 @@ from .db_security import (
     mysql_tls_kwargs,
     mysql_tls_policy,
 )
-from . import settings
+from . import db_runtime, settings
 logger = logging.getLogger(__name__)
 _LIVE_LOCK = threading.Lock()
 _LIVE_CACHE: tuple[float, str, dict[str, Any]] | None = None
@@ -63,8 +63,12 @@ def runtime_identity_status(*, profile_root: Path | None = None) -> dict[str, An
     Hermes owns active-profile and runtime selection. Historical release
     manifests, imported-Hermes paths, and private launcher layouts are not
     DataSage runtime prerequisites. This bounded check cannot prove a Git
-    commit/tree binding and reports that limitation explicitly. The database
-    transport/grant/account gates below remain fail-closed.
+    commit/tree or release-receipt binding and reports that limitation
+    explicitly. Candidate identity, live replay, host compaction, stability,
+    latency, and cost are verified once before release with
+    ``python -B build_release_receipt.py --verify-candidate``; they are not
+    recomputed on every business query. The database transport/grant/account
+    gates below remain fail-closed.
     """
 
     git_binding = {
@@ -72,6 +76,13 @@ def runtime_identity_status(*, profile_root: Path | None = None) -> dict[str, An
         "commit": None,
         "tree": None,
         "reason_code": "GIT_BINDING_UNAVAILABLE",
+    }
+    release_binding = {
+        "available": False,
+        "enforced_per_query": False,
+        "verification_scope": "prestart_release_gate",
+        "verification_command": "python -B build_release_receipt.py --verify-candidate",
+        "reason_code": "RELEASE_PRESTART_VERIFICATION_REQUIRED",
     }
 
     candidate = _profile_root() if profile_root is None else Path(profile_root)
@@ -91,6 +102,7 @@ def runtime_identity_status(*, profile_root: Path | None = None) -> dict[str, An
             "reason_code": reason,
             "path_integrity_verified": False,
             "git_binding": git_binding,
+            "release_binding": release_binding,
             "identity_override": False,
             "runtime": "hermes_managed",
         }
@@ -101,6 +113,7 @@ def runtime_identity_status(*, profile_root: Path | None = None) -> dict[str, An
         "reason_code": None,
         "path_integrity_verified": True,
         "git_binding": git_binding,
+        "release_binding": release_binding,
         "identity_override": False,
         "runtime": "hermes_managed",
     }
@@ -189,9 +202,13 @@ def database_configuration_status() -> dict[str, Any]:
             "missing_names": [],
         }
     try:
-        from . import tools
-
-        module = tools._load_pymysql()
+        module = db_runtime.load_pymysql()
+    except db_runtime.DatabaseRuntimeError:
+        return {
+            "ready": False,
+            "reason_code": "DEPENDENCY_UNAVAILABLE",
+            "missing_names": [],
+        }
     except Exception:
         return {
             "ready": False,
@@ -258,9 +275,7 @@ def live_database_security_status() -> dict[str, Any]:
         if cached is not None and cache_key == cached[1] and now < cached[0]:
             return dict(cached[2])
         try:
-            from . import tools
-
-            connection = tools._connect(
+            connection = db_runtime.connect(
                 connect_timeout_seconds=settings.get_int(
                     "mysql_health_connect_timeout_seconds",
                     5,
@@ -274,7 +289,7 @@ def live_database_security_status() -> dict[str, Any]:
                     60,
                 ),
             )
-        except tools.QueryFailure as exc:
+        except db_runtime.DatabaseRuntimeError as exc:
             status = {
                 "ready": False,
                 "reason_code": exc.code,
