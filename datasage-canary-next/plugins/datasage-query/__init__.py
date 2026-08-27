@@ -29,7 +29,7 @@ def register(ctx) -> None:
     ctx.register_tool(
         name="datasage_catalog",
         toolset="datasage-query",
-        schema=schemas.DATASAGE_CATALOG,
+        schema=schemas.model_tool_schema(schemas.DATASAGE_CATALOG),
         handler=entitlements.guard(
             "datasage_catalog",
             wire.bounded_json_handler("datasage_catalog", contracts.datasage_catalog),
@@ -39,7 +39,7 @@ def register(ctx) -> None:
     ctx.register_tool(
         name="datasage_entity_resolve",
         toolset="datasage-query",
-        schema=schemas.DATASAGE_ENTITY_RESOLVE,
+        schema=schemas.model_tool_schema(schemas.DATASAGE_ENTITY_RESOLVE),
         handler=entitlements.guard(
             "datasage_entity_resolve",
             wire.bounded_json_handler(
@@ -52,7 +52,7 @@ def register(ctx) -> None:
     ctx.register_tool(
         name="datasage_query",
         toolset="datasage-query",
-        schema=schemas.DATASAGE_QUERY,
+        schema=schemas.model_tool_schema(schemas.DATASAGE_QUERY),
         handler=wire.bounded_json_handler(
             "datasage_query",
             tools.entitlement_guarded_datasage_query,

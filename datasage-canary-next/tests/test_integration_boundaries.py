@@ -435,6 +435,35 @@ class GitGovernedSkillTests(unittest.TestCase):
         self.assertEqual(1, len(registration.prompt_sections))
         self.assertIn("requires_toolsets: [datasage-query]", main_skill)
 
+    def test_registered_tool_schemas_use_deepseek_documented_subset(self):
+        _, registration = probe_registration(
+            PLUGIN_ROOT,
+            package_name="datasage_deepseek_schema_registration",
+        )
+        forbidden = set(schemas._MODEL_SCHEMA_OMIT_KEYS) | {"oneOf"}
+
+        def keys(value):
+            if isinstance(value, dict):
+                found = set(value)
+                for child in value.values():
+                    found.update(keys(child))
+                return found
+            if isinstance(value, list):
+                found = set()
+                for child in value:
+                    found.update(keys(child))
+                return found
+            return set()
+
+        for entry in registration.tools:
+            with self.subTest(tool=entry["name"]):
+                self.assertFalse(forbidden & keys(entry["schema"]))
+        self.assertIn(
+            "dependencies",
+            schemas.DATASAGE_ENTITY_RESOLVE["parameters"],
+            "model projection must not mutate the canonical runtime contract",
+        )
+
     def test_soul_denial_rule_requires_trusted_signal_and_preserves_mixed_turn(self):
         normalized = " ".join(
             (PROFILE_ROOT / "SOUL.md").read_text(encoding="utf-8").split()

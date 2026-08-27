@@ -776,3 +776,61 @@ DATASAGE_ENTITY_RESOLVE = {
         },
     },
 }
+
+
+# DeepSeek's documented function-calling schema subset accepts ``anyOf`` but
+# rejects several otherwise-valid JSON Schema keywords used by the canonical
+# DataSage contracts (for example string/array length bounds, ``oneOf``,
+# ``allOf``, conditionals, and dependencies).  Keep the canonical schemas
+# above as the single source of truth for runtime validation and tests; expose
+# only this lossless-at-runtime projection to the model.  The handlers still
+# enforce every omitted constraint before entitlement, readiness, or DB I/O.
+_MODEL_SCHEMA_OMIT_KEYS = frozenset(
+    {
+        "$schema",
+        "allOf",
+        "contains",
+        "dependencies",
+        "dependentRequired",
+        "else",
+        "if",
+        "maxItems",
+        "maxLength",
+        "maxProperties",
+        "minItems",
+        "minLength",
+        "minProperties",
+        "not",
+        "patternProperties",
+        "prefixItems",
+        "propertyNames",
+        "then",
+        "uniqueItems",
+    }
+)
+
+
+def _model_schema_node(value):
+    if isinstance(value, list):
+        return [_model_schema_node(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    projected = {}
+    for key, item in value.items():
+        if key in _MODEL_SCHEMA_OMIT_KEYS:
+            continue
+        if key == "oneOf":
+            projected["anyOf"] = _model_schema_node(item)
+            continue
+        if key == "const":
+            projected.setdefault("enum", [item])
+            continue
+        projected[key] = _model_schema_node(item)
+    return projected
+
+
+def model_tool_schema(canonical_tool_schema: dict) -> dict:
+    """Return a DeepSeek-compatible model schema without weakening runtime guards."""
+
+    return _model_schema_node(canonical_tool_schema)
