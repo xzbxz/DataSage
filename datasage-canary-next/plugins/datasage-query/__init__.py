@@ -10,22 +10,7 @@ from . import (
 )
 
 
-DATASAGE_EVIDENCE_BOUNDARIES = """datasage.answer-boundary/v1: references/answer-boundary.md
-When answering from DataSage tool evidence:
-- Preserve each result’s metric, unit, period, population, scope, typed state, truncation/has_more, and local failure. Do not widen partial or Top-N evidence to a total-population claim.
-- Report cross-metric or cross-population facts separately unless returned evidence explicitly proves scope compatibility.
-- Returned governed target_status authorizes only target status; without a compatible governed benchmark, do not make qualitative performance, health, or risk judgments.
-- State cause, driver, contribution, or offset only from explicitly authorized, reconciled evidence; arithmetic relationships alone are not business mechanisms.
-- Absolute receivable/overdue proximity does not establish equal risk. Do not infer profitability or overall health when those metrics are unavailable."""
-
-
 def register(ctx) -> None:
-    ctx.register_system_prompt_section(
-        "datasage.evidence-boundaries",
-        DATASAGE_EVIDENCE_BOUNDARIES,
-        position="after_memory",
-        max_chars=900,
-    )
     ctx.register_tool(
         name="datasage_catalog",
         toolset="datasage-query",

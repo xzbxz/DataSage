@@ -17,7 +17,7 @@
   },
   "release_validation": {
     "schema": "datasage-live-replay-manifest/v1",
-    "release_target": "0.15.0-rc7",
+    "release_target": "0.15.0-rc8",
     "source_release": "0.15.0-rc5",
     "transcript_source": "wecom",
     "session_id": "20260825_200011_809a2f82",
@@ -446,6 +446,24 @@
       "allowed_conclusions": ["ask_entity_clarification", "state_no_unconfirmed_entity_substitution", "report_entity_candidates", "disclose_data_limits"],
       "forbidden_conclusions": ["assume_thailand_equals_bkk_without_confirmation", "claim_benchmarkless_absolute_scale_is_small", "claim_cross_scope_magnitude_ratio_without_compatible_population", "claim_opposite_trends_without_aligned_period_series", "claim_formal_trend_from_partial_period_mismatch", "claim_scope_incompatible_cross_metric_strength", "invent_result"],
       "evidence_requirements": {"required_receipts": ["catalog", "entity_resolution", "context_transition"], "minimum_successful_queries": 0, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": true, "required_error_codes": ["ENTITY_AMBIGUOUS"]}
+    },
+    {
+      "id": "topn_04_synthetic_yoy_product_boundary", "category": "top_n", "conversation_id": "synthetic_yoy_top5_boundary", "turn": 1,
+      "prompt": "对比2026年7月与去年同期的发货额，列出前5个产品，并说明统计口径和数据局限。",
+      "plan_constraints": {"domains": ["delivery"], "metrics": ["delivery_amount"], "dimensions": ["product"], "operations": ["year_over_year", "top_n"], "time_semantics": "resolved_month_vs_prior_year_month_matched_elapsed", "context_action": "new", "must_not_metrics": [], "must_not_operations": ["year_over_year_without_matched_elapsed_coverage"]},
+      "required_conclusions": ["report_top_n", "report_observed_change", "disclose_ranking_scope"],
+      "allowed_conclusions": ["report_top_n", "report_observed_change", "disclose_ranking_scope", "disclose_data_limits", "state_noncausal"],
+      "forbidden_conclusions": ["claim_tail_driver_from_truncated_top_n", "claim_lifecycle_new_from_zero_comparison"],
+      "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage"], "minimum_successful_queries": 2, "allow_partial_failure": false, "require_untruncated": false, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
+    },
+    {
+      "id": "multiturn_09_synthetic_yoy_customer_boundary", "category": "multiturn", "conversation_id": "synthetic_yoy_top5_boundary", "turn": 2,
+      "prompt": "换成按客户看，仍然列前5。",
+      "plan_constraints": {"domains": ["delivery"], "metrics": ["delivery_amount"], "dimensions": ["customer"], "operations": ["year_over_year", "top_n"], "time_semantics": "resolved_month_vs_prior_year_month_matched_elapsed", "context_action": "preserve", "must_not_metrics": [], "must_not_operations": ["year_over_year_without_matched_elapsed_coverage"]},
+      "required_conclusions": ["report_top_n", "report_observed_change", "disclose_ranking_scope"],
+      "allowed_conclusions": ["report_top_n", "report_observed_change", "disclose_ranking_scope", "disclose_data_limits", "state_noncausal"],
+      "forbidden_conclusions": ["claim_tail_driver_from_truncated_top_n", "infer_country_from_entity_name", "claim_concentration_from_truncated_top_n_or_top1", "claim_lifecycle_new_from_zero_comparison", "report_incorrect_top_n_aggregate"],
+      "evidence_requirements": {"required_receipts": ["query", "coverage", "context_transition"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": false, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
     }
   ]
 }

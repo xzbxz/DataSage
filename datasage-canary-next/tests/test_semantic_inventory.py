@@ -13,20 +13,11 @@ import yaml
 
 PROFILE_ROOT = Path(__file__).resolve().parents[1]
 CONTRACT_ROOT = PROFILE_ROOT / "plugins" / "datasage-query" / "contracts"
-PLANNING_REFERENCE = (
-    PROFILE_ROOT
-    / "skills"
-    / "business-analytics"
-    / "datasage"
-    / "references"
-    / "planning-semantics.yaml"
-)
-
 BASELINE_PARSED_SHA256 = {
     "customer_risk-semantics.yaml": "1641c882ddb935b5a5f1a1d17d243c7c1327109a75292d43e3512816d4cd8ba5",
-    "delivery-semantics.yaml": "27a7e02163fa6da79d8b039d0ae3cfe3182e4aa874a05f08fecdf38586276b52",
+    "delivery-semantics.yaml": "80ead8c04e4d78fdc7fd3b5fee2e27d0e21b0b1c6a05625fe77306d605cd2424",
     "inventory-semantics.yaml": "b17b52899dbd179c8994ce370d30d64468a06ab59129dc01894fb35b78cb05cb",
-    "receipt-semantics.yaml": "b5fda985febb1a510c9a270475534f0270d02080e7fbed32ab81f0e5934d2268",
+    "receipt-semantics.yaml": "5978c0775ca8c10c65c68a222286e7d079c67cb56af3e23cb009f40cdee586b3",
     "receivable-semantics.yaml": "1b7686a7dbb5d5efe0a0d24bf6a79a0e38efd062d8366b3541e587a8ea928a34",
     "target-semantics.yaml": "2d2e720601cc4e08ff85ed88b2ca06729f06a3fd821e85b11f8a06fffa1a7fc6",
 }
@@ -128,18 +119,6 @@ class PendingCapabilityLifecycleTests(unittest.TestCase):
                     "remains_unavailable_until_gate_passes",
                     lifecycle.get("activation_effect"),
                 )
-
-    def test_planning_reference_projects_live_roles_without_a_local_enum(self):
-        reference = yaml.safe_load(PLANNING_REFERENCE.read_text(encoding="utf-8"))
-        self.assertNotIn("evidence_roles", reference)
-        projection = reference["live_schema_projection"]
-        self.assertEqual("datasage_query", projection["source"])
-        self.assertEqual("evidence_role", projection["field"])
-        self.assertEqual("forbidden", projection["local_enum"])
-        self.assertNotIn("values", projection)
-        self.assertNotIn("allowed_values", projection)
-        self.assertTrue(projection["lifecycle"]["owner"])
-        self.assertTrue(projection["lifecycle"]["refresh_trigger"])
 
 
 if __name__ == "__main__":

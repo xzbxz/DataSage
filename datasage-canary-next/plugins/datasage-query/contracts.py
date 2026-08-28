@@ -1195,9 +1195,6 @@ def _catalog_performance_scorecard() -> dict[str, Any]:
         "level": "performance_scorecard",
         "version": manifest.get("version"),
         "kind": manifest.get("kind"),
-        "selection_owner": manifest.get("selection_owner"),
-        "ordering_owner": manifest.get("ordering_owner"),
-        "interpretation_owner": manifest.get("interpretation_owner"),
         "candidate_lenses": candidate_lenses,
         "evidence_boundaries": _copy_guidance(
             manifest.get("evidence_boundaries") or []

@@ -1059,8 +1059,6 @@ metrics:
     change_decomposition:
       mode: additive_partition
       dimensions: [customer, salesperson, department, organization, product]
-    reasoning_topics:
-      [customer_mix, demand_timing, delivery_execution, external_event, product_mix]
   gross_delivery_amount_original:
     disclosures: []
     label: 原币毛出库金额
@@ -1125,7 +1123,6 @@ metrics:
     change_decomposition:
       mode: additive_partition
       dimensions: [customer, salesperson, department, organization, product]
-    reasoning_topics: [customer_mix, external_event, product_mix, return_activity]
     dimension_overrides: *return_dimension_overrides
     answer_note: *answer_note_return_amount
   return_amount_original:
@@ -1224,8 +1221,6 @@ metrics:
     change_decomposition:
       mode: additive_partition
       dimensions: [customer, salesperson, department, organization, product]
-    reasoning_topics:
-      [customer_mix, demand_timing, delivery_execution, external_event, product_mix, return_activity]
     dimension_overrides: *current_attribute_overrides
     answer_note: *answer_note_delivery_amount
     answer_contract:
@@ -1378,7 +1373,6 @@ metrics:
     change_decomposition:
       mode: additive_partition
       dimensions: [customer, salesperson, department, organization, product]
-    reasoning_topics: [customer_mix, demand_timing, external_event, product_mix]
   order_amount_original:
     disclosures: []
     label: 原币下单金额

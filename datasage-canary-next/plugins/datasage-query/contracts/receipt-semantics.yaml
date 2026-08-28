@@ -249,8 +249,6 @@ metrics:
     change_decomposition:
       mode: additive_partition
       dimensions: [customer, salesperson, department, organization]
-    reasoning_topics:
-      [collection_timing, credit_or_settlement, customer_mix, external_event]
     answer_note: *answer_note_receipt_amount
   actual_receipt_amount:
     disclosures:
@@ -346,7 +344,6 @@ metrics:
     change_decomposition:
       mode: additive_partition
       dimensions: [customer, salesperson, department, organization]
-    reasoning_topics: [customer_mix, external_event, return_activity]
     answer_note: *answer_note_refund_amount
   actual_refund_amount:
     disclosures:
@@ -441,8 +438,6 @@ metrics:
     change_decomposition:
       mode: additive_partition
       dimensions: [customer, salesperson, department, organization]
-    reasoning_topics:
-      [collection_timing, credit_or_settlement, customer_mix, external_event, return_activity]
     answer_note: *answer_note_net_receipt_amount
   net_receipt_amount_original:
     disclosures:

@@ -8,6 +8,7 @@ host-compaction fixture and are not claimed as Profile-owned fixes here.
 from __future__ import annotations
 
 import copy
+from decimal import Decimal
 import hashlib
 import importlib
 import importlib.util
@@ -121,9 +122,7 @@ class CapabilityContractAcceptanceTests(unittest.TestCase):
             return {
                 "request_id": f"{domain}_contract_probe",
                 "domain": domain,
-                "mode": "metric",
                 "metric": "contract_probe_metric",
-                "purpose": "offline schema/runtime equivalence probe",
                 **extra,
             }
 
@@ -359,6 +358,161 @@ class IntelligenceBoundaryAcceptanceTests(unittest.TestCase):
                         any(label in error for error in errors),
                         f"reviewed forbidden conclusion was not rejected: {label}",
                     )
+
+    def test_synthetic_yoy_top5_replay_freezes_reviewed_failure_classes(self):
+        scorer = _golden_scorer()
+        suite = json.loads(
+            (PLUGIN_ROOT / "e2e" / "golden_expert_cases.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual([], scorer.validate_suite(suite))
+        cases = {case["id"]: case for case in suite["cases"]}
+        reviewed_failures = {
+            "topn_04_synthetic_yoy_product_boundary": {
+                "forbidden_operations": [
+                    "year_over_year_without_matched_elapsed_coverage"
+                ],
+                "forbidden_conclusions": [
+                    "claim_tail_driver_from_truncated_top_n",
+                    "claim_lifecycle_new_from_zero_comparison",
+                ],
+            },
+            "multiturn_09_synthetic_yoy_customer_boundary": {
+                "forbidden_operations": [],
+                "forbidden_conclusions": [
+                    "claim_tail_driver_from_truncated_top_n",
+                    "infer_country_from_entity_name",
+                    "claim_concentration_from_truncated_top_n_or_top1",
+                    "claim_lifecycle_new_from_zero_comparison",
+                    "report_incorrect_top_n_aggregate",
+                ],
+            },
+        }
+        for case_id, reviewed in reviewed_failures.items():
+            with self.subTest(case_id=case_id):
+                case = cases[case_id]
+                self.assertTrue(
+                    set(reviewed["forbidden_operations"])
+                    <= set(case["plan_constraints"]["must_not_operations"])
+                )
+                self.assertTrue(
+                    set(reviewed["forbidden_conclusions"])
+                    <= set(case["forbidden_conclusions"])
+                )
+                plan = {
+                    key: copy.deepcopy(value)
+                    for key, value in case["plan_constraints"].items()
+                    if not key.startswith("must_not_")
+                }
+                plan["operations"].extend(reviewed["forbidden_operations"])
+                observed = {
+                    "plan": plan,
+                    "conclusions": [
+                        *case["required_conclusions"],
+                        *reviewed["forbidden_conclusions"],
+                    ],
+                    "evidence": {
+                        "receipts": case["evidence_requirements"][
+                            "required_receipts"
+                        ],
+                        "successful_queries": case["evidence_requirements"][
+                            "minimum_successful_queries"
+                        ],
+                        "failed_queries": 0,
+                        "truncated": True,
+                        "reconciled": False,
+                        "query_attempted": True,
+                        "error_codes": [],
+                    },
+                }
+                errors = scorer._score_case(case, observed)
+                for label in reviewed["forbidden_operations"]:
+                    self.assertTrue(any(label in error for error in errors), label)
+                for label in reviewed["forbidden_conclusions"]:
+                    self.assertTrue(any(label in error for error in errors), label)
+
+        product_case = cases["topn_04_synthetic_yoy_product_boundary"]
+        first_request_reliability_failure = {
+            "error_code": "INVALID_INPUT",
+            "request_count": 0,
+            "omitted_contract_fields": {
+                "comparison.coverage",
+            },
+        }
+        self.assertEqual(
+            {"comparison.coverage"},
+            first_request_reliability_failure["omitted_contract_fields"],
+        )
+        self.assertEqual(
+            ("INVALID_INPUT", 0),
+            (
+                first_request_reliability_failure["error_code"],
+                first_request_reliability_failure["request_count"],
+            ),
+        )
+        self.assertIn(
+            "year_over_year_without_matched_elapsed_coverage",
+            product_case["plan_constraints"]["must_not_operations"],
+        )
+
+        # Anonymous normalized units reproduce the reviewed multi-row arithmetic
+        # trap without preserving production entities or row-level business data.
+        rows = [
+            {"entity": "entity_1", "current": Decimal("81.5"), "comparison": Decimal("10.0")},
+            {"entity": "entity_2", "current": Decimal("60.0"), "comparison": Decimal("4.0")},
+            {"entity": "entity_3", "current": Decimal("40.0"), "comparison": Decimal("2.0")},
+            {"entity": "entity_4", "current": Decimal("30.0"), "comparison": Decimal("2.2")},
+            {"entity": "entity_5", "current": Decimal("19.9"), "comparison": Decimal("0")},
+        ]
+        audited = {
+            "current_total": sum((row["current"] for row in rows), Decimal("0")),
+            "comparison_total": sum(
+                (row["comparison"] for row in rows), Decimal("0")
+            ),
+        }
+        audited["delta_total"] = (
+            audited["current_total"] - audited["comparison_total"]
+        )
+        self.assertEqual(
+            {
+                "current_total": Decimal("231.4"),
+                "comparison_total": Decimal("18.2"),
+                "delta_total": Decimal("213.2"),
+            },
+            audited,
+        )
+        forbidden_numeric_claims = {
+            "current_total": Decimal("235.4"),
+            "delta_total": Decimal("202.7"),
+            "top_n_total": Decimal("81.5"),
+        }
+        self.assertNotEqual(
+            forbidden_numeric_claims["current_total"], audited["current_total"]
+        )
+        self.assertNotEqual(
+            forbidden_numeric_claims["delta_total"], audited["delta_total"]
+        )
+        self.assertNotEqual(
+            forbidden_numeric_claims["top_n_total"], audited["current_total"]
+        )
+
+        customer_case = cases["multiturn_09_synthetic_yoy_customer_boundary"]
+        self.assertTrue(any(row["comparison"] == 0 for row in rows))
+        self.assertTrue(
+            all(set(row) == {"entity", "current", "comparison"} for row in rows)
+        )
+        self.assertFalse(customer_case["evidence_requirements"]["require_untruncated"])
+        self.assertTrue(
+            {
+                "claim_tail_driver_from_truncated_top_n",
+                "infer_country_from_entity_name",
+                "claim_concentration_from_truncated_top_n_or_top1",
+                "claim_lifecycle_new_from_zero_comparison",
+                "report_incorrect_top_n_aggregate",
+            }
+            <= set(customer_case["forbidden_conclusions"])
+        )
 
     def test_reviewed_failures_use_existing_golden_and_trusted_replay_gate(self):
         scorer = _golden_scorer()

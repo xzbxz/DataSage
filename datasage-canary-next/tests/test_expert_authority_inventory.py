@@ -1,17 +1,47 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import unittest
+from unittest import mock
 
 import yaml
 
 from plugin_registration_probe import probe_registration
+from agent import skill_utils as hermes_skill_utils
+from tools import skills_sync as hermes_skills_sync
 
 
 PROFILE_ROOT = Path(__file__).resolve().parents[1]
 SKILL_ROOT = PROFILE_ROOT / "skills" / "business-analytics" / "datasage"
 PLUGIN_ROOT = PROFILE_ROOT / "plugins" / "datasage-query"
+REVIEWED_NATIVE_SKILLS = {
+    "document-to-action-items",
+    "docx",
+    "grounded-citations",
+    "meeting-action-items",
+    "ocr-and-documents",
+    "pdf",
+    "powerpoint",
+    "weekly-review-planning",
+    "xlsx",
+}
+
+
+def _bundled_skill_inventory() -> dict[str, dict[str, object]]:
+    inventory: dict[str, dict[str, object]] = {}
+    # Exercise the same source-directory resolution used by sync_skills(),
+    # including an explicit HERMES_BUNDLED_SKILLS override when present.
+    for path in hermes_skills_sync._get_bundled_dir().rglob("SKILL.md"):
+        text = path.read_text(encoding="utf-8")
+        _, raw, _ = text.split("---", 2)
+        frontmatter = yaml.safe_load(raw)
+        name = frontmatter["name"]
+        if name in inventory:
+            raise AssertionError(f"duplicate bundled Skill name: {name}")
+        inventory[name] = frontmatter
+    return inventory
 
 class ExpertAuthorityInventoryTests(unittest.TestCase):
     def test_model_reference_owners_consumers_and_lifecycle_are_inventoried(self):
@@ -19,7 +49,6 @@ class ExpertAuthorityInventoryTests(unittest.TestCase):
         expected = {
             "datasage.query-rules/v1": "references/query-rules.md",
             "datasage.entity-guidance/v1": "references/entity-guidance.md",
-            "datasage.planning-semantics/v1": "references/planning-semantics.yaml",
             "datasage.answer-boundary/v1": "references/answer-boundary.md",
         }
         for rule_id, relative_path in expected.items():
@@ -29,21 +58,6 @@ class ExpertAuthorityInventoryTests(unittest.TestCase):
         self.assertIn("Owner", architecture)
         self.assertIn("Consumer", architecture)
         self.assertIn("生命周期", architecture)
-
-    def test_planning_reference_is_method_only_and_schema_owns_role_enum(self):
-        planning = yaml.safe_load(
-            (SKILL_ROOT / "references" / "planning-semantics.yaml").read_text(
-                encoding="utf-8"
-            )
-        )
-        authority = planning["authority"]
-        self.assertEqual("datasage.planning-semantics/v1", authority["id"])
-        self.assertFalse(authority["runtime_authority"])
-        self.assertFalse(authority["metric_authority"])
-        self.assertEqual(
-            "live_datasage_query_schema", authority["evidence_role_enum_source"]
-        )
-        self.assertTrue(authority["consumers"])
 
     def test_maintainer_rationale_cannot_become_model_or_runtime_authority(self):
         maintainer = (
@@ -58,43 +72,64 @@ class ExpertAuthorityInventoryTests(unittest.TestCase):
         self.assertIn("non-model, non-runtime", maintainer)
         self.assertNotIn("entity-rules-maintainer", skill)
 
-    def test_plugin_prompt_has_canonical_rule_anchor_with_existing_safety(self):
-        module, registration = probe_registration(
+    def test_plugin_uses_skill_references_without_a_resident_prompt_copy(self):
+        _module, registration = probe_registration(
             PLUGIN_ROOT,
             package_name="datasage_expert_authority_registration",
         )
-        self.assertEqual(1, len(registration.prompt_sections))
-        section = registration.prompt_sections[0]
-        prompt = section["content"]
-        max_chars = section["max_chars"]
-        self.assertEqual(module.DATASAGE_EVIDENCE_BOUNDARIES, prompt)
-        self.assertLessEqual(len(prompt), max_chars)
-        self.assertIn("datasage.answer-boundary/v1", prompt)
-        self.assertIn("references/answer-boundary.md", prompt)
-        for phrase in (
-            "scope compatibility",
-            "governed benchmark",
-            "arithmetic relationships",
-            "Do not infer profitability",
-        ):
-            self.assertIn(phrase, prompt)
+        self.assertEqual([], registration.prompt_sections)
 
-    def test_removed_companion_has_no_active_usage_or_prompt_entry(self):
-        usage = json.loads((PROFILE_ROOT / "skills" / ".usage.json").read_text(encoding="utf-8"))
-        snapshot = json.loads(
-            (PROFILE_ROOT / ".skills_prompt_snapshot.json").read_text(encoding="utf-8")
+        answer_policy = (SKILL_ROOT / "references" / "answer-boundary.md").read_text(
+            encoding="utf-8"
         )
+        for detailed_policy in (
+            "compatible governed target or benchmark",
+            "Absolute receivable or overdue proximity",
+            "requested_limit",
+            "partial batch",
+        ):
+            self.assertIn(detailed_policy, answer_policy)
+
+    def test_removed_companion_has_no_usage_or_snapshot_inventory_entry(self):
+        usage = json.loads((PROFILE_ROOT / "skills" / ".usage.json").read_text(encoding="utf-8"))
         self.assertNotIn("datasage-query-patterns", usage)
         self.assertEqual("active", usage["datasage"]["state"])
-        self.assertEqual(["datasage"], [item["skill_name"] for item in snapshot["skills"]])
+        snapshot_path = PROFILE_ROOT / ".skills_prompt_snapshot.json"
+        if snapshot_path.exists():
+            snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            snapshot_names = {item["skill_name"] for item in snapshot["skills"]}
+            self.assertIn("datasage", snapshot_names)
+            self.assertNotIn("datasage-query-patterns", snapshot_names)
 
-    def test_bundled_skill_marker_remains_until_native_allowlist_exists(self):
+    def test_pinned_host_inventory_matches_reviewed_native_skill_denylist(self):
+        config = yaml.safe_load(
+            (PROFILE_ROOT / "config.yaml").read_text(encoding="utf-8")
+        )
+        distribution = yaml.safe_load(
+            (PROFILE_ROOT / "distribution.yaml").read_text(encoding="utf-8")
+        )
         architecture = (PROFILE_ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")
-        self.assertTrue((PROFILE_ROOT / ".no-bundled-skills").is_file())
+        inventory = _bundled_skill_inventory()
+        disabled = set(config["skills"]["disabled"])
+
+        self.assertEqual("==0.20.5", distribution["hermes_requires"])
+        self.assertFalse((PROFILE_ROOT / ".no-bundled-skills").exists())
+        self.assertEqual(REVIEWED_NATIVE_SKILLS, set(inventory) - disabled)
+        self.assertEqual(set(inventory) - REVIEWED_NATIVE_SKILLS, disabled)
+        with mock.patch.dict(os.environ, {"HERMES_HOME": str(PROFILE_ROOT)}):
+            hermes_skill_utils._raw_config_cache_clear()
+            try:
+                self.assertEqual(
+                    disabled,
+                    hermes_skill_utils.get_disabled_skill_names(platform="wecom"),
+                )
+            finally:
+                hermes_skill_utils._raw_config_cache_clear()
+        for name in REVIEWED_NATIVE_SKILLS:
+            self.assertIn("windows", inventory[name]["platforms"])
         self.assertIn("skills.disabled", architecture)
-        self.assertIn("keep_skills", architecture)
-        self.assertIn("持久 allowlist", architecture)
-        self.assertIn("TODO", architecture)
+        self.assertIn("快照差异审查", architecture)
+        self.assertIn("新增、删除或重命名", architecture)
 
 
 if __name__ == "__main__":

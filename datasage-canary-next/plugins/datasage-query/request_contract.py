@@ -41,7 +41,6 @@ class StringContract:
 
 
 REQUEST_ID = StringContract(1, 64)
-PURPOSE = StringContract(1, 300)
 METRIC_CODE = StringContract(1, 100)
 DIMENSION_CODE = StringContract(1, 80)
 

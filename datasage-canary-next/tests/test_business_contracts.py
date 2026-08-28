@@ -46,6 +46,18 @@ def _main_skill() -> str:
     return SKILL_PATH.read_text(encoding="utf-8")
 
 
+def _answer_boundary() -> str:
+    return (SKILL_PATH.parent / "references" / "answer-boundary.md").read_text(
+        encoding="utf-8"
+    )
+
+
+def _query_rules() -> str:
+    return (SKILL_PATH.parent / "references" / "query-rules.md").read_text(
+        encoding="utf-8"
+    )
+
+
 class BusinessContractTests(unittest.TestCase):
     @staticmethod
     def _metric_detail_receipt(domain: str, metric: str) -> str:
@@ -56,7 +68,7 @@ class BusinessContractTests(unittest.TestCase):
         )
         if payload.get("status") != "success":
             raise AssertionError(payload)
-        return str(payload["content_hash"])
+        return str(payload["results"][0]["detail_receipt"])
 
     @staticmethod
     def _read_only_source_evidence() -> dict[str, object]:
@@ -622,14 +634,14 @@ class BusinessContractTests(unittest.TestCase):
             )
         return contexts, results, operation_partitions
 
-    def test_user_visible_datasage_skill_survives_eager_schema_and_curation(self) -> None:
+    def test_datasage_skill_coexists_with_reviewed_native_skills(self) -> None:
         config = yaml.safe_load((PROFILE_ROOT / "config.yaml").read_text(encoding="utf-8"))
         self.assertEqual("off", config["tools"]["tool_search"]["enabled"])
         content = _main_skill()
         self.assertIn("requires_toolsets: [datasage-query]", content)
         self.assertIn("requires_tools: [datasage_catalog, datasage_query]", content)
-        self.assertTrue((PROFILE_ROOT / ".no-bundled-skills").is_file())
-        self.assertNotIn("disabled", config["skills"])
+        self.assertFalse((PROFILE_ROOT / ".no-bundled-skills").exists())
+        self.assertTrue(config["skills"]["disabled"])
         self.assertFalse(
             (
                 PROFILE_ROOT
@@ -641,6 +653,7 @@ class BusinessContractTests(unittest.TestCase):
 
     def test_user_visible_skills_declare_the_official_tool_search_bridge(self) -> None:
         main_skill = _main_skill()
+        request_policy = _query_rules()
         for bridge_name in ("`tool_search`", "`tool_describe`", "`tool_call`"):
             self.assertNotIn(bridge_name, main_skill)
         for direct_tool in (
@@ -648,11 +661,11 @@ class BusinessContractTests(unittest.TestCase):
             "`datasage_query`",
             "`datasage_entity_resolve`",
         ):
-            self.assertIn(direct_tool, main_skill)
+            self.assertIn(direct_tool, main_skill + request_policy)
         self.assertNotIn("`datasage_reference`", main_skill)
 
     def test_main_skill_top_n_disclosure_depends_on_returned_state(self) -> None:
-        content = _main_skill()
+        content = _answer_boundary()
         normalized = " ".join(content.split())
         self.assertIn("A Top-N result describes only the returned ranking", normalized)
         for field in ("`requested_limit`", "`effective_limit`", "`has_more`"):
@@ -669,17 +682,35 @@ class BusinessContractTests(unittest.TestCase):
                 ),
             )
 
+    def test_skill_hardens_truncated_top_n_and_multirow_arithmetic(self) -> None:
+        skill = " ".join(_main_skill().split())
+        boundary = " ".join(_answer_boundary().split())
+
+        self.assertIn("do not turn an unreturned tail into a driver", skill)
+        self.assertIn("returned population and relationship explicitly authorize it", skill)
+        self.assertIn("available calculation tool", skill)
+        for required in (
+            "never attribute the total change to the unreturned tail",
+            "Never infer geography, category, ownership",
+            "does not establish lifecycle-new status",
+            "Do not claim concentration or dispersion from a Top-1 value",
+            "use an available calculation tool",
+            "state the exact operands and formula",
+            "label the result as a derived observation",
+        ):
+            self.assertIn(required, boundary)
+
     def test_complete_change_finalization_reports_noncausal_structural_contribution(
         self,
     ) -> None:
-        skill = _main_skill()
+        answer_policy = _answer_boundary()
         self.assertIn(
             "Structural contribution requires an explicitly reconciled decomposition",
-            skill,
+            answer_policy,
         )
         self.assertIn(
             "Correlation and decomposition alone never authorize causality",
-            skill,
+            answer_policy,
         )
         semantics = yaml.safe_load(
             (PLUGIN_ROOT / "contracts" / "delivery-semantics.yaml").read_text(
@@ -876,8 +907,6 @@ class BusinessContractTests(unittest.TestCase):
         request = {
             "request_id": "matched_elapsed_yoy",
             "domain": "delivery",
-            "mode": "metric",
-            "purpose": "typed matched-elapsed year-over-year proof",
             "metric": "delivery_amount",
             "dimensions": [],
             "time_range": {"start": "2026-01-01", "end": "2026-09-01"},
@@ -972,12 +1001,87 @@ class BusinessContractTests(unittest.TestCase):
         self.assertEqual("20", projected["claim_ledger"][0]["facts"]["delta_value"])
         self.assertEqual("0.2", projected["claim_ledger"][0]["facts"]["change_rate"])
 
+    def test_run_one_preserves_matched_elapsed_alignment_and_compatibility(
+        self,
+    ) -> None:
+        observed_on = date(2026, 8, 28)
+        raw_request = {
+            "request_id": "yoy_result_validation_regression",
+            "domain": "delivery",
+            "metric": "delivery_amount",
+            "dimensions": [],
+            "time_range": {"start": "2026-07-01", "end": "2026-08-01"},
+            "comparison": {
+                "kind": "year_over_year",
+                "coverage": "matched_elapsed",
+            },
+            "detail_receipt": self._metric_detail_receipt(
+                "delivery", "delivery_amount"
+            ),
+        }
+        request, datasets, semantics = tools._validate_request_plan_without_entities(
+            raw_request,
+            observed_on=observed_on,
+        )
+        prepared = {
+            "request": request,
+            "datasets": datasets,
+            "semantics": semantics,
+            "resolved_entities": [],
+            "entity_resolution_db_call_count": 0,
+        }
+        sql_calls: list[tuple[str, list[object], int]] = []
+
+        def execute_query(sql, params, limit, **_kwargs):
+            sql_calls.append((sql, list(params), limit))
+            return (
+                [
+                    {
+                        "metric_value": "120.00",
+                        "comparison_value": "100.00",
+                        "delta_value": "20.00",
+                        "change_rate": "0.2",
+                        tools._INTERNAL_MATCH_COUNT: 2,
+                    }
+                ],
+                False,
+                self._read_only_source_evidence(),
+            )
+
+        result = tools._run_one(
+            raw_request,
+            prepared=prepared,
+            execute_query=execute_query,
+            period_observed_on=observed_on,
+        )
+
+        self.assertEqual("success", result["status"], result)
+        self.assertEqual(1, result["business_sql_attempted_count"])
+        self.assertEqual(1, result["business_sql_confirmed_count"])
+        self.assertEqual(1, len(sql_calls))
+        self.assertTrue(sql_calls[0][0])
+        self.assertEqual(
+            {
+                "version": "matched-elapsed-comparison/v1",
+                "kind": "year_over_year",
+                "coverage": "matched_elapsed",
+                "observed_on": "2026-08-28",
+                "requested_current_start": "2026-07-01",
+                "requested_current_end": "2026-08-01",
+                "effective_current_end": "2026-08-01",
+                "current_was_clipped": False,
+            },
+            result["applied_time_range"]["comparison_alignment"],
+        )
+        self.assertEqual(
+            {"status": "compatible", "reason_codes": []},
+            result["applied_time_range"]["comparison_compatibility"],
+        )
+
     def test_year_over_year_requires_matched_elapsed_contract(self) -> None:
         base = {
             "request_id": "invalid_yoy_contract",
             "domain": "delivery",
-            "mode": "metric",
-            "purpose": "typed comparison validation proof",
             "metric": "delivery_amount",
             "dimensions": [],
             "time_range": {"start": "2026-01-01", "end": "2026-09-01"},
@@ -1089,8 +1193,6 @@ class BusinessContractTests(unittest.TestCase):
         request = {
             "request_id": "matched_elapsed_yoy_partition",
             "domain": "delivery",
-            "mode": "metric",
-            "purpose": "complete matched-elapsed year-over-year decomposition",
             "metric": "delivery_amount",
             "time_range": {"start": "2026-01-01", "end": "2026-09-01"},
             "comparison": {
@@ -2311,11 +2413,12 @@ class BusinessContractTests(unittest.TestCase):
             schemas.REQUEST["properties"]["time_range"]["description"],
         )
 
-        main_skill = _main_skill()
-        normalized = " ".join(main_skill.split())
+        request_policy = _query_rules()
+        answer_policy = _answer_boundary()
+        normalized = " ".join(request_policy.split())
         self.assertIn("copy that result's `detail_receipt`", normalized)
         self.assertIn("Never reuse it for another metric", normalized)
-        self.assertIn("Preserve typed states", normalized)
+        self.assertIn("Preserve typed states", answer_policy)
 
     def test_runtime_metric_detail_receipt_gate_fails_closed_before_database(
         self,
@@ -2439,9 +2542,9 @@ class BusinessContractTests(unittest.TestCase):
         self.assertIn("detail_receipt", schemas.REQUEST["properties"])
         self.assertNotIn("detail_receipt", schemas.REQUEST["required"])
         query_description = schemas.DATASAGE_QUERY["description"]
-        self.assertIn("content_hash", query_description)
+        self.assertNotIn("content_hash", query_description)
         self.assertIn("before any database access", query_description)
-        skill_content = _main_skill()
+        skill_content = " ".join(_query_rules().split())
         self.assertIn("`detail_receipt`", skill_content)
         self.assertIn("Never reuse it for another metric", skill_content)
         self.assertNotIn("copy its `content_hash`", skill_content)
@@ -4009,10 +4112,10 @@ class BusinessContractTests(unittest.TestCase):
             self.assertIs(disclosures[formal_dso_disclosure_id]["applies"], True)
             assert_disclosure_seals(result)
 
-        current_receipt = detail["content_hash"]
-        stale_detail = json.loads(json.dumps(detail, ensure_ascii=False))
-        stale_detail.pop("content_hash")
-        stale_detail["results"][0]["metric"]["answer_contract"][1] = (
+        current_receipt = detail["results"][0]["detail_receipt"]
+        stale_detail = json.loads(json.dumps(detail["results"][0], ensure_ascii=False))
+        stale_detail.pop("detail_receipt")
+        stale_detail["metric"]["answer_contract"][1] = (
             "同时呈现已返回的平均净经营欠款、期间自然日数、月末欠款快照月数和有效出库月份数；"
             "只有同一次 datasage_query 返回的 "
             "formal-receivable-turnover-calculation-attestation/v1 状态为 verified、"
@@ -4021,14 +4124,7 @@ class BusinessContractTests(unittest.TestCase):
             "attestation 缺失、无效或状态为 undefined 时，不得依据本 catalog 合同直接陈述"
             "正式公式或正式周转数值。"
         )
-        stale_receipt = hashlib.sha256(
-            json.dumps(
-                stale_detail,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
+        stale_receipt = contracts._catalog_metric_detail_receipt(stale_detail)
         self.assertNotEqual(current_receipt, stale_receipt)
         stale_request = {
             **dso_request,
@@ -4075,9 +4171,12 @@ class BusinessContractTests(unittest.TestCase):
         self.assertNotIn(formal_dso_disclosure_id, delivery_receipt_ids)
 
         main_skill = _main_skill()
+        answer_policy = _answer_boundary()
+        query_policy = _query_rules()
         self.assertLess(len(main_skill), 6_000)
-        self.assertIn("Preserve typed states", main_skill)
-        self.assertIn("Never invent or substitute a metric", main_skill)
+        self.assertIn("Preserve typed states", answer_policy)
+        self.assertIn("Never invent or", query_policy)
+        self.assertIn("substitute a metric", query_policy)
         self.assertNotIn("formal-receivable-turnover-calculation-attestation/v1", main_skill)
 
     def test_delivery_internal_customer_exclusion_is_sealed_and_model_visible(
@@ -4694,22 +4793,18 @@ class BusinessContractTests(unittest.TestCase):
                 }
             )
         )
-        current_catalog.pop("content_hash")
-        stale_catalog = json.loads(
-            json.dumps(current_catalog, ensure_ascii=False).replace(
+        current_detail = json.loads(
+            json.dumps(current_catalog["results"][0], ensure_ascii=False)
+        )
+        current_detail.pop("detail_receipt")
+        stale_detail = json.loads(
+            json.dumps(current_detail, ensure_ascii=False).replace(
                 "截至数据库查询日，当前正数未结清应收中超过适用授信天数的部分按治理汇率折算后的人民币金额。",
                 "当前正数未结清应收中，超过适用授信天数的部分按治理汇率折算后的人民币金额。",
             )
         )
-        self.assertNotEqual(current_catalog, stale_catalog)
-        stale_receipt = hashlib.sha256(
-            json.dumps(
-                stale_catalog,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
+        self.assertNotEqual(current_detail, stale_detail)
+        stale_receipt = contracts._catalog_metric_detail_receipt(stale_detail)
         stale_request = {
             **base_request,
             "request_id": "overdue_stale_receipt",
@@ -4774,7 +4869,7 @@ class BusinessContractTests(unittest.TestCase):
             "database_query_date_observation",
             json.dumps(detail, ensure_ascii=False),
         )
-        current_receipt = str(detail["content_hash"])
+        current_receipt = str(detail["results"][0]["detail_receipt"])
 
         def run_query(
             request_id: str,
@@ -5100,17 +5195,10 @@ class BusinessContractTests(unittest.TestCase):
         )
         self.assertEqual("查询范围：当前业务快照", other_payload["answer_scope_line"])
 
-        stale_detail = json.loads(json.dumps(detail, ensure_ascii=False))
-        stale_detail.pop("content_hash")
-        stale_detail["results"][0]["metric"].pop("answer_contract")
-        stale_receipt = hashlib.sha256(
-            json.dumps(
-                stale_detail,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
+        stale_detail = json.loads(json.dumps(detail["results"][0], ensure_ascii=False))
+        stale_detail.pop("detail_receipt")
+        stale_detail["metric"].pop("answer_contract")
+        stale_receipt = contracts._catalog_metric_detail_receipt(stale_detail)
         self.assertNotEqual(current_receipt, stale_receipt)
         stale_request = {
             "request_id": "inventory_old_observation_contract_receipt",
@@ -5283,7 +5371,6 @@ class BusinessContractTests(unittest.TestCase):
                 "projection_fingerprint": "projection_ordinary",
                 "row_count": 1,
                 "truncated": False,
-                "allowed_reasoning_topics": ["comparison"],
             }
             claim: dict[str, object] = {
                 "request_id": result["request_id"],
@@ -5996,9 +6083,13 @@ class BusinessContractTests(unittest.TestCase):
     def test_skill_keeps_adaptive_planning_and_evidence_boundaries(self) -> None:
         main_skill = _main_skill()
         normalized = " ".join(main_skill.split())
+        answer_boundary = " ".join(_answer_boundary().split())
 
         self.assertIn("Choose the route adaptively", normalized)
-        self.assertIn("If one branch fails, preserve valid independent evidence", normalized)
+        self.assertIn(
+            "If one branch fails, preserve valid independent evidence",
+            answer_boundary,
+        )
         for forbidden in (
             "must query exactly",
             "fixed metric count",
@@ -6021,7 +6112,7 @@ class BusinessContractTests(unittest.TestCase):
             {entry["name"] for entry in registration.tools},
         )
         self.assertEqual([], registration.hooks)
-        self.assertEqual(1, len(registration.prompt_sections))
+        self.assertEqual([], registration.prompt_sections)
 
     def test_period_evidence_distinguishes_calendar_progress_from_freshness(self) -> None:
         observed_on = date(2026, 8, 25)
@@ -6062,10 +6153,7 @@ class BusinessContractTests(unittest.TestCase):
         claim = result["claim_ledger"][0]
         claim["allowed_relations"] = ["observation", "causal_conclusion"]
         tools.evidence.seal_claim(claim)
-        request = {
-            "request_id": "causal_relation",
-            "analysis_intent": "change_diagnosis",
-        }
+        request = {"request_id": "causal_relation"}
 
         bundle = tools.evidence.build_evidence_bundle([request], [result])
         self.assertIn("causal_conclusion", bundle["items"][0]["supports"])
@@ -6190,7 +6278,7 @@ class BusinessContractTests(unittest.TestCase):
             projected["operands"],
         )
 
-    def test_compact_wire_retains_period_scope_and_generic_answer_constraint(self) -> None:
+    def test_compact_wire_retains_period_scope_and_typed_limitation(self) -> None:
         observed_on = date(2026, 8, 25)
         result = self._scalar_calculation_result(
             "open_period", "90", period=("2026-08-01", "2026-09-01")
@@ -6201,7 +6289,7 @@ class BusinessContractTests(unittest.TestCase):
         result["applied_time_range"] = annotated
         result["claim_ledger"][0]["period"] = copy.deepcopy(annotated)
         tools.evidence.seal_claim(result["claim_ledger"][0])
-        request = {"request_id": "open_period", "analysis_intent": "performance_review"}
+        request = {"request_id": "open_period"}
         payload = {
             "status": "success",
             "metric_contexts": [{"business_metric_ref": "metric_calculation_fixture"}],
@@ -6217,10 +6305,7 @@ class BusinessContractTests(unittest.TestCase):
                 "period_state"
             ],
         )
-        self.assertEqual(
-            ["open_period"],
-            compact["answer_constraints"]["period_coverage"]["request_ids"],
-        )
+        self.assertNotIn("answer_constraints", compact)
         self.assertIn(
             "PERIOD_IN_PROGRESS",
             compact["evidence_bundle"]["items"][0]["limitations"],
@@ -6497,8 +6582,6 @@ class BusinessContractTests(unittest.TestCase):
         base = {
             "request_id": "month_boundary_not_public",
             "domain": "delivery",
-            "mode": "metric",
-            "purpose": "public schema and runtime contract parity",
             "metric": "delivery_amount",
             "dimensions": [],
             "time_range": {"start": "2026-01", "end": "2026-09"},
@@ -6578,7 +6661,7 @@ class BusinessContractTests(unittest.TestCase):
         code = (
             "import json; from tools.skills_tool import skill_view; "
             "files=['references/answer-boundary.md','references/entity-guidance.md',"
-            "'references/planning-semantics.yaml','references/query-rules.md']; "
+            "'references/query-rules.md']; "
             "print(json.dumps({'bare':json.loads(skill_view('datasage', preprocess=False)), "
             "'qualified':json.loads(skill_view('datasage:datasage', preprocess=False)), "
             "'references':[json.loads(skill_view('datasage', file_path=f, preprocess=False)) "
@@ -6611,10 +6694,13 @@ class BusinessContractTests(unittest.TestCase):
             resolved,
         )
         main_skill = _main_skill()
-        self.assertIn("skill_view(name=\"datasage\", file_path=", main_skill)
-        self.assertIn("successfully queried lenses", main_skill)
+        normalized = " ".join(main_skill.split())
+        self.assertIn("skill_view(name=\"datasage\", file_path=", normalized)
+        self.assertIn("optional `performance_scorecard`", normalized)
+        self.assertIn("otherwise discover", normalized)
+        self.assertIn("successfully queried lenses", normalized)
 
-    def test_main_skill_keeps_transient_analysis_out_of_memory_and_finishes_tool_turns(
+    def test_main_skill_keeps_transient_analysis_out_of_memory_without_host_loop_rules(
         self,
     ) -> None:
         main_skill = _main_skill()
@@ -6622,18 +6708,14 @@ class BusinessContractTests(unittest.TestCase):
         self.assertIn("Conversation history, not persistent memory", normalized)
         self.assertIn("temporary or candidate entity mappings", normalized)
         self.assertIn("stable cross-session preference", normalized)
-        self.assertIn("contains `tool_calls` is interim", normalized)
-        self.assertIn("tool-free assistant message", normalized)
-        self.assertIn(
-            "complete answer to the user's current business question", normalized
-        )
-        self.assertIn("Never let a memory approval", normalized)
+        self.assertNotIn("contains `tool_calls` is interim", normalized)
+        self.assertNotIn("tool-free assistant message", normalized)
 
-    def test_main_skill_states_the_governed_calculation_batch_boundary(self) -> None:
-        main_skill = _main_skill()
-        self.assertIn("same `datasage_query` call", main_skill)
-        self.assertIn("compatible scalar evidence already present", main_skill)
-        self.assertIn("explicitly labeled transparent arithmetic", main_skill)
+    def test_answer_policy_owns_the_governed_calculation_batch_boundary(self) -> None:
+        answer_boundary = " ".join(_answer_boundary().split())
+        self.assertIn("same `datasage_query` call", answer_boundary)
+        self.assertIn("compatible scalar evidence already returned", answer_boundary)
+        self.assertIn("explicitly labeled transparent arithmetic", answer_boundary)
 
     def test_unknown_geography_never_auto_binds_a_governed_filter_value(self) -> None:
         for token in ("泰国", "未注册地域名称"):

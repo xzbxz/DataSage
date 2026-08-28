@@ -432,7 +432,7 @@ class GitGovernedSkillTests(unittest.TestCase):
             {entry["name"] for entry in registration.tools},
         )
         self.assertEqual([], registration.hooks)
-        self.assertEqual(1, len(registration.prompt_sections))
+        self.assertEqual([], registration.prompt_sections)
         self.assertIn("requires_toolsets: [datasage-query]", main_skill)
 
     def test_registered_tool_schemas_use_deepseek_documented_subset(self):
@@ -470,12 +470,13 @@ class GitGovernedSkillTests(unittest.TestCase):
         )
         self.assertIn("The DataSage plugin owns metric definitions", normalized)
         self.assertIn("permissions", normalized)
-        self.assertIn("If one branch fails", (
-            SKILL_PATH
-        ).read_text(encoding="utf-8"))
+        answer_boundary = (
+            SKILL_PATH.parent / "references" / "answer-boundary.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("If one branch fails", answer_boundary)
         self.assertNotIn("DATA_ENTITLEMENT_DENIED", normalized)
 
-    def test_official_plugin_manager_renders_one_static_evidence_section(self):
+    def test_official_plugin_manager_keeps_skill_guidance_on_demand(self):
         manager = PluginManager()
         isolated_registry = ToolRegistry()
 
@@ -516,18 +517,7 @@ class GitGovernedSkillTests(unittest.TestCase):
                 },
                 manager._plugin_tool_names,
             )
-            self.assertEqual(
-                {"datasage.evidence-boundaries"},
-                set(manager._system_prompt_sections),
-            )
-            registered_section = manager._system_prompt_sections[
-                "datasage.evidence-boundaries"
-            ]
-            self.assertIsInstance(registered_section.content, str)
-            self.assertEqual("after_memory", registered_section.position)
-            self.assertEqual(900, registered_section.max_chars)
-            self.assertLessEqual(len(registered_section.content), 900)
-
+            self.assertEqual({}, manager._system_prompt_sections)
             rendered = manager.render_system_prompt_sections(
                 {
                     "session_id": "alpha5-prompt-section-test",
@@ -535,12 +525,7 @@ class GitGovernedSkillTests(unittest.TestCase):
                     "profile_name": "datasage-expert-next",
                 }
             )
-            self.assertEqual(1, len(rendered))
-            self.assertEqual("datasage.evidence-boundaries", rendered[0].id)
-            self.assertEqual(registered_section.content.strip(), rendered[0].content)
-            self.assertIn("scope compatibility", rendered[0].content)
-            self.assertIn("governed benchmark", rendered[0].content)
-            self.assertIn("arithmetic relationships", rendered[0].content)
+            self.assertEqual([], rendered)
 
             for hook_name in (
                 "transform_llm_output",
@@ -556,8 +541,8 @@ class GitGovernedSkillTests(unittest.TestCase):
                             is_first_turn=True,
                         ),
                     )
-            # Only the bounded static evidence section is always on. The full
-            # expert workflow remains an ordinary Hermes on-demand Skill.
+            # SOUL supplies the stable role boundary; the full expert workflow
+            # remains an ordinary Hermes on-demand Skill.
 
     def test_hermes_clarify_stays_direct_and_datasage_catalog_is_searchable(self):
         self.assertIn("clarify", HERMES_CORE_TOOL_NAMES)
@@ -1539,15 +1524,14 @@ class DistributionBoundaryTests(unittest.TestCase):
             )
             self.assertEqual([], list(installed.rglob("*.pyc")))
 
-    def test_current_distribution_uses_official_bundled_skill_opt_out(self):
+    def test_distribution_allows_reviewed_bundled_skill_sync(self):
         distribution = (PROFILE_ROOT / "distribution.yaml").read_text(
             encoding="utf-8"
         )
-        self.assertIn("- .no-bundled-skills", distribution)
+        self.assertNotIn("- .no-bundled-skills", distribution)
         self.assertNotIn("- .release", distribution)
         marker = PROFILE_ROOT / ".no-bundled-skills"
-        self.assertTrue(marker.is_file())
-        self.assertIn("hermes skills opt-out", marker.read_text(encoding="utf-8"))
+        self.assertFalse(marker.exists())
 
     def test_wecom_restores_official_host_surface_and_adds_datasage(self):
         config = (PROFILE_ROOT / "config.yaml").read_text(encoding="utf-8")
@@ -1575,6 +1559,10 @@ class DistributionBoundaryTests(unittest.TestCase):
         self.assertEqual(
             {"write_approval": True},
             parsed_config["memory"],
+        )
+        self.assertEqual(
+            {"background_review": {"enabled": False}},
+            parsed_config["auxiliary"],
         )
         approvals = parsed_config.get("approvals")
         self.assertIsInstance(approvals, dict)

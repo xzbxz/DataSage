@@ -1,5 +1,5 @@
 name: datasage-query
-version: "0.15.0-rc7"
+version: "0.15.0-rc8"
 manifest_version: 2
 api_version: 1
 # Python dependency ownership is deliberately single-source: PyMySQL 1.2.0 is
@@ -46,5 +46,4 @@ config_schema:
   max_rows: {type: int, default: 100, description: "Maximum rows returned per request."}
   max_cell_chars: {type: int, default: 2000, description: "Maximum public cell text length."}
   max_dimension_display_chars: {type: int, default: 80, description: "Maximum dimension display length."}
-  max_tool_result_chars: {type: int, default: 90000, description: "Final Hermes-safe tool wire limit."}
   data_entitlements: {type: dict, default: {}, description: "Governed per-principal data entitlements."}

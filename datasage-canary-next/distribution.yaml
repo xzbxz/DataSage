@@ -1,5 +1,5 @@
 name: datasage-canary-next
-version: 0.15.0-rc7
+version: 0.15.0-rc8
 description: Hermes-native digital expert with adaptive analysis and governed evidence
   contracts.
 hermes_requires: ==0.20.5
@@ -28,7 +28,6 @@ env_requires:
   - name: WECOM_SECRET
     description: WeCom AI Bot secret.
 distribution_owned:
-  - .no-bundled-skills
   - distribution.yaml
   - SOUL.md
   - profile.yaml
@@ -90,5 +89,4 @@ distribution_owned:
   - skills/business-analytics/datasage/SKILL.md
   - skills/business-analytics/datasage/references/answer-boundary.md
   - skills/business-analytics/datasage/references/entity-guidance.md
-  - skills/business-analytics/datasage/references/planning-semantics.yaml
   - skills/business-analytics/datasage/references/query-rules.md

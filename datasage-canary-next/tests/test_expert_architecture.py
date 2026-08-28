@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import tempfile
 import types
 import unittest
 from unittest import mock
@@ -41,7 +42,7 @@ def _frontmatter(path: Path) -> dict[str, object]:
 
 
 class ExpertArchitectureTests(unittest.TestCase):
-    def test_release_identity_and_eager_small_toolset_are_content_consistent(self):
+    def test_release_identity_and_reviewed_host_capabilities_are_consistent(self):
         config = yaml.safe_load((PROFILE_ROOT / "config.yaml").read_text(encoding="utf-8"))
         distribution = yaml.safe_load(
             (PROFILE_ROOT / "distribution.yaml").read_text(encoding="utf-8")
@@ -54,17 +55,17 @@ class ExpertArchitectureTests(unittest.TestCase):
         self.assertEqual(str(distribution["version"]), str(skill["version"]))
         self.assertRegex(config["model"]["default"], r"^[a-z0-9][a-z0-9._-]+$")
         self.assertEqual("off", config["tools"]["tool_search"]["enabled"])
-        self.assertNotIn("disabled", config["skills"])
-        self.assertTrue((PROFILE_ROOT / ".no-bundled-skills").is_file())
+        self.assertTrue(config["skills"]["disabled"])
+        self.assertFalse((PROFILE_ROOT / ".no-bundled-skills").exists())
         self.assertFalse(
             (PROFILE_ROOT / "skills" / "datasage" / "datasage-query-patterns").exists()
         )
         settings = config["plugins"]["entries"]["datasage-query"]["settings"]
         self.assertNotIn("max_result_bytes", settings)
         self.assertNotIn("max_batch_bytes", settings)
-        self.assertGreater(settings["max_tool_result_chars"], 0)
+        self.assertNotIn("max_tool_result_chars", settings)
 
-    def test_plugin_registers_tools_without_answer_state_hooks(self):
+    def test_plugin_registers_tools_without_answer_state_hooks_or_prompt_sections(self):
         manifest = yaml.safe_load(
             (PLUGIN_ROOT / "plugin.yaml").read_text(encoding="utf-8")
         )
@@ -78,10 +79,7 @@ class ExpertArchitectureTests(unittest.TestCase):
         )
         self.assertNotIn("provides_hooks", manifest)
         self.assertEqual([], registration.hooks)
-        self.assertEqual(
-            ["datasage.evidence-boundaries"],
-            [entry["id"] for entry in registration.prompt_sections],
-        )
+        self.assertEqual([], registration.prompt_sections)
 
     def test_datasage_skill_is_compact_native_and_tool_gated(self):
         path = SKILL_PATH
@@ -95,10 +93,6 @@ class ExpertArchitectureTests(unittest.TestCase):
             hermes["requires_tools"],
         )
 
-    def test_analysis_intent_is_reachable_from_public_schema(self):
-        intent = schemas.REQUEST["properties"]["analysis_intent"]
-        self.assertEqual(set(tools.evidence.ANALYSIS_INTENTS), set(intent["enum"]))
-
     def test_references_use_the_native_skill_surface(self):
         linked = {
             path.name
@@ -109,7 +103,6 @@ class ExpertArchitectureTests(unittest.TestCase):
             {
                 "answer-boundary.md",
                 "entity-guidance.md",
-                "planning-semantics.yaml",
                 "query-rules.md",
             },
             linked,
@@ -136,7 +129,7 @@ class ExpertArchitectureTests(unittest.TestCase):
         receipts = [result["detail_receipt"] for result in payload["results"]]
         self.assertEqual(2, len(set(receipts)))
         for (domain, metric), receipt in zip(selections, receipts):
-            self.assertIn(receipt, tools._current_metric_detail_receipts(domain, metric))
+            self.assertEqual(receipt, tools._current_metric_detail_receipt(domain, metric))
 
     def test_ranked_limit_is_not_silently_reduced_to_ten(self):
         with mock.patch.object(tools, "_bounded_int", return_value=100):
@@ -150,21 +143,54 @@ class ExpertArchitectureTests(unittest.TestCase):
         for field in ("requested_limit", "effective_limit", "has_more"):
             self.assertIn(field, tools._MODEL_WIRE_RESULT_FIELDS)
 
-    def test_oversized_batch_returns_partial_prefix(self):
+    def test_large_batch_is_left_complete_for_hermes_host_handling(self):
         payload = {
             "status": "success",
             "results": [
-                {"request_id": f"q{index}", "value": "x" * 240}
+                {"request_id": f"q{index}", "value": "x" * 40_000}
                 for index in range(3)
             ],
             "evidence_bundle": {"large": "y" * 300},
         }
-        with mock.patch.object(wire, "tool_result_char_limit", return_value=900):
-            result = json.loads(wire.enforce_tool_result_budget("datasage_query", payload))
-        self.assertEqual("partial", result["status"])
-        self.assertGreater(len(result["results"]), 0)
-        self.assertGreater(result["omitted_result_count"], 0)
-        self.assertTrue(result["error"]["retryable"])
+        rendered = wire.enforce_tool_result_budget("datasage_query", payload)
+        result = json.loads(rendered)
+        self.assertGreater(len(rendered), 90_000)
+        self.assertEqual("success", result["status"])
+        self.assertEqual(["q0", "q1", "q2"], [item["request_id"] for item in result["results"]])
+        self.assertNotIn("omitted_result_count", result)
+        self.assertNotIn("error", result)
+
+    def test_large_batch_reaches_hermes_host_spillover_intact(self):
+        host_storage = importlib.import_module("tools.tool_result_storage")
+        rendered = wire.enforce_tool_result_budget(
+            "datasage_query",
+            {
+                "status": "success",
+                "results": [
+                    {"request_id": f"q{index}", "value": "x" * 40_000}
+                    for index in range(3)
+                ],
+                "evidence_bundle": {"coverage": {"request_count": 3}},
+            },
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            with mock.patch.object(
+                host_storage,
+                "get_spillover_dir",
+                return_value=Path(temporary) / "cache" / "spillover",
+            ):
+                persisted = host_storage.maybe_persist_tool_result(
+                    rendered,
+                    "datasage_query",
+                    "datasage_large_batch",
+                    env=None,
+                )
+
+            saved_path = host_storage.extract_persisted_path(persisted)
+            self.assertIsNotNone(saved_path)
+            self.assertEqual(rendered, Path(saved_path).read_text(encoding="utf-8"))
+            self.assertIn("<persisted-output>", persisted)
 
 
 if __name__ == "__main__":

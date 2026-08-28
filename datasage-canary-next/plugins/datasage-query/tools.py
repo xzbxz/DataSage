@@ -84,10 +84,6 @@ _FILTER_OPERATORS = {
 _COMMON_REQUEST_FIELDS = {
     "request_id",
     "domain",
-    "mode",
-    "purpose",
-    "analysis_intent",
-    "evidence_role",
     "time_range",
     "calendar_month",
     "order_by",
@@ -333,16 +329,13 @@ def _validate_detail_request_capabilities(
         raise
 
 
-def _current_metric_detail_receipts(domain: str, metric_code: str) -> tuple[str, ...]:
+def _current_metric_detail_receipt(domain: str, metric_code: str) -> str:
     """Recompute the current batch-safe per-detail receipt."""
 
     payload = json.loads(
         contracts.datasage_catalog(
             {"requests": [{"domain": domain, "metric": metric_code}]}
         )
-    )
-    legacy_receipt = (
-        payload.get("content_hash") if payload.get("status") == "success" else None
     )
     results = payload.get("results")
     selected = results[0] if isinstance(results, list) and len(results) == 1 else None
@@ -351,9 +344,7 @@ def _current_metric_detail_receipts(domain: str, metric_code: str) -> tuple[str,
         selected.get("detail_receipt") if isinstance(selected, Mapping) else None
     )
     if (
-        not isinstance(legacy_receipt, str)
-        or _DETAIL_RECEIPT.fullmatch(legacy_receipt) is None
-        or not isinstance(detail_receipt, str)
+        not isinstance(detail_receipt, str)
         or _DETAIL_RECEIPT.fullmatch(detail_receipt) is None
         or not isinstance(selected, Mapping)
         or selected.get("domain") != domain
@@ -365,25 +356,7 @@ def _current_metric_detail_receipts(domain: str, metric_code: str) -> tuple[str,
             "当前指标详情收据无法生成。",
             stage="contract_load",
         )
-    return (detail_receipt,)
-
-
-def _current_metric_detail_receipt(domain: str, metric_code: str) -> str:
-    """Compatibility helper for callers that still expect the legacy receipt."""
-
-    payload = json.loads(
-        contracts.datasage_catalog(
-            {"requests": [{"domain": domain, "metric": metric_code}]}
-        )
-    )
-    receipt = payload.get("content_hash") if payload.get("status") == "success" else None
-    if not isinstance(receipt, str) or _DETAIL_RECEIPT.fullmatch(receipt) is None:
-        raise QueryFailure(
-            "CONTRACT_UNAVAILABLE",
-            "当前指标详情兼容收据无法生成。",
-            stage="contract_load",
-        )
-    return receipt
+    return detail_receipt
 
 
 def _validate_metric_detail_gate(
@@ -418,14 +391,8 @@ def _validate_metric_detail_gate(
                 stage="input_validation",
             )
         domain = str(request.get("domain"))
-        expected_receipts = (
-            *_current_metric_detail_receipts(domain, metric_code),
-            _current_metric_detail_receipt(domain, metric_code),
-        )
-        if not any(
-            hmac.compare_digest(supplied, expected)
-            for expected in expected_receipts
-        ):
+        expected_receipt = _current_metric_detail_receipt(domain, metric_code)
+        if not hmac.compare_digest(supplied, expected_receipt):
             raise QueryFailure(
                 "METRIC_DETAIL_RECEIPT_INVALID",
                 "detail_receipt 无效、已过期或与当前查询不匹配。",
@@ -1212,8 +1179,7 @@ def _validate_request(
     request = dict(request)
     request_id = request.get("request_id")
     domain = request.get("domain")
-    mode = request.get("mode")
-    purpose = request.get("purpose")
+    legacy_mode = request.get("mode")
     if not request_contract.valid_string(request_id, request_contract.REQUEST_ID):
         raise QueryFailure(
             "INVALID_INPUT",
@@ -1228,25 +1194,20 @@ def _validate_request(
             path=field_path("domain"),
             hint=f"Use one of: {', '.join(SUPPORTED_DOMAINS)}.",
         )
-    if mode == "dataset":
+    if legacy_mode == "dataset":
         raise QueryFailure(
             "DETAIL_CONTRACT_UNAVAILABLE",
             "当前发布版本尚未开放语义明细合同，请使用已登记指标和维度。",
         )
-    if mode != "metric":
+    if legacy_mode is not None and legacy_mode != "metric":
         raise QueryFailure(
             "INVALID_INPUT",
             "查询模式不受支持。",
             path=field_path("mode"),
             hint="Use mode='metric'.",
         )
-    if not request_contract.valid_string(purpose, request_contract.PURPOSE):
-        raise QueryFailure(
-            "INVALID_INPUT",
-            "查询目的无效。",
-            path=field_path("purpose"),
-            hint="Use a non-blank purpose of at most 300 characters.",
-        )
+    request.pop("purpose", None)
+    request.pop("mode", None)
     unexpected_fields = sorted(set(request) - _METRIC_REQUEST_FIELDS)
     if unexpected_fields:
         unexpected = unexpected_fields[0]
@@ -1260,6 +1221,7 @@ def _validate_request(
                 else f"Remove unsupported request field '{unexpected}'."
             ),
         )
+    request["mode"] = "metric"
     try:
         validate_request_field_contract(request)
     except CapabilityContractError as exc:
@@ -1318,12 +1280,6 @@ def _validate_request(
                     path=field_path(f"metric_filters.{filter_name}"),
                     hint="Use one scalar or a non-empty bounded scalar array.",
                 )
-    analysis_intent = request.get("analysis_intent")
-    if analysis_intent is not None and analysis_intent not in evidence.ANALYSIS_INTENTS:
-        raise QueryFailure("INVALID_INPUT", "analysis_intent 不受支持。")
-    evidence_role = request.get("evidence_role")
-    if evidence_role is not None and evidence_role not in evidence.EVIDENCE_ROLES:
-        raise QueryFailure("INVALID_INPUT", "evidence_role 不受支持。")
     decomposition_of = request.get("decomposition_of_request_id")
     if decomposition_of is not None and not request_contract.valid_string(
         decomposition_of, request_contract.REQUEST_ID
@@ -1920,7 +1876,7 @@ def _validate_delivery_metric_scope(request: Mapping[str, Any]) -> dict[str, Any
 
 
 def _validate_inventory_metric_scope(request: Mapping[str, Any]) -> dict[str, Any]:
-    """Validate the structured current-inventory scope without reading purpose text."""
+    """Validate the structured current-inventory scope without reading free text."""
 
     normalized = dict(request)
     scope = normalized.get("inventory_scope")
@@ -4063,16 +4019,6 @@ def _audit_batch_capabilities(
         and result["change_reconciliation"].get("status") == "reconciled"
         for result in results
     )
-    topics = {
-        topic
-        for result in results
-        for topic in (
-            result.get("allowed_reasoning_topics")
-            if isinstance(result.get("allowed_reasoning_topics"), list)
-            else []
-        )
-        if isinstance(topic, str)
-    }
     error_codes = sorted({
         str(error["code"])
         for result in results
@@ -4086,7 +4032,6 @@ def _audit_batch_capabilities(
         "partial": 0 < successful < len(results),
         "linked_decomposition_count": linked,
         "reconciled_count": reconciled,
-        "reasoning_topic_count": len(topics),
         "error_codes": error_codes,
     }
     _CAPABILITY_LOGGER.info(
@@ -4220,27 +4165,11 @@ _PUBLIC_STATE_FIELDS = {
 }
 _SCOPE_PRESENTATION_KEYS = {
     "request_id",
-    "purpose",
-    "analysis_intent",
-    "evidence_role",
     "dimensions",
     "order_by",
     "limit",
     "decomposition_of_request_id",
     "_target_gap_of_request_id",
-}
-_KNOWN_REASONING_TOPICS = {
-    "collection_timing",
-    "credit_or_settlement",
-    "customer_mix",
-    "demand_timing",
-    "delivery_execution",
-    "external_event",
-    "price_or_terms",
-    "product_mix",
-    "return_activity",
-    "supply_availability",
-    "target_or_plan_change",
 }
 
 
@@ -4255,31 +4184,6 @@ def _semantic_request_fingerprint(
         request,
         scope_fingerprint=scope_fingerprint,
     )
-
-
-def _allowed_reasoning_topics(
-    metric_definition: Mapping[str, Any],
-) -> list[str]:
-    """Return only versioned, metric-owned reasoning capabilities."""
-
-    topics = metric_definition.get("reasoning_topics")
-    decomposition = metric_definition.get("change_decomposition")
-    if topics is None:
-        return []
-    if (
-        not isinstance(topics, list)
-        or not topics
-        or any(not isinstance(topic, str) for topic in topics)
-        or len(set(topics)) != len(topics)
-        or not set(topics) <= _KNOWN_REASONING_TOPICS
-        or not isinstance(decomposition, Mapping)
-        or decomposition.get("mode") != "additive_partition"
-    ):
-        raise QueryFailure(
-            "CONTRACT_UNAVAILABLE",
-            "指标原因推理能力合同无效。",
-        )
-    return list(topics)
 
 
 def _safe_display_value(value: Any) -> str | None:
@@ -5522,18 +5426,6 @@ def _partition_proof_completeness_counts(
     return {field: int(value) for field, value in counts.items()}
 
 
-def _reasoning_evidence_eligible(claim: Mapping[str, Any]) -> bool:
-    triplet = _claim_triplet(claim)
-    relations = claim.get("allowed_relations")
-    return (
-        triplet is not None
-        and triplet[2] != 0
-        and claim.get("source_truncated") is False
-        and isinstance(relations, list)
-        and "period_comparison" in relations
-    )
-
-
 def _authorize_change_decompositions(
     contexts: Sequence[Mapping[str, Any] | None],
     results: list[dict[str, Any]],
@@ -6662,6 +6554,9 @@ def _resolve_snapshot_time_evidence(
                 "查询时间范围结构无效。",
                 stage="result_validation",
             )
+        if key == "comparison_alignment":
+            resolved[key] = _public_comparison_alignment(item)
+            continue
         field = (
             _INTERNAL_COMPARISON_SNAPSHOT_MONTH
             if key == "comparison"
@@ -7225,7 +7120,6 @@ def _mark_model_wire_evidence_integrity_failure(
     visible_count = len(claims) if isinstance(claims, list) else 0
     projected["data_state"] = "incomplete" if visible_count else "undefined"
     projected["row_count"] = visible_count
-    projected["allowed_reasoning_topics"] = []
     projected.pop("change_reconciliation", None)
     projected.pop("target_gap_reconciliation", None)
     projected["error"] = dict(_MODEL_WIRE_EVIDENCE_INTEGRITY_ERROR)
@@ -7461,7 +7355,6 @@ def _fail_closed_formal_dso_model_wire(projected: dict[str, Any]) -> None:
                 facts.pop("metric_value", None)
             evidence.seal_claim(claim)
         projected["row_count"] = len(states)
-        projected["allowed_reasoning_topics"] = []
         projected.pop("change_reconciliation", None)
         projected.pop("target_gap_reconciliation", None)
 
@@ -7550,10 +7443,6 @@ def _model_wire_result(result: Mapping[str, Any]) -> dict[str, Any]:
         projected["change_reconciliation"] = _model_wire_change_reconciliation(
             projected["change_reconciliation"]
         )
-    # Reasoning policy is not part of the public data contract. Evidence
-    # validation may use an empty topic list as private fail-closed state, but
-    # Hermes remains responsible for choosing and labelling useful hypotheses.
-    projected.pop("allowed_reasoning_topics", None)
     return projected
 
 
@@ -7578,7 +7467,6 @@ def _model_wire_evidence_bundle_results(
         "scope_fingerprint",
         "projection_fingerprint",
         "claim_ledger",
-        "allowed_reasoning_topics",
         "row_count",
         "truncated",
         "error",
@@ -8805,14 +8693,6 @@ def _run_one(
             disclosure_ledger=disclosure_ledger,
             disclosure_ledger_seal=disclosure_ledger_seal,
         )
-        reasoning_topics = (
-            _allowed_reasoning_topics(metric_definition)
-            if any(
-                _reasoning_evidence_eligible(claim)
-                for claim in claim_ledger
-            )
-            else []
-        )
         result = {
             "request_id": request["request_id"],
             "_calculation_scope": _calculation_scope_contract(
@@ -8836,7 +8716,6 @@ def _run_one(
             "disclosure_contract_version": "metric-disclosure-ledger/v1",
             "disclosure_ledger": disclosure_ledger,
             "disclosure_ledger_seal": disclosure_ledger_seal,
-            "allowed_reasoning_topics": reasoning_topics,
             "change_reconciliation": None,
             "complete_partition_proof": complete_partition_proof,
             "complete_partition_proof_failure": complete_partition_proof_failure,

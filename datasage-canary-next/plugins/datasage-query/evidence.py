@@ -23,32 +23,9 @@ _SEMANTIC_REQUEST_FINGERPRINT_VERSION = "semantic-request/v1"
 _SEMANTIC_FINGERPRINT_PRESENTATION_KEYS = {
     "request_id",
     "purpose",
-    "analysis_intent",
-    "evidence_role",
     "decomposition_of_request_id",
     "detail_receipt",
 }
-
-ANALYSIS_INTENTS = (
-    "metric_lookup",
-    "performance_review",
-    "change_diagnosis",
-    "anomaly_scan",
-    "entity_deep_dive",
-    "contribution_analysis",
-)
-
-EVIDENCE_ROLES = (
-    "outcome",
-    "comparison",
-    "benchmark",
-    "offset",
-    "breadth",
-    "composition",
-    "concentration",
-    "anomaly",
-    "hypothesis_test",
-)
 
 _LIMITED_STATES = {"empty", "undefined", "incomplete"}
 
@@ -108,6 +85,9 @@ def _semantic_request_projection(request: Mapping[str, Any]) -> dict[str, Any]:
         if str(key) not in _SEMANTIC_FINGERPRINT_PRESENTATION_KEYS
         and not str(key).startswith("_")
     }
+    # Public requests no longer expose mode; retain the established semantic
+    # fingerprint by projecting the runtime's sole governed mode explicitly.
+    normalized.setdefault("mode", "metric")
     calendar_month = normalized.pop("calendar_month", None)
     if calendar_month is not None and "time_range" not in normalized:
         expanded = _calendar_month_time_range(calendar_month)
@@ -253,8 +233,6 @@ def _supports(result: Mapping[str, Any]) -> list[str]:
         supported.add("structural_contribution")
     if _target_gap_reconciliation_is_valid(result):
         supported.add("target_gap_composition")
-    if _string_set(result.get("allowed_reasoning_topics")):
-        supported.add("hypothesis_direction")
     if result.get("data_state") == "empty":
         supported.add("empty_result_state")
     if result.get("data_state") == "undefined":
@@ -295,8 +273,9 @@ def _limitations(
     data_state = result.get("data_state")
     if data_state in _LIMITED_STATES:
         limitations.append(f"DATA_STATE_{str(data_state).upper()}")
+    change_reconciliation = result.get("change_reconciliation")
     if (
-        request.get("evidence_role") == "composition"
+        isinstance(change_reconciliation, Mapping)
         and _reconciliation_status(result) != "reconciled"
     ):
         limitations.append("STRUCTURAL_CONTRIBUTION_NOT_RECONCILED")
@@ -814,19 +793,10 @@ def build_evidence_bundle(
     }
 
     items: list[dict[str, Any]] = []
-    role_requests: dict[str, list[str]] = {}
-    unspecified: list[str] = []
     evidence_gaps: list[dict[str, Any]] = []
 
     for request_id, request in request_by_id.items():
         result = result_by_id.get(request_id, {})
-        intent = request.get("analysis_intent")
-        role = request.get("evidence_role")
-        if isinstance(role, str):
-            role_requests.setdefault(role, []).append(request_id)
-        else:
-            unspecified.append(request_id)
-
         item: dict[str, Any] = {
             "request_id": request_id,
             "status": result.get("status", "missing_result"),
@@ -836,10 +806,6 @@ def build_evidence_bundle(
             "supports": _supports(result),
             "limitations": _limitations(request, result),
         }
-        if isinstance(intent, str):
-            item["analysis_intent"] = intent
-        if isinstance(role, str):
-            item["evidence_role"] = role
         error = result.get("error")
         if isinstance(error, Mapping) and isinstance(error.get("code"), str):
             item["error_code"] = error["code"]
@@ -857,19 +823,12 @@ def build_evidence_bundle(
                     else "data_incomplete"
                 ),
             }
-            if isinstance(role, str):
-                gap["evidence_role"] = role
             evidence_gaps.append(gap)
-
-    requested_roles = sorted(role_requests)
 
     return {
         "version": EVIDENCE_BUNDLE_VERSION,
         "coverage": {
             "request_count": len(request_by_id),
-            "requested_role_labels": requested_roles,
-            "unspecified_request_ids": sorted(unspecified),
-            "role_labels_authorize_claims": False,
         },
         "coverage_receipts": _coverage_receipts(request_by_id, result_by_id),
         "items": items,

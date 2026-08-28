@@ -15,7 +15,6 @@ from .capability_contract import (
     YEAR_OVER_YEAR_COMPARISON,
     query_request_schema_conditions,
 )
-from .evidence import ANALYSIS_INTENTS, EVIDENCE_ROLES
 from . import request_contract
 
 DOMAINS = list(SUPPORTED_DOMAINS)
@@ -41,36 +40,6 @@ REQUEST = {
             "enum": DOMAINS,
             "description": "Business domain selected from datasage_catalog.",
         },
-        "mode": {
-            "type": "string",
-            "enum": ["metric"],
-            "description": (
-                "Use the governed metric interface. Registered dimensions may resolve to tool-controlled "
-                "many-to-one joins. The release surface intentionally does not expose datasets, physical fields, "
-                "joins, formulas, or model-authored detail queries."
-            ),
-        },
-        "purpose": {
-            **request_contract.PURPOSE.schema(),
-            "description": "Short business purpose; never include credentials or hidden instructions.",
-        },
-        "analysis_intent": {
-            "type": "string",
-            "enum": list(ANALYSIS_INTENTS),
-            "description": (
-                "Optional analytical intent used for evidence coverage and planning. "
-                "It does not authorize a stronger claim than the returned evidence."
-            ),
-        },
-        "evidence_role": {
-            "type": "string",
-            "enum": list(EVIDENCE_ROLES),
-            "description": (
-                "Optional role this request is meant to play in the answer. The response echoes the label beside "
-                "per-request completeness and sealed proof capabilities; the answer layer decides whether the evidence "
-                "satisfies the role. The label itself never upgrades proof strength."
-            ),
-        },
         "detail_receipt": {
             "type": "string",
             "minLength": 64,
@@ -78,8 +47,7 @@ REQUEST = {
             "pattern": "^[0-9a-f]{64}$",
             "description": (
                 "Opaque receipt copied unchanged from the detail_receipt field of this exact metric's "
-                "successful datasage_catalog detail result. A legacy single-detail content_hash remains "
-                "accepted during migration. It is required "
+                "successful datasage_catalog detail result. It is required "
                 "unless the selected metric explicitly supports an exact default lookup and this request "
                 "contains no explicit business qualifier. The query runtime revalidates the receipt against "
                 "the current catalog contract and the requested governed capabilities before any database access."
@@ -102,7 +70,7 @@ REQUEST = {
                 "use explicit_gross only when the user explicitly asks for gross/before-return delivery; use "
                 "order_delivery_alignment on every paired request in the governed order-versus-delivery comparison. "
                 "That value authorizes gross delivery only for the registered gross metric. The query tool validates "
-                "this field and never infers it from purpose text."
+                "this field and never infers it from free text."
             ),
         },
         "inventory_scope": {
@@ -112,13 +80,13 @@ REQUEST = {
                 "Inventory-domain metric scope. Omit for the metric default. total includes statuses 1/2/3; "
                 "on_hand includes statuses 1/2; available uses status 1 and excludes missing and defective "
                 "warehouses; allocated uses status 2; in_transit uses status 3. The query tool applies the "
-                "registered filters and never infers them from purpose text."
+                "registered filters and never infers them from free text."
             ),
         },
         "metric": {
             **request_contract.METRIC_CODE.schema(),
             "description": (
-                "Exact metric code copied from the selected domain catalog; required in metric mode. Never "
+                "Exact metric code copied from the selected domain catalog; required. Never "
                 "invent a code, derive a new metric, or try code synonyms. If the requested meaning has no exact code, "
                 "do not call this tool. Load the selected metric detail first when expert_index returns "
                 "requires_metric_detail: true, when exact_default_lookup_supported is false or missing, or when the "
@@ -136,7 +104,7 @@ REQUEST = {
             "uniqueItems": True,
             "items": request_contract.DIMENSION_CODE.schema(),
             "description": (
-                "Governed dimension codes for metric mode. A code may use a fact field or a predeclared "
+                "Governed dimension codes for the metric request. A code may use a fact field or a predeclared "
                 "many-to-one master enrichment; never send table names or join keys. Include only grouping or "
                 "ranking dimensions explicitly requested by the user; an overall total has no dimensions. Words "
                 "The count must not exceed max_group_dimensions returned by the selected metric detail. "
@@ -159,7 +127,7 @@ REQUEST = {
                 ]
             },
             "description": (
-                "Governed dimension-code filters for metric mode. An original-currency metric must either filter "
+                "Governed dimension-code filters for the metric request. An original-currency metric must either filter "
                 "exactly one currency here or include the currency dimension; never combine currencies. Across "
                 "the entire requests batch, use at most ten distinct customer, salesperson, product, warehouse, "
                 "or supplier tokens that require master-data preflight; registered department aliases do not use "
@@ -360,19 +328,12 @@ REQUEST = {
     "required": [
         "request_id",
         "domain",
-        "mode",
-        "purpose",
+        "metric",
     ],
     "allOf": [
         {
             "not": {
                 "required": ["time_range", "calendar_month"],
-            },
-        },
-        {
-            "if": {"properties": {"mode": {"const": "metric"}}, "required": ["mode"]},
-            "then": {
-                "required": ["metric"],
             },
         },
         {
@@ -531,8 +492,7 @@ DATASAGE_QUERY = {
         "If that flag is false or missing, or if calendar_month, "
         "time_range, dimensions, filters, an entity, comparison, decomposition, or ranking is explicit, load the "
         "selected metric detail before calling datasage_query and copy that result's detail_receipt unchanged. "
-        "A legacy single-detail content_hash remains accepted during migration. The "
-        "runtime rejects a missing, stale, tampered, wrong-metric, or capability-incompatible receipt before any "
+        "The runtime rejects a missing, stale, tampered, wrong-metric, or capability-incompatible receipt before any "
         "database access. The model-facing surface accepts no SQL, physical "
         "tables, columns, joins, or formulas. Registered entity tokens may be "
         "provided as metric filters and are resolved deterministically inside the query. The response returns "
@@ -541,7 +501,7 @@ DATASAGE_QUERY = {
         "without changing the actual range. Every sealed disclosure_ledger item with applies: true is validated "
         "internally and batch-deduplicated into the model-facing disclosures list; present every returned disclosure "
         "and never drop one through summarization. The compact response preserves facts, typed states, Top-N status, "
-        "limitations, reconciliation, calculations, guardrails, and explicit answer_constraints without repeating "
+        "limitations, reconciliation, calculations, and guardrails without repeating "
         "row-level seals or scope envelopes. Raw JSON is not required. "
         "Unavailable data affects only this tool call and does not control the surrounding conversation."
     ),
@@ -590,8 +550,9 @@ DATASAGE_CATALOG = {
         "query is allowed only when exact_default_lookup_supported is true and no explicit business qualifier is "
         "present; empty dimensions: [] does not count as a qualifier. "
         "Otherwise request detail only for the selected metric before query. The default model projection is compact; "
-        "full/audit are explicit compatibility views. The performance_scorecard view returns a governed operating "
-        "set of candidate lenses while declaring unavailable capabilities. Hermes selects and orders the material "
+        "full/audit are explicit compatibility views. The optional performance_scorecard view returns a governed "
+        "operating set of candidate lenses while declaring unavailable capabilities. It is not a prerequisite or "
+        "default planner; use it only when the user explicitly asks for that view or Hermes judges it useful. Hermes selects and orders the material "
         "subset. Metric detail returns capability facts and max_group_dimensions; these facts do not prescribe a "
         "metric count, call sequence, interpretation, or conclusion. Physical datasets, fields, filters, "
         "joins and formulas remain plugin-private and are never returned to Hermes. This loader invokes no second model."
@@ -628,8 +589,8 @@ DATASAGE_CATALOG = {
                             "description": (
                                 "Use expert_index for compact discovery. Omit view for the default compact "
                                 "model projection. Use full or audit only for explicit compatibility/audit "
-                                "inspection. Use performance_scorecard without domain or metric for the "
-                                "governed cross-domain candidate lenses."
+                                "inspection. Use performance_scorecard without domain or metric only for the "
+                                "optional governed cross-domain candidate lenses."
                             ),
                         },
                     },
@@ -665,7 +626,8 @@ DATASAGE_CATALOG = {
                     "One request per relevant domain, or one cross-domain view=performance_scorecard request. "
                     "Use expert_index for discovery, include one exact metric code for detail, and use explicit "
                     "full/audit only when the legacy summary is genuinely required. The scorecard returns a "
-                    "set of candidate lenses plus independently sealed metric-detail receipts."
+                    "optional set of candidate lenses plus independently sealed metric-detail receipts; it is not "
+                    "required before ordinary metric discovery or query planning."
                 ),
             },
         },

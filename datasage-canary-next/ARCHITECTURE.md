@@ -1,6 +1,6 @@
 # DataSage Expert 0.15 架构
 
-版本：`0.15.0-rc7`
+版本：`0.15.0-rc8`
 运行基线：Hermes `0.20.5`
 
 ## 唯一目标
@@ -56,16 +56,14 @@ SOUL 只保留专家身份与事实/假设/建议等高层原则；动态期间�
 | `skills/business-analytics/datasage/SKILL.md` | Profile Skill | Hermes Skill loader | 激活、工作流与既有安全边界；随 Skill 版本发布 |
 | `datasage.query-rules/v1` | Skill 请求规则 | Hermes 按需加载、库存测试 | 请求构造方法；live schema/catalog 拥有可用字段和值 |
 | `datasage.entity-guidance/v1` | Skill 实体指导 | Hermes 按需加载、库存测试 | 模型安全投影；不能创建或覆盖实体映射 |
-| `datasage.planning-semantics/v1` | Skill 分析方法 | Hermes 按需加载、库存测试 | 可选规划参考；`evidence_role` 枚举以 live `datasage_query` schema 为准 |
 | `datasage.answer-boundary/v1` | Skill 最终回答策略 | Hermes 按需加载、插件安全锚点、库存测试 | 详细回答边界；插件 prompt 只提供不可独立演进的安全副本和规则 ID |
 | `datasage.entity-maintainer-rationale/v1` | 插件维护者 | 维护者、库存测试 | 源码仓库中的非模型、非运行时文档；不进入发行载荷，只有落入 registry/domain semantics 并有测试才生效 |
 | plugin contracts/schema/results | DataSage plugin | plugin runtime、Hermes tools | 指标能力、权限、执行与返回证据的确定性权威 |
 
 发行与模型权威是两回事：`entity-rules-maintainer.md` 只留在源码仓库供审计，
 不属于 `distribution_owned`；Skill 不得加载它，插件也不得 import 它。
-`planning-semantics.yaml` 只描述分析
-角色的使用方法，不复制或扩展 live schema 的枚举权威。库存测试负责机械检查
-这些 owner、consumer、lifecycle 和引用关系，防止无 consumer 的孤儿规则。
+库存测试负责机械检查这些 owner、consumer、lifecycle 和引用关系，防止无
+consumer 的孤儿规则。
 
 ## 请求与失败域
 
@@ -75,8 +73,8 @@ SOUL 只保留专家身份与事实/假设/建议等高层原则；动态期间�
   -> 公开 schema（由 capability contract 生成字段条件）
   -> 每个 public branch 独立验证
   -> 每个 branch 按 operation 申请物理执行槽
-  -> 成功与局部失败共同进入 compact wire
-  -> 最终字符预算保留 success-first 完整分支
+  -> 成功与局部失败共同进入领域语义压缩
+  -> 保留全部完整分支交给 Hermes 原生 spillover/turn budget
   -> Hermes 形成答案
 ```
 
@@ -86,9 +84,9 @@ SOUL 只保留专家身份与事实/假设/建议等高层原则；动态期间�
 最多十个 branch，每个 branch 放不进剩余物理预算时仅返回
 `EXECUTION_BUDGET_EXCEEDED`。
 
-原始单结果和批结果 byte gate 已删除。行数、单元格长度、查询超时、SQL 只读、
-权限和最终 `max_tool_result_chars` 仍保留。压缩发生在最终字符预算之前；超限时
-先保留成功证据，再保留局部失败。
+原始单结果、批结果 byte gate 与 Profile 自建最终字符预算均已删除。行数、
+单元格长度、查询超时、SQL 只读和权限仍保留。DataSage 只做领域语义压缩；
+完整结果交给 Hermes 原生 spillover，不再按 success-first 丢弃 branch。
 
 ## Scorecard 边界
 
@@ -101,7 +99,8 @@ SOUL 只保留专家身份与事实/假设/建议等高层原则；动态期间�
 
 - 冲突的 `datasage-query-patterns` companion Skill；
 - test-only `skill_prompt.py` 和自定义 `datasage_reference`/reference registry；
-- 手工维护的 bundled Skill 禁用清单，改用 Hermes 官方 `.no-bundled-skills`；
+- Hermes bundled Skill 的全局 `.no-bundled-skills` opt-out，改为受测试约束的
+  保守 denylist；
 - 每次查询重复返回的静态 `answer_guardrails` 和英文解释规则；
 - 模型可见的 planner source、固定 overview bundle 和 recipe 路由；
 - schema 允许但运行时整批拒绝的重复字段验证路径；
@@ -133,12 +132,26 @@ fixture，要求压缩后保留用户纠正、当前 period/scope/entity/metric 
 
 ### Hermes 内建 Skill 选择约束
 
-保留 `.no-bundled-skills`。对 Hermes `0.20.5` 的宿主实现检查显示，
-`skills.disabled` 是排除列表，profile 创建时的 `keep_skills` 只是一次性选择；
-当前没有能在后续更新/重新播种时仍精确保留指定内建 Skill 的持久 allowlist。
-因此本版不能删除 marker 后声称只复用一部分内建 Skill。TODO：宿主提供原生、
-持久、更新稳定的 allowlist 并有升级回归测试后，再评估以精确 allowlist 替代
-`.no-bundled-skills`；在此之前按需复用只能通过本 profile 自有、已盘点的 Skill。
+删除 `.no-bundled-skills`，由 Hermes 官方同步机制提供内建 Skill。Hermes
+`0.20.5` 的 `skills.disabled` 是全局排除列表，`skills.platform_disabled` 会与
+全局列表按平台取并集；宿主没有持久 allowlist。因此本 Profile 在精确锁定
+`hermes_requires: ==0.20.5` 的同时，用完整 denylist 模拟保守 allowlist，只启用：
+
+- `document-to-action-items`、`meeting-action-items`：从文档和会议材料生成有出处的
+  决策、义务与待办；
+- `docx`、`xlsx`、`pdf`、`powerpoint`、`ocr-and-documents`：处理常见办公文件，
+  包括提取、生成、编辑与验证；
+- `grounded-citations`：为外部事实建立可验证引用；
+- `weekly-review-planning`：把既有承诺、阻塞和下一步整理为周度工作计划。
+
+未启用外部账号型、代码开发型、桌面控制型、社交媒体型、创意媒体型和功能重叠
+但边界更窄的 Skill（例如 `nano-pdf`）。内建 Skill 仍由 Hermes 拥有，本 Profile
+不复制或修改其内容。
+
+每次 Hermes 升级都必须先运行测试，将宿主 bundled Skill 名称与
+`skills.disabled` 做完整快照差异审查。新增、删除或重命名任一内建 Skill都会使测试
+失败；只有人工审查并更新 denylist 后才允许升级。`platform_disabled` 仅在某个
+渠道需要比全局集合更窄时使用，不能用来暗中扩大能力。
 
 ## 期间比较合同
 
@@ -176,7 +189,7 @@ logs 或用户 Memory。当前远程仓库的 manifest 位于子目录，尚不�
 - schema 与逐分支运行时字段合同机械等价；
 - mixed valid/invalid batch 保留成功证据；
 - complete 扩展超预算只局部失败；
-- compact-before-budget 且 success-first；
+- 领域语义压缩保留全部完整分支，并由 Hermes 原生 spillover 承载宿主预算；
 - scorecard 的指标选择、顺序和调用数可自适应；
 - planner/companion/fixed-answer scorer 不在发布路径；
 - Git commit/tag 与 Profile Distribution 提供发行/安装身份，receipt 只绑定领域质量证据；

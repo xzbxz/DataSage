@@ -85,9 +85,6 @@ def performance_scorecard_manifest() -> dict[str, Any]:
     return {
         "version": SCORECARD_VERSION,
         "kind": "operating_performance_candidate_lenses",
-        "selection_owner": "Hermes",
-        "ordering_owner": "Hermes",
-        "interpretation_owner": "Hermes",
         "candidate_lenses": deepcopy(SCORECARD_LENSES),
         "evidence_boundaries": [
             "This is operating evidence, not complete company health or profitability.",

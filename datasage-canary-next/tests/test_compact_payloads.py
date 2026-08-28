@@ -7,7 +7,6 @@ from pathlib import Path
 import sys
 import types
 import unittest
-from unittest import mock
 
 import jsonschema
 
@@ -83,7 +82,6 @@ def _query_result(
             }
         ],
         "disclosure_ledger_seal": "sha256_" + "e" * 64,
-        "allowed_reasoning_topics": [],
         "change_reconciliation": (
             {"status": "not_reconciled", "reason_code": "ordinary_ranking"}
             if structural_limitation
@@ -135,8 +133,6 @@ def _query_payload() -> dict[str, object]:
                     "reconciliation": "not_requested_or_unavailable",
                     "supports": ["observation", "dimension_breakdown"],
                     "limitations": ["SOURCE_TRUNCATED"],
-                    "analysis_intent": "contribution_analysis",
-                    "evidence_role": "concentration",
                 },
                 {
                     "request_id": "structure",
@@ -146,8 +142,6 @@ def _query_payload() -> dict[str, object]:
                     "reconciliation": "not_requested_or_unavailable",
                     "supports": ["observation", "dimension_breakdown"],
                     "limitations": ["STRUCTURAL_CONTRIBUTION_NOT_RECONCILED"],
-                    "analysis_intent": "contribution_analysis",
-                    "evidence_role": "composition",
                 },
             ],
             "evidence_gaps": [],
@@ -204,7 +198,6 @@ class CompactPayloadTests(unittest.TestCase):
     def test_default_catalog_is_compact_and_full_view_remains_compatible(self):
         raw, compact = _catalog({"requests": [{"domain": "delivery"}]})
         rendered = json.dumps(compact, ensure_ascii=False, separators=(",", ":"))
-        self.assertLessEqual(len(rendered), wire.tool_result_char_limit())
         metric = compact["results"][0]["metrics"][0]
         for field in (
             "code",
@@ -231,7 +224,7 @@ class CompactPayloadTests(unittest.TestCase):
             {"requests": [{"domain": "delivery", "metric": "delivery_amount"}]}
         )
         rendered = json.dumps(compact, ensure_ascii=False, separators=(",", ":"))
-        self.assertLessEqual(len(rendered), wire.tool_result_char_limit())
+        self.assertLess(len(rendered), len(raw))
         detail = compact["results"][0]
         self.assertRegex(detail["detail_receipt"], r"^[0-9a-f]{64}$")
         self.assertTrue(detail["dimensions"])
@@ -247,11 +240,7 @@ class CompactPayloadTests(unittest.TestCase):
     def test_scorecard_returns_candidate_lenses_with_independent_receipts(self):
         raw, compact = _catalog({"requests": [{"view": "performance_scorecard"}]})
         rendered = json.dumps(compact, ensure_ascii=False, separators=(",", ":"))
-        self.assertLessEqual(len(rendered), wire.tool_result_char_limit())
         scorecard = compact["results"][0]
-        self.assertEqual("Hermes", scorecard["selection_owner"])
-        self.assertEqual("Hermes", scorecard["ordering_owner"])
-        self.assertEqual("Hermes", scorecard["interpretation_owner"])
         self.assertGreater(scorecard["metric_count"], 0)
         candidates = [
             candidate
@@ -278,6 +267,12 @@ class CompactPayloadTests(unittest.TestCase):
             "request_template",
             "request_id_hint",
             "reasoning_topics",
+            "optional_view",
+            "default_planner",
+            "invocation_policy",
+            "selection_owner",
+            "ordering_owner",
+            "interpretation_owner",
         ):
             self.assertNotIn(forbidden, rendered)
             self.assertNotIn(forbidden, raw)
@@ -291,17 +286,13 @@ class CompactPayloadTests(unittest.TestCase):
             receipts.append(receipt)
             domain = detail["domain"]
             metric = detail["metric"]["code"]
-            self.assertIn(
+            self.assertEqual(
                 receipt,
-                tools._current_metric_detail_receipts(
-                    domain, metric
-                ),
+                tools._current_metric_detail_receipt(domain, metric),
             )
             request = {
                 "request_id": f"adaptive_candidate_{index}",
                 "domain": domain,
-                "mode": "metric",
-                "purpose": "offline adaptive scorecard candidate probe",
                 "metric": metric,
                 "detail_receipt": receipt,
                 "dimensions": [],
@@ -331,28 +322,18 @@ class CompactPayloadTests(unittest.TestCase):
         for field in ("requested_limit", "effective_limit", "has_more", "truncated"):
             self.assertIn(field, result)
         self.assertEqual(["SOURCE_TRUNCATED"], result["limitations"])
-        self.assertEqual(
-            ["ranked"],
-            compact["answer_constraints"]["truncated_population"]["request_ids"],
+        self.assertNotIn("answer_constraints", compact)
+        items = {
+            item["request_id"]: item
+            for item in compact["evidence_bundle"]["items"]
+        }
+        self.assertEqual("truncated", items["ranked"]["completeness"])
+        self.assertIn("SOURCE_TRUNCATED", items["ranked"]["limitations"])
+        self.assertIn(
+            "STRUCTURAL_CONTRIBUTION_NOT_RECONCILED",
+            items["structure"]["limitations"],
         )
-        self.assertEqual(
-            ["structure"],
-            compact["answer_constraints"]["reconciliation_missing"]["request_ids"],
-        )
-        self.assertEqual(
-            [],
-            compact["answer_constraints"]["benchmark_evidence"]["request_ids"],
-        )
-        self.assertEqual(
-            [],
-            compact["answer_constraints"]["scope_compatibility"]["proofs"],
-        )
-        self.assertEqual(
-            [],
-            compact["answer_constraints"]["scope_compatibility"][
-                "incompatibilities"
-            ],
-        )
+        self.assertEqual("success", compact["calculations"][0]["status"])
         self.assertNotIn("answer_guardrails", compact["evidence_bundle"])
         self.assertNotIn('"rule":', rendered)
         self.assertEqual(1, compact["calculation_count"])
@@ -366,29 +347,9 @@ class CompactPayloadTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, rendered)
 
-    def test_only_sealed_supports_project_benchmark_evidence(self):
+    def test_wire_keeps_typed_supports_and_calculation_scope_without_projection(self):
         payload = _query_payload()
-        payload["evidence_bundle"]["items"][0]["evidence_role"] = "benchmark"
-        payload["evidence_bundle"]["items"][0]["supports"].extend(
-            ["period_comparison", "change"]
-        )
-        compact = json.loads(wire.enforce_tool_result_budget("datasage_query", payload))
-        benchmark = compact["answer_constraints"]["benchmark_evidence"]
-        self.assertNotIn("ranked", benchmark["request_ids"])
-
         payload["evidence_bundle"]["items"][0]["supports"].append("target_status")
-        compact = json.loads(wire.enforce_tool_result_budget("datasage_query", payload))
-        benchmark = compact["answer_constraints"]["benchmark_evidence"]
-        self.assertIn("ranked", benchmark["request_ids"])
-
-    def test_scope_compatibility_projects_only_bound_calculation_proofs(self):
-        payload = _query_payload()
-        compact = json.loads(wire.enforce_tool_result_budget("datasage_query", payload))
-        compatibility = compact["answer_constraints"]["scope_compatibility"]
-        self.assertEqual([], compatibility["proofs"])
-        self.assertEqual([], compatibility["incompatibilities"])
-        self.assertNotIn("status", compatibility)
-
         payload["calculations"][0].update(
             {
                 "operands": [
@@ -407,17 +368,21 @@ class CompactPayloadTests(unittest.TestCase):
             }
         )
         compact = json.loads(wire.enforce_tool_result_budget("datasage_query", payload))
+        self.assertNotIn("answer_constraints", compact)
+        item = compact["evidence_bundle"]["items"][0]
+        self.assertIn("target_status", item["supports"])
+        calculation = compact["calculations"][0]
+        self.assertEqual("success", calculation["status"])
         self.assertEqual(
-            [
-                {
-                    "calculation_id": "c1",
-                    "request_ids": ["ranked", "structure"],
-                }
-            ],
-            compact["answer_constraints"]["scope_compatibility"]["proofs"],
+            {
+                "same_metric_basis": True,
+                "same_filter_scope": True,
+                "same_unit": True,
+            },
+            calculation["scope_compatibility"],
         )
 
-    def test_scope_compatibility_projects_only_typed_scope_mismatch_failures(self):
+    def test_wire_keeps_failed_calculation_as_typed_fact(self):
         payload = _query_payload()
         payload["calculations"][0].update(
             {
@@ -434,81 +399,48 @@ class CompactPayloadTests(unittest.TestCase):
             }
         )
         compact = json.loads(wire.enforce_tool_result_budget("datasage_query", payload))
-        compatibility = compact["answer_constraints"]["scope_compatibility"]
-        self.assertEqual([], compatibility["proofs"])
+        self.assertNotIn("answer_constraints", compact)
+        calculation = compact["calculations"][0]
+        self.assertEqual("failed", calculation["status"])
         self.assertEqual(
-            [
-                {
-                    "calculation_id": "c1",
-                    "request_ids": ["ranked", "structure"],
-                    "reason_code": "CALCULATION_SCOPE_MISMATCH",
-                }
-            ],
-            compatibility["incompatibilities"],
+            "CALCULATION_SCOPE_MISMATCH",
+            calculation["error"]["code"],
+        )
+        self.assertEqual(
+            ["ranked", "structure"],
+            [operand["request_id"] for operand in calculation["operands"]],
         )
 
-        payload["calculations"][0]["error"]["code"] = (
-            "CALCULATION_DIVISION_BY_ZERO"
+    def test_typed_reconciliation_is_the_limitation_authority(self):
+        without_reconciliation = _query_result(
+            "without_reconciliation",
+            truncated=False,
+            structural_limitation=False,
         )
-        compact = json.loads(wire.enforce_tool_result_budget("datasage_query", payload))
-        self.assertEqual(
-            [],
-            compact["answer_constraints"]["scope_compatibility"][
-                "incompatibilities"
-            ],
+        plain = tools.evidence.build_evidence_bundle(
+            [{"request_id": "without_reconciliation"}],
+            [without_reconciliation],
+        )
+        self.assertNotIn(
+            "STRUCTURAL_CONTRIBUTION_NOT_RECONCILED",
+            plain["items"][0]["limitations"],
         )
 
-    def test_partial_query_prefix_filters_batch_metadata_to_returned_requests(self):
-        payload = _query_payload()
-        payload["calculations"][0].update(
-            {
-                "status": "failed",
-                "operands": [
-                    {"request_id": "ranked"},
-                    {"request_id": "structure"},
-                ],
-                "error": {
-                    "code": "CALCULATION_SCOPE_MISMATCH",
-                    "message": "typed failure",
-                    "retryable": False,
-                },
-            }
+        with_reconciliation = _query_result(
+            "typed_reconciliation",
+            truncated=False,
+            structural_limitation=True,
         )
-        with mock.patch.object(wire, "tool_result_char_limit", return_value=8_000):
-            compact = json.loads(
-                wire.enforce_tool_result_budget("datasage_query", payload)
-            )
-        self.assertEqual("partial", compact["status"])
-        self.assertNotIn("answer_scope_line", compact)
-        returned_ids = {item["request_id"] for item in compact["results"]}
-        self.assertTrue(returned_ids)
-        for disclosure in compact.get("disclosures", []):
-            self.assertTrue(set(disclosure["request_ids"]) <= returned_ids)
-        for item in compact.get("evidence_bundle", {}).get("items", []):
-            self.assertIn(item["request_id"], returned_ids)
-        coverage = compact["evidence_bundle"]["coverage"]
-        self.assertEqual(len(returned_ids), coverage["request_count"])
-        retained_items = compact["evidence_bundle"].get("items", [])
-        self.assertEqual(
-            sorted(
-                {
-                    item["evidence_role"]
-                    for item in retained_items
-                    if "evidence_role" in item
-                }
-            ),
-            coverage["requested_role_labels"],
+        typed = tools.evidence.build_evidence_bundle(
+            [{"request_id": "typed_reconciliation"}],
+            [with_reconciliation],
         )
-        self.assertTrue(
-            set(coverage["unspecified_request_ids"]) <= returned_ids
+        self.assertIn(
+            "STRUCTURAL_CONTRIBUTION_NOT_RECONCILED",
+            typed["items"][0]["limitations"],
         )
-        self.assertIn("answer_constraints", compact)
-        compatibility = compact["answer_constraints"]["scope_compatibility"]
-        for field in ("proofs", "incompatibilities"):
-            for item in compatibility[field]:
-                self.assertTrue(set(item["request_ids"]) <= returned_ids)
 
-    def test_partial_budget_skips_one_oversized_success_and_keeps_later_success(self):
+    def test_large_query_retains_every_branch_for_hermes_spillover(self):
         huge = _query_result("huge", truncated=False, structural_limitation=False)
         for claim in huge["claim_ledger"]:
             claim["facts"]["metric_value"] = "x" * 12_000
@@ -540,21 +472,20 @@ class CompactPayloadTests(unittest.TestCase):
                 "reconciliation": "not_requested_or_unavailable",
                 "supports": ["observation"],
                 "limitations": [],
-                "evidence_role": role,
             }
-            for request_id, role in (("huge", "primary"), ("small", "support"))
+            for request_id in ("huge", "small")
         ]
-        with mock.patch.object(wire, "tool_result_char_limit", return_value=8_000):
-            compact = json.loads(
-                wire.enforce_tool_result_budget("datasage_query", payload)
-            )
-        self.assertEqual(["small"], [item["request_id"] for item in compact["results"]])
-        self.assertEqual(1, compact["evidence_bundle"]["coverage"]["request_count"])
+        rendered = wire.enforce_tool_result_budget("datasage_query", payload)
+        compact = json.loads(rendered)
+        self.assertGreater(len(rendered), 90_000)
         self.assertEqual(
-            ["support"],
-            compact["evidence_bundle"]["coverage"]["requested_role_labels"],
+            ["huge", "small"],
+            [item["request_id"] for item in compact["results"]],
         )
-        self.assertNotIn("answer_scope_line", compact)
+        self.assertEqual(2, len(compact["evidence_bundle"]["items"]))
+        self.assertEqual(2, len(compact["metric_contexts"]))
+        self.assertNotIn("omitted_result_count", compact)
+        self.assertNotIn("answer_constraints", compact)
 
     def test_query_wire_keeps_row_scope_when_scopes_vary(self):
         payload = _query_payload()

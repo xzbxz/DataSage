@@ -7,7 +7,20 @@
 `.env`、认证信息、状态库、会话、日志、Memory 及其他运行数据属于用户态，
 不得提交，也不得由发行更新覆盖。企微和数据库权限不属于发行流程的修改范围。
 
-当前候选版本：`0.15.0-rc7`。
+当前候选版本：`0.15.0-rc8`。
+
+## Hermes 原生专家能力
+
+本 Profile 不再使用 `.no-bundled-skills` 退出 Hermes 内建 Skill 同步。针对精确
+锁定的 Hermes `0.20.5`，`config.yaml` 用完整 `skills.disabled` denylist 只保留
+经过审查的文档、表格、PDF、演示文稿、OCR、引用、会议/文档行动项和周度计划
+能力。内建 Skill 由 Hermes 在下一次 `hermes update` 时同步；需要立即同步时运行
+`hermes -p datasage-canary-next skills opt-in --sync`。本仓库不复制或修改这些宿主资产。
+
+升级 Hermes 前必须先运行离线测试。测试会比较新宿主的完整 bundled Skill
+名称集合和当前 denylist；任何新增、删除或重命名都会阻断升级，直到维护者完成
+快照差异审查。不要只因为新 Skill 看起来相关就默认启用，也不要手工维护一份
+Profile 内的内建 Skill 副本。
 
 ## 权威边界
 
@@ -24,7 +37,7 @@
 全部实现合并后，在源码根目录为当前载荷生成一个新的、不可覆盖的候选 receipt：
 
 ```powershell
-$candidate = "pending/datasage-v015-rc7-candidate-receipt-$(Get-Date -Format yyyyMMddTHHmmss).json"
+$candidate = "pending/datasage-v015-rc8-candidate-receipt-$(Get-Date -Format yyyyMMddTHHmmss).json"
 python -B build_release_receipt.py --output $candidate
 python -B build_release_receipt.py --verify-candidate
 ```
@@ -84,9 +97,9 @@ git clone <distribution-repo-url> <clean-source-dir>
 git -C <clean-source-dir> checkout --detach <reviewed-tag-or-commit>
 git -C <clean-source-dir> status --porcelain
 git -C <clean-source-dir> rev-parse HEAD
-hermes profile install <clean-source-dir> --name datasage-rc7-clean -y
-hermes profile info datasage-rc7-clean
-hermes -p datasage-rc7-clean plugins doctor datasage-query --ci
+hermes profile install <clean-source-dir> --name datasage-rc8-clean -y
+hermes profile info datasage-rc8-clean
+hermes -p datasage-rc8-clean plugins doctor datasage-query --ci
 ```
 
 随后只在这个隔离 Profile 上运行真实 replay、企微入站到 delivery ledger、宿主

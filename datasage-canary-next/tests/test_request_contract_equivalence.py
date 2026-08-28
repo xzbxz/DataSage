@@ -38,9 +38,7 @@ def _request(request_id: str = "q1", **overrides):
     value = {
         "request_id": request_id,
         "domain": "delivery",
-        "mode": "metric",
         "metric": "contract_probe_metric",
-        "purpose": "request contract equivalence probe",
     }
     value.update(overrides)
     return value
@@ -82,7 +80,6 @@ class RequestContractEquivalenceTests(unittest.TestCase):
     def test_string_boundaries_are_generated_from_one_contract(self):
         valid = (
             _request(request_id="r" * request_contract.REQUEST_ID.max_length),
-            _request(purpose="p" * request_contract.PURPOSE.max_length),
             _request(metric="m" * request_contract.METRIC_CODE.max_length),
             _request(dimensions=["d" * request_contract.DIMENSION_CODE.max_length]),
             _request(decomposition_of_request_id="overall"),
@@ -90,8 +87,6 @@ class RequestContractEquivalenceTests(unittest.TestCase):
         invalid = (
             _request(request_id=" "),
             _request(request_id="r" * (request_contract.REQUEST_ID.max_length + 1)),
-            _request(purpose="\t\r\n"),
-            _request(purpose="p" * (request_contract.PURPOSE.max_length + 1)),
             _request(metric="\n"),
             _request(metric="m" * (request_contract.METRIC_CODE.max_length + 1)),
             _request(decomposition_of_request_id=" "),
@@ -115,6 +110,28 @@ class RequestContractEquivalenceTests(unittest.TestCase):
         for request in invalid:
             with self.subTest(invalid=request):
                 self.assertRequestEquivalent(request, False)
+
+    def test_public_schema_omits_legacy_mode_and_purpose_but_runtime_shim_accepts_metric(self):
+        properties = schemas.REQUEST["properties"]
+        self.assertNotIn("mode", properties)
+        self.assertNotIn("purpose", properties)
+        self.assertEqual(
+            {"request_id", "domain", "metric"},
+            set(schemas.REQUEST["required"]),
+        )
+
+        legacy = _request(mode="metric", purpose="legacy caller context")
+        self.assertTrue(list(self.request_validator.iter_errors(legacy)))
+        normalized = tools._validate_request(copy.deepcopy(legacy))
+        self.assertEqual("metric", normalized["mode"])
+        self.assertNotIn("purpose", normalized)
+        self.assertEqual(
+            tools.evidence.semantic_request_fingerprint(_request()),
+            tools.evidence.semantic_request_fingerprint(legacy),
+        )
+
+        with self.assertRaises(tools.QueryFailure):
+            tools._validate_request(_request(mode="dataset"))
 
     def test_envelope_and_batch_boundaries_are_equivalent(self):
         maximum_requests = [

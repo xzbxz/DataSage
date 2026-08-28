@@ -6,6 +6,9 @@ model:
   # model fixed for the full session so the result remains attributable.
   default: deepseek-v4-flash
   base_url: https://api.deepseek.com/v1
+auxiliary:
+  background_review:
+    enabled: false
 agent:
   reasoning_effort: high
 tools:
@@ -47,9 +50,6 @@ plugins:
         max_rows: 100
         max_cell_chars: 2000
         max_dimension_display_chars: 80
-        # Compact business evidence first, then enforce Hermes' final wire
-        # ceiling. Oversized batches retain a complete success-first subset.
-        max_tool_result_chars: 90000
         # Business owner approval recorded 2026-08-11: every authenticated
         # WeCom member may use the complete governed DataSage data surface.
         data_entitlements:
@@ -82,6 +82,85 @@ memory:
 skills:
   # Git is authoritative; tracked expert guidance requires operator approval.
   write_approval: true
+  # Hermes 0.20.5 has a denylist rather than a persistent bundled-skill
+  # allowlist. Keep only the reviewed document, spreadsheet, presentation,
+  # citation, and action-item capabilities active. The architecture test
+  # compares this list with the pinned host inventory so an upgrade cannot
+  # activate a newly bundled skill without review.
+  disabled:
+    - airtable
+    - apple-notes
+    - apple-reminders
+    - architecture-diagram
+    - arxiv
+    - ascii-art
+    - ascii-video
+    - baoyu-infographic
+    - blocked-page-recovery
+    - blogwatcher
+    - box
+    - claude-code
+    - claude-design
+    - codebase-inspection
+    - codex
+    - comfyui
+    - competitor-news-monitor
+    - computer-use
+    - design-md
+    - dogfood
+    - email-inbox-triage
+    - evaluating-llms-harness
+    - excalidraw
+    - findmy
+    - gif-search
+    - github-auth
+    - github-code-review
+    - github-issue-to-pr
+    - github-issues
+    - github-pr-workflow
+    - github-repo-management
+    - google-workspace
+    - hermes-agent
+    - hermes-agent-skill-authoring
+    - himalaya
+    - huggingface-hub
+    - humanizer
+    - imessage
+    - inspecting-hermes-desktop-dom
+    - llama-cpp
+    - llm-wiki
+    - manim-video
+    - maps
+    - merge-reconciler
+    - nano-pdf
+    - node-inspect-debugger
+    - notion
+    - obsidian
+    - opencode
+    - openhue
+    - p5js
+    - plan
+    - popular-web-designs
+    - pretext
+    - product-price-monitor
+    - python-debugpy
+    - requesting-code-review
+    - research-paper-writing
+    - sdlc-review
+    - serving-llms-vllm
+    - session-librarian
+    - simplify-code
+    - sketch
+    - songsee
+    - songwriting-and-ai-music
+    - spike
+    - systematic-debugging
+    - teams-meeting-pipeline
+    - test-driven-development
+    - touchdesigner-mcp
+    - weights-and-biases
+    - xurl
+    - youtube-content
 platforms:
   wecom:
     enabled: true
