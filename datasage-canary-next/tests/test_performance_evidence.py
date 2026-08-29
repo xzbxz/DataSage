@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import subprocess
+import sys
 import types
 import unittest
 from pathlib import Path
@@ -288,6 +290,73 @@ class PerformanceEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(runner.EvidenceError, "canonical token equation"):
             _collect(boundary_factory=_fake_factory(total_tokens=999))
 
+    def test_official_preflight_schema_matches_real_agent_without_network(self) -> None:
+        probe = r'''
+import importlib.util, json, os, socket, sys, types
+from pathlib import Path
+from unittest import mock
+
+profile = Path(sys.argv[1]).resolve()
+os.environ["HERMES_HOME"] = str(profile)
+spec = importlib.util.spec_from_file_location(
+    "datasage_performance_agent_schema_probe",
+    profile / "tests" / "run_performance_evidence.py",
+)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+contract = json.loads((profile / "tests" / "fixtures" / "performance_non_db_contract.json").read_text(encoding="utf-8"))
+context = module._prepare_host_boundary(
+    load_credentials=False,
+    suppress_home_initialization=True,
+    import_agent_module=True,
+)
+agent_class = context["run_agent"].AIAgent
+hermes_logging = module._verified_import("hermes_logging")
+offline_client = types.SimpleNamespace(close=lambda: None)
+with (
+    mock.patch.object(context["config"], "ensure_hermes_home", lambda: None),
+    mock.patch.object(hermes_logging, "setup_logging", lambda *_args, **_kwargs: None),
+    mock.patch.object(agent_class, "_create_openai_client", return_value=offline_client),
+    mock.patch.object(socket, "create_connection", side_effect=AssertionError("network blocked")),
+    mock.patch.object(socket.socket, "connect", side_effect=AssertionError("network blocked")),
+):
+    agent = agent_class(
+        api_key="offline-test-key", base_url="https://api.deepseek.com/v1",
+        provider="deepseek", requested_provider="deepseek", api_mode="chat_completions",
+        model=contract["model"], enabled_toolsets=["datasage-query"],
+        max_iterations=2, max_tokens=2048, run_budget_seconds=120,
+        quiet_mode=True, platform="cli", session_db=None, fallback_model=None,
+        skip_context_files=True, skip_memory=True, skip_background_review=True,
+        checkpoints_enabled=False,
+    )
+    try:
+        assert set(agent.valid_tool_names) == set(module.EXPECTED_TOOLS)
+        preflight_hash = module._tool_schema_hash(context["public_tools"])
+        agent_hash = module._tool_schema_hash(agent.tools)
+        assert preflight_hash == agent_hash
+        assert agent_hash == contract["acceptance"]["expected_tool_schema_sha256"]
+    finally:
+        agent.close()
+'''
+        environment = dict(os.environ)
+        environment["HERMES_HOME"] = str(PROFILE_ROOT)
+        completed = subprocess.run(
+            [sys.executable, "-B", "-c", probe, str(PROFILE_ROOT)],
+            cwd=PROFILE_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=30,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            msg=f"fresh-process AIAgent schema probe failed:\n{completed.stdout}\n{completed.stderr}",
+        )
+
     def test_warmup_plus_measured_peak_cost_budget_is_cumulative(self) -> None:
         with self.assertRaisesRegex(runner.EvidenceError, "warmup plus measured peak cost"):
             _collect(boundary_factory=_fake_factory(input_tokens=600_000))
@@ -321,17 +390,13 @@ class PerformanceEvidenceTests(unittest.TestCase):
                 isolated_test_state=True,
             )
         self.assertIsNone(context["run_agent"])
-        for module_name in ("config", "plugins", "run_agent"):
+        for module_name in ("config", "plugins", "model_tools", "run_agent"):
             module_path = Path(context["module_paths"][module_name]).resolve()
             self.assertTrue(runner._path_is_within(module_path, runner.HERMES_ROOT))
         self.assertEqual(set(context["entries"]), set(runner.EXPECTED_TOOLS))
         runner._verify_handler_provenance(context["entries"])
-        schemas = [
-            {"type": "function", "function": {**context["entries"][name].schema, "name": name}}
-            for name in runner.EXPECTED_TOOLS
-        ]
         self.assertEqual(
-            runner._tool_schema_hash(schemas),
+            runner._tool_schema_hash(context["public_tools"]),
             _contract()["acceptance"]["expected_tool_schema_sha256"],
         )
 

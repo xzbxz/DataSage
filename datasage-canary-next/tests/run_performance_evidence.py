@@ -439,6 +439,69 @@ def _isolated_test_plugin_discovery(
     return registry, entries
 
 
+def _isolated_official_tool_definitions(
+    registry_module: Any,
+    plugins_module: Any,
+    entries: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], Any]:
+    """Resolve public schemas through Hermes while restoring every shared cache."""
+
+    original_registry = registry_module.registry
+    isolated_registry = registry_module.ToolRegistry()
+    original_discover = plugins_module.discover_plugins
+    previous_model_tools = sys.modules.get("model_tools")
+    model_tools = None
+    toolsets_module = None
+    original_model_registry = None
+    original_last_names: list[str] = []
+    original_tool_cache: dict[Any, Any] = {}
+    original_toolset_memo: dict[Any, Any] = {}
+    registry_module.registry = isolated_registry
+    plugins_module.discover_plugins = lambda *args, **kwargs: None
+    try:
+        try:
+            model_tools = _verified_import("model_tools")
+        finally:
+            plugins_module.discover_plugins = original_discover
+        original_model_registry = model_tools.registry
+        original_last_names = list(model_tools._last_resolved_tool_names)
+        with model_tools._tool_defs_cache_lock:
+            original_tool_cache = dict(model_tools._tool_defs_cache)
+        toolsets_module = _verified_import("toolsets")
+        original_toolset_memo = dict(toolsets_module._resolve_toolset_memo)
+        model_tools.registry = isolated_registry
+        scope = isolated_registry.current_scope_key()
+        for name in EXPECTED_TOOLS:
+            entry = entries[name]
+            isolated_registry.register(
+                name=name,
+                toolset=entry.toolset,
+                schema=entry.schema,
+                handler=entry.handler,
+                scope=scope,
+            )
+        model_tools._clear_tool_defs_cache()
+        public_tools = model_tools.get_tool_definitions(
+            enabled_toolsets=["datasage-query"],
+            quiet_mode=True,
+        )
+        return public_tools, model_tools
+    finally:
+        plugins_module.discover_plugins = original_discover
+        registry_module.registry = original_registry
+        if model_tools is not None and original_model_registry is not None:
+            model_tools.registry = original_model_registry
+            model_tools._last_resolved_tool_names = original_last_names
+            with model_tools._tool_defs_cache_lock:
+                model_tools._tool_defs_cache.clear()
+                model_tools._tool_defs_cache.update(original_tool_cache)
+        if toolsets_module is not None:
+            toolsets_module._resolve_toolset_memo.clear()
+            toolsets_module._resolve_toolset_memo.update(original_toolset_memo)
+        if previous_model_tools is None:
+            sys.modules.pop("model_tools", None)
+
+
 def _prepare_host_boundary(
     *,
     load_credentials: bool,
@@ -468,6 +531,11 @@ def _prepare_host_boundary(
             registry, entries = _isolated_test_plugin_discovery(
                 registry_module,
             )
+            public_tools, model_tools_module = _isolated_official_tool_definitions(
+                registry_module,
+                plugins_module,
+                entries,
+            )
         else:
             plugins_module.discover_plugins()
             registry = registry_module.registry
@@ -480,6 +548,13 @@ def _prepare_host_boundary(
             if set(registry.get_tool_names_for_toolset("datasage-query")) != set(EXPECTED_TOOLS):
                 raise EvidenceError("datasage-query toolset exposes an unexpected tool surface")
             _verify_handler_provenance(entries)
+            model_tools_module = _verified_import("model_tools")
+            if model_tools_module.registry is not registry:
+                raise EvidenceError("model_tools is bound to a stale Hermes registry")
+            public_tools = model_tools_module.get_tool_definitions(
+                enabled_toolsets=["datasage-query"],
+                quiet_mode=True,
+            )
     finally:
         config_module.ensure_hermes_home = original_initializer
     run_agent_spec = importlib.util.find_spec("run_agent")
@@ -489,10 +564,11 @@ def _prepare_host_boundary(
     run_agent_module = _verified_import("run_agent") if import_agent_module else None
     return {
         "config": config_module, "plugins": plugins_module, "run_agent": run_agent_module,
-        "registry": registry, "entries": entries,
+        "registry": registry, "entries": entries, "public_tools": public_tools,
         "module_paths": {
             "config": str(Path(config_module.__file__).resolve()),
             "plugins": str(Path(plugins_module.__file__).resolve()),
+            "model_tools": str(Path(model_tools_module.__file__).resolve()),
             "run_agent": str(Path(run_agent_origin).resolve()),
         },
     }
