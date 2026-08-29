@@ -8,6 +8,9 @@ model:
   base_url: https://api.deepseek.com/v1
 auxiliary:
   background_review:
+    # Keep automatic post-turn review off for this Git-governed canary.
+    # Explicit /refine remains available; its Memory and Skill mutations
+    # stay staged behind the write_approval gates below.
     enabled: false
 agent:
   reasoning_effort: high

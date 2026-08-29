@@ -79,6 +79,12 @@ class ExpertAuthorityInventoryTests(unittest.TestCase):
         )
         self.assertEqual([], registration.prompt_sections)
 
+        architecture = (PROFILE_ROOT / "ARCHITECTURE.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("插件不注册 prompt 副本", architecture)
+        self.assertNotIn("插件安全锚点", architecture)
+
         answer_policy = (SKILL_ROOT / "references" / "answer-boundary.md").read_text(
             encoding="utf-8"
         )
@@ -89,6 +95,36 @@ class ExpertAuthorityInventoryTests(unittest.TestCase):
             "partial batch",
         ):
             self.assertIn(detailed_policy, answer_policy)
+
+    def test_runtime_contract_and_repository_have_no_removed_authority_sediment(self):
+        datasets = yaml.safe_load(
+            (PLUGIN_ROOT / "contracts" / "datasets.yaml").read_text(
+                encoding="utf-8"
+            )
+        )["datasets"]
+        removed_dataset_sections = {
+            "allocation_contract",
+            "candidate_key_sets",
+            "data_quality",
+            "dataset_query_policies",
+            "derived_fields",
+            "identity_mappings",
+        }
+        for dataset_name, definition in datasets.items():
+            with self.subTest(dataset=dataset_name):
+                self.assertTrue(
+                    removed_dataset_sections.isdisjoint(definition),
+                    removed_dataset_sections.intersection(definition),
+                )
+
+        tools_text = (PLUGIN_ROOT / "tools.py").read_text(encoding="utf-8")
+        self.assertNotIn("_EVIDENCE_INTERPRETATION", tools_text)
+
+        repository_ignore = (PROFILE_ROOT.parent / ".gitignore").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("planning-semantics.yaml", repository_ignore)
+        self.assertNotIn(".no-bundled-skills", repository_ignore)
 
     def test_removed_companion_has_no_usage_or_snapshot_inventory_entry(self):
         usage = json.loads((PROFILE_ROOT / "skills" / ".usage.json").read_text(encoding="utf-8"))

@@ -1,8 +1,8 @@
 # DataSage Canary Next
 
-这是 DataSage Profile 的源码目录；当前它也被直接用作
-`datasage-canary-next` 运行目录。源码与运行实例同址是迁移期间的技术债，
-不是目标发行结构。
+这是 DataSage Profile 的源码目录，也是当前 `datasage-canary-next` 运行目录。
+当前维护方式是在现有 Git 工作区和活动分支上原地修改、测试、审查与提交；
+不创建第二个安装实例，也不使用 `hermes profile install/update` 覆盖这个目录。
 
 `.env`、认证信息、状态库、会话、日志、Memory 及其他运行数据属于用户态，
 不得提交，也不得由发行更新覆盖。企微和数据库权限不属于发行流程的修改范围。
@@ -25,7 +25,8 @@ Profile 内的内建 Skill 副本。
 ## 权威边界
 
 - Git commit/tag 是源码版本身份；`distribution.yaml` 是 Hermes 安装载荷与版本声明。
-- `hermes profile install/update/info` 是安装、更新和实例信息的官方入口。
+- `hermes profile install/update/info` 仅用于未来独立发布的 Profile Distribution，
+  不是当前 Git 同址工作区的维护或重启步骤。
 - `build_release_receipt.py` 只是源码仓库中的 DataSage 质量门禁：它把真实 replay、
   compaction、交付和性能证据绑定到一个经过审查的运行载荷。它不是安装器、
   版本系统或回滚系统，也不随运行 Profile 发行。
@@ -71,57 +72,14 @@ python -B build_release_receipt.py --check
 历史 receipt 保持不可变。receipt 的内容哈希只是质量证据的受测对象，不取代
 Git commit/tag，也不证明 Hermes 安装来源。
 
-## 官方 Profile Distribution 迁移阻断
+## 当前 Git 原地维护
 
-Hermes `0.20.5` 要求远程发行仓库的根目录直接包含 `distribution.yaml`。当前 Git
-仓库根目录是 `profiles/`，本 Profile 位于其 `datasage-canary-next/` 子目录，因此
-现在的远程仓库不能直接作为 `hermes profile install <git-url>` 的来源；本次文件
-整理没有假装解决这个仓库拓扑问题。
+所有源码变更留在当前活动分支。重启前必须确认 `git status --short` 只包含本次
+已审查改动，完整离线测试和候选门禁通过，再提交并记录可回滚的 commit/tag。
+Git 操作不得覆盖 `.env`、`state.db`、sessions、logs、Memory、企微或数据库配置。
 
-仓库级迁移必须选择一种方案：
-
-1. 首选：把 `datasage-canary-next/` 发布为独立仓库，目录内容位于仓库根；
-2. 或建立专用发行分支/仓库，把该子目录投影到发行根，且不复制第二份可编辑源。
-
-不要为 Hermes 再实现“支持仓库子目录”的自定义安装器。迁移完成前，远程
-`install/update` 不应被宣称可用。
-
-## 干净安装验证
-
-发行根布局完成后，先把待验证 tag/commit 检出到临时、干净的本地目录。Hermes
-`0.20.5` 的远程安装跟随远端默认分支，CLI 不提供 commit 参数，因此 canary
-验证应从已经 detached 到审查版本的本地 checkout 安装：
-
-```powershell
-git clone <distribution-repo-url> <clean-source-dir>
-git -C <clean-source-dir> checkout --detach <reviewed-tag-or-commit>
-git -C <clean-source-dir> status --porcelain
-git -C <clean-source-dir> rev-parse HEAD
-hermes profile install <clean-source-dir> --name datasage-rc8-clean -y
-hermes profile info datasage-rc8-clean
-hermes -p datasage-rc8-clean plugins doctor datasage-query --ci
-```
-
-随后只在这个隔离 Profile 上运行真实 replay、企微入站到 delivery ledger、宿主
-compaction 和性能门禁。确认干净实例不含 `tests/`、`docs/history/`、
-`build_release_receipt.py` 或插件 `e2e/`，且未触碰既有 Profile 的 `.env`、Memory、
-sessions、企微和数据库权限。
-
-第一次迁移必须使用新名称做干净安装，因为 Hermes 更新只覆盖新 manifest 中列出
-的路径，不会自动删除旧版本已落盘、但后来移出 `distribution_owned` 的开发资产。
-验证完成后再按独立发布授权切换 canary。
-
-## 后续更新与信息检查
-
-只有实例已经由官方 installer 安装、并记录了根布局合法的 source 后，才使用：
-
-```powershell
-hermes profile update datasage-canary-next -y
-hermes profile info datasage-canary-next
-```
-
-`update` 默认保留已有 `config.yaml`；只有明确审查并授权配置替换时才可使用
-`--force-config`。不要把当前源码/运行同址的 Profile 当作已经完成这一迁移。
+未来如需对外发布独立 Profile Distribution，再按 Hermes 官方要求建立根目录含
+`distribution.yaml` 的独立发行源；不得复制第二份可编辑源码或自建安装器。
 
 DataSage 当前没有有 owner 的定时任务，因此不向 Hermes `cron` toolset 暴露
 `datasage-query`。未来新增主动巡检时，必须同时定义任务 owner、调度身份与权限、

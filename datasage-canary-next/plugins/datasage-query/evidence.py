@@ -11,9 +11,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping, Sequence
+
+from . import capability_contract
 
 
 EVIDENCE_BUNDLE_VERSION = "evidence-bundle/v1"
@@ -62,20 +63,10 @@ def _canonical_semantic_boundary(value: Any) -> Any:
 
 
 def _calendar_month_time_range(value: Any) -> dict[str, str] | None:
-    if not isinstance(value, str) or re.fullmatch(
-        r"^(?!0000-)(?!9999-12$)[0-9]{4}-(?:0[1-9]|1[0-2])$", value
-    ) is None:
-        return None
     try:
-        start = date.fromisoformat(f"{value}-01")
-        end = date(
-            start.year + (1 if start.month == 12 else 0),
-            1 if start.month == 12 else start.month + 1,
-            1,
-        )
+        return capability_contract._calendar_month_time_range(value)
     except (ValueError, OverflowError):
         return None
-    return {"start": start.isoformat(), "end": end.isoformat()}
 
 
 def _semantic_request_projection(request: Mapping[str, Any]) -> dict[str, Any]:

@@ -12,9 +12,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from .capability_contract import PUBLIC_REQUEST_LIMIT
-
-
+PUBLIC_REQUEST_LIMIT = 10
 PUBLIC_CALCULATION_LIMIT = 10
 MAX_GROUP_DIMENSIONS = 5
 MAX_METRIC_FILTERS = 12

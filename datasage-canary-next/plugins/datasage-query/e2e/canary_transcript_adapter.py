@@ -55,6 +55,7 @@ PUBLIC_TOOLS = {
     "datasage_entity_resolve",
     "datasage_query",
 }
+_PERFORMANCE_SCORECARD_FIRST = "performance_scorecard_first"
 MAX_JSON_CHARS = 2_000_000
 _HOST_TOOL_GUARDRAIL_SUFFIX = re.compile(
     r"\n\n\[(?:Tool loop warning|Tool loop hard stop): "
@@ -495,15 +496,28 @@ def _normalize(
     reconciled = False
     query_attempted = False
 
-    for call in calls:
+    for call_index, call in enumerate(calls):
         name = call["name"]
         args = call["arguments"]
         payload = call["result"]
         if name == "datasage_catalog" and payload.get("status") == "success":
             _ordered_add(receipts, "catalog")
+            requests = args.get("requests") or []
+            results = payload.get("results") or []
+            if (
+                call_index == 0
+                and len(requests) == 1
+                and isinstance(requests[0], dict)
+                and set(requests[0]) == {"view"}
+                and requests[0].get("view") == "performance_scorecard"
+                and len(results) == 1
+                and isinstance(results[0], dict)
+                and results[0].get("level") == "performance_scorecard"
+            ):
+                _ordered_add(operations, _PERFORMANCE_SCORECARD_FIRST)
             if _is_bound_metric_detail_catalog_call(args, payload):
                 _ordered_add(receipts, "metric_detail")
-            for request in args.get("requests") or []:
+            for request in requests:
                 if isinstance(request, dict):
                     _ordered_add(domains, request.get("domain"))
                     _ordered_add(metrics, request.get("metric"))
@@ -827,6 +841,18 @@ def _plan_trace(value: Any) -> dict[str, Any] | None:
     return {key: value[key] for key in required if key != "schema"}
 
 
+def _validate_performance_scorecard_trace(
+    persisted_plan: dict[str, Any],
+    review_trace: dict[str, Any],
+) -> None:
+    persisted = _PERFORMANCE_SCORECARD_FIRST in persisted_plan["operations"]
+    reviewed = _PERFORMANCE_SCORECARD_FIRST in review_trace["operations"]
+    if persisted != reviewed:
+        raise ValueError(
+            "review plan_trace.operations contradicts persisted scorecard call"
+        )
+
+
 def _validate_live_context_bindings(bindings: Any) -> None:
     if not isinstance(bindings, dict):
         raise ValueError("live fixture context_bindings must be an object")
@@ -1121,6 +1147,7 @@ def adapt(
             ):
                 raise ValueError("session_lineage must contain unique session IDs")
             if trace is not None:
+                _validate_performance_scorecard_trace(plan, trace)
                 for field in ("domains", "metrics", "dimensions"):
                     if not set(plan[field]).issubset(set(trace[field])):
                         raise ValueError(

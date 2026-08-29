@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from datetime import date
 import importlib
 import json
 import os
@@ -27,7 +28,10 @@ sys.modules.setdefault(PACKAGE, package)
 capability_contract = importlib.import_module(f"{PACKAGE}.capability_contract")
 request_contract = importlib.import_module(f"{PACKAGE}.request_contract")
 schemas = importlib.import_module(f"{PACKAGE}.schemas")
+contracts = importlib.import_module(f"{PACKAGE}.contracts")
+analytical_queries = importlib.import_module(f"{PACKAGE}.analytical_queries")
 tools = importlib.import_module(f"{PACKAGE}.tools")
+evidence = importlib.import_module(f"{PACKAGE}.evidence")
 runtime_health = importlib.import_module(f"{PACKAGE}.runtime_health")
 entitlements = importlib.import_module(f"{PACKAGE}.entitlements")
 db_runtime = importlib.import_module(f"{PACKAGE}.db_runtime")
@@ -237,6 +241,226 @@ class RequestContractEquivalenceTests(unittest.TestCase):
             schemas.REQUEST["properties"]["metric_filters"]
             ["additionalProperties"]["oneOf"][-1]["maxItems"],
         )
+
+    def test_compilers_share_group_dimension_limit_policy(self):
+        self.assertEqual(
+            request_contract.MAX_GROUP_DIMENSIONS,
+            analytical_queries._max_group_dimensions({}),
+        )
+        self.assertEqual(
+            request_contract.MAX_GROUP_DIMENSIONS,
+            tools._max_group_dimensions({}),
+        )
+        self.assertEqual(
+            2,
+            contracts._metric_group_dimension_limit(
+                {}, ["department", "customer"]
+            ),
+        )
+
+        invalid = (
+            {"query_kind": "analytical"},
+            {"max_group_dimensions": True},
+            {
+                "max_group_dimensions": request_contract.MAX_GROUP_DIMENSIONS + 1
+            },
+        )
+        for metric in invalid:
+            with self.subTest(metric=metric):
+                for compiler in (
+                    analytical_queries._max_group_dimensions,
+                    tools._max_group_dimensions,
+                ):
+                    with self.assertRaises(Exception) as caught:
+                        compiler(metric)
+                    self.assertEqual(
+                        "CONTRACT_UNAVAILABLE", caught.exception.code
+                    )
+
+    def test_compilers_share_dimension_column_validation(self):
+        valid = {"columns": ["department_id", {"column": "name", "alias": "department_name"}]}
+        expected = [
+            ("department_id", "department_id"),
+            ("name", "department_name"),
+        ]
+        self.assertEqual(expected, analytical_queries._dimension_columns(valid))
+        self.assertEqual(expected, tools._dimension_columns(valid))
+
+        invalid = (
+            {},
+            {"columns": "department_id"},
+            {"columns": [1]},
+            {"columns": ["1department"]},
+            {"columns": [{"column": "name", "alias": "bad-name"}]},
+        )
+        for definition in invalid:
+            with self.subTest(definition=definition):
+                for compiler in (
+                    analytical_queries._dimension_columns,
+                    tools._dimension_columns,
+                ):
+                    with self.assertRaises(Exception) as caught:
+                        compiler(definition)
+                    self.assertEqual(
+                        "CONTRACT_UNAVAILABLE", caught.exception.code
+                    )
+
+    def test_compilers_share_fixed_filter_validation(self):
+        valid = (
+            {"op": "eq", "value": "active"},
+            {"op": "ne", "value": 0},
+            {"op": "gt", "value": 1},
+            {
+                "op": "in",
+                "value": list(range(request_contract.MAX_FILTER_VALUES)),
+            },
+        )
+        for spec in valid:
+            with self.subTest(valid=spec):
+                analytical_params = []
+                tool_params = []
+                analytical_sql = analytical_queries._filter_clause(
+                    "f", "status", spec, analytical_params
+                )
+                tool_sql = tools._filter_clause(
+                    "status", spec, tool_params, alias="f"
+                )
+                self.assertEqual(analytical_sql, tool_sql)
+                self.assertEqual(analytical_params, tool_params)
+
+        invalid = (
+            {"op": "in", "value": []},
+            {
+                "op": "in",
+                "value": list(range(request_contract.MAX_FILTER_VALUES + 1)),
+            },
+            {"op": "in", "value": "active"},
+            {"op": "eq", "value": ["active"]},
+            {"op": "eq", "value": {"unexpected": True}},
+            {"op": "unsupported", "value": "active"},
+        )
+        for spec in invalid:
+            with self.subTest(invalid=spec):
+                with self.assertRaises(analytical_queries.AnalysisQueryError) as analysis:
+                    analytical_queries._filter_clause("f", "status", spec, [])
+                with self.assertRaises(tools.QueryFailure) as execution:
+                    tools._filter_clause("status", spec, [], alias="f")
+                self.assertEqual("CONTRACT_UNAVAILABLE", analysis.exception.code)
+                self.assertEqual("INVALID_PLAN", execution.exception.code)
+
+    def test_compilers_share_entity_binding_validation(self):
+        definition = {
+            "filter_column": "department_name",
+            "identity_filter": {
+                "entity_type": "department",
+                "value_field": "department_id",
+                "column": "department_id",
+            },
+        }
+        binding = {
+            "entity_type": "department",
+            "value_field": "department_id",
+            "identity_columns": ["department_id"],
+            "filter_values": ["D001"],
+        }
+
+        def analytical_bound(request, current_definition=definition):
+            bindings = analytical_queries._entity_bindings(request)
+            selected, value = analytical_queries._bound_value(
+                bindings, "department", "fallback"
+            )
+            column = analytical_queries._dimension_filter(
+                current_definition, selected
+            )
+            return column, value
+
+        valid_requests = (
+            ({}, ("department_name", "fallback")),
+            (
+                {"_entity_bindings": {"department": binding}},
+                ("department_id", "D001"),
+            ),
+            (
+                {
+                    "_entity_bindings": {
+                        "department": {
+                            **binding,
+                            "filter_values": ["D001", "D002"],
+                        }
+                    }
+                },
+                ("department_id", ["D001", "D002"]),
+            ),
+        )
+        for request, expected in valid_requests:
+            with self.subTest(valid=request):
+                self.assertEqual(expected, analytical_bound(request))
+                self.assertEqual(
+                    expected,
+                    tools._bound_entity_filter(
+                        request, "department", definition, "fallback"
+                    ),
+                )
+
+        invalid = (
+            ({"_entity_bindings": [{}]}, definition),
+            (
+                {
+                    "_entity_bindings": {
+                        "department": {**binding, "filter_values": []}
+                    }
+                },
+                definition,
+            ),
+            (
+                {"_entity_bindings": {"department": binding}},
+                {
+                    **definition,
+                    "identity_filter": {
+                        **definition["identity_filter"],
+                        "value_field": "other_id",
+                    },
+                },
+            ),
+            ({}, {}),
+        )
+        for request, current_definition in invalid:
+            with self.subTest(invalid=request, definition=current_definition):
+                with self.assertRaises(analytical_queries.AnalysisQueryError) as analysis:
+                    analytical_bound(request, current_definition)
+                with self.assertRaises(tools.QueryFailure) as execution:
+                    tools._bound_entity_filter(
+                        request,
+                        "department",
+                        current_definition,
+                        "fallback",
+                    )
+                self.assertEqual("CONTRACT_UNAVAILABLE", analysis.exception.code)
+                self.assertEqual("CONTRACT_UNAVAILABLE", execution.exception.code)
+
+    def test_date_helpers_share_arithmetic_and_keep_boundary_semantics(self):
+        expected = date(2025, 2, 28)
+        self.assertEqual(
+            expected, analytical_queries._add_months(date(2024, 2, 29), 12)
+        )
+        self.assertEqual(expected, tools._add_months(date(2024, 2, 29), 12))
+
+        with self.assertRaises(analytical_queries.AnalysisQueryError) as analysis:
+            analytical_queries._add_months(date.min, -1)
+        with self.assertRaises(tools.QueryFailure) as execution:
+            tools._add_months(date.min, -1)
+        self.assertEqual("INVALID_PLAN", analysis.exception.code)
+        self.assertEqual("INVALID_PLAN", execution.exception.code)
+
+        expected_range = {"start": "2024-02-01", "end": "2024-03-01"}
+        self.assertEqual(expected_range, evidence._calendar_month_time_range("2024-02"))
+        self.assertEqual(expected_range, tools._calendar_month_time_range("2024-02"))
+        for invalid in (None, "2024-2", "0000-01", "9999-12"):
+            with self.subTest(invalid=invalid):
+                self.assertIsNone(evidence._calendar_month_time_range(invalid))
+                with self.assertRaises(tools.QueryFailure) as caught:
+                    tools._calendar_month_time_range(invalid)
+                self.assertEqual("INVALID_INPUT", caught.exception.code)
 
     def test_runtime_guard_reuses_prevalidated_dispatch_on_ready_path(self):
         args = {"requests": [_request()]}

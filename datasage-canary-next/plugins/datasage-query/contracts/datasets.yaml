@@ -38,8 +38,6 @@ datasets:
     required_filters:
       - {column: is_delete, op: eq, value: n}
       - {column: is_void, op: eq, value: n}
-    dataset_query_policies:
-      default: {mode: detail_only, time_requirement: forbidden}
     joins: []
     warnings:
       - Current attributes are not transaction-time history.
@@ -49,28 +47,11 @@ datasets:
     kind: master_snapshot
     grain: current_employee_identity_record_with_known_duplicate
     primary_key: []
-    candidate_key_sets:
-      - [id]
-      - [person_id]
-      - [person_no]
-      - [erp_account]
-      - [wecom_account]
     updated_at: gmt_modified
     allowed_columns: [person_id, person_no, person_name, depts, region, position, country, main_dept, alias, wecom_status, title, is_delete]
     forbidden_columns: [id, creator_id, modifier_id, gmt_create, gmt_modified, sex, erp_account, wecom_account, wecom_name, direct_leaders]
     required_filters: []
-    dataset_query_policies:
-      default: {mode: detail_only, time_requirement: forbidden}
     joins: []
-    identity_mappings:
-      fact_salesperson: {local_columns: [sales_id, final_sales_id], remote_column: person_id}
-      erp_identity: {column: person_id}
-      wecom_identity: {column: wecom_account}
-    data_quality:
-      status: blocked_for_metric_join
-      evidence_date: 2026-07-17
-      observed: 632_rows_631_distinct_id_551_distinct_person_id_one_conflicting_payroll_leave_pair
-      release_condition: person_id_is_unique_or_an_owner_confirmed_deterministic_canonical_view_exists
     warnings:
       - Fact sales_id or final_sales_id maps to employee person_id; never join transaction facts by id or person_name.
       - The physical id is a mixed identity: it equals person_id when ERP identity exists and otherwise equals wecom_account.
@@ -88,8 +69,6 @@ datasets:
     required_filters:
       - {column: is_delete, op: eq, value: n}
       - {column: is_void, op: eq, value: n}
-    dataset_query_policies:
-      default: {mode: detail_only, time_requirement: forbidden}
     joins: []
     warnings:
       - Current attributes are not transaction-time history.
@@ -104,8 +83,6 @@ datasets:
     required_filters:
       - {column: is_delete, op: eq, value: n}
       - {column: is_void, op: eq, value: n}
-    dataset_query_policies:
-      default: {mode: detail_only, time_requirement: forbidden}
     joins: []
     warnings:
       - Current SKU status must not remove historical delivery facts; apply active filters in a LEFT JOIN ON clause.
@@ -118,8 +95,6 @@ datasets:
     updated_at: gmt_modified
     allowed_columns: [supplier_id, supplier_no, supplier_name, supplier_region, supplier_full_name, org_id, supplier_group_id, supplier_type, supplier_type_no, supplier_level, main_products, employee_num, cooperation_year, currency_no, company_address, is_invoice, first_cooperation_time, settlement_method]
     required_filters: []
-    dataset_query_policies:
-      default: {mode: detail_only, time_requirement: forbidden}
     joins: []
     warnings:
       - Current attributes are not transaction-time history.
@@ -133,8 +108,6 @@ datasets:
     updated_at: null
     allowed_columns: [id, goods_id, goods_no, goods_name, dept, type, supplier, rolls_g, start_time, end_time]
     required_filters: []
-    dataset_query_policies:
-      default: {mode: detail_only, time_requirement: forbidden}
     joins: []
     warnings:
       - A product and department can have multiple lifecycle rows; never directly join this table to delivery facts.
@@ -148,8 +121,6 @@ datasets:
     updated_at: gmt_modified
     allowed_columns: [whse_id, whse_name, whse_full_name, whse_type, whse_category, org_id, org_name, region, dept_name, is_missing, is_ccbs, is_defective]
     required_filters: []
-    dataset_query_policies:
-      default: {mode: detail_only, time_requirement: forbidden}
     joins: []
     warnings:
       - Warehouse attributes are current master data, not transaction-time history.
@@ -165,38 +136,11 @@ datasets:
     allowed_columns: [goods_detail_id, sale_bill_id, delivery_time, sale_time, bill_status, is_inner_cus, currency_no, delivery_exchange_rate, sale_exchange_rate, delivery_amount_rmb, sale_amount_rmb, delivery_amount, sale_amount, sorted_goods_num, sorted_piece_num, sale_goods_num, sale_piece_num, customer_id, customer_no, customer_name, customer_dept, customer_region, customer_type, customer_category, customer_label, sales_id, sales_name, org_name, goods_id, goods_no, goods_name, goods_region, goods_category, goods_sku_id, attr_val, color_label, supplier_id, supplier_no, supplier_name, is_ready, is_print, is_ht, bill_type, is_brand_cus, is_ha_cus, is_ccbs_cus, is_ht_cus, is_vip_cus, is_customized]
     forbidden_columns: [is_self]
     required_filters: []
-    dataset_query_policies:
-      delivery:
-        mode: detail_only
-        time_requirement: required
-        time_routes:
-          delivery_time:
-            format: date
-            required_filters:
-              - {column: bill_status, op: eq, value: 6}
-              - {column: is_inner_cus, op: eq, value: n}
-          sale_time:
-            format: date
-            required_filters:
-              - {column: is_inner_cus, op: eq, value: n}
-        companion_rules:
-          - {if_selected_any: [delivery_amount, sale_amount], require_selected: [currency_no], error_code: CURRENCY_SCOPE_REQUIRED}
     joins:
       - {target: vk_dwd.customer_dwd, local: [customer_id], remote: [customer_id], cardinality: many_to_one, stage: before_metric_aggregation}
       - {target: vk_dwd.goods_detail_dwd, local: [goods_id], remote: [goods_id], cardinality: many_to_one, stage: before_metric_aggregation}
       - {target: vk_ods.goods_sku_ods, local: [goods_sku_id], remote: [sku_id], cardinality: many_to_one, stage: before_metric_aggregation}
       - {target: vk_dwd.supplier_info_dwd, local: [supplier_id], remote: [supplier_id], cardinality: many_to_one, stage: before_metric_aggregation}
-    derived_fields:
-      is_ready:
-        source: vk_ods.ready_goods_detail
-        relationship: exists
-        local_keys: [goods_id, customer_dept]
-        remote_keys: [goods_id, dept]
-        event_time: sale_time
-        start_field: start_time
-        end_field: end_time
-        accepted_types: [备货, 试备货]
-        query_policy: use_fact_copy
     warnings:
       - Delivery uses delivery_time and bill_status = 6; order uses sale_time and must not inherit that delivery status filter.
       - Fact is_self is deprecated and forbidden; ready-goods queries use is_ready.
@@ -211,20 +155,6 @@ datasets:
     updated_at: gmt_modified
     allowed_columns: [barcode_detail_id, complnt_apply_id, complnt_no, complnt_goods_id, channel_id, channel_no, sale_bill_type, statement_time, status, complnt_type, channel_type, return_amount_rmb, return_amount, return_goods_num, return_piece_num, currency_no, in_whse_id, whse_name, whse_dept, whse_category, batch_no, bar_code, is_defective, customer_id, customer_no, customer_name, customer_dept, customer_region, customer_type, customer_category, sales_id, sales_name, biz_org, biz_dept, biz_region, goods_id, goods_no, goods_name, goods_region, goods_sku_id, attr_val, color_label, supplier_id, supplier_no, supplier_name, is_ready, is_print, is_customized, is_brand_cus, is_ha_cus, is_ccbs_cus, is_ht_cus, is_vip_cus, is_inner_cus]
     required_filters: []
-    dataset_query_policies:
-      delivery:
-        mode: detail_only
-        time_requirement: required
-        time_routes:
-          statement_time:
-            format: date
-            required_filters:
-              - {column: status, op: eq, value: 4}
-              - {column: complnt_type, op: eq, value: 1}
-              - {column: channel_type, op: eq, value: 1}
-              - {column: is_inner_cus, op: eq, value: n}
-        companion_rules:
-          - {if_selected_any: [return_amount], require_selected: [currency_no], error_code: CURRENCY_SCOPE_REQUIRED}
     joins:
       - {target: vk_dwd.customer_dwd, local: [customer_id], remote: [customer_id], cardinality: many_to_one, stage: before_metric_aggregation}
       - {target: vk_dwd.goods_detail_dwd, local: [goods_id], remote: [goods_id], cardinality: many_to_one, stage: before_metric_aggregation}
@@ -265,12 +195,6 @@ datasets:
     allowed_columns: [detail_id, bill_id, bill_no, bill_time, bill_status, is_inner_cus, detail_receive_rmb, detail_receive_amount, detail_deal_amount, exchange_rate, currency_no, customer_id, customer_no, customer_name, customer_dept, customer_region, customer_type, customer_category, final_sales_id, final_sales_no, final_sales_name, biz_dept, biz_region, dept_name, settle_org_name, receive_org_name, sale_org_name, org_id, org_name, is_ha_cus, is_ccbs_cus, settle_way, receive_usage]
     required_filters:
       - {column: bill_status, op: ne, value: A}
-    dataset_query_policies:
-      default:
-        mode: detail_only
-        time_requirement: required
-        time_routes:
-          bill_time: {format: date, required_filters: []}
     joins:
       - {target: vk_dwd.customer_dwd, local: [customer_id], remote: [customer_id], cardinality: many_to_one, stage: before_metric_aggregation}
     warnings:
@@ -288,12 +212,6 @@ datasets:
     allowed_columns: [detail_id, bill_id, bill_no, bill_time, bill_status, is_inner_cus, detail_return_rmb, detail_return_amount, detail_deal_amount, exchange_rate, currency_no, customer_id, customer_no, customer_name, customer_dept, customer_region, customer_type, customer_category, final_sales_id, final_sales_no, final_sales_name, biz_dept, biz_region, dept_name, settle_org_name, receive_org_name, sale_org_name, org_id, org_name, is_ha_cus, is_ccbs_cus, settle_way, return_usage]
     required_filters:
       - {column: bill_status, op: ne, value: A}
-    dataset_query_policies:
-      default:
-        mode: detail_only
-        time_requirement: required
-        time_routes:
-          bill_time: {format: date, required_filters: []}
     joins:
       - {target: vk_dwd.customer_dwd, local: [customer_id], remote: [customer_id], cardinality: many_to_one, stage: before_metric_aggregation}
     warnings:
@@ -312,12 +230,6 @@ datasets:
     required_filters:
       - {column: bill_status, op: ne, value: A}
       - {column: is_inner_cus, op: eq, value: n}
-    dataset_query_policies:
-      default:
-        mode: detail_only
-        time_requirement: required
-        time_routes:
-          bill_time: {format: date, required_filters: []}
     joins:
       - {target: vk_dwd.customer_dwd, local: [customer_id], remote: [customer_id], cardinality: many_to_one, stage: before_metric_aggregation}
       - {target: vk_dwd.customer_credit_dwd, local: [customer_id, org_name, currency_no], remote: [customer_id, org_name, currency_no], cardinality: many_to_one, stage: before_metric_aggregation}
@@ -337,12 +249,6 @@ datasets:
     allowed_columns: [bill_date, customer_id, customer_no, customer_name, customer_dept, customer_region, sales_id, sales_name, org_name, currency_no, receivable_amount, receive_amount, return_amount, reverse_amount, cumulative_receivable_amount, cumulative_receive_amount, cumulative_return_amount, cumulative_reverse_amount, debt_amount, debt_amount_rmb, exchange_rate, is_inner_cus, is_brand_cus, is_ha_cus, is_ht_cus, is_ccbs_cus]
     required_filters:
       - {column: is_inner_cus, op: eq, value: n}
-    dataset_query_policies:
-      default:
-        mode: detail_only
-        time_requirement: required
-        time_routes:
-          bill_date: {format: month, required_filters: []}
     joins:
       - {target: vk_dwd.customer_dwd, local: [customer_id], remote: [customer_id], cardinality: many_to_one, stage: before_metric_aggregation}
       - {target: vk_dwd.customer_credit_dwd, local: [customer_id, org_name, currency_no], remote: [customer_id, org_name, currency_no], cardinality: many_to_one, stage: before_metric_aggregation}
@@ -363,12 +269,6 @@ datasets:
     allowed_columns: [bill_date, customer_id, customer_no, customer_name, customer_dept, customer_region, sales_id, sales_name, org_name, currency_no, exchange_rate, debt_amount, is_inner_cus, is_ccbs_cus, is_ha_cus, 0_30_debt, 31_60_debt, 61_90_debt, 91_120_debt, 121_150_debt, 151_180_debt, 181_240_debt, 241_300_debt, 301_360_debt, 361_debt]
     required_filters:
       - {column: is_inner_cus, op: eq, value: n}
-    dataset_query_policies:
-      default:
-        mode: detail_only
-        time_requirement: required
-        time_routes:
-          bill_date: {format: month, required_filters: []}
     joins:
       - {target: vk_dwd.customer_dwd, local: [customer_id], remote: [customer_id], cardinality: many_to_one, stage: before_metric_aggregation}
     warnings:
@@ -388,8 +288,6 @@ datasets:
     updated_at: gmt_modified
     allowed_columns: [id, customer_id, customer_no, customer_name, customer_dept, customer_region, sales_id, sales_name, org_id, org_name, currency_no, credit_days, credit_amount]
     required_filters: []
-    dataset_query_policies:
-      default: {mode: detail_only, time_requirement: forbidden}
     joins:
       - {target: vk_dwd.customer_dwd, local: [customer_id], remote: [customer_id], cardinality: many_to_one, stage: before_metric_aggregation}
     warnings:
@@ -421,14 +319,6 @@ datasets:
       - {column: bill_status, op: eq, value: 6}
       - {column: is_inner_cus, op: eq, value: n}
     joins: []
-    allocation_contract:
-      ledger: salesperson_allocation
-      base_table: vk_dwd.sale_bill_goods_detail_dwd
-      base_key: goods_detail_id
-      allocation_key: sales_id
-      quality_owner: ETL
-      runtime_policy: pending_production_read_only_reconciliation
-      required_checks: [every_valid_base_detail_has_allocation, composite_key_unique, allocated_rmb_equals_base_rmb, no_orphans]
     warnings:
       - Use only for salesperson target, collaboration, or explicitly allocated performance questions.
       - Aggregate actuals to the exact target keys before merging.
@@ -455,14 +345,6 @@ datasets:
     required_filters:
       - {column: bill_status, op: ne, value: A}
     joins: []
-    allocation_contract:
-      ledger: salesperson_allocation
-      base_table: vk_dwd.receive_bill_detail_dwd
-      base_key: detail_id
-      allocation_key: sales_id
-      quality_owner: ETL
-      runtime_policy: pending_production_read_only_reconciliation
-      required_checks: [every_valid_base_detail_has_allocation, composite_key_unique, allocated_rmb_equals_base_rmb, no_orphans]
     warnings:
       - Use only for salesperson target, collaboration, or explicitly allocated performance questions.
       - Aggregate actuals to the exact target keys before merging; receipt actuals include internal customers.
@@ -478,14 +360,6 @@ datasets:
     required_filters:
       - {column: bill_status, op: ne, value: A}
     joins: []
-    allocation_contract:
-      ledger: salesperson_allocation
-      base_table: vk_dwd.receive_return_bill_detail_dwd
-      base_key: detail_id
-      allocation_key: sales_id
-      quality_owner: ETL
-      runtime_policy: pending_production_read_only_reconciliation
-      required_checks: [every_valid_base_detail_has_allocation, composite_key_unique, allocated_rmb_equals_base_rmb, allocated_original_equals_base_original, no_orphans]
     warnings:
       - Use only for salesperson target, collaboration, or explicitly allocated performance questions; ordinary refund and net receipt remain on the transaction-detail ledger.
       - No collaborator means one 100-percent row for the final salesperson; collaborators produce proportional rows.
@@ -523,8 +397,6 @@ datasets:
     allowed_columns: [id, bar_code, status, goods_num, piece_num, goods_id, goods_no, goods_name, goods_region, goods_sku_id, attr_val, color_label, batch_no, cylinder_no, unit, is_ht, is_ready, ready_type, whse_id, whse_name, whse_type, whse_dept, whse_region, whse_org, is_missing, is_ccbs_whse, is_defective_whse, customer_dept, is_inner_cus, come_whse_time, estimate_receive_time, sale_time, currency_no, ddp_amount_rmb, ddp_amount]
     required_filters:
       - {column: status, op: in, value: [1, 2, 3]}
-    dataset_query_policies:
-      inventory: {mode: detail_only, time_requirement: forbidden}
     joins:
       - {target: vk_dwd.goods_detail_dwd, local: [goods_id], remote: [goods_id], cardinality: many_to_one, stage: after_fact_aggregation}
       - {target: vk_dwd.whse_info_dwd, local: [whse_id], remote: [whse_id], cardinality: many_to_one, stage: after_fact_aggregation}
@@ -543,12 +415,6 @@ datasets:
     updated_at: gmt_modified
     allowed_columns: [id, bill_date, goods_num, piece_num, unit, cost_amount_rmb, cost_amount, ddp_amount_rmb, ddp_amount, currency_no, exchange_rate, unclosed_time, unclosed_days, goods_id, goods_no, goods_name, goods_sku_id, attr_val, color_label, batch_no, is_ht, is_print, is_ready, ready_type, whse_id, whse_name, whse_type, whse_dept, whse_region, whse_org, org_id, org_name]
     required_filters: []
-    dataset_query_policies:
-      inventory:
-        mode: detail_only
-        time_requirement: required
-        time_routes:
-          bill_date: {format: month, required_filters: []}
     joins:
       - {target: vk_dwd.goods_detail_dwd, local: [goods_id], remote: [goods_id], cardinality: many_to_one, stage: after_fact_aggregation}
       - {target: vk_dwd.whse_info_dwd, local: [whse_id], remote: [whse_id], cardinality: many_to_one, stage: after_fact_aggregation}
@@ -566,12 +432,6 @@ datasets:
     updated_at: null
     allowed_columns: [bill_date, dept_name, org_name, goods_id, goods_no, goods_name, is_ccbs_cus, is_ready, ready_type, currency_no, delivery_amount_rmb, delivery_amount, return_amount_rmb, return_amount, pur_delivery_rmb, pur_delivery_amount, cost_amount_rmb, cost_amount, ddp_amount_rmb, ddp_amount]
     required_filters: []
-    dataset_query_policies:
-      inventory:
-        mode: detail_only
-        time_requirement: required
-        time_routes:
-          bill_date: {format: month, required_filters: []}
     joins:
       - {target: vk_dwd.goods_detail_dwd, local: [goods_id], remote: [goods_id], cardinality: many_to_one, stage: after_fact_aggregation}
     warnings:

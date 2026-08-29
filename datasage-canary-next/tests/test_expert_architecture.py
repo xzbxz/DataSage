@@ -93,6 +93,21 @@ class ExpertArchitectureTests(unittest.TestCase):
             hermes["requires_tools"],
         )
 
+    def test_general_clarification_and_git_in_place_policy_have_one_owner(self):
+        soul = (PROFILE_ROOT / "SOUL.md").read_text(encoding="utf-8")
+        skill = SKILL_PATH.read_text(encoding="utf-8")
+        clarification_rule = (
+            "Ask for clarification only when materially different interpretations"
+        )
+        self.assertEqual(1, soul.count(clarification_rule))
+        self.assertNotIn(clarification_rule, skill)
+
+        readme = (PROFILE_ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("当前 Git 原地维护", readme)
+        self.assertIn("不创建第二个安装实例", readme)
+        self.assertNotIn("第一次迁移必须使用新名称", readme)
+        self.assertNotIn("--name datasage-rc8-clean", readme)
+
     def test_references_use_the_native_skill_surface(self):
         linked = {
             path.name

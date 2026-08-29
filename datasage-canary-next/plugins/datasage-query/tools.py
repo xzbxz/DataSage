@@ -46,6 +46,7 @@ from .db_security import (
     validate_mysql_source_evidence,
 )
 from . import (
+    capability_contract,
     contract_store,
     contracts,
     db_runtime,
@@ -66,7 +67,6 @@ _DOMAINS = set(SUPPORTED_DOMAINS)
 _SEMANTIC_PATHS = {
     domain: DOMAIN_SOURCES[domain]["semantics"] for domain in SUPPORTED_DOMAINS
 }
-_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _COLUMN_IDENTIFIER = re.compile(r"^[A-Za-z0-9_]+$")
 _MYSQL_MONTH_FORMAT = "%%Y-%%m"
 _MYSQL_DAY_FORMAT = "%%Y-%%m-%%d"
@@ -167,12 +167,6 @@ _DETAIL_QUALIFIER_FIELDS = {
     "delivery_scope",
     "inventory_scope",
 }
-_EVIDENCE_INTERPRETATION = (
-    "查询结果只能直接证明返回的事实、对比和关联；对于为什么、驱动因素或原因分析，"
-    "未被证据直接验证的原因必须标为可能、相关或未知/待验证，不得写成已确认因果。"
-)
-
-
 class QueryFailure(Exception):
     def __init__(
         self,
@@ -229,18 +223,13 @@ def _ensure_metric_available(metric: Mapping[str, Any]) -> None:
 
 
 def _max_group_dimensions(metric: Mapping[str, Any]) -> int:
-    value = metric.get("max_group_dimensions", 5)
-    if (
-        not isinstance(value, int)
-        or isinstance(value, bool)
-        or not 0 <= value <= 5
-        or (metric.get("query_kind") is not None and "max_group_dimensions" not in metric)
-    ):
+    try:
+        return capability_contract._metric_group_dimension_limit(metric)
+    except CapabilityContractError as exc:
         raise QueryFailure(
             "CONTRACT_UNAVAILABLE",
             "分析指标缺少有效的分组维度上限。",
-        )
-    return value
+        ) from exc
 
 
 def _has_explicit_detail_qualifier(request: Mapping[str, Any]) -> bool:
@@ -786,22 +775,18 @@ def _next_month_start(today: date) -> date:
 def _calendar_month_time_range(value: Any) -> dict[str, str]:
     """Expand a typed calendar month into canonical half-open day bounds."""
 
-    if not isinstance(value, str) or re.fullmatch(
-        r"^(?!0000-)(?!9999-12$)[0-9]{4}-(?:0[1-9]|1[0-2])$", value
-    ) is None:
+    try:
+        return capability_contract._calendar_month_time_range(value)
+    except ValueError as exc:
         raise QueryFailure(
             "INVALID_INPUT",
             "calendar_month must use a zero-padded YYYY-MM value.",
-        )
-    try:
-        start = date.fromisoformat(f"{value}-01")
-        end = _next_month_start(start)
-    except (ValueError, OverflowError) as exc:
+        ) from exc
+    except OverflowError as exc:
         raise QueryFailure(
             "INVALID_INPUT",
             "calendar_month contains an invalid or unsupported year-month.",
         ) from exc
-    return {"start": start.isoformat(), "end": end.isoformat()}
 
 
 def _business_today() -> date:
@@ -1055,10 +1040,12 @@ def _metric_time_bounds(metric: Mapping[str, Any], start: str, end: str) -> tupl
 
 
 def _add_months(value: date, months: int) -> date:
-    index = value.year * 12 + value.month - 1 + months
-    year, month_zero = divmod(index, 12)
-    month = month_zero + 1
-    return date(year, month, min(value.day, calendar.monthrange(year, month)[1]))
+    try:
+        return capability_contract._shift_months(value, months)
+    except (ValueError, OverflowError) as exc:
+        raise QueryFailure(
+            "INVALID_PLAN", "期间比较超出支持的日期边界。"
+        ) from exc
 
 
 def _comparison_period(start: str, end: str) -> tuple[str, str]:
@@ -1907,22 +1894,16 @@ def _fixed_filter_refines(inherited: Mapping[str, Any], candidate: Mapping[str, 
 def _filter_clause(
     column: str, spec: Mapping[str, Any], params: list[Any], *, alias: str | None = None
 ) -> str:
-    op = str(spec.get("op", "eq")).lower()
-    value = spec.get("value")
+    try:
+        op, value = capability_contract._fixed_filter_spec(spec)
+    except CapabilityContractError as exc:
+        raise QueryFailure("INVALID_PLAN", "指标定义包含不支持的过滤规则。") from exc
     quoted = _qualified_identifier(alias, column) if alias else _quote_identifier(column)
-    if op == "eq":
-        params.append(value)
-        return f"{quoted} = %s"
-    if op == "ne":
-        params.append(value)
-        return f"{quoted} <> %s"
-    if op == "in" and isinstance(value, list) and value:
+    if op == "in":
         params.extend(value)
         return f"{quoted} IN ({', '.join(['%s'] * len(value))})"
-    if op in _FILTER_OPERATORS and op not in {"eq", "ne"} and not isinstance(value, (list, dict)):
-        params.append(value)
-        return f"{quoted} {_FILTER_OPERATORS[op]} %s"
-    raise QueryFailure("INVALID_PLAN", "指标定义包含不支持的过滤规则。")
+    params.append(value)
+    return f"{quoted} {_FILTER_OPERATORS[op]} %s"
 
 
 def _latest_snapshot_resolver_sql(
@@ -1997,26 +1978,10 @@ def _blocked_columns(
 
 
 def _dimension_columns(definition: Mapping[str, Any]) -> list[tuple[str, str]]:
-    raw_columns = definition.get("columns") or []
-    if not isinstance(raw_columns, list) or not raw_columns:
-        raise QueryFailure("CONTRACT_UNAVAILABLE", "维度定义缺少有效字段。")
-    result: list[tuple[str, str]] = []
-    for item in raw_columns:
-        if isinstance(item, str):
-            column, output = item, item
-        elif isinstance(item, dict):
-            column, output = item.get("column"), item.get("alias") or item.get("column")
-        else:
-            raise QueryFailure("CONTRACT_UNAVAILABLE", "维度字段定义格式无效。")
-        if (
-            not isinstance(column, str)
-            or _IDENTIFIER.fullmatch(column) is None
-            or not isinstance(output, str)
-            or _IDENTIFIER.fullmatch(output) is None
-        ):
-            raise QueryFailure("CONTRACT_UNAVAILABLE", "维度字段或输出名称无效。")
-        result.append((column, output))
-    return result
+    try:
+        return capability_contract._dimension_columns(definition)
+    except CapabilityContractError as exc:
+        raise QueryFailure("CONTRACT_UNAVAILABLE", exc.message) from exc
 
 
 def _dimension_expression(definition: Mapping[str, Any], alias: str, column: str) -> str:
@@ -2051,30 +2016,16 @@ def _bound_entity_filter(
     definition: Mapping[str, Any],
     fallback_value: Any,
 ) -> tuple[str, Any]:
-    bindings = request.get("_entity_bindings") or {}
-    binding = bindings.get(code) if isinstance(bindings, Mapping) else None
-    if not isinstance(binding, Mapping):
-        column = definition.get("filter_column")
-        return str(column) if isinstance(column, str) else "", fallback_value
-    identity_filter = definition.get("identity_filter")
-    if (
-        not isinstance(identity_filter, Mapping)
-        or identity_filter.get("entity_type") != binding.get("entity_type")
-        or identity_filter.get("value_field") != binding.get("value_field")
-        or not isinstance(identity_filter.get("column"), str)
-        or identity_filter.get("column") not in set(binding.get("identity_columns") or [])
-    ):
+    try:
+        bindings = capability_contract._entity_bindings(request)
+        return capability_contract._bound_entity_filter(
+            bindings, code, definition, fallback_value
+        )
+    except CapabilityContractError as exc:
         raise QueryFailure(
             "CONTRACT_UNAVAILABLE",
-            "实体绑定与指标的稳定身份过滤定义不一致。",
-        )
-    values = binding.get("filter_values")
-    if not isinstance(values, list) or not values:
-        raise QueryFailure("CONTRACT_UNAVAILABLE", "实体绑定缺少稳定身份值。")
-    value: Any = values
-    if not isinstance(fallback_value, list) and len(values) == 1:
-        value = values[0]
-    return str(identity_filter["column"]), value
+            exc.message,
+        ) from exc
 
 
 def _governed_join(
@@ -2287,7 +2238,7 @@ def _build_metric_core(
     requested_dimensions = request.get("dimensions") or []
     if (
         not isinstance(requested_dimensions, list)
-        or len(requested_dimensions) > 5
+        or len(requested_dimensions) > request_contract.MAX_GROUP_DIMENSIONS
         or any(not isinstance(code, str) for code in requested_dimensions)
         or len(requested_dimensions) != len(set(requested_dimensions))
     ):
@@ -2602,7 +2553,7 @@ def _build_metric_core(
         quoted_filter = _dimension_expression(definition, alias, str(column))
         value = _normalized_dimension_value(definition, bound_value)
         if isinstance(value, list):
-            if not value or len(value) > 50:
+            if not value or len(value) > request_contract.MAX_FILTER_VALUES:
                 raise QueryFailure("INVALID_PLAN", "过滤值列表无效。")
             where.append(f"{quoted_filter} IN ({', '.join(['%s'] * len(value))})")
             where_params.extend(value)

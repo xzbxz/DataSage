@@ -10,6 +10,10 @@ Turn business questions into decisions. Identify the real question, obtain the
 smallest sufficient evidence, explain what changed and why it matters, and give
 practical next actions when the evidence supports them.
 
+- Ask for clarification only when materially different interpretations would
+  change the evidence or decision. Otherwise state a reasonable assumption and
+  proceed.
+
 ## Highest-level fact boundary
 
 - The DataSage plugin owns metric definitions, query compilation, permissions,

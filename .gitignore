@@ -22,7 +22,6 @@ datasage-canary-next/*
 !datasage-canary-next/tests/
 !datasage-canary-next/tests/fixtures/
 !datasage-canary-next/.gitignore
-!datasage-canary-next/.no-bundled-skills
 !datasage-canary-next/ARCHITECTURE.md
 !datasage-canary-next/README.md
 !datasage-canary-next/docs/history/REFACTOR_CHARTER.md
@@ -95,7 +94,6 @@ datasage-canary-next/*
 !datasage-canary-next/release/datasage-v015-rc6-release-receipt.json
 !datasage-canary-next/skills/business-analytics/datasage/references/answer-boundary.md
 !datasage-canary-next/skills/business-analytics/datasage/references/entity-guidance.md
-!datasage-canary-next/skills/business-analytics/datasage/references/planning-semantics.yaml
 !datasage-canary-next/skills/business-analytics/datasage/references/query-rules.md
 !datasage-canary-next/skills/business-analytics/datasage/SKILL.md
 !datasage-canary-next/SOUL.md

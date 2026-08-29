@@ -56,7 +56,7 @@ SOUL 只保留专家身份与事实/假设/建议等高层原则；动态期间�
 | `skills/business-analytics/datasage/SKILL.md` | Profile Skill | Hermes Skill loader | 激活、工作流与既有安全边界；随 Skill 版本发布 |
 | `datasage.query-rules/v1` | Skill 请求规则 | Hermes 按需加载、库存测试 | 请求构造方法；live schema/catalog 拥有可用字段和值 |
 | `datasage.entity-guidance/v1` | Skill 实体指导 | Hermes 按需加载、库存测试 | 模型安全投影；不能创建或覆盖实体映射 |
-| `datasage.answer-boundary/v1` | Skill 最终回答策略 | Hermes 按需加载、插件安全锚点、库存测试 | 详细回答边界；插件 prompt 只提供不可独立演进的安全副本和规则 ID |
+| `datasage.answer-boundary/v1` | Skill 最终回答策略 | Hermes 按需加载、库存测试 | 详细回答边界；插件不注册 prompt 副本 |
 | `datasage.entity-maintainer-rationale/v1` | 插件维护者 | 维护者、库存测试 | 源码仓库中的非模型、非运行时文档；不进入发行载荷，只有落入 registry/domain semantics 并有测试才生效 |
 | plugin contracts/schema/results | DataSage plugin | plugin runtime、Hermes tools | 指标能力、权限、执行与返回证据的确定性权威 |
 
@@ -121,6 +121,14 @@ Memory 永远不是查询语法、指标/实体 ID、别名、地域映射、cat
 重新以 live schema/catalog、实体 registry 或用户当前明确输入为准。清理已有
 持久内容属于用户数据变更，必须另获用户明确授权，不能由架构迁移静默完成。
 
+Hermes `0.20.5` 在读取配置失败时会让自动 background review fail-open，同时
+write-approval gate 也可能回落为关闭。本 Profile 因而显式关闭自动 background
+review，只保留由用户主动触发的 `/refine`；Memory 和 Skill 写入继续通过现有
+write-approval gate 进入待审批区。每次重启前的门禁必须验证 `config.yaml` 可解析，
+并在 `HERMES_HOME` 指向本 Profile 时使用锁定宿主的真实判定，确认自动 review
+关闭且两个 approval gate 均开启。该门禁不改变 Hermes 的失败默认值，也不是
+上游根因修复；Profile 不为此复制宿主决策或增加第二套配置层。
+
 Hermes 宿主的上下文压缩顺序不在 Profile 插件控制范围内。本包提供宿主合同
 fixture，要求压缩后保留用户纠正、当前 period/scope/entity/metric 和事实/假设
 区分；在宿主 E2E 通过前不得宣称该能力已由 Profile 自身修复。
@@ -167,8 +175,9 @@ Catalog 的 metric detail 与 domain view 在公开 schema 和运行时都机械
 
 ## 发布身份与回滚
 
-Git commit/tag 是源码版本身份，`distribution.yaml` 是 Hermes 安装载荷与版本
-声明；安装、更新和实例信息由官方 `hermes profile install/update/info` 管理。
+Git commit/tag 是当前源码与运行目录的版本身份，`distribution.yaml` 定义未来独立
+发行时的安装载荷与版本声明。当前同址工作区由 Git 原地维护，不通过
+`hermes profile install/update` 覆盖，也不创建第二个安装实例。
 Profile 不实现第二套安装器、版本解析器或回滚器。
 
 源码仓库中的 `build_release_receipt.py` 根据 `distribution_owned` 的运行文件计算
@@ -178,11 +187,10 @@ SHA-256，把 DataSage 特有的 replay、compaction、交付和性能门禁绑�
 不读取 `.env`、数据库状态、sessions、logs、Memory 或企微凭据，并且构建脚本、
 测试、E2E scorer 与历史设计文档不进入运行载荷。
 
-本候选只能先安装到隔离 canary。回滚必须从上一份经过审查的 Git tag/commit
-重新应用官方 Profile Distribution，且不得覆盖 `.env`、`state.db`、sessions、
-logs 或用户 Memory。当前远程仓库的 manifest 位于子目录，尚不满足官方发行根
-布局；迁移方案和干净安装验证见 `README.md`，完成前不得宣称远程 install/update
-链路已可用。
+重启前必须保持当前 Git 工作区可审计，并完成离线、宿主和候选门禁。回滚使用
+上一份经过审查的 Git tag/commit，且不得覆盖 `.env`、`state.db`、sessions、
+logs 或用户 Memory。未来如发布独立 Profile Distribution，必须先满足官方发行根
+布局；该发布工作不是当前原地维护或重启的前置步骤。
 
 ## 验收门槛
 

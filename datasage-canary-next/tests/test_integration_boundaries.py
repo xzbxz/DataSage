@@ -14,10 +14,16 @@ import unittest
 from unittest import mock
 
 import yaml
+from agent.background_review import (
+    is_background_review_enabled,
+    load_background_review_settings,
+)
 from hermes_cli.plugins import PluginManager
 from hermes_cli.tools_config import _get_platform_tools
 from tools import clarify_tool as _hermes_clarify_registration  # noqa: F401
+from tools import skill_provenance as hermes_skill_provenance
 from tools import tool_search as hermes_tool_search
+from tools import write_approval as hermes_write_approval
 from tools.registry import ToolRegistry, registry as hermes_registry
 
 from plugin_registration_probe import probe_registration
@@ -56,6 +62,23 @@ def _load_module(name: str):
     )
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load test module: {name}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[qualified_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_e2e_module(name: str):
+    qualified_name = f"_datasage_{name}_integration_tests"
+    existing = sys.modules.get(qualified_name)
+    if existing is not None:
+        return existing
+    spec = importlib.util.spec_from_file_location(
+        qualified_name,
+        PLUGIN_ROOT / "e2e" / f"{name}.py",
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load e2e test module: {name}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[qualified_name] = module
     spec.loader.exec_module(module)
@@ -764,6 +787,144 @@ class ProductionSafetyTests(unittest.TestCase):
 
 
 class DistributionBoundaryTests(unittest.TestCase):
+    @staticmethod
+    def _catalog_call(request, result):
+        return {
+            "name": "datasage_catalog",
+            "arguments": {"requests": [request]},
+            "result": {"status": "success", "results": [result]},
+        }
+
+    def test_first_persisted_scorecard_call_derives_existing_operation(self):
+        adapter = _load_e2e_module("canary_transcript_adapter")
+        plan, evidence = adapter._normalize(
+            [
+                self._catalog_call(
+                    {"view": "performance_scorecard"},
+                    {"level": "performance_scorecard"},
+                )
+            ]
+        )
+        self.assertEqual(["performance_scorecard_first"], plan["operations"])
+        self.assertEqual(["catalog"], evidence["receipts"])
+
+    def test_later_scorecard_call_does_not_claim_first_operation(self):
+        adapter = _load_e2e_module("canary_transcript_adapter")
+        plan, _evidence = adapter._normalize(
+            [
+                self._catalog_call(
+                    {"domain": "delivery", "view": "expert_index"},
+                    {"level": "expert_index", "domain": "delivery"},
+                ),
+                self._catalog_call(
+                    {"view": "performance_scorecard"},
+                    {"level": "performance_scorecard"},
+                ),
+            ]
+        )
+        self.assertNotIn("performance_scorecard_first", plan["operations"])
+
+    def test_review_trace_cannot_inject_or_delete_scorecard_first(self):
+        adapter = _load_e2e_module("canary_transcript_adapter")
+        direct_plan, _evidence = adapter._normalize(
+            [
+                self._catalog_call(
+                    {"domain": "delivery", "view": "expert_index"},
+                    {"level": "expert_index", "domain": "delivery"},
+                )
+            ]
+        )
+        injected_trace = copy.deepcopy(direct_plan)
+        injected_trace["operations"] = ["performance_scorecard_first"]
+        with self.assertRaisesRegex(
+            ValueError, "contradicts persisted scorecard call"
+        ):
+            adapter._validate_performance_scorecard_trace(
+                direct_plan, injected_trace
+            )
+
+        scorecard_plan, _evidence = adapter._normalize(
+            [
+                self._catalog_call(
+                    {"view": "performance_scorecard"},
+                    {"level": "performance_scorecard"},
+                )
+            ]
+        )
+        deleted_trace = copy.deepcopy(scorecard_plan)
+        deleted_trace["operations"] = []
+        with self.assertRaisesRegex(
+            ValueError, "contradicts persisted scorecard call"
+        ):
+            adapter._validate_performance_scorecard_trace(
+                scorecard_plan, deleted_trace
+            )
+
+    def test_broad_reviews_allow_direct_discovery_but_explicit_scorecard_does_not(self):
+        scorer = _load_e2e_module("golden_expert_scorer")
+        suite = json.loads(
+            (PLUGIN_ROOT / "e2e" / "golden_expert_cases.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        cases = {case["id"]: case for case in suite["cases"]}
+
+        def observed(case, operations):
+            constraints = case["plan_constraints"]
+            requirements = case["evidence_requirements"]
+            return {
+                "plan": {
+                    "domains": ["delivery"],
+                    "metrics": ["delivery_amount"],
+                    "dimensions": list(constraints["dimensions"]),
+                    "operations": list(operations),
+                    "time_semantics": constraints["time_semantics"],
+                    "context_action": constraints["context_action"],
+                    "context_bindings": dict(
+                        constraints.get("context_bindings", {})
+                    ),
+                },
+                "conclusions": list(case["required_conclusions"]),
+                "evidence": {
+                    "receipts": list(requirements["required_receipts"]),
+                    "successful_queries": requirements[
+                        "minimum_successful_queries"
+                    ],
+                    "failed_queries": 0,
+                    "truncated": False,
+                    "reconciled": requirements[
+                        "require_reconciled_decomposition"
+                    ],
+                    "query_attempted": not requirements["must_not_query"],
+                    "error_codes": list(requirements["required_error_codes"]),
+                },
+            }
+
+        optional_case_ids = (
+            "ambiguity_06_department_performance_scorecard",
+            "ambiguity_07_live_idk_scorecard",
+            "ambiguity_08_live_vietnam_scorecard",
+            "ambiguity_09_live_thai_kim_scorecard",
+            "ambiguity_10_rc5_vietnam_scorecard",
+        )
+        for case_id in optional_case_ids:
+            with self.subTest(case_id=case_id):
+                case = cases[case_id]
+                self.assertEqual([], case["plan_constraints"]["operations"])
+                self.assertEqual([], scorer._score_case(case, observed(case, [])))
+
+        explicit = cases["ambiguity_05_performance_scorecard"]
+        direct_errors = scorer._score_case(explicit, observed(explicit, []))
+        self.assertTrue(
+            any("performance_scorecard_first" in error for error in direct_errors)
+        )
+        self.assertEqual(
+            [],
+            scorer._score_case(
+                explicit, observed(explicit, ["performance_scorecard_first"])
+            ),
+        )
+
     def test_permission_golden_requires_semantic_denial_without_fixed_model_text(self):
         scorer_path = PLUGIN_ROOT / "e2e" / "golden_expert_scorer.py"
         spec = importlib.util.spec_from_file_location(
@@ -924,10 +1085,7 @@ class DistributionBoundaryTests(unittest.TestCase):
         self.assertEqual([], constraints["domains"])
         self.assertEqual([], constraints["metrics"])
         self.assertEqual(["department"], constraints["dimensions"])
-        self.assertEqual(
-            ["performance_scorecard_first"],
-            constraints["operations"],
-        )
+        self.assertEqual([], constraints["operations"])
         self.assertEqual(
             {"fixed_scorecard_bundle", "fixed_metric_count", "fixed_call_order"},
             set(constraints["must_not_operations"]),
@@ -1016,10 +1174,7 @@ class DistributionBoundaryTests(unittest.TestCase):
                 "delivery_target_completion",
                 "overdue_receivable_amount",
             ]
-            adaptive_plan["operations"] = [
-                "performance_scorecard_first",
-                "parallel_evidence",
-            ]
+            adaptive_plan["operations"] = ["parallel_evidence"]
             observed = {
                 "id": case["id"],
                 "session_id": session_id,
@@ -1564,6 +1719,11 @@ class DistributionBoundaryTests(unittest.TestCase):
             {"background_review": {"enabled": False}},
             parsed_config["auxiliary"],
         )
+        self.assertFalse(
+            is_background_review_enabled(
+                parsed_config["auxiliary"]["background_review"]
+            )
+        )
         approvals = parsed_config.get("approvals")
         self.assertIsInstance(approvals, dict)
         self.assertEqual(
@@ -1579,6 +1739,44 @@ class DistributionBoundaryTests(unittest.TestCase):
             "compression:",
         ):
             self.assertNotIn(f"\n{host_global_block}", config)
+
+    def test_automatic_review_is_off_and_manual_review_writes_still_stage(self):
+        parsed_config = yaml.safe_load(
+            (PROFILE_ROOT / "config.yaml").read_text(encoding="utf-8")
+        )
+        self.assertIsInstance(parsed_config, dict)
+
+        with mock.patch.dict(
+            os.environ,
+            {"HERMES_HOME": str(PROFILE_ROOT)},
+        ), mock.patch(
+            "hermes_cli.config.ensure_hermes_home",
+            return_value=None,
+        ):
+            enabled, task_config = load_background_review_settings()
+            self.assertFalse(enabled)
+            self.assertIs(task_config.get("enabled"), False)
+
+            origin_token = hermes_skill_provenance.set_current_write_origin(
+                hermes_skill_provenance.BACKGROUND_REVIEW
+            )
+            try:
+                for subsystem in (
+                    hermes_write_approval.MEMORY,
+                    hermes_write_approval.SKILLS,
+                ):
+                    with self.subTest(subsystem=subsystem):
+                        self.assertTrue(
+                            hermes_write_approval.write_approval_enabled(
+                                subsystem
+                            )
+                        )
+                        decision = hermes_write_approval.evaluate_gate(subsystem)
+                        self.assertTrue(decision.stage)
+                        self.assertFalse(decision.allow)
+                        self.assertFalse(decision.blocked)
+            finally:
+                hermes_skill_provenance.reset_current_write_origin(origin_token)
 
 
 if __name__ == "__main__":

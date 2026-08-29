@@ -14,7 +14,7 @@ from .capability_contract import (
     SNAPSHOT_MONTHS_BEFORE_COMPARISON,
     assert_capability_boundary,
 )
-from . import contract_store
+from . import capability_contract, contract_store
 from .scorecard import performance_scorecard_manifest
 
 _MODEL_PROJECTION_VERSION = "datasage-model-semantic-projection/v5"
@@ -427,24 +427,21 @@ def _metric_group_dimension_limit(
     """Return the governed grouping arity exposed to planner and executor."""
 
     raw_limit = definition.get("max_group_dimensions")
-    if definition.get("query_kind") is not None and raw_limit is None:
+    try:
+        limit = capability_contract._metric_group_dimension_limit(definition)
+    except CapabilityContractError as exc:
         raise ContractFailure(
             "CONTRACT_UNAVAILABLE",
             "analytical metric lacks max_group_dimensions",
-        )
+        ) from exc
     if raw_limit is None:
-        return min(5, len(allowed_dimensions))
-    if (
-        not isinstance(raw_limit, int)
-        or isinstance(raw_limit, bool)
-        or not 0 <= raw_limit <= 5
-        or raw_limit > len(allowed_dimensions)
-    ):
+        return min(limit, len(allowed_dimensions))
+    if limit > len(allowed_dimensions):
         raise ContractFailure(
             "CONTRACT_UNAVAILABLE",
             "metric max_group_dimensions is invalid",
         )
-    return raw_limit
+    return limit
 
 
 def _is_unavailable(definition: Mapping[str, Any]) -> bool:

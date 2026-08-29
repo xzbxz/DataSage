@@ -8,11 +8,10 @@ aggregated facts compared at a governed dimension.
 
 from __future__ import annotations
 
-import calendar
 from datetime import date, datetime
 from typing import Any, Mapping
 
-from . import capability_contract, sql_identifiers
+from . import capability_contract, request_contract, sql_identifiers
 
 _OPS = {"eq": "=", "ne": "<>", "gt": ">", "gte": ">=", "lt": "<", "lte": "<="}
 _MYSQL_MONTH_FORMAT = "%%Y-%%m"
@@ -31,17 +30,13 @@ class AnalysisQueryError(ValueError):
 
 
 def _max_group_dimensions(metric: Mapping[str, Any]) -> int:
-    value = metric.get("max_group_dimensions")
-    if (
-        not isinstance(value, int)
-        or isinstance(value, bool)
-        or not 0 <= value <= 5
-    ):
+    try:
+        return capability_contract._metric_group_dimension_limit(metric)
+    except capability_contract.CapabilityContractError as exc:
         raise AnalysisQueryError(
             "CONTRACT_UNAVAILABLE",
             "分析指标缺少有效的分组维度上限。",
-        )
-    return value
+        ) from exc
 
 
 def _ensure_available(definition: Mapping[str, Any]) -> None:
@@ -90,10 +85,7 @@ def _approved(column: Any, dataset: Mapping[str, Any]) -> str:
 
 def _add_months(value: date, months: int) -> date:
     try:
-        month_index = value.year * 12 + value.month - 1 + months
-        year, month_zero = divmod(month_index, 12)
-        month = month_zero + 1
-        return date(year, month, min(value.day, calendar.monthrange(year, month)[1]))
+        return capability_contract._shift_months(value, months)
     except (ValueError, OverflowError) as exc:
         raise AnalysisQueryError("INVALID_PLAN", "分析期间超出支持的日期边界。") from exc
 
@@ -131,22 +123,24 @@ def _time_window(
 
 
 def _filter_clause(alias: str, column: str, spec: Mapping[str, Any], params: list[Any]) -> str:
-    op = str(spec.get("op", "eq")).lower()
-    value = spec.get("value")
+    try:
+        op, value = capability_contract._fixed_filter_spec(spec)
+    except capability_contract.CapabilityContractError as exc:
+        raise AnalysisQueryError(
+            "CONTRACT_UNAVAILABLE", "分析指标包含不支持的固定过滤规则。"
+        ) from exc
     quoted = _qualified(alias, column)
-    if op == "in" and isinstance(value, list) and 1 <= len(value) <= 50:
+    if op == "in":
         params.extend(value)
         return f"{quoted} IN ({', '.join(['%s'] * len(value))})"
-    if op in _OPS and not isinstance(value, (list, dict)):
-        params.append(value)
-        return f"{quoted} {_OPS[op]} %s"
-    raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "分析指标包含不支持的固定过滤规则。")
+    params.append(value)
+    return f"{quoted} {_OPS[op]} %s"
 
 
 def _value_filter(alias: str, column: str, value: Any, params: list[Any]) -> str:
     quoted = _qualified(alias, column)
     if isinstance(value, list):
-        if not 1 <= len(value) <= 50:
+        if not 1 <= len(value) <= request_contract.MAX_FILTER_VALUES:
             raise AnalysisQueryError("INVALID_PLAN", "分析过滤值数量无效。")
         params.extend(value)
         return f"{quoted} IN ({', '.join(['%s'] * len(value))})"
@@ -157,10 +151,12 @@ def _value_filter(alias: str, column: str, value: Any, params: list[Any]) -> str
 
 
 def _entity_bindings(request: Mapping[str, Any]) -> Mapping[str, Any]:
-    bindings = request.get("_entity_bindings") or {}
-    if not isinstance(bindings, Mapping):
-        raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "实体绑定结构无效。")
-    return bindings
+    try:
+        return capability_contract._entity_bindings(request)
+    except capability_contract.CapabilityContractError as exc:
+        raise AnalysisQueryError(
+            "CONTRACT_UNAVAILABLE", "实体绑定结构无效。"
+        ) from exc
 
 
 def _bound_value(
@@ -168,37 +164,20 @@ def _bound_value(
     code: str,
     fallback: Any,
 ) -> tuple[Mapping[str, Any] | None, Any]:
-    binding = bindings.get(code)
-    if not isinstance(binding, Mapping):
-        return None, fallback
-    values = binding.get("filter_values")
-    if not isinstance(values, list) or not values:
-        raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "实体绑定缺少稳定身份值。")
-    value: Any = values
-    if not isinstance(fallback, list) and len(values) == 1:
-        value = values[0]
-    return binding, value
+    try:
+        return capability_contract._bound_entity_value(bindings, code, fallback)
+    except capability_contract.CapabilityContractError as exc:
+        raise AnalysisQueryError("CONTRACT_UNAVAILABLE", exc.message) from exc
 
 
 def _dimension_filter(
     definition: Mapping[str, Any],
     binding: Mapping[str, Any] | None,
 ) -> str:
-    if binding is None:
-        column = definition.get("filter_column")
-        if not isinstance(column, str):
-            raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "分析维度过滤定义无效。")
-        return column
-    identity_filter = definition.get("identity_filter")
-    if (
-        not isinstance(identity_filter, Mapping)
-        or identity_filter.get("entity_type") != binding.get("entity_type")
-        or identity_filter.get("value_field") != binding.get("value_field")
-        or not isinstance(identity_filter.get("column"), str)
-        or identity_filter.get("column") not in set(binding.get("identity_columns") or [])
-    ):
-        raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "分析实体稳定身份定义不一致。")
-    return str(identity_filter["column"])
+    try:
+        return capability_contract._entity_filter_column(definition, binding)
+    except capability_contract.CapabilityContractError as exc:
+        raise AnalysisQueryError("CONTRACT_UNAVAILABLE", exc.message) from exc
 
 
 def _bound_mapping_column(binding: Mapping[str, Any], column: Any) -> str:
@@ -216,17 +195,10 @@ def _bound_mapping_column(binding: Mapping[str, Any], column: Any) -> str:
 
 
 def _dimension_columns(definition: Mapping[str, Any]) -> list[tuple[str, str]]:
-    result: list[tuple[str, str]] = []
-    for item in definition.get("columns") or []:
-        if isinstance(item, str):
-            result.append((item, item))
-        elif isinstance(item, dict) and isinstance(item.get("column"), str):
-            result.append((str(item["column"]), str(item.get("alias") or item["column"])))
-        else:
-            raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "分析维度字段定义无效。")
-    if not result:
-        raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "分析维度没有可用字段。")
-    return result
+    try:
+        return capability_contract._dimension_columns(definition)
+    except capability_contract.CapabilityContractError as exc:
+        raise AnalysisQueryError("CONTRACT_UNAVAILABLE", exc.message) from exc
 
 
 def _order_clause(

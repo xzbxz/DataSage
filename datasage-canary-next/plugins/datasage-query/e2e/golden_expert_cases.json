@@ -360,7 +360,7 @@
     {
       "id": "ambiguity_06_department_performance_scorecard", "category": "ambiguity", "conversation_id": "ambiguity_06", "turn": 1,
       "prompt": "HN跟HCM上半年分别表现得如何",
-      "plan_constraints": {"domains": [], "metrics": [], "dimensions": ["department"], "operations": ["performance_scorecard_first"], "time_semantics": "2026H1_flows_with_current_overdue_snapshot", "context_action": "new", "must_not_metrics": [], "must_not_operations": ["fixed_scorecard_bundle", "fixed_metric_count", "fixed_call_order"]},
+      "plan_constraints": {"domains": [], "metrics": [], "dimensions": ["department"], "operations": [], "time_semantics": "2026H1_flows_with_current_overdue_snapshot", "context_action": "new", "must_not_metrics": [], "must_not_operations": ["fixed_scorecard_bundle", "fixed_metric_count", "fixed_call_order"]},
       "required_conclusions": ["report_metrics_individually", "report_governed_target_status", "disclose_period_flow_and_current_snapshot_scopes"],
       "allowed_conclusions": ["report_metrics_individually", "report_governed_target_status", "disclose_period_flow_and_current_snapshot_scopes", "report_available_evidence", "report_observed_change", "disclose_data_limits", "state_noncausal"],
       "forbidden_conclusions": ["claim_scope_incompatible_overall_ranking", "claim_unsupported_mechanism_causality", "infer_equal_risk_from_absolute_overdue_similarity", "infer_ungoverned_overall_health_or_strength"],
@@ -396,7 +396,7 @@
     {
       "id": "ambiguity_07_live_idk_scorecard", "category": "ambiguity", "conversation_id": "live_idk_20260825", "turn": 1,
       "prompt": "IDK今年怎么样",
-      "plan_constraints": {"domains": [], "metrics": [], "dimensions": ["department"], "operations": ["performance_scorecard_first"], "time_semantics": "2026_ytd_flows_with_separate_snapshots", "context_action": "new", "must_not_metrics": [], "must_not_operations": ["fixed_scorecard_bundle", "fixed_metric_count", "fixed_call_order"]},
+      "plan_constraints": {"domains": [], "metrics": [], "dimensions": ["department"], "operations": [], "time_semantics": "2026_ytd_flows_with_separate_snapshots", "context_action": "new", "must_not_metrics": [], "must_not_operations": ["fixed_scorecard_bundle", "fixed_metric_count", "fixed_call_order"]},
       "required_conclusions": ["report_metrics_individually", "report_governed_target_status", "disclose_period_flow_and_snapshot_scopes", "disclose_partial_period_comparison_limit"],
       "allowed_conclusions": ["report_metrics_individually", "report_governed_target_status", "disclose_period_flow_and_snapshot_scopes", "disclose_partial_period_comparison_limit", "report_available_evidence", "disclose_data_limits", "state_noncausal"],
       "forbidden_conclusions": ["infer_ungoverned_overall_health_or_strength", "claim_formal_trend_from_partial_period_mismatch", "claim_benchmarkless_risk_level", "claim_scope_incompatible_cross_metric_strength", "predict_in_progress_period_outcome", "relabel_time_series_scalar_as_current_snapshot"],
@@ -414,7 +414,7 @@
     {
       "id": "ambiguity_08_live_vietnam_scorecard", "category": "ambiguity", "conversation_id": "live_vietnam_20260825", "turn": 1,
       "prompt": "越南今年经营表现怎么样？",
-      "plan_constraints": {"domains": [], "metrics": [], "dimensions": ["department"], "operations": ["performance_scorecard_first"], "time_semantics": "2026_ytd_flows_with_separate_snapshots", "context_action": "new", "must_not_metrics": [], "must_not_operations": ["fixed_scorecard_bundle", "fixed_metric_count", "fixed_call_order"]},
+      "plan_constraints": {"domains": [], "metrics": [], "dimensions": ["department"], "operations": [], "time_semantics": "2026_ytd_flows_with_separate_snapshots", "context_action": "new", "must_not_metrics": [], "must_not_operations": ["fixed_scorecard_bundle", "fixed_metric_count", "fixed_call_order"]},
       "required_conclusions": ["report_metrics_individually", "report_governed_target_status", "disclose_period_flow_and_snapshot_scopes", "disclose_partial_period_comparison_limit"],
       "allowed_conclusions": ["report_metrics_individually", "report_governed_target_status", "disclose_period_flow_and_snapshot_scopes", "disclose_partial_period_comparison_limit", "report_available_evidence", "report_nonmonotonic_series", "state_cross_metric_scope_not_proven", "request_independent_evidence", "disclose_data_limits", "state_noncausal"],
       "forbidden_conclusions": ["infer_ungoverned_overall_health_or_strength", "infer_demand_health_without_demand_evidence", "claim_monotonic_trend_from_nonmonotonic_series", "claim_cross_metric_synchrony_without_aligned_series", "claim_formal_trend_from_partial_period_mismatch", "claim_scope_incompatible_cross_metric_strength", "predict_in_progress_period_outcome"],
@@ -423,7 +423,7 @@
     {
       "id": "ambiguity_09_live_thai_kim_scorecard", "category": "ambiguity", "conversation_id": "live_thai_kim_20260825", "turn": 1,
       "prompt": "Thai Kim今年经营表现怎么样？",
-      "plan_constraints": {"domains": [], "metrics": [], "dimensions": ["department"], "operations": ["performance_scorecard_first"], "time_semantics": "2026_ytd_flows_with_separate_snapshots", "context_action": "new", "must_not_metrics": [], "must_not_operations": ["fixed_scorecard_bundle", "fixed_metric_count", "fixed_call_order"]},
+      "plan_constraints": {"domains": [], "metrics": [], "dimensions": ["department"], "operations": [], "time_semantics": "2026_ytd_flows_with_separate_snapshots", "context_action": "new", "must_not_metrics": [], "must_not_operations": ["fixed_scorecard_bundle", "fixed_metric_count", "fixed_call_order"]},
       "required_conclusions": ["report_metrics_individually", "report_governed_target_status", "disclose_period_flow_and_snapshot_scopes", "disclose_partial_period_comparison_limit"],
       "allowed_conclusions": ["report_metrics_individually", "report_governed_target_status", "disclose_period_flow_and_snapshot_scopes", "disclose_partial_period_comparison_limit", "report_available_evidence", "state_cross_metric_scope_not_proven", "request_independent_evidence", "disclose_data_limits", "state_noncausal"],
       "forbidden_conclusions": ["claim_benchmarkless_risk_level", "recommend_no_intervention_without_action_evidence", "claim_cross_metric_synchrony_without_aligned_series", "claim_formal_trend_from_partial_period_mismatch", "claim_scope_incompatible_cross_metric_strength", "predict_in_progress_period_outcome"],
@@ -432,7 +432,7 @@
     {
       "id": "ambiguity_10_rc5_vietnam_scorecard", "category": "ambiguity", "conversation_id": "rc5_live_20260825_200011", "turn": 1,
       "prompt": "越南今年的经营情况",
-      "plan_constraints": {"domains": [], "metrics": [], "dimensions": ["department"], "operations": ["performance_scorecard_first"], "time_semantics": "2026_ytd_flows_with_separate_snapshots", "context_action": "new", "must_not_metrics": [], "must_not_operations": ["fixed_scorecard_bundle", "fixed_metric_count", "fixed_call_order"]},
+      "plan_constraints": {"domains": [], "metrics": [], "dimensions": ["department"], "operations": [], "time_semantics": "2026_ytd_flows_with_separate_snapshots", "context_action": "new", "must_not_metrics": [], "must_not_operations": ["fixed_scorecard_bundle", "fixed_metric_count", "fixed_call_order"]},
       "required_conclusions": ["report_metrics_individually", "report_governed_target_status", "report_inventory_or_disclose_missing_capability", "disclose_period_flow_and_snapshot_scopes", "disclose_partial_period_comparison_limit"],
       "allowed_conclusions": ["report_metrics_individually", "report_governed_target_status", "report_inventory_or_disclose_missing_capability", "disclose_period_flow_and_snapshot_scopes", "disclose_partial_period_comparison_limit", "report_available_evidence", "state_cross_metric_scope_not_proven", "request_independent_evidence", "disclose_data_limits", "state_noncausal"],
       "forbidden_conclusions": ["claim_formal_trend_from_partial_period_mismatch", "claim_complete_business_review_without_inventory_evidence", "claim_cross_metric_synchrony_without_aligned_series", "infer_ungoverned_overall_health_or_strength", "invent_result"],
