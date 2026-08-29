@@ -226,10 +226,23 @@ class PerformanceEvidenceTests(unittest.TestCase):
                 )
         self.assertEqual(events, [])
 
-    def test_real_collector_refuses_current_untracked_or_dirty_sources(self) -> None:
+    def test_clean_worktree_guard_rejects_a_dirty_profile(self) -> None:
+        real_git = runner._git
+
+        def dirty_profile(root, *args):
+            if root == runner.PROFILE_GIT_ROOT and args[:2] == (
+                "status",
+                "--porcelain=v1",
+            ):
+                return " M datasage-canary-next/tests/run_performance_evidence.py"
+            return real_git(root, *args)
+
         with mock.patch.dict(os.environ, {"HERMES_HOME": str(PROFILE_ROOT)}, clear=False):
             runner._bind_profile_environment()
-            with self.assertRaisesRegex(runner.EvidenceError, "git attribution failed|dirty"):
+            with (
+                mock.patch.object(runner, "_git", side_effect=dirty_profile),
+                self.assertRaisesRegex(runner.EvidenceError, "target profile is dirty"),
+            ):
                 runner._assert_clean_worktrees()
 
     def test_invalid_arguments_are_rejected_not_recorded(self) -> None:
