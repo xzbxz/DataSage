@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib
 import importlib.util
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -270,6 +273,418 @@ def _self_attested_live(version="0.15.0-test"):
     }
 
 
+def _live_contract():
+    contract = json.loads(
+        (PROFILE_ROOT / "tests" / "fixtures" / "live_release_contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    contract["subject"] = {"name": "datasage-canary-next", "version": "0.15.0-test"}
+    contract["host"] = {
+        "hermes_version": "0.20.5",
+        "hermes_git_commit": TEST_HERMES_COMMIT,
+    }
+    return contract
+
+
+def _live_manifest(contract=None):
+    contract = contract or _live_contract()
+    return {
+        "release_target": contract["subject"]["version"],
+        "transcript_source": "cli",
+        "trusted_replay_gate": {
+            "case_ids": copy.deepcopy(contract["case_plan"]["case_ids"]),
+            "required_replay_runs_per_case": contract["case_plan"]["runs"],
+        },
+    }
+
+
+def _live_report(builder, evidence_dir, subject=None, contract=None):
+    subject = copy.deepcopy(subject or _subject())
+    contract = contract or _live_contract()
+    case_ids = contract["case_plan"]["case_ids"]
+    commands = contract["execution"]["command_shapes"]
+    suite = json.loads(builder.GOLDEN_SUITE.read_text(encoding="utf-8"))
+    golden = {case["id"]: case for case in suite["cases"]}
+    natural_review_evidence = {
+        "ambiguity_10_rc5_vietnam_scorecard": {
+            "report_metrics_individually": ("各项业务指标会分别呈现", "不会把不同指标合成为未经治理的总分"),
+            "report_governed_target_status": ("目标状态只按已经治理的口径报告", "不会自行推导一个总体强弱判断"),
+            "report_inventory_or_disclose_missing_capability": ("库存结论只依据实际可用的证据说明", "缺少库存依据时会明确标注无法确认"),
+            "disclose_period_flow_and_snapshot_scopes": ("期间流量与时点快照会分开标明", "两类统计范围不会混在同一口径里"),
+            "disclose_partial_period_comparison_limit": ("部分期间与完整期间并不完全可比", "局部观察不能被表述成正式趋势"),
+        },
+        "multiturn_08_rc5_thailand_followup": {
+            "ask_entity_clarification": ("泰国可能代表国家市场或具体业务实体", "请先确认需要比较的准确对象"),
+            "state_no_unconfirmed_entity_substitution": ("在确认之前不会替换查询实体", "不会自动把泰国当成曼谷或其他候选对象"),
+        },
+    }
+
+    def sha_bytes(payload):
+        return hashlib.sha256(payload).hexdigest()
+
+    def sha(value):
+        payload = value.encode("utf-8") if isinstance(value, str) else builder._canonical_json_bytes(value)
+        return sha_bytes(payload)
+
+    def artifact(path):
+        payload = path.read_bytes()
+        return {
+            "path": path.relative_to(evidence_dir).as_posix(),
+            "sha256": sha_bytes(payload),
+            "bytes": len(payload),
+        }
+
+    def candidate_and_export(run_index):
+        session_id = f"private-live-session-{run_index}"
+        messages = []
+        candidate_cases = []
+        turns = []
+        external_reviews = []
+        profile = {
+            "profile_id": subject["name"],
+            "artifact_id": subject["profile_git_commit"],
+            "payload_sha256": subject["content_sha256"],
+        }
+        database_identity = "c" * 64
+        for offset, case_id in enumerate(case_ids):
+            case = golden[case_id]
+            user_id = offset * 2 + 1
+            final_id = user_id + 1
+            phrases = natural_review_evidence[case_id]
+            final_answer = "。".join(
+                phrase
+                for label in case["required_conclusions"]
+                for phrase in phrases[label]
+            ) + "。"
+            turn_messages = [
+                {"id": user_id, "role": "user", "tool_name": None, "tool_call_id": None, "tool_calls": None, "content": case["prompt"]},
+                {"id": final_id, "role": "assistant", "tool_name": None, "tool_call_id": None, "tool_calls": None, "content": final_answer},
+            ]
+            messages.extend(turn_messages)
+            prompt_sha = sha_bytes(case["prompt"].encode("utf-8"))
+            final_sha = sha_bytes(final_answer.encode("utf-8"))
+            fixture_sha = "d" * 64
+            database_ref_sha = "e" * 64
+            watermark = sha({
+                "schema": "datasage-replay-watermark/v2-live-fixture",
+                "test_id": case_id,
+                "conversation_id": case["conversation_id"],
+                "turn": case["turn"],
+                "canonical_prompt_sha256": prompt_sha,
+                "user_message_id": user_id,
+                "database_identity_sha256": database_identity,
+                "artifact_id": profile["artifact_id"],
+                "payload_sha256": profile["payload_sha256"],
+                "fixture_attestation_sha256": fixture_sha,
+                "business_database_ref_sha256": database_ref_sha,
+            })
+            binding = {
+                "test_id": case_id,
+                "artifact_id": profile["artifact_id"],
+                "payload_sha256": profile["payload_sha256"],
+                "session_id": session_id,
+                "user_message_id": user_id,
+                "canonical_prompt_sha256": prompt_sha,
+                "database_identity_sha256": database_identity,
+                "watermark_sha256": watermark,
+                "final_answer_sha256": final_sha,
+                "fixture_attestation_sha256": fixture_sha,
+                "business_database_ref_sha256": database_ref_sha,
+            }
+            external_reviews_for_case = []
+            for reviewer_index, reviewer_id in enumerate(("datasage-live-reviewer-a", "datasage-live-reviewer-b")):
+                evidence = []
+                for label in case["required_conclusions"]:
+                    excerpt = phrases[label][reviewer_index]
+                    start = final_answer.index(excerpt)
+                    evidence.append({"label": label, "start": start, "end": start + len(excerpt), "text_sha256": sha(excerpt)})
+                external_reviews_for_case.append({
+                    "run_index": run_index,
+                    "case_id": case_id,
+                    "session_id_sha256": sha(session_id),
+                    "final_answer_sha256": final_sha,
+                    "capture_sha256": "0" * 64,
+                    "reviewer_id": reviewer_id,
+                    "labels": copy.deepcopy(case["required_conclusions"]),
+                    "evidence": evidence,
+                    "reviewed_at": "2026-08-29T00:00:00+00:00",
+                })
+            consensus_reviewer_id = builder._review_consensus_id(external_reviews_for_case)
+            assertion = {
+                "schema": "datasage-review-assertion/v2",
+                "status": "reviewed",
+                "test_id": case_id,
+                "artifact_id": profile["artifact_id"],
+                "payload_sha256": profile["payload_sha256"],
+                "session_id": session_id,
+                "user_message_id": user_id,
+                "canonical_prompt_sha256": prompt_sha,
+                "database_identity_sha256": database_identity,
+                "watermark_sha256": watermark,
+                "final_answer_sha256": final_sha,
+                "reviewer_id": consensus_reviewer_id,
+                "labels": external_reviews_for_case[0]["labels"],
+                "fixture_attestation_sha256": fixture_sha,
+                "business_database_ref_sha256": database_ref_sha,
+            }
+            review = {
+                "status": "reviewed",
+                "reviewer_id_sha256": sha(consensus_reviewer_id),
+                "assertion_sha256": sha(assertion),
+                "binding_sha256": sha(binding),
+                "plan_trace_sha256": None,
+            }
+            plan = {
+                key: copy.deepcopy(value)
+                for key, value in case["plan_constraints"].items()
+                if not key.startswith("must_not_")
+            }
+            plan.setdefault("context_bindings", {"filter_fingerprints": {}})
+            observed = {
+                "id": case_id,
+                "session_id": session_id,
+                "session_lineage": [session_id],
+                "plan": plan,
+                "conclusions": copy.deepcopy(case["required_conclusions"]),
+                "conclusion_review": review,
+                "evidence": {
+                    "receipts": copy.deepcopy(case["evidence_requirements"]["required_receipts"]),
+                    "successful_queries": case["evidence_requirements"]["minimum_successful_queries"],
+                    "failed_queries": 0,
+                    "truncated": False,
+                    "reconciled": case["evidence_requirements"]["require_reconciled_decomposition"],
+                    "query_attempted": not case["evidence_requirements"]["must_not_query"],
+                    "error_codes": copy.deepcopy(case["evidence_requirements"]["required_error_codes"]),
+                },
+            }
+            candidate_cases.append(observed)
+            external_reviews.extend(external_reviews_for_case)
+            turns.append({
+                "test_id": case_id,
+                "conversation_id": case["conversation_id"],
+                "turn": case["turn"],
+                "session_id": session_id,
+                "database_message_ids": [user_id, final_id],
+                "user_message_id": user_id,
+                "canonical_prompt_sha256": prompt_sha,
+                "database_identity_sha256": database_identity,
+                "watermark_sha256": watermark,
+                "user_platform_message_id": None,
+                "final_message_id": final_id,
+                "final_platform_message_id": None,
+                "final_answer_sha256": final_sha,
+                "transcript_sha256": sha(turn_messages),
+                "candidate_case_sha256": sha(observed),
+                "conclusion_review": review,
+                "fixture_attestation_sha256": fixture_sha,
+                "business_database_ref_sha256": database_ref_sha,
+            })
+        receipt = {
+            "schema": "datasage-canary-receipt/v1",
+            "captured_at": "2026-08-29T00:00:00+00:00",
+            "source": {"platform": "cli", "sqlite_mode": "ro", "query_only": True, "state_db_identity_sha256": database_identity},
+            "profile_artifact": profile,
+            "state_db_identity_sha256": database_identity,
+            "candidate_cases_sha256": sha(candidate_cases),
+            "turns": turns,
+        }
+        receipt["receipt_sha256"] = sha(receipt)
+        return session_id, {"id": session_id, "messages": messages}, {
+            "schema": "datasage-golden-expert-candidate/v1",
+            "profile_artifact": profile,
+            "state_db_identity_sha256": database_identity,
+            "cases": candidate_cases,
+            "canary_receipt": receipt,
+        }, external_reviews
+
+    def process(template, seed, run_dir, stream_prefix, bindings=None, stdout=b"", stderr=b""):
+        bindings = bindings or {}
+        argv = []
+        for token in template:
+            if token.startswith("{") and token.endswith("}"):
+                binding = token[1:-1]
+                if binding not in bindings:
+                    raise AssertionError(f"missing test binding {binding}")
+                argv.append({"binding": binding, "value_sha256": sha(bindings[binding])})
+            else:
+                argv.append(token)
+        stdout_path, stderr_path = run_dir / f"{stream_prefix}.stdout", run_dir / f"{stream_prefix}.stderr"
+        stdout_path.write_bytes(stdout)
+        stderr_path.write_bytes(stderr)
+        return {
+            "argv": argv,
+            "argv_sha256": sha(argv),
+            "exit_code": 0,
+            "timed_out": False,
+            "duration_ns": seed * 1_000_000,
+            "stdout": artifact(stdout_path),
+            "stderr": artifact(stderr_path),
+        }
+
+    python = str(builder._canonical_hermes_python())
+    state_db = str((builder.ROOT / "state.db").resolve())
+    python_proof = {
+        "schema": "datasage-python-runtime-provenance/v1",
+        "entry_kind": "runner",
+        "executable": copy.deepcopy(contract["python_provenance_approval"]["executable"]),
+        "sys_executable_sha256": "2" * 64,
+        "sys_prefix_sha256": "3" * 64,
+        "sys_base_prefix_sha256": "9" * 64,
+        "sys_path_entry_sha256": ["4" * 64, "5" * 64],
+        "sys_path_sha256": "6" * 64,
+        "sys_path_template_sha256": contract["python_provenance_approval"]["sys_path"]["runner_sha256"],
+        "path_controls": [{
+            "path_sha256": "7" * 64,
+            "pth": copy.deepcopy(contract["python_provenance_approval"]["pth"]),
+            "customization": {
+                "sitecustomize.py": {"exists": False, "identity": None},
+                "usercustomize.py": {"exists": False, "identity": None},
+            },
+        }],
+        "pth_import_payloads": copy.deepcopy(contract["python_provenance_approval"]["pth_import_payloads"]),
+        "import_origins": [
+            {**copy.deepcopy(item), "origin_sha256": "a" * 64}
+            for item in contract["python_provenance_approval"]["imports"]
+        ],
+    }
+    captures = []
+    runs = []
+    review_paths = []
+    for run_index in range(1, 4):
+        run_dir = evidence_dir / "private" / subject["profile_git_commit"] / f"run-{run_index}"
+        run_dir.mkdir(parents=True)
+        session_id, export, candidate, external_reviews = candidate_and_export(run_index)
+        prompt_paths = []
+        for turn, case_id in enumerate(case_ids, 1):
+            prompt_path = run_dir / f"turn-{turn}.txt"
+            prompt_path.write_text(golden[case_id]["prompt"], encoding="utf-8")
+            prompt_paths.append(prompt_path)
+        export_path = run_dir / "session.jsonl"
+        export_path.write_text(json.dumps(export, ensure_ascii=False) + "\n", encoding="utf-8")
+        candidate_path = run_dir / "candidate.json"
+        candidate_path.write_text(json.dumps(candidate, ensure_ascii=False), encoding="utf-8")
+        reviews_path = run_dir / "reviews.json"
+        reviews_path.write_text(json.dumps({"schema": "datasage-live-review-set/v1", "run_index": run_index, "reviews": external_reviews}), encoding="utf-8")
+        review_paths.append(reviews_path)
+        bindings_path = run_dir / "bindings.json"
+        bindings_path.write_text("{}", encoding="utf-8")
+        scorer = builder._load_e2e_module(f"_test_live_scorer_{run_index}", builder.ROOT / builder.GOLDEN_SCORER_PATH)
+        score = scorer.score(scorer.select_suite(suite, case_ids), candidate)
+        score_path = run_dir / "score.json"
+        score_path.write_text(json.dumps(score, ensure_ascii=False), encoding="utf-8")
+        nonce = f"{run_index:032x}"
+        message_path = run_dir / "outbound.txt"
+        message_path.write_text(f"DataSage live release protocol probe {nonce}", encoding="utf-8")
+        ack_path = run_dir / "ack.json"
+        ack_path.write_text(json.dumps({"success": True, "chat_id": "test-receiver", "message_id": f"opaque-{run_index}"}), encoding="utf-8")
+        export_ref = artifact(export_path)
+        candidate_ref = artifact(candidate_path)
+        reviews_ref = artifact(reviews_path)
+        score_ref = artifact(score_path)
+        message_ref = artifact(message_path)
+        ack_ref = artifact(ack_path)
+        session_sha = sha_bytes(session_id.encode("utf-8"))
+        capture_bindings = {
+            "initial_turn": {"python": python, "prompt_file": str(prompt_paths[0])},
+            "resume_turn": {"python": python, "exact_session_id": session_id, "prompt_file": str(prompt_paths[1])},
+            "session_export": {"python": python, "exact_session_id": session_id},
+        }
+        capture_processes = {
+            name: process(
+                commands[name], run_index * 10 + offset, run_dir, name.replace("_", "-"), capture_bindings[name],
+                export_path.read_bytes() if name == "session_export" else b"",
+                (f"session_id: {session_id}\n".encode("utf-8") if name in {"initial_turn", "resume_turn"} else b""),
+            )
+            for offset, name in enumerate(("initial_turn", "resume_turn", "session_export"), 1)
+        }
+        prompt_refs = [artifact(path) for path in prompt_paths]
+        capture_artifacts = [*prompt_refs]
+        for name in ("initial_turn", "resume_turn", "session_export"):
+            capture_artifacts.extend((capture_processes[name]["stdout"], capture_processes[name]["stderr"]))
+        capture_artifacts.append(export_ref)
+        captures.append({
+            "run_index": run_index,
+            "case_ids": copy.deepcopy(case_ids),
+            "prompts": prompt_refs,
+            "processes": capture_processes,
+            "session": {
+                "source": "cli", "export_format": "jsonl", "turns": 2,
+                "lineage_sha256": sha([session_id]), "session_id_sha256": session_sha,
+                "final_answer_sha256": [external_reviews[0]["final_answer_sha256"], external_reviews[2]["final_answer_sha256"]],
+                "export": export_ref,
+            },
+            "artifact_set_sha256": sha(capture_artifacts),
+        })
+        finalize_bindings = {
+            "adapter": {"python": python, "adapter": str(builder.ROOT / builder.TRANSCRIPT_ADAPTER_PATH), "state_db": state_db, "bindings": str(bindings_path), "candidate": str(candidate_path)},
+            "scorer": {"python": python, "scorer": str(builder.ROOT / builder.GOLDEN_SCORER_PATH), "golden_suite": str(builder.ROOT / builder.GOLDEN_SUITE_PATH), "case_1": case_ids[0], "case_2": case_ids[1], "candidate": str(candidate_path), "score_report": str(score_path)},
+            "outbound": {"python": python, "message_file": str(message_path)},
+        }
+        runs.append(
+            {
+                "run_index": run_index,
+                "case_ids": copy.deepcopy(case_ids),
+                "processes": {
+                    name: process(
+                        commands[name], run_index * 10 + offset, run_dir, name, finalize_bindings[name],
+                        ack_path.read_bytes() if name == "outbound" else b"",
+                    )
+                    for offset, name in enumerate(("adapter", "scorer", "outbound"), start=4)
+                },
+                "candidate": candidate_ref,
+                "score_report": score_ref,
+                "reviews": reviews_ref,
+                "outbound": {
+                    "target_sha256": contract["outbound"]["expected_target_sha256"],
+                    "nonce_sha256": sha_bytes(nonce.encode("utf-8")),
+                    "message": message_ref,
+                    "ack": ack_ref,
+                    "ledger_evidence": "standalone_send_has_no_delivery_obligation",
+                },
+            }
+        )
+    source = lambda path: {"path": path, "sha256": TEST_SHA}
+    capture_path = evidence_dir / "private" / subject["profile_git_commit"] / "capture.json"
+    capture_path.write_text(json.dumps({
+        "schema": "datasage-live-capture/v1",
+        "subject": subject,
+        "host": {"hermes_version": "0.20.5", "hermes_git_commit": TEST_HERMES_COMMIT},
+        "contract": source("tests/fixtures/live_release_contract.json"),
+        "python_provenance": {"before": python_proof, "after": python_proof},
+        "runs": captures,
+    }, ensure_ascii=False), encoding="utf-8")
+    capture_ref = artifact(capture_path)
+    capture_digest_path = capture_path.with_name("capture.sha256")
+    capture_digest_path.write_text(capture_ref["sha256"] + "\n", encoding="ascii", newline="")
+    for run, reviews_path in zip(runs, review_paths):
+        value = json.loads(reviews_path.read_text(encoding="utf-8"))
+        for review in value["reviews"]:
+            review["capture_sha256"] = capture_ref["sha256"]
+        reviews_path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+        run["reviews"] = artifact(reviews_path)
+    return {
+        "schema": "datasage-live-release-evidence/v1",
+        "subject": subject,
+        "host": {
+            "hermes_version": "0.20.5",
+            "hermes_git_commit": TEST_HERMES_COMMIT,
+        },
+        "contract": source("tests/fixtures/live_release_contract.json"),
+        "producer": source("tests/run_live_release_evidence.py"),
+        "golden_suite": source("plugins/datasage-query/e2e/golden_expert_cases.json"),
+        "adapter": source("plugins/datasage-query/e2e/canary_transcript_adapter.py"),
+        "scorer": source("plugins/datasage-query/e2e/golden_expert_scorer.py"),
+        "runtime_readiness_policy_sha256": builder._sha256_bytes(
+            builder._canonical_json_bytes(contract["runtime_readiness_policy"])
+        ),
+        "capture": capture_ref,
+        "capture_digest": artifact(capture_digest_path),
+        "python_provenance": {"before": python_proof, "after": python_proof},
+        "runs": runs,
+    }
+
+
 class ReleaseEligibilityTests(unittest.TestCase):
     def test_receipt_identity_comparison_is_exact(self):
         builder = _builder()
@@ -356,6 +771,21 @@ class ReleaseEligibilityTests(unittest.TestCase):
         codes = {blocker["code"] for blocker in result["blockers"]}
         self.assertIn("LIVE_MODEL_REPLAY_NOT_VERIFIED", codes)
         self.assertIn("LIVE_REPLAY_RUNS_INCOMPLETE", codes)
+        self.assertIn("LIVE_RELEASE_GATE_BLOCKED", codes)
+        self.assertIn("OUTBOUND_DELIVERY_NOT_VERIFIED", codes)
+        self.assertIn("STABILITY_NOT_VERIFIED", codes)
+        self.assertEqual("unverified_raw_evidence_required", result["live_model_replay"]["status"])
+        self.assertEqual(
+            "trusted_human_orchestrated_not_cryptographically_authenticated",
+            result["live_model_replay"]["review_assurance"],
+        )
+        self.assertEqual(
+            "best_effort_not_same_user_adversarial",
+            result["live_model_replay"]["capture_integrity"],
+        )
+        self.assertEqual("missing", result["outbound_delivery"]["status"])
+        self.assertEqual("missing", result["stability"]["status"])
+        self.assertEqual("missing", result["live_replay_runs"]["status"])
         self.assertIn("HOST_COMPACTION_NOT_VERIFIED", codes)
         self.assertIn("PERFORMANCE_COST_NOT_VERIFIED", codes)
 
@@ -419,6 +849,542 @@ class ReleaseEligibilityTests(unittest.TestCase):
             )
         )
         self.assertEqual(5, len(contract["deferred_scopes"]))
+        live_contract = builder._validate_live_contract(
+            builder._read_strict_json(builder.LIVE_RELEASE_CONTRACT)
+        )
+        self.assertEqual(
+            {"name": receipt["name"], "version": receipt["version"]},
+            live_contract["subject"],
+        )
+        self.assertEqual(contract["host"], live_contract["host"])
+
+    def test_raw_live_evidence_derives_all_five_live_gates(self):
+        builder = _builder()
+        subject = _subject()
+        contract = _live_contract()
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence_dir = Path(temporary) / "evidence"
+            report = _live_report(builder, evidence_dir, subject, contract)
+            with (
+                mock.patch.object(builder, "EVIDENCE_DIR", evidence_dir),
+                mock.patch.object(builder, "_validate_hashed_source", return_value=Path("checked")),
+                mock.patch.object(builder, "_receiver_sha256", return_value=contract["outbound"]["expected_target_sha256"]),
+                mock.patch.object(builder, "_is_read_only", return_value=True),
+                mock.patch.object(builder, "_current_python_provenance", return_value=report["python_provenance"]["before"]),
+            ):
+                result = builder.evaluate_release_gates(
+                    _live_manifest(contract),
+                    _host_fixture(),
+                    version=subject["version"],
+                    subject=subject,
+                    profile_git_commit=TEST_PROFILE_COMMIT,
+                    hermes_git_commit=TEST_HERMES_COMMIT,
+                    live_evidence=report,
+                    live_contract=contract,
+                )
+        codes = {item["code"] for item in result["blockers"]}
+        self.assertEqual("passed", result["live_model_replay"]["status"])
+        self.assertEqual(
+            "trusted_human_orchestrated_not_cryptographically_authenticated",
+            result["live_model_replay"]["review_assurance"],
+        )
+        self.assertEqual(
+            "best_effort_not_same_user_adversarial",
+            result["live_model_replay"]["capture_integrity"],
+        )
+        self.assertEqual("protocol_api_ack_verified", result["outbound_delivery"]["status"])
+        self.assertEqual("protocol_or_api_ack_not_user_read", result["outbound_delivery"]["evidence_semantics"])
+        self.assertEqual("passed", result["stability"]["status"])
+        self.assertEqual("complete", result["live_replay_runs"]["status"])
+        self.assertTrue({code for code, _ in builder.LIVE_BLOCKERS}.isdisjoint(codes))
+
+    def test_review_excerpt_binding_and_internal_label_laundering_are_rejected(self):
+        builder = _builder()
+        labels = ["report_metrics_individually"]
+        answer = "各项业务指标会分别呈现，而且不会合成为未经治理的总分。"
+        excerpt = "各项业务指标会分别呈现"
+        start = answer.index(excerpt)
+        review = {
+            "labels": labels,
+            "evidence": [{
+                "label": labels[0], "start": start, "end": start + len(excerpt),
+                "text_sha256": hashlib.sha256(excerpt.encode("utf-8")).hexdigest(),
+            }],
+        }
+        builder._validate_review_evidence(review, answer, labels)
+        with self.assertRaises(ValueError):
+            builder._validate_review_evidence(review, "dummy answer", labels)
+        suite = json.loads(builder.GOLDEN_SUITE.read_text(encoding="utf-8"))
+        golden = next(case for case in suite["cases"] if case["id"] == "ambiguity_10_rc5_vietnam_scorecard")
+        copied_excerpt = "人工审查提供了如下证据片段"
+        copied = copied_excerpt + "：" + "；".join(
+            [*golden["required_conclusions"], *golden["allowed_conclusions"], *golden["forbidden_conclusions"]]
+        )
+        copied_review = {
+            "labels": golden["required_conclusions"],
+            "evidence": [
+                {
+                    "label": label,
+                    "start": copied.index(copied_excerpt),
+                    "end": copied.index(copied_excerpt) + len(copied_excerpt),
+                    "text_sha256": hashlib.sha256(copied_excerpt.encode("utf-8")).hexdigest(),
+                }
+                for label in golden["required_conclusions"]
+            ],
+        }
+        builder._validate_review_evidence(copied_review, copied, golden["required_conclusions"])
+        with self.assertRaises(ValueError):
+            builder._reject_internal_conclusion_codes(copied, golden)
+
+    def test_python_provenance_detects_replaced_interpreter_pth_and_sitecustomize(self):
+        builder = _builder()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            executable = root / "python.exe"
+            executable.write_bytes(b"trusted-python")
+            original_python = builder._file_identity(executable)
+            executable.write_bytes(b"forged-python!")
+            self.assertNotEqual(original_python, builder._file_identity(executable))
+
+            site_dir = root / "site-packages"
+            site_dir.mkdir()
+            original_controls = builder._python_path_controls([site_dir], root)
+            (site_dir / "temporary-injection.pth").write_text(str(root), encoding="utf-8")
+            self.assertNotEqual(original_controls, builder._python_path_controls([site_dir], root))
+            (site_dir / "sitecustomize.py").write_text("raise RuntimeError('injected')", encoding="utf-8")
+            controls = builder._python_path_controls([site_dir], root)
+            self.assertTrue(controls[0]["customization"]["sitecustomize.py"]["exists"])
+            self.assertRegex(
+                controls[0]["customization"]["sitecustomize.py"]["identity"]["sha256"],
+                r"^[0-9a-f]{64}$",
+            )
+
+    def test_real_pinned_venv_provenance_smoke_and_tracked_approval(self):
+        builder = _builder()
+        contract = builder._validate_live_contract(builder._read_strict_json(builder.LIVE_RELEASE_CONTRACT))
+        code = (
+            "import importlib.util,pathlib;"
+            f"p=pathlib.Path({str(PROFILE_ROOT / 'build_release_receipt.py')!r});"
+            "s=importlib.util.spec_from_file_location('live_builder_smoke',p);"
+            "b=importlib.util.module_from_spec(s);s.loader.exec_module(b);"
+            "c=b._validate_live_contract(b._read_strict_json(b.LIVE_RELEASE_CONTRACT));"
+            "x=b._current_python_provenance('runner',c['python_provenance_approval']);"
+            "b._validate_python_provenance(x,'real pinned venv',c['python_provenance_approval']);"
+            "print(len(x['sys_path_entry_sha256']),len(x['pth_import_payloads']))"
+        )
+        environment = {
+            key: value for key, value in os.environ.items()
+            if not key.upper().startswith("PYTHON")
+        }
+        environment.update({
+            "PYTHONPATH": str(builder._hermes_source_root()),
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
+        })
+        result = subprocess.run(
+            [str(builder._canonical_hermes_python()), "-B", "-c", code],
+            cwd=PROFILE_ROOT / "tests", env=environment, capture_output=True, text=True,
+            timeout=10, check=False,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("12 3", result.stdout.strip())
+
+        with tempfile.TemporaryDirectory() as temporary:
+            proof = _live_report(builder, Path(temporary) / "evidence", _subject(), _live_contract())["python_provenance"]["before"]
+        forged = copy.deepcopy(proof)
+        forged["pth_import_payloads"][0]["sha256"] = "9" * 64
+        with mock.patch.object(builder, "_current_python_provenance", return_value=forged):
+            with self.assertRaises(ValueError):
+                builder._validate_python_provenance(
+                    forged, "pre-existing replaced .pth payload", contract["python_provenance_approval"]
+                )
+        forged = copy.deepcopy(proof)
+        forged["path_controls"][0]["pth"].append({"path": "Lib/site-packages/injected.pth", "sha256": "9" * 64, "bytes": 1})
+        with mock.patch.object(builder, "_current_python_provenance", return_value=forged):
+            with self.assertRaises(ValueError):
+                builder._validate_python_provenance(
+                    forged, "pre-existing added .pth", contract["python_provenance_approval"]
+                )
+
+    def test_runtime_path_and_private_artifact_ancestor_boundaries(self):
+        builder = _builder()
+        hermes_root = builder._hermes_source_root().resolve()
+        prefix = builder._canonical_hermes_python().parent.parent.resolve()
+        base = Path(sys.base_prefix).resolve()
+        paths = [
+            (builder.ROOT / "tests").resolve(),
+            hermes_root,
+            base / "python313.zip",
+            base / "DLLs",
+            base / "Lib",
+            base,
+            prefix,
+            prefix / "Lib" / "site-packages",
+            builder.ROOT.resolve() / "__editable__.hermes_agent-0.20.5.finder.__path_hook__",
+            prefix / "Lib" / "site-packages" / "win32",
+            prefix / "Lib" / "site-packages" / "win32" / "lib",
+            prefix / "Lib" / "site-packages" / "Pythonwin",
+        ]
+        paths = [path.resolve() for path in paths]
+        builder._validate_runtime_sys_paths(paths, "runner")
+        with self.assertRaises(ValueError):
+            builder._validate_runtime_sys_paths([*paths, prefix / "unapproved-shadow-path"], "runner")
+        with self.assertRaises(ValueError):
+            builder._validate_runtime_sys_paths([*paths, prefix / "Lib"], "runner")
+        reordered = [*paths]
+        reordered[2], reordered[3] = reordered[3], reordered[2]
+        with self.assertRaises(ValueError):
+            builder._validate_runtime_sys_paths(reordered, "runner")
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence_dir = Path(temporary) / "evidence"
+            expected_parent = evidence_dir / "private" / ("1" * 40) / "run-1"
+            expected_parent.mkdir(parents=True)
+            artifact = expected_parent / "captured.stdout"
+            artifact.write_bytes(b"retained")
+            with mock.patch.object(builder, "EVIDENCE_DIR", evidence_dir):
+                builder._validate_private_evidence_path(artifact, expected_parent, "test artifact")
+                with mock.patch.object(
+                    builder, "_is_reparse_point",
+                    side_effect=lambda path: path == evidence_dir / "private",
+                ):
+                    with self.assertRaises(ValueError):
+                        builder._validate_private_evidence_path(artifact, expected_parent, "ancestor reparse")
+                with self.assertRaises(ValueError):
+                    builder._validate_private_evidence_path(artifact, expected_parent.parent, "wrong parent")
+
+    def test_live_evidence_rejects_tampering_and_maps_back_to_five_blockers(self):
+        builder = _builder()
+        subject = _subject()
+        contract = _live_contract()
+        def mutate_capture(evidence, root, callback):
+            path = root / evidence["capture"]["path"]
+            capture = json.loads(path.read_text(encoding="utf-8"))
+            callback(capture)
+            path.write_text(json.dumps(capture, ensure_ascii=False), encoding="utf-8")
+            payload = path.read_bytes()
+            evidence["capture"].update({"sha256": hashlib.sha256(payload).hexdigest(), "bytes": len(payload)})
+
+        def bool_exit(evidence, root):
+            mutate_capture(evidence, root, lambda capture: capture["runs"][0]["processes"]["initial_turn"].__setitem__("exit_code", True))
+
+        def duplicate_run(evidence, _root):
+            evidence["runs"][1]["run_index"] = 1
+
+        def stale_commit(evidence, _root):
+            evidence["subject"]["profile_git_commit"] = "9" * 40
+
+        def forged_pass_summary(evidence, _root):
+            evidence["runs"][0]["scorer_report"] = {"passed": True}
+
+        def forged_argv(evidence, root):
+            def change(capture):
+                record = capture["runs"][0]["processes"]["resume_turn"]
+                token = next(item for item in record["argv"] if isinstance(item, dict) and item.get("binding") == "exact_session_id")
+                token["value_sha256"] = "9" * 64
+                record["argv_sha256"] = builder._sha256_bytes(builder._canonical_json_bytes(record["argv"]))
+            mutate_capture(evidence, root, change)
+
+        def forged_export_hash(evidence, root):
+            mutate_capture(evidence, root, lambda capture: capture["runs"][0]["session"]["export"].__setitem__("sha256", "9" * 64))
+
+        def mutate_json_ref(evidence, root, ref, callback):
+            path = root / ref["path"]
+            value = json.loads(path.read_text(encoding="utf-8"))
+            callback(value)
+            path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+            payload = path.read_bytes()
+            ref.update({"sha256": hashlib.sha256(payload).hexdigest(), "bytes": len(payload)})
+
+        def sync_capture_and_reviews(evidence, root, capture):
+            for captured in capture["runs"]:
+                refs = [*captured["prompts"]]
+                for name in ("initial_turn", "resume_turn", "session_export"):
+                    refs.extend((captured["processes"][name]["stdout"], captured["processes"][name]["stderr"]))
+                refs.append(captured["session"]["export"])
+                captured["artifact_set_sha256"] = builder._sha256_bytes(builder._canonical_json_bytes(refs))
+            capture_path = root / evidence["capture"]["path"]
+            capture_path.write_text(json.dumps(capture, ensure_ascii=False), encoding="utf-8")
+            capture_payload = capture_path.read_bytes()
+            capture_sha = hashlib.sha256(capture_payload).hexdigest()
+            evidence["capture"].update({"sha256": capture_sha, "bytes": len(capture_payload)})
+            digest_path = root / evidence["capture_digest"]["path"]
+            digest_path.write_text(capture_sha + "\n", encoding="ascii", newline="")
+            digest_payload = digest_path.read_bytes()
+            evidence["capture_digest"].update({"sha256": hashlib.sha256(digest_payload).hexdigest(), "bytes": len(digest_payload)})
+            for run in evidence["runs"]:
+                review_path = root / run["reviews"]["path"]
+                review_set = json.loads(review_path.read_text(encoding="utf-8"))
+                for review in review_set["reviews"]:
+                    review["capture_sha256"] = capture_sha
+                review_path.write_text(json.dumps(review_set, ensure_ascii=False), encoding="utf-8")
+                review_payload = review_path.read_bytes()
+                run["reviews"].update({"sha256": hashlib.sha256(review_payload).hexdigest(), "bytes": len(review_payload)})
+
+        def retained_session_stderr(evidence, root, payload, names):
+            capture_path = root / evidence["capture"]["path"]
+            capture = json.loads(capture_path.read_text(encoding="utf-8"))
+            for name in names:
+                ref = capture["runs"][0]["processes"][name]["stderr"]
+                path = root / ref["path"]
+                path.write_bytes(payload)
+                ref.update({"sha256": hashlib.sha256(payload).hexdigest(), "bytes": len(payload)})
+            sync_capture_and_reviews(evidence, root, capture)
+
+        def empty_initial_session_stderr(evidence, root):
+            retained_session_stderr(evidence, root, b"", ("initial_turn",))
+
+        def stale_session_stderr(evidence, root):
+            retained_session_stderr(evidence, root, b"session_id: stale-private-session\n", ("initial_turn", "resume_turn"))
+
+        def review_wrong_session(evidence, root):
+            mutate_json_ref(evidence, root, evidence["runs"][0]["reviews"], lambda value: value["reviews"][0].__setitem__("session_id_sha256", "9" * 64))
+
+        def review_wrong_answer(evidence, root):
+            mutate_json_ref(evidence, root, evidence["runs"][0]["reviews"], lambda value: value["reviews"][0].__setitem__("final_answer_sha256", "9" * 64))
+
+        def review_wrong_run(evidence, root):
+            mutate_json_ref(evidence, root, evidence["runs"][0]["reviews"], lambda value: value["reviews"][0].__setitem__("run_index", 2))
+
+        def review_plan_trace(evidence, root):
+            mutate_json_ref(evidence, root, evidence["runs"][0]["reviews"], lambda value: value["reviews"][0].__setitem__("plan_trace", {"status": "passed"}))
+
+        def duplicate_review(evidence, root):
+            def change(value):
+                value["reviews"][1] = copy.deepcopy(value["reviews"][0])
+            mutate_json_ref(evidence, root, evidence["runs"][0]["reviews"], change)
+
+        def review_disagrees(evidence, root):
+            mutate_json_ref(evidence, root, evidence["runs"][0]["reviews"], lambda value: value["reviews"][1]["labels"].reverse())
+
+        def review_excerpt_hash_forged(evidence, root):
+            mutate_json_ref(evidence, root, evidence["runs"][0]["reviews"], lambda value: value["reviews"][0]["evidence"][0].__setitem__("text_sha256", "9" * 64))
+
+        def static_case_review(evidence, root):
+            mutate_json_ref(evidence, root, evidence["runs"][0]["reviews"], lambda value: value["reviews"][0].pop("run_index"))
+
+        def candidate_bool_message_id(evidence, root):
+            mutate_json_ref(evidence, root, evidence["runs"][0]["candidate"], lambda value: value["canary_receipt"]["turns"][0].__setitem__("user_message_id", True))
+
+        def candidate_unknown_field(evidence, root):
+            mutate_json_ref(evidence, root, evidence["runs"][0]["candidate"], lambda value: value.__setitem__("eligible", True))
+
+        def duplicate_export_key(evidence, root):
+            capture_path = root / evidence["capture"]["path"]
+            capture = json.loads(capture_path.read_text(encoding="utf-8"))
+            export_ref = capture["runs"][0]["session"]["export"]
+            export_path = root / export_ref["path"]
+            session = json.loads(export_path.read_text(encoding="utf-8"))
+            raw = '{"id":' + json.dumps(session["id"]) + ',"messages":[],"messages":' + json.dumps(session["messages"], ensure_ascii=False) + '}\n'
+            export_path.write_text(raw, encoding="utf-8")
+            payload = export_path.read_bytes()
+            digest = hashlib.sha256(payload).hexdigest()
+            export_ref.update({"sha256": digest, "bytes": len(payload)})
+            stdout_ref = capture["runs"][0]["processes"]["session_export"]["stdout"]
+            stdout_path = root / stdout_ref["path"]
+            stdout_path.write_bytes(payload)
+            stdout_ref.update({"sha256": digest, "bytes": len(payload)})
+            captured = capture["runs"][0]
+            refs = [*captured["prompts"]]
+            for name in ("initial_turn", "resume_turn", "session_export"):
+                refs.extend((captured["processes"][name]["stdout"], captured["processes"][name]["stderr"]))
+            refs.append(captured["session"]["export"])
+            captured["artifact_set_sha256"] = builder._sha256_bytes(builder._canonical_json_bytes(refs))
+            capture_path.write_text(json.dumps(capture, ensure_ascii=False), encoding="utf-8")
+            capture_payload = capture_path.read_bytes()
+            capture_sha = hashlib.sha256(capture_payload).hexdigest()
+            evidence["capture"].update({"sha256": capture_sha, "bytes": len(capture_payload)})
+            digest_path = root / evidence["capture_digest"]["path"]
+            digest_path.write_text(capture_sha + "\n", encoding="ascii", newline="")
+            digest_payload = digest_path.read_bytes()
+            evidence["capture_digest"].update({"sha256": hashlib.sha256(digest_payload).hexdigest(), "bytes": len(digest_payload)})
+            for run in evidence["runs"]:
+                review_path = root / run["reviews"]["path"]
+                review_set = json.loads(review_path.read_text(encoding="utf-8"))
+                for review in review_set["reviews"]:
+                    review["capture_sha256"] = capture_sha
+                review_path.write_text(json.dumps(review_set, ensure_ascii=False), encoding="utf-8")
+                review_payload = review_path.read_bytes()
+                run["reviews"].update({"sha256": hashlib.sha256(review_payload).hexdigest(), "bytes": len(review_payload)})
+
+        def extra_old_user_history(evidence, root):
+            capture_path = root / evidence["capture"]["path"]
+            capture = json.loads(capture_path.read_text(encoding="utf-8"))
+            export_ref = capture["runs"][0]["session"]["export"]
+            export_path = root / export_ref["path"]
+            session = json.loads(export_path.read_text(encoding="utf-8"))
+            session["messages"].insert(0, {
+                "id": 999,
+                "role": "user",
+                "tool_name": None,
+                "tool_call_id": None,
+                "tool_calls": None,
+                "content": "older unrelated user history",
+            })
+            payload = (json.dumps(session, ensure_ascii=False) + "\n").encode("utf-8")
+            export_path.write_bytes(payload)
+            export_ref.update({"sha256": hashlib.sha256(payload).hexdigest(), "bytes": len(payload)})
+            stdout_ref = capture["runs"][0]["processes"]["session_export"]["stdout"]
+            stdout_path = root / stdout_ref["path"]
+            stdout_path.write_bytes(payload)
+            stdout_ref.update({"sha256": hashlib.sha256(payload).hexdigest(), "bytes": len(payload)})
+            sync_capture_and_reviews(evidence, root, capture)
+
+        def synchronized_capture_rewrite_without_external_review(evidence, root):
+            capture_path = root / evidence["capture"]["path"]
+            capture = json.loads(capture_path.read_text(encoding="utf-8"))
+            capture["runs"][0]["processes"]["initial_turn"]["duration_ns"] += 1
+            capture_path.write_text(json.dumps(capture, ensure_ascii=False), encoding="utf-8")
+            payload = capture_path.read_bytes()
+            digest = hashlib.sha256(payload).hexdigest()
+            evidence["capture"].update({"sha256": digest, "bytes": len(payload)})
+            digest_path = root / evidence["capture_digest"]["path"]
+            digest_path.write_text(digest + "\n", encoding="ascii", newline="")
+            digest_payload = digest_path.read_bytes()
+            evidence["capture_digest"].update({"sha256": hashlib.sha256(digest_payload).hexdigest(), "bytes": len(digest_payload)})
+
+        def replaced_python_proof(evidence, _root):
+            evidence["python_provenance"]["before"]["executable"]["sha256"] = "9" * 64
+
+        def forged_target_hash(evidence, _root):
+            evidence["runs"][0]["outbound"]["target_sha256"] = "9" * 64
+
+        def rescored_candidate_failure(evidence, root):
+            ref = evidence["runs"][0]["candidate"]
+            path = root / ref["path"]
+            candidate = json.loads(path.read_text(encoding="utf-8"))
+            candidate["cases"][0]["conclusions"].append("invent_result")
+            turn = candidate["canary_receipt"]["turns"][0]
+            turn["candidate_case_sha256"] = builder._sha256_bytes(
+                builder._canonical_json_bytes(candidate["cases"][0])
+            )
+            receipt = candidate["canary_receipt"]
+            receipt["candidate_cases_sha256"] = builder._sha256_bytes(
+                builder._canonical_json_bytes(candidate["cases"])
+            )
+            receipt_body = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+            receipt["receipt_sha256"] = builder._sha256_bytes(builder._canonical_json_bytes(receipt_body))
+            path.write_text(json.dumps(candidate, ensure_ascii=False), encoding="utf-8")
+            payload = path.read_bytes()
+            digest = hashlib.sha256(payload).hexdigest()
+            ref.update({"sha256": digest, "bytes": len(payload)})
+
+        def ack_without_id(evidence, root):
+            path = root / evidence["runs"][0]["outbound"]["ack"]["path"]
+            path.write_text(json.dumps({"success": True, "data": "not-an-ack-id"}), encoding="utf-8")
+            payload = path.read_bytes()
+            evidence["runs"][0]["outbound"]["ack"].update(
+                {"sha256": hashlib.sha256(payload).hexdigest(), "bytes": len(payload)}
+            )
+            stdout_ref = evidence["runs"][0]["processes"]["outbound"]["stdout"]
+            stdout_path = root / stdout_ref["path"]
+            stdout_path.write_bytes(payload)
+            stdout_ref.update({"sha256": hashlib.sha256(payload).hexdigest(), "bytes": len(payload)})
+
+        def ack_target_fallback(evidence, root):
+            ack_ref = evidence["runs"][0]["outbound"]["ack"]
+            path = root / ack_ref["path"]
+            payload = json.dumps({"success": True, "target": "test-receiver", "message_id": "opaque"}).encode("utf-8")
+            path.write_bytes(payload)
+            ack_ref.update({"sha256": hashlib.sha256(payload).hexdigest(), "bytes": len(payload)})
+            stdout_ref = evidence["runs"][0]["processes"]["outbound"]["stdout"]
+            stdout_path = root / stdout_ref["path"]
+            stdout_path.write_bytes(payload)
+            stdout_ref.update({"sha256": hashlib.sha256(payload).hexdigest(), "bytes": len(payload)})
+
+        def forged_ledger(evidence, _root):
+            evidence["runs"][0]["outbound"]["ledger"] = {"pending": 0, "attempting": 0, "failed": 0}
+
+        mutations = (
+            bool_exit, duplicate_run, stale_commit, forged_pass_summary,
+            forged_argv, forged_export_hash, rescored_candidate_failure,
+            review_wrong_session, review_wrong_answer, review_wrong_run,
+            review_plan_trace, duplicate_review, review_disagrees, review_excerpt_hash_forged, static_case_review,
+            candidate_bool_message_id, candidate_unknown_field, duplicate_export_key, extra_old_user_history,
+            synchronized_capture_rewrite_without_external_review, replaced_python_proof,
+            empty_initial_session_stderr, stale_session_stderr,
+            forged_target_hash, ack_without_id, ack_target_fallback, forged_ledger,
+        )
+        for mutate in mutations:
+            with self.subTest(mutation=mutate.__name__), tempfile.TemporaryDirectory() as temporary:
+                evidence_dir = Path(temporary) / "evidence"
+                evidence = _live_report(builder, evidence_dir, subject, contract)
+                expected_python = copy.deepcopy(evidence["python_provenance"]["before"])
+                mutate(evidence, evidence_dir)
+                with (
+                    mock.patch.object(builder, "EVIDENCE_DIR", evidence_dir),
+                    mock.patch.object(builder, "_validate_hashed_source", return_value=Path("checked")),
+                    mock.patch.object(builder, "_receiver_sha256", return_value=contract["outbound"]["expected_target_sha256"]),
+                    mock.patch.object(builder, "_is_read_only", return_value=True),
+                    mock.patch.object(builder, "_current_python_provenance", return_value=expected_python),
+                ):
+                    result = builder.evaluate_release_gates(
+                        _live_manifest(contract),
+                        _host_fixture(),
+                        version=subject["version"],
+                        subject=subject,
+                        profile_git_commit=TEST_PROFILE_COMMIT,
+                        hermes_git_commit=TEST_HERMES_COMMIT,
+                        live_evidence=evidence,
+                        live_contract=contract,
+                    )
+                codes = {item["code"] for item in result["blockers"]}
+                self.assertIn("LIVE_RELEASE_EVIDENCE_INVALID", codes)
+                self.assertTrue({code for code, _ in builder.LIVE_BLOCKERS}.issubset(codes))
+                self.assertEqual("invalid", result["live_model_replay"]["status"])
+                self.assertEqual(
+                    "trusted_human_orchestrated_not_cryptographically_authenticated",
+                    result["live_model_replay"]["review_assurance"],
+                )
+                self.assertEqual(
+                    "best_effort_not_same_user_adversarial",
+                    result["live_model_replay"]["capture_integrity"],
+                )
+
+    def test_live_capture_readonly_and_python_customization_fail_closed(self):
+        builder = _builder()
+        subject, contract = _subject(), _live_contract()
+        for readonly, python_error in ((False, None), (True, ValueError("sitecustomize is forbidden"))):
+            with self.subTest(readonly=readonly, python_error=python_error), tempfile.TemporaryDirectory() as temporary:
+                evidence_dir = Path(temporary) / "evidence"
+                evidence = _live_report(builder, evidence_dir, subject, contract)
+                python_patch = (
+                    mock.patch.object(builder, "_current_python_provenance", side_effect=python_error)
+                    if python_error else
+                    mock.patch.object(builder, "_current_python_provenance", return_value=evidence["python_provenance"]["before"])
+                )
+                with (
+                    mock.patch.object(builder, "EVIDENCE_DIR", evidence_dir),
+                    mock.patch.object(builder, "_validate_hashed_source", return_value=Path("checked")),
+                    mock.patch.object(builder, "_receiver_sha256", return_value=contract["outbound"]["expected_target_sha256"]),
+                    mock.patch.object(builder, "_is_read_only", return_value=readonly),
+                    python_patch,
+                ):
+                    result = builder.evaluate_release_gates(
+                        _live_manifest(contract), _host_fixture(), version=subject["version"],
+                        subject=subject, profile_git_commit=TEST_PROFILE_COMMIT,
+                        hermes_git_commit=TEST_HERMES_COMMIT, live_evidence=evidence, live_contract=contract,
+                    )
+                self.assertIn("LIVE_RELEASE_EVIDENCE_INVALID", {item["code"] for item in result["blockers"]})
+
+    def test_live_ack_actual_receiver_must_match_anonymous_contract_pin(self):
+        builder = _builder()
+        subject, contract = _subject(), _live_contract()
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence_dir = Path(temporary) / "evidence"
+            evidence = _live_report(builder, evidence_dir, subject, contract)
+            with (
+                mock.patch.object(builder, "EVIDENCE_DIR", evidence_dir),
+                mock.patch.object(builder, "_validate_hashed_source", return_value=Path("checked")),
+                mock.patch.object(builder, "_is_read_only", return_value=True),
+                mock.patch.object(builder, "_current_python_provenance", return_value=evidence["python_provenance"]["before"]),
+            ):
+                result = builder.evaluate_release_gates(
+                    _live_manifest(contract), _host_fixture(), version=subject["version"],
+                    subject=subject, profile_git_commit=TEST_PROFILE_COMMIT,
+                    hermes_git_commit=TEST_HERMES_COMMIT,
+                    live_evidence=evidence, live_contract=contract,
+                )
+        self.assertIn("LIVE_RELEASE_EVIDENCE_INVALID", {item["code"] for item in result["blockers"]})
 
     def test_self_attested_pass_fields_and_bool_numbers_cannot_clear_any_gate(self):
         builder = _builder()

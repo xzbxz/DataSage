@@ -1,0 +1,565 @@
+#!/usr/bin/env python3
+"""Capture then finalize test-only live release evidence via official Hermes CLI."""
+
+from __future__ import annotations
+
+import argparse
+from datetime import datetime
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import subprocess
+import sys
+import time
+from typing import Any
+import uuid
+
+
+ROOT = Path(__file__).resolve().parents[1]
+CONTRACT_PATH = ROOT / "tests" / "fixtures" / "live_release_contract.json"
+GOLDEN_PATH = ROOT / "plugins" / "datasage-query" / "e2e" / "golden_expert_cases.json"
+ADAPTER_PATH = ROOT / "plugins" / "datasage-query" / "e2e" / "canary_transcript_adapter.py"
+SCORER_PATH = ROOT / "plugins" / "datasage-query" / "e2e" / "golden_expert_scorer.py"
+BUILDER_PATH = ROOT / "build_release_receipt.py"
+EVIDENCE_DIR = ROOT / "pending" / "evidence"
+SESSION_RE = re.compile(r"(?m)^session_id:\s*(\S+)\s*$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _reject_constant(value: str) -> None:
+    raise ValueError(f"non-finite JSON is forbidden: {value}")
+
+
+def _strict_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON property: {key}")
+        result[key] = value
+    return result
+
+
+def _read_json(path: Path) -> dict[str, object]:
+    value = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_strict_object, parse_constant=_reject_constant)
+    if not isinstance(value, dict):
+        raise ValueError(f"JSON document must be an object: {path}")
+    return value
+
+
+def _canonical(value: object) -> bytes:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+
+
+def _sha(value: object) -> str:
+    payload = value if isinstance(value, bytes) else value.encode("utf-8") if isinstance(value, str) else _canonical(value)
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _load_module(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _git(root: Path, *args: str, binary: bool = False) -> bytes | str:
+    result = subprocess.run(
+        ["git", "-c", f"safe.directory={root.resolve().as_posix()}", "-C", str(root), *args],
+        stdin=subprocess.DEVNULL, capture_output=True, text=not binary, timeout=10, check=False,
+    )
+    if result.returncode:
+        raise RuntimeError("Git provenance check failed")
+    return result.stdout
+
+
+def _commit(root: Path) -> str:
+    value = str(_git(root, "rev-parse", "HEAD")).strip().lower()
+    if re.fullmatch(r"[0-9a-f]{40,64}", value) is None:
+        raise RuntimeError("Git HEAD is not a full commit")
+    return value
+
+
+def _clean(root: Path, scope: Path | None = None) -> bool:
+    args = ["status", "--porcelain=v1", "--untracked-files=all"]
+    if scope is not None:
+        args.extend(["--", scope.resolve().relative_to(root.resolve()).as_posix()])
+    return not str(_git(root, *args)).strip()
+
+
+def _source(commit: str, path: str) -> dict[str, str]:
+    git_root = Path(str(_git(ROOT, "rev-parse", "--show-toplevel")).strip()).resolve()
+    repository_path = (ROOT.relative_to(git_root) / path).as_posix()
+    blob = _git(git_root, "show", f"{commit}:{repository_path}", binary=True)
+    worktree = (ROOT / path).read_bytes()
+    if not isinstance(blob, bytes) or blob != worktree:
+        raise RuntimeError(f"tracked source differs from HEAD: {path}")
+    return {"path": path, "sha256": _sha(blob)}
+
+
+def _artifact(path: Path) -> dict[str, object]:
+    payload = path.read_bytes()
+    return {"path": path.relative_to(EVIDENCE_DIR).as_posix(), "sha256": _sha(payload), "bytes": len(payload)}
+
+
+def _write_json(path: Path, value: object) -> None:
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _runtime(*, hermes_root: Path, hermes_python: Path, state_db: Path, contract: dict[str, object]) -> tuple[Path, Path, Path, str, str]:
+    hermes_root = hermes_root.resolve(strict=True)
+    state_db = state_db.resolve(strict=True)
+    if state_db != (ROOT / "state.db").resolve(strict=True):
+        raise RuntimeError("--state-db must be this Profile's canonical state.db")
+    expected_python = (hermes_root / "venv" / "Scripts" / "python.exe").resolve(strict=True)
+    if hermes_python.resolve(strict=True) != expected_python:
+        raise RuntimeError("--hermes-python must be the pinned Hermes checkout venv interpreter")
+    profile_git_root = Path(str(_git(ROOT, "rev-parse", "--show-toplevel")).strip()).resolve()
+    if not _clean(profile_git_root, ROOT) or not _clean(hermes_root):
+        raise RuntimeError("Profile scope and Hermes source must both be clean")
+    profile_commit, hermes_commit = _commit(ROOT), _commit(hermes_root)
+    if contract["host"]["hermes_git_commit"] != hermes_commit:
+        raise RuntimeError("Hermes HEAD differs from the tracked live contract")
+    for path in ("build_release_receipt.py", "tests/fixtures/live_release_contract.json", *contract["source_paths"].values()):
+        _source(profile_commit, path)
+    return hermes_root, expected_python, state_db, profile_commit, hermes_commit
+
+
+def _environment(hermes_root: Path) -> dict[str, str]:
+    env = {key: value for key, value in os.environ.items() if not key.upper().startswith("PYTHON")}
+    env.update({"HERMES_HOME": str(ROOT), "PYTHONPATH": str(hermes_root), "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1"})
+    return env
+
+
+def _expand(template: list[str], replacements: dict[str, str]) -> list[str]:
+    command = []
+    for token in template:
+        if token.startswith("{") and token.endswith("}"):
+            name = token[1:-1]
+            if name not in replacements:
+                raise RuntimeError(f"missing command binding: {name}")
+            command.append(replacements[name])
+        else:
+            command.append(token)
+    return command
+
+
+def _run(command: list[str], template: list[str], *, cwd: Path, env: dict[str, str], timeout: int, stream_dir: Path, stream_prefix: str) -> tuple[subprocess.CompletedProcess[bytes], dict[str, object]]:
+    if len(command) != len(template):
+        raise RuntimeError("subprocess argv length differs from tracked template")
+    projection: list[object] = []
+    for actual, expected in zip(command, template):
+        if expected.startswith("{") and expected.endswith("}"):
+            projection.append({"binding": expected[1:-1], "value_sha256": _sha(actual)})
+        elif actual == expected:
+            projection.append(actual)
+        else:
+            raise RuntimeError("subprocess literal argv differs from tracked template")
+    started = time.perf_counter_ns()
+    try:
+        result = subprocess.run(command, cwd=cwd, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=False, timeout=timeout, check=False)
+        timed_out = False
+    except subprocess.TimeoutExpired as error:
+        stdout = error.stdout if isinstance(error.stdout, bytes) else (error.stdout or "").encode("utf-8")
+        stderr = error.stderr if isinstance(error.stderr, bytes) else (error.stderr or "").encode("utf-8")
+        result, timed_out = subprocess.CompletedProcess(command, 124, stdout, stderr), True
+    stdout_path, stderr_path = stream_dir / f"{stream_prefix}.stdout", stream_dir / f"{stream_prefix}.stderr"
+    stdout_path.write_bytes(result.stdout)
+    stderr_path.write_bytes(result.stderr)
+    record = {
+        "argv": projection, "argv_sha256": _sha(projection), "exit_code": result.returncode,
+        "timed_out": timed_out, "duration_ns": max(1, time.perf_counter_ns() - started),
+        "stdout": _artifact(stdout_path), "stderr": _artifact(stderr_path),
+    }
+    if timed_out or result.returncode:
+        raise RuntimeError("live subprocess failed")
+    return result, record
+
+
+def _session_id(stderr: bytes) -> str:
+    matches = SESSION_RE.findall(stderr.decode("utf-8", "strict"))
+    if len(matches) != 1:
+        raise RuntimeError("quiet Hermes CLI did not emit exactly one session_id")
+    return matches[0]
+
+
+def _python_provenance(builder: Any, hermes_root: Path, hermes_python: Path, contract: dict[str, object]) -> dict[str, object]:
+    if Path(sys.executable).resolve() != hermes_python.resolve() or Path(sys.prefix).resolve() != hermes_python.parent.parent.resolve():
+        raise RuntimeError("runner itself must execute under the pinned Hermes venv Python")
+    proof = builder._current_python_provenance("runner", contract["python_provenance_approval"])
+    return builder._validate_python_provenance(proof, "runner Python provenance", contract["python_provenance_approval"])
+
+
+def _set_read_only(paths: list[Path]) -> None:
+    for path in paths:
+        path.chmod(stat.S_IREAD)
+
+
+def _export(payload: str) -> tuple[dict[str, object], list[dict[str, object]]]:
+    rows = [json.loads(line, object_pairs_hook=_strict_object, parse_constant=_reject_constant) for line in payload.splitlines() if line.strip()]
+    if len(rows) != 1 or not isinstance(rows[0], dict) or not isinstance(rows[0].get("messages"), list):
+        raise RuntimeError("official export did not contain exactly one session")
+    messages = rows[0]["messages"]
+    if any(not isinstance(item, dict) for item in messages):
+        raise RuntimeError("official export contains an invalid message")
+    return rows[0], messages
+
+
+def _endpoints(messages: list[dict[str, object]], prompts: list[str]) -> list[tuple[int, int, str]]:
+    if [item.get("content") for item in messages if item.get("role") == "user"] != prompts:
+        raise RuntimeError("official export user turns are not exactly the two ordered Golden prompts")
+    result = []
+    start = 0
+    for prompt in prompts:
+        users = [index for index in range(start, len(messages)) if messages[index].get("role") == "user" and messages[index].get("content") == prompt]
+        if len(users) != 1:
+            raise RuntimeError("captured prompt is not unique in the official export")
+        user_index = users[0]
+        next_user = next((index for index in range(user_index + 1, len(messages)) if messages[index].get("role") == "user"), len(messages))
+        assistants = [index for index in range(user_index + 1, next_user) if messages[index].get("role") == "assistant" and isinstance(messages[index].get("content"), str) and messages[index]["content"]]
+        if not assistants:
+            raise RuntimeError("captured turn has no final assistant answer")
+        user_id, final = messages[user_index].get("id"), messages[assistants[-1]]
+        final_id = final.get("id")
+        if type(user_id) is not int or type(final_id) is not int or user_id >= final_id:
+            raise RuntimeError("captured turn endpoints are invalid")
+        result.append((user_id, final_id, _sha(final["content"])))
+        start = next_user
+    return result
+
+
+def _review_assertion(review: dict[str, object], *, adapter: Any, profile: dict[str, str], case_id: str, session_id: str, user_id: int, prompt_sha: str, database_identity: str, watermark: str, final_sha: str, fixture_sha: str, database_ref_sha: str) -> dict[str, object]:
+    return {
+        "schema": adapter.REVIEW_SCHEMA, "status": "reviewed", "test_id": case_id,
+        "artifact_id": profile["artifact_id"], "payload_sha256": profile["payload_sha256"],
+        "session_id": session_id, "user_message_id": user_id, "canonical_prompt_sha256": prompt_sha,
+        "database_identity_sha256": database_identity, "watermark_sha256": watermark,
+        "final_answer_sha256": final_sha, "reviewer_id": review["reviewer_id"], "labels": review["labels"],
+        "fixture_attestation_sha256": fixture_sha, "business_database_ref_sha256": database_ref_sha,
+    }
+
+
+def _capture(args: argparse.Namespace, contract: dict[str, object], golden: dict[str, object], builder: Any) -> int:
+    hermes_root, hermes_python, state_db, commit, hermes_commit = _runtime(hermes_root=args.hermes_root, hermes_python=args.hermes_python, state_db=args.state_db, contract=contract)
+    python_before = _python_provenance(builder, hermes_root, hermes_python, contract)
+    receipt = builder.build_receipt()
+    case_ids = contract["case_plan"]["case_ids"]
+    by_id = {item["id"]: item for item in golden["cases"]}
+    cases = [by_id[case_id] for case_id in case_ids]
+    if [case["turn"] for case in cases] != [1, 2] or {case["conversation_id"] for case in cases} != {contract["case_plan"]["conversation_id"]}:
+        raise RuntimeError("contract cases are not the exact tracked two-turn conversation")
+    root = EVIDENCE_DIR / "private" / commit
+    if root.exists():
+        raise RuntimeError("private capture path already exists; partial capture remains fail-closed")
+    root.mkdir(parents=True)
+    env, shapes, timeout = _environment(hermes_root), contract["execution"]["command_shapes"], contract["execution"]["timeout_seconds"]
+    runs = []
+    for run_index in range(1, 4):
+        run_dir = root / f"run-{run_index}"
+        run_dir.mkdir()
+        prompts = []
+        for turn, case in enumerate(cases, 1):
+            path = run_dir / f"turn-{turn}.txt"
+            path.write_text(case["prompt"], encoding="utf-8")
+            prompts.append(path)
+        initial = _expand(shapes["initial_turn"], {"python": str(hermes_python), "prompt_file": str(prompts[0])})
+        first, first_record = _run(initial, shapes["initial_turn"], cwd=ROOT, env=env, timeout=timeout, stream_dir=run_dir, stream_prefix="initial-turn")
+        session_id = _session_id(first.stderr)
+        resume = _expand(shapes["resume_turn"], {"python": str(hermes_python), "exact_session_id": session_id, "prompt_file": str(prompts[1])})
+        second, second_record = _run(resume, shapes["resume_turn"], cwd=ROOT, env=env, timeout=timeout, stream_dir=run_dir, stream_prefix="resume-turn")
+        if _session_id(second.stderr) != session_id:
+            raise RuntimeError("two-turn capture unexpectedly rotated the exact session ID")
+        export_command = _expand(shapes["session_export"], {"python": str(hermes_python), "exact_session_id": session_id})
+        exported, export_record = _run(export_command, shapes["session_export"], cwd=ROOT, env=env, timeout=timeout, stream_dir=run_dir, stream_prefix="session-export")
+        export_path = run_dir / "session.jsonl"
+        export_path.write_bytes(exported.stdout)
+        session, messages = _export(exported.stdout.decode("utf-8", "strict"))
+        if (session.get("id") or session.get("session_id")) != session_id:
+            raise RuntimeError("official export does not match the exact resumed session")
+        endpoints = _endpoints(messages, [case["prompt"] for case in cases])
+        prompt_refs = [_artifact(path) for path in prompts]
+        artifact_refs = [prompt_refs[0], prompt_refs[1]]
+        for record in (first_record, second_record, export_record):
+            artifact_refs.extend((record["stdout"], record["stderr"]))
+        export_ref = _artifact(export_path)
+        artifact_refs.append(export_ref)
+        runs.append({
+            "run_index": run_index, "case_ids": case_ids,
+            "prompts": prompt_refs,
+            "processes": {"initial_turn": first_record, "resume_turn": second_record, "session_export": export_record},
+            "session": {"source": "cli", "export_format": "jsonl", "turns": 2, "lineage_sha256": _sha([session_id]), "session_id_sha256": _sha(session_id), "final_answer_sha256": [item[2] for item in endpoints], "export": export_ref},
+            "artifact_set_sha256": _sha(artifact_refs),
+        })
+    _runtime(hermes_root=hermes_root, hermes_python=hermes_python, state_db=state_db, contract=contract)
+    python_after = _python_provenance(builder, hermes_root, hermes_python, contract)
+    capture = {
+        "schema": "datasage-live-capture/v1",
+        "subject": {"name": receipt["name"], "version": receipt["version"], "content_sha256": receipt["content_sha256"], "profile_git_commit": commit},
+        "host": {"hermes_version": contract["host"]["hermes_version"], "hermes_git_commit": hermes_commit},
+        "contract": _source(commit, "tests/fixtures/live_release_contract.json"),
+        "python_provenance": {"before": python_before, "after": python_after},
+        "runs": runs,
+    }
+    temporary = root / ".capture.json.tmp"
+    _write_json(temporary, capture)
+    capture_path = root / "capture.json"
+    temporary.replace(capture_path)
+    digest_path = root / "capture.sha256"
+    digest_path.write_text(_sha(capture_path.read_bytes()) + "\n", encoding="ascii", newline="")
+    _set_read_only([path for path in root.rglob("*") if path.is_file()])
+    return 0
+
+
+def _finalize(args: argparse.Namespace, contract: dict[str, object], golden: dict[str, object], builder: Any) -> int:
+    hermes_root, hermes_python, state_db, commit, hermes_commit = _runtime(hermes_root=args.hermes_root, hermes_python=args.hermes_python, state_db=args.state_db, contract=contract)
+    python_before = _python_provenance(builder, hermes_root, hermes_python, contract)
+    receipt = builder.build_receipt()
+    root = EVIDENCE_DIR / "private" / commit
+    capture_path, capture_digest_path = root / "capture.json", root / "capture.sha256"
+    capture_ref, capture_digest_ref = _artifact(capture_path), _artifact(capture_digest_path)
+    builder._live_capture_artifact(capture_ref, capture_digest_ref, subject_commit=commit)
+    capture = _read_json(capture_path)
+    expected_subject = {"name": receipt["name"], "version": receipt["version"], "content_sha256": receipt["content_sha256"], "profile_git_commit": commit}
+    expected_host = {"hermes_version": contract["host"]["hermes_version"], "hermes_git_commit": hermes_commit}
+    expected_contract = _source(commit, "tests/fixtures/live_release_contract.json")
+    if (
+        set(capture) != {"schema", "subject", "host", "contract", "python_provenance", "runs"}
+        or capture["schema"] != "datasage-live-capture/v1"
+        or _canonical(capture["subject"]) != _canonical(expected_subject)
+        or _canonical(capture["host"]) != _canonical(expected_host)
+        or _canonical(capture["contract"]) != _canonical(expected_contract)
+        or not isinstance(capture["runs"], list)
+        or len(capture["runs"]) != 3
+    ):
+        raise RuntimeError("no complete current-subject capture is available")
+    capture_python = capture["python_provenance"]
+    if not isinstance(capture_python, dict) or set(capture_python) != {"before", "after"}:
+        raise RuntimeError("frozen capture has no closed Python provenance")
+    builder._validate_python_provenance(capture_python["before"], "capture Python before", contract["python_provenance_approval"])
+    builder._validate_python_provenance(capture_python["after"], "capture Python after", contract["python_provenance_approval"])
+    case_ids = contract["case_plan"]["case_ids"]
+    by_id = {item["id"]: item for item in golden["cases"]}
+    cases = [by_id[case_id] for case_id in case_ids]
+    shapes = contract["execution"]["command_shapes"]
+    captured_contexts = []
+    for position, captured in enumerate(capture["runs"], 1):
+        if (
+            not isinstance(captured, dict)
+            or set(captured) != {"run_index", "case_ids", "prompts", "processes", "session", "artifact_set_sha256"}
+            or type(captured["run_index"]) is not int
+            or captured["run_index"] != position
+            or captured["case_ids"] != case_ids
+            or not isinstance(captured["processes"], dict)
+            or set(captured["processes"]) != {"initial_turn", "resume_turn", "session_export"}
+            or not isinstance(captured["session"], dict)
+            or set(captured["session"]) != {"source", "export_format", "turns", "lineage_sha256", "session_id_sha256", "final_answer_sha256", "export"}
+        ):
+            raise RuntimeError("frozen capture run shape/order differs from the tracked contract")
+        run_dir = root / f"run-{position}"
+        prompt_refs = captured["prompts"]
+        if not isinstance(prompt_refs, list) or len(prompt_refs) != 2:
+            raise RuntimeError("frozen capture has no exact prompt artifacts")
+        prompt_paths = []
+        for turn, (ref, case) in enumerate(zip(prompt_refs, cases), 1):
+            path, payload = builder._live_artifact(
+                ref, subject_commit=commit, run_index=position, filename=f"turn-{turn}.txt",
+                label=f"captured prompt {turn}", require_read_only=True,
+            )
+            if payload.decode("utf-8") != case["prompt"]:
+                raise RuntimeError("frozen prompt artifact differs from the tracked Golden prompt")
+            prompt_paths.append(path)
+        export_path = run_dir / "session.jsonl"
+        if captured["session"]["export"] != _artifact(export_path):
+            raise RuntimeError("frozen capture export is not bound to the retained official export")
+        builder._live_artifact(
+            captured["session"]["export"], subject_commit=commit, run_index=position,
+            filename="session.jsonl", label="captured official export", require_read_only=True,
+        )
+        session, messages = _export(export_path.read_text(encoding="utf-8"))
+        session_id = session.get("id") or session.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            raise RuntimeError("captured session ID is unavailable")
+        endpoints = _endpoints(messages, [case["prompt"] for case in cases])
+        session_record = captured["session"]
+        if (
+            session_record["source"] != "cli"
+            or session_record["export_format"] != "jsonl"
+            or type(session_record["turns"]) is not int
+            or session_record["turns"] != 2
+            or session_record["lineage_sha256"] != _sha([session_id])
+            or session_record["session_id_sha256"] != _sha(session_id)
+            or session_record["final_answer_sha256"] != [item[2] for item in endpoints]
+        ):
+            raise RuntimeError("frozen capture session lineage/answers do not match the retained export")
+        builder._validate_process_record(
+            captured["processes"]["initial_turn"], shapes["initial_turn"], f"capture run {position} initial",
+            expected_bindings={"python": str(hermes_python), "prompt_file": str(prompt_paths[0])},
+            subject_commit=commit, run_index=position, stream_prefix="initial-turn", require_read_only=True,
+        )
+        builder._validate_process_record(
+            captured["processes"]["resume_turn"], shapes["resume_turn"], f"capture run {position} resume",
+            expected_bindings={"python": str(hermes_python), "exact_session_id": session_id, "prompt_file": str(prompt_paths[1])},
+            subject_commit=commit, run_index=position, stream_prefix="resume-turn", require_read_only=True,
+        )
+        builder._validate_process_record(
+            captured["processes"]["session_export"], shapes["session_export"], f"capture run {position} export",
+            expected_bindings={"python": str(hermes_python), "exact_session_id": session_id},
+            subject_commit=commit, run_index=position, stream_prefix="session-export", require_read_only=True,
+        )
+        retained_session_ids = []
+        for name, prefix in (("initial_turn", "initial-turn"), ("resume_turn", "resume-turn")):
+            _, stderr_payload = builder._live_artifact(
+                captured["processes"][name]["stderr"], subject_commit=commit, run_index=position,
+                filename=f"{prefix}.stderr", label=f"capture {name} stderr",
+                require_read_only=True, allow_empty=True,
+            )
+            retained_session_ids.append(builder._official_session_id_from_stderr(stderr_payload, f"capture {name} stderr"))
+        if retained_session_ids != [session_id, session_id]:
+            raise RuntimeError("frozen initial/resume stderr does not bind the exact exported session")
+        if captured["processes"]["session_export"]["stdout"]["sha256"] != captured["session"]["export"]["sha256"]:
+            raise RuntimeError("captured export process stdout differs from the retained official export")
+        artifact_refs = [*prompt_refs]
+        for name in ("initial_turn", "resume_turn", "session_export"):
+            artifact_refs.extend((captured["processes"][name]["stdout"], captured["processes"][name]["stderr"]))
+        artifact_refs.append(captured["session"]["export"])
+        if captured["artifact_set_sha256"] != _sha(artifact_refs):
+            raise RuntimeError("frozen capture artifact-set digest is invalid")
+        captured_contexts.append((captured, run_dir, export_path, session_id, endpoints, messages))
+    report_path = EVIDENCE_DIR / f"live-release-{commit}.json"
+    if report_path.exists():
+        raise RuntimeError("final live evidence already exists and is immutable")
+    external = _read_json(args.reviews)
+    if set(external) != {"schema", "reviews"} or external["schema"] != "datasage-live-review-batch/v1" or not isinstance(external["reviews"], list) or len(external["reviews"]) != 12:
+        raise RuntimeError("external review batch must contain two trusted reviewers x 3 runs x 2 cases")
+    review_keys = {"run_index", "case_id", "session_id_sha256", "final_answer_sha256", "capture_sha256", "reviewer_id", "labels", "evidence", "reviewed_at"}
+    review_map: dict[tuple[int, str], list[dict[str, object]]] = {}
+    for review in external["reviews"]:
+        if not isinstance(review, dict) or set(review) != review_keys:
+            raise RuntimeError("external reviews have unknown/missing fields; plan_trace is forbidden")
+        key = (review.get("run_index"), review.get("case_id"))
+        if type(key[0]) is not int or not isinstance(key[1], str):
+            raise RuntimeError("external reviews contain a wrong run/case")
+        review_map.setdefault(key, []).append(review)
+    expected_review_keys = {(run, case) for run in range(1, 4) for case in case_ids}
+    trusted = contract["review_policy"]["trusted_reviewer_id_sha256"]
+    if set(review_map) != expected_review_keys or any(len(pair) != 2 or {_sha(item["reviewer_id"]) for item in pair} != set(trusted) for pair in review_map.values()):
+        raise RuntimeError("external reviews do not exactly cover two independent trusted reviewers per run/case")
+    adapter = _load_module("datasage_live_adapter", ADAPTER_PATH)
+    profile = {"profile_id": receipt["name"], "artifact_id": commit, "payload_sha256": receipt["content_sha256"]}
+    database_identity = adapter._database_identity(state_db)
+    env, timeout = _environment(hermes_root), contract["execution"]["timeout_seconds"]
+    finalized = []
+    for captured, run_dir, export_path, session_id, endpoints, messages in captured_contexts:
+        run_index = captured["run_index"]
+        generated = [run_dir / name for name in (
+            "reviews.json", "bindings.json", "candidate.json", "score.json", "outbound.txt", "ack.json",
+            "adapter.stdout", "adapter.stderr", "scorer.stdout", "scorer.stderr", "outbound.stdout", "outbound.stderr",
+        )]
+        if any(path.exists() for path in generated):
+            raise RuntimeError("partial finalize artifacts exist; refusing to repeat adapter/send work")
+        ordered_reviews = []
+        for case_id in case_ids:
+            pair = sorted(review_map[(run_index, case_id)], key=lambda item: trusted.index(_sha(item["reviewer_id"])))
+            ordered_reviews.extend(pair)
+        review_set = {"schema": "datasage-live-review-set/v1", "run_index": run_index, "reviews": ordered_reviews}
+        reviews = builder._validate_live_reviews(
+            review_set, run_index=run_index, case_ids=case_ids,
+            review_policy=contract["review_policy"], capture_sha256=capture_ref["sha256"],
+        )
+        consensus_reviews = []
+        for case, endpoint in zip(cases, endpoints):
+            pair = reviews[case["id"]]
+            final_answer = next(item["content"] for item in messages if item.get("id") == endpoint[1])
+            builder._reject_internal_conclusion_codes(final_answer, case)
+            for review in pair:
+                if review["session_id_sha256"] != _sha(session_id) or review["final_answer_sha256"] != endpoint[2]:
+                    raise RuntimeError("external review is not bound to the captured run/answer")
+                builder._validate_review_evidence(review, final_answer, case["required_conclusions"])
+            if pair[0]["labels"] != pair[1]["labels"]:
+                raise RuntimeError("trusted reviewers did not reach exact conclusion consensus")
+            consensus_reviews.append({"reviewer_id": builder._review_consensus_id(pair), "labels": pair[0]["labels"]})
+        reviews_path = run_dir / "reviews.json"
+        _write_json(reviews_path, review_set)
+        fixture_sha, database_ref_sha = args.fixture_attestation_sha256, args.business_database_ref_sha256
+        turns = []
+        for case, review, (user_id, final_id, final_sha) in zip(cases, consensus_reviews, endpoints):
+            prompt_sha = _sha(case["prompt"])
+            watermark = adapter._watermark(test_id=case["id"], conversation_id=case["conversation_id"], turn=case["turn"], canonical_prompt_sha256=prompt_sha, user_message_id=user_id, database_identity_sha256=database_identity, profile=profile, fixture_attestation_sha256=fixture_sha, business_database_ref_sha256=database_ref_sha)
+            turns.append({
+                "test_id": case["id"], "conversation_id": case["conversation_id"], "turn": case["turn"], "session_id": session_id,
+                "user_message_id": user_id, "final_message_id": final_id, "canonical_prompt_sha256": prompt_sha, "watermark_sha256": watermark,
+                "fixture_attestation_sha256": fixture_sha, "business_database_ref_sha256": database_ref_sha,
+                "review": _review_assertion(review, adapter=adapter, profile=profile, case_id=case["id"], session_id=session_id, user_id=user_id, prompt_sha=prompt_sha, database_identity=database_identity, watermark=watermark, final_sha=final_sha, fixture_sha=fixture_sha, database_ref_sha=database_ref_sha),
+            })
+        bindings = {"schema": adapter.LIVE_BINDING_SCHEMA, "captured_at": datetime.now().astimezone().isoformat(), "transcript_source": "cli", "profile_artifact": profile, "state_db_identity_sha256": database_identity, "turns": turns}
+        bindings_path, candidate_path, score_path = run_dir / "bindings.json", run_dir / "candidate.json", run_dir / "score.json"
+        _write_json(bindings_path, bindings)
+        common = {"python": str(hermes_python), "adapter": str(ADAPTER_PATH), "scorer": str(SCORER_PATH), "state_db": str(state_db), "bindings": str(bindings_path), "candidate": str(candidate_path), "golden_suite": str(GOLDEN_PATH), "case_1": case_ids[0], "case_2": case_ids[1], "score_report": str(score_path)}
+        _, adapter_record = _run(_expand(shapes["adapter"], common), shapes["adapter"], cwd=ROOT, env=env, timeout=timeout, stream_dir=run_dir, stream_prefix="adapter")
+        _, scorer_record = _run(_expand(shapes["scorer"], common), shapes["scorer"], cwd=ROOT, env=env, timeout=timeout, stream_dir=run_dir, stream_prefix="scorer")
+        nonce = uuid.uuid4().hex
+        message_path = run_dir / "outbound.txt"
+        message_path.write_text(f"DataSage live release protocol probe {nonce}", encoding="utf-8")
+        sent, outbound_record = _run(_expand(shapes["outbound"], {"python": str(hermes_python), "message_file": str(message_path)}), shapes["outbound"], cwd=ROOT, env=env, timeout=timeout, stream_dir=run_dir, stream_prefix="outbound")
+        ack_path = run_dir / "ack.json"
+        ack_path.write_bytes(sent.stdout)
+        ack = json.loads(sent.stdout.decode("utf-8", "strict"), object_pairs_hook=_strict_object, parse_constant=_reject_constant)
+        receiver = ack.get("chat_id") if isinstance(ack, dict) else None
+        if not isinstance(receiver, str) or not receiver or _sha(receiver) != contract["outbound"]["expected_target_sha256"]:
+            raise RuntimeError("WeCom ACK receiver does not match the anonymous tracked target")
+        finalized.append({
+            "run_index": run_index, "case_ids": case_ids, "processes": {"adapter": adapter_record, "scorer": scorer_record, "outbound": outbound_record},
+            "candidate": _artifact(candidate_path), "score_report": _artifact(score_path), "reviews": _artifact(reviews_path),
+            "outbound": {"target_sha256": _sha(receiver), "nonce_sha256": _sha(nonce), "message": _artifact(message_path), "ack": _artifact(ack_path), "ledger_evidence": "standalone_send_has_no_delivery_obligation"},
+        })
+    _runtime(hermes_root=hermes_root, hermes_python=hermes_python, state_db=state_db, contract=contract)
+    python_after = _python_provenance(builder, hermes_root, hermes_python, contract)
+    sources = contract["source_paths"]
+    evidence = {
+        "schema": "datasage-live-release-evidence/v1",
+        "subject": {"name": receipt["name"], "version": receipt["version"], "content_sha256": receipt["content_sha256"], "profile_git_commit": commit},
+        "host": {"hermes_version": contract["host"]["hermes_version"], "hermes_git_commit": hermes_commit},
+        "contract": _source(commit, "tests/fixtures/live_release_contract.json"), "producer": _source(commit, sources["producer"]),
+        "golden_suite": _source(commit, sources["golden_suite"]), "adapter": _source(commit, sources["adapter"]), "scorer": _source(commit, sources["scorer"]),
+        "runtime_readiness_policy_sha256": _sha(contract["runtime_readiness_policy"]),
+        "capture": capture_ref, "capture_digest": capture_digest_ref,
+        "python_provenance": {"before": python_before, "after": python_after}, "runs": finalized,
+    }
+    temporary = EVIDENCE_DIR / f".live-release-{commit}.tmp"
+    _write_json(temporary, evidence)
+    temporary.replace(report_path)
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("phase", choices=("capture", "finalize"))
+    parser.add_argument("--hermes-python", type=Path, required=True)
+    parser.add_argument("--hermes-root", type=Path, required=True)
+    parser.add_argument("--state-db", type=Path, required=True)
+    parser.add_argument("--reviews", type=Path)
+    parser.add_argument("--fixture-attestation-sha256")
+    parser.add_argument("--business-database-ref-sha256")
+    args = parser.parse_args(argv)
+    contract, golden = _read_json(CONTRACT_PATH), _read_json(GOLDEN_PATH)
+    builder = _load_module("datasage_live_builder", BUILDER_PATH)
+    builder._validate_live_contract(contract)
+    if args.phase == "capture":
+        if args.reviews or args.fixture_attestation_sha256 or args.business_database_ref_sha256:
+            parser.error("capture accepts no review/finalize inputs")
+        return _capture(args, contract, golden, builder)
+    if args.reviews is None:
+        parser.error("finalize requires --reviews")
+    for name in ("fixture_attestation_sha256", "business_database_ref_sha256"):
+        if SHA256_RE.fullmatch(getattr(args, name) or "") is None:
+            parser.error(f"finalize requires --{name.replace('_', '-')} as SHA-256")
+    return _finalize(args, contract, golden, builder)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

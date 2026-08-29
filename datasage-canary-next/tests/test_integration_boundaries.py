@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import copy
 import importlib.util
 import json
@@ -1777,6 +1778,132 @@ class DistributionBoundaryTests(unittest.TestCase):
                         self.assertFalse(decision.blocked)
             finally:
                 hermes_skill_provenance.reset_current_write_origin(origin_token)
+
+
+class LiveReleaseEvidenceBoundaryTests(unittest.TestCase):
+    def test_live_contract_is_fixed_to_official_cli_and_two_by_three_plan(self):
+        contract = json.loads(
+            (PROFILE_ROOT / "tests" / "fixtures" / "live_release_contract.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual("datasage-live-release-contract/v1", contract["schema"])
+        self.assertEqual(2, contract["case_plan"]["turns_per_session"])
+        self.assertEqual(2, len(contract["case_plan"]["case_ids"]))
+        self.assertEqual(3, contract["case_plan"]["runs"])
+        shapes = contract["execution"]["command_shapes"]
+        prefix = ["{python}", "-B", "-m", "hermes_cli.main"]
+        self.assertEqual(prefix + ["chat", "-Q"], shapes["initial_turn"][:6])
+        self.assertIn("--query-file", shapes["initial_turn"])
+        self.assertEqual(prefix + ["chat", "-Q"], shapes["resume_turn"][:6])
+        self.assertIn("--resume", shapes["resume_turn"])
+        self.assertIn("{exact_session_id}", shapes["resume_turn"])
+        self.assertEqual(prefix + ["sessions", "export"], shapes["session_export"][:6])
+        self.assertIn("--session-id", shapes["session_export"])
+        self.assertEqual(prefix + ["send", "--to", "wecom"], shapes["outbound"][:7])
+        self.assertEqual(["{python}", "-B", "{adapter}"], shapes["adapter"][:3])
+        self.assertEqual(["{python}", "-B", "{scorer}"], shapes["scorer"][:3])
+        rendered = json.dumps(shapes, sort_keys=True)
+        for forbidden in ('"latest"', '"-c"', '"--continue"', '"-z"', '"--oneshot"'):
+            self.assertNotIn(forbidden, rendered)
+        self.assertEqual(
+            "protocol_or_api_ack_not_user_read",
+            contract["outbound"]["evidence_semantics"],
+        )
+        self.assertEqual("sha256_only", contract["outbound"]["target_storage"])
+        self.assertEqual(
+            "4d497bc168a1782eeaffb82b3cfa1f9ae212e86d9fa6dea721fe34712a3179e7",
+            contract["outbound"]["expected_target_sha256"],
+        )
+        self.assertEqual(
+            "standalone_send_has_no_delivery_obligation",
+            contract["outbound"]["ledger_evidence"],
+        )
+        self.assertEqual(2, contract["review_policy"]["reviews_per_run_case"])
+        self.assertEqual(2, len(set(contract["review_policy"]["trusted_reviewer_id_sha256"])))
+        self.assertEqual(
+            "trusted_human_review_not_mechanically_proven",
+            contract["review_policy"]["semantic_assurance"],
+        )
+        self.assertEqual(
+            "sha256_sidecar_bound_to_both_trusted_reviews",
+            contract["capture_integrity_policy"]["manifest_digest"],
+        )
+        self.assertEqual(
+            "effective_path_pth_and_customization_content_sha256",
+            contract["python_provenance_policy"]["site_packages"],
+        )
+        self.assertEqual(
+            "hermes_cli_main_session_export_send_from_pinned_checkout",
+            contract["python_provenance_policy"]["import_origins"],
+        )
+        self.assertFalse(contract["runtime_readiness_policy"]["configuration_values_recorded"])
+        self.assertEqual(
+            "external_gate_not_auto_passed",
+            contract["runtime_readiness_policy"]["database_account"],
+        )
+        self.assertEqual(
+            "external_gate_not_auto_passed",
+            contract["runtime_readiness_policy"]["database_tls"],
+        )
+
+    def test_live_runner_contains_no_private_agent_or_replay_engine(self):
+        path = PROFILE_ROOT / "tests" / "run_live_release_evidence.py"
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imports = {
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.Import, ast.ImportFrom))
+            for alias in node.names
+        }
+        self.assertFalse(
+            {"run_agent", "AIAgent", "planner", "trusted_replay_runner", "hermes_replay_driver"}.intersection(imports)
+        )
+        self.assertNotIn("from run_agent import", source)
+        self.assertNotIn("AIAgent(", source)
+        self.assertNotIn("latest", source)
+        self.assertNotIn("_rebind", source)
+        self.assertNotIn("command[-len(template):]", source)
+        self.assertIn('_expand(shapes["initial_turn"]', source)
+        self.assertIn('_expand(shapes["session_export"]', source)
+        self.assertIn("canary_transcript_adapter.py", source)
+        self.assertIn("golden_expert_scorer.py", source)
+        self.assertIn('"private" / commit', source)
+        self.assertNotIn("delivery_obligations", source)
+        self.assertIn('choices=("capture", "finalize")', source)
+        self.assertIn("PYTHONNOUSERSITE", source)
+        self.assertIn("partial finalize artifacts exist", source)
+        self.assertIn("expected_target_sha256", source)
+        self.assertIn("_set_read_only", source)
+        self.assertIn("capture.sha256", source)
+        self.assertIn("_python_provenance", source)
+        self.assertNotIn('ack.get("target")', source)
+
+    def test_live_contract_reuses_the_tracked_golden_cases_without_legacy_ids(self):
+        suite = json.loads(
+            (PLUGIN_ROOT / "e2e" / "golden_expert_cases.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        release = suite["release_validation"]
+        contract = json.loads(
+            (PROFILE_ROOT / "tests" / "fixtures" / "live_release_contract.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(
+            contract["case_plan"]["case_ids"],
+            release["trusted_replay_gate"]["case_ids"],
+        )
+        selected = [
+            case for case in suite["cases"]
+            if case["id"] in contract["case_plan"]["case_ids"]
+        ]
+        self.assertEqual([1, 2], [case["turn"] for case in selected])
+        self.assertEqual(1, len({case["conversation_id"] for case in selected}))
+        self.assertNotIn("session_id", contract)
+        self.assertNotIn("message_id", json.dumps(contract, sort_keys=True))
 
 
 if __name__ == "__main__":

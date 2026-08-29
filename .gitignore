@@ -102,7 +102,9 @@ datasage-canary-next/*
 !datasage-canary-next/tests/contracts/release_evidence.schema.json
 !datasage-canary-next/tests/fixtures/host_compaction_ordering.json
 !datasage-canary-next/tests/fixtures/performance_non_db_contract.json
+!datasage-canary-next/tests/fixtures/live_release_contract.json
 !datasage-canary-next/tests/run_performance_evidence.py
+!datasage-canary-next/tests/run_live_release_evidence.py
 !datasage-canary-next/tests/test_host_compaction_e2e.py
 !datasage-canary-next/tests/test_performance_evidence.py
 !datasage-canary-next/tests/test_business_contracts.py
