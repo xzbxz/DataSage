@@ -53,6 +53,27 @@ python -B build_release_receipt.py --verify-candidate
 python -B build_release_receipt.py --verify-candidate --receipt $candidate
 ```
 
+Host compaction 与非数据库性能门禁只接受当前 Git HEAD 的原始证据。源码完成
+审查并提交、Profile 与 Hermes 两个工作区都干净后，按同一 HEAD 生成：
+
+```powershell
+$head = git rev-parse HEAD
+python -B tests/test_host_compaction_e2e.py --output "pending/evidence/host-compaction-$head.json"
+python -B tests/run_performance_evidence.py --output "pending/evidence/performance-$head.json"
+python -B build_release_receipt.py --verify-candidate --receipt $candidate
+```
+
+第一条复用 Hermes 官方 compaction 链且禁止网络；第二条会调用合同固定的模型，
+但三条工具路径都必须在数据库前返回 `DATA_ENTITLEMENT_DENIED`，总调用数和按官方
+峰值价格快照估算的测试费用受跟踪合同限制。两类报告只保存 raw trace/usage，
+通过状态、P50/P90 和总成本均由 release builder 重算。它们不验证数据库、企微、
+业务结果或生产并发，也不是业务 SLA。
+
+这些本地 JSON 绑定 HEAD、Git blob、Hermes commit 与当前工作区，但没有独立签名；
+它们用于防止过期、错配和手填派生状态，不能抵御同一机器上有文件写权限的恶意
+操作者。需要跨人员的防篡改证明时，应由受保护 CI/签名系统补充 attestation，
+不得在 Profile 运行时自建签名器或 planner。
+
 candidate 与 final receipt 使用严格分离的目录和文件名：
 
 - `--verify-candidate` 只接受 `pending/*-candidate-receipt*.json`；

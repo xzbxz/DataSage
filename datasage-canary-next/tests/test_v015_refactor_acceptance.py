@@ -759,7 +759,14 @@ class ReleaseAndHostBoundaryAcceptanceTests(unittest.TestCase):
         )
         self.assertEqual("hermes_host", fixture["owner"])
         self.assertTrue(fixture["profile_must_not_patch"])
-        self.assertEqual("expected_failure_before_host_fix", fixture["pre_fix_state"])
+        self.assertEqual(
+            {
+                "hermes_version": "0.20.5",
+                "hermes_git_commit": "fcbd1076a93841fa88855acce810e342a5b78101",
+            },
+            fixture["pinned_host"],
+        )
+        self.assertIn("not_covered", fixture["persistent_memory_conflict_scope"])
         self.assertEqual(
             fixture["latest_user_message"],
             fixture["expected_authoritative_latest_user_message"],

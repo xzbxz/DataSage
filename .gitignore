@@ -20,6 +20,7 @@ datasage-canary-next/*
 !datasage-canary-next/skills/business-analytics/datasage/
 !datasage-canary-next/skills/business-analytics/datasage/references/
 !datasage-canary-next/tests/
+!datasage-canary-next/tests/contracts/
 !datasage-canary-next/tests/fixtures/
 !datasage-canary-next/.gitignore
 !datasage-canary-next/ARCHITECTURE.md
@@ -98,7 +99,12 @@ datasage-canary-next/*
 !datasage-canary-next/skills/business-analytics/datasage/SKILL.md
 !datasage-canary-next/SOUL.md
 !datasage-canary-next/tests/HOST_COMPACTION_INTEGRATION.md
+!datasage-canary-next/tests/contracts/release_evidence.schema.json
 !datasage-canary-next/tests/fixtures/host_compaction_ordering.json
+!datasage-canary-next/tests/fixtures/performance_non_db_contract.json
+!datasage-canary-next/tests/run_performance_evidence.py
+!datasage-canary-next/tests/test_host_compaction_e2e.py
+!datasage-canary-next/tests/test_performance_evidence.py
 !datasage-canary-next/tests/test_business_contracts.py
 !datasage-canary-next/tests/test_compact_payloads.py
 !datasage-canary-next/tests/test_expert_authority_inventory.py

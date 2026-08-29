@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://datasage.local/contracts/release-evidence.schema.json",
+  "title": "DataSage raw release evidence",
+  "oneOf": [
+    {"$ref": "#/$defs/hostCompaction"},
+    {"$ref": "#/$defs/performance"}
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "gitCommit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40,64}$"
+    },
+    "subject": {
+      "type": "object",
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "version": {"type": "string", "minLength": 1},
+        "content_sha256": {"$ref": "#/$defs/sha256"},
+        "profile_git_commit": {"$ref": "#/$defs/gitCommit"}
+      },
+      "required": ["name", "version", "content_sha256", "profile_git_commit"],
+      "unevaluatedProperties": false
+    },
+    "host": {
+      "type": "object",
+      "properties": {
+        "hermes_version": {"type": "string", "minLength": 1},
+        "hermes_git_commit": {"$ref": "#/$defs/gitCommit"}
+      },
+      "required": ["hermes_version", "hermes_git_commit"],
+      "unevaluatedProperties": false
+    },
+    "hashedSource": {
+      "type": "object",
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "required": ["path", "sha256"],
+      "unevaluatedProperties": false
+    },
+    "hostCompaction": {
+      "type": "object",
+      "properties": {
+        "schema": {"const": "datasage-host-compaction-evidence/v1"},
+        "subject": {"$ref": "#/$defs/subject"},
+        "host": {"$ref": "#/$defs/host"},
+        "fixture": {"$ref": "#/$defs/hashedSource"},
+        "producer": {"$ref": "#/$defs/hashedSource"},
+        "compression_count": {"type": "integer", "minimum": 1},
+        "captured_request_sha256": {"$ref": "#/$defs/sha256"},
+        "captured_request": {
+          "type": "object",
+          "properties": {
+            "messages": {
+              "type": "array",
+              "minItems": 1,
+              "items": {"type": "object"}
+            }
+          },
+          "required": ["messages"]
+        }
+      },
+      "required": [
+        "schema",
+        "subject",
+        "host",
+        "fixture",
+        "producer",
+        "compression_count",
+        "captured_request_sha256",
+        "captured_request"
+      ],
+      "unevaluatedProperties": false
+    },
+    "usage": {
+      "type": "object",
+      "properties": {
+        "input_tokens": {"type": "integer", "minimum": 0},
+        "cache_read_tokens": {"type": "integer", "minimum": 0},
+        "cache_write_tokens": {"type": "integer", "minimum": 0},
+        "output_tokens": {"type": "integer", "minimum": 0},
+        "reasoning_tokens": {"type": "integer", "minimum": 0},
+        "total_tokens": {"type": "integer", "minimum": 0},
+        "api_calls": {"type": "integer", "minimum": 0}
+      },
+      "required": [
+        "input_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "output_tokens",
+        "reasoning_tokens",
+        "total_tokens",
+        "api_calls"
+      ],
+      "unevaluatedProperties": false
+    },
+    "toolCall": {
+      "type": "object",
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "arguments": {"type": "object"}
+      },
+      "required": ["name", "arguments"],
+      "unevaluatedProperties": false
+    },
+    "performanceSample": {
+      "type": "object",
+      "properties": {
+        "case_id": {"type": "string", "minLength": 1},
+        "run_index": {"type": "integer", "minimum": 0},
+        "duration_ns": {"type": "integer", "minimum": 0},
+        "expected_tool": {"type": "string", "minLength": 1},
+        "observed_tool_calls": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/toolCall"}
+        },
+        "tool_result": {"type": "object"},
+        "database_runtime_entered": {"type": "boolean"},
+        "final_response": {"type": "string", "minLength": 1},
+        "usage": {"$ref": "#/$defs/usage"}
+      },
+      "required": [
+        "case_id",
+        "run_index",
+        "duration_ns",
+        "expected_tool",
+        "observed_tool_calls",
+        "tool_result",
+        "database_runtime_entered",
+        "final_response",
+        "usage"
+      ],
+      "unevaluatedProperties": false
+    },
+    "performance": {
+      "type": "object",
+      "properties": {
+        "schema": {"const": "datasage-performance-evidence/v1"},
+        "subject": {"$ref": "#/$defs/subject"},
+        "host": {"$ref": "#/$defs/host"},
+        "provider": {"type": "string", "minLength": 1},
+        "model": {"type": "string", "minLength": 1},
+        "contract": {"$ref": "#/$defs/hashedSource"},
+        "producer": {"$ref": "#/$defs/hashedSource"},
+        "system_prompt": {"$ref": "#/$defs/hashedSource"},
+        "tool_schema_sha256": {"$ref": "#/$defs/sha256"},
+        "pricing_snapshot_sha256": {"$ref": "#/$defs/sha256"},
+        "warmup": {"$ref": "#/$defs/performanceSample"},
+        "samples": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/performanceSample"}
+        }
+      },
+      "required": [
+        "schema",
+        "subject",
+        "host",
+        "provider",
+        "model",
+        "contract",
+        "producer",
+        "system_prompt",
+        "tool_schema_sha256",
+        "pricing_snapshot_sha256",
+        "warmup",
+        "samples"
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}
