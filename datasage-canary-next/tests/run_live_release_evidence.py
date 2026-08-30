@@ -28,6 +28,12 @@ SCORER_PATH = ROOT / "plugins" / "datasage-query" / "e2e" / "golden_expert_score
 BUILDER_PATH = ROOT / "build_release_receipt.py"
 EVIDENCE_DIR = ROOT / "pending" / "evidence"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+SESSION_META_CONVERSATIONAL_FIELDS = (
+    "content", "api_content", "tool_calls", "tool_call_id", "tool_name",
+    "function_call", "name", "effect_disposition", "finish_reason",
+    "reasoning", "reasoning_content", "reasoning_details",
+    "codex_reasoning_items", "codex_message_items",
+)
 
 
 def _reject_constant(value: str) -> None:
@@ -356,6 +362,17 @@ def _endpoints(
     clarify_reply_script: object,
 ) -> list[tuple[int, int, str]]:
     policies = _clarify_turn_policies(clarify_reply_script, len(prompts))
+    conversation_messages = []
+    for item in messages:
+        role = item.get("role")
+        if role == "session_meta":
+            if any(item.get(field) not in (None, "", [], {}) for field in SESSION_META_CONVERSATIONAL_FIELDS):
+                raise RuntimeError("session_meta contains conversational or tool-flow payload")
+            continue
+        if role not in {"system", "user", "assistant", "tool"}:
+            raise RuntimeError("official export contains an unsupported conversational role")
+        conversation_messages.append(item)
+    messages = conversation_messages
     if [item.get("content") for item in messages if item.get("role") == "user"] != prompts:
         raise RuntimeError("official export user turns are not exactly the two ordered Golden prompts")
     first_user = next(index for index, item in enumerate(messages) if item.get("role") == "user")

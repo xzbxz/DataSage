@@ -766,6 +766,61 @@ class ReleaseEligibilityTests(unittest.TestCase):
         ]
         self.assertEqual(2, len(builder._live_endpoints(valid, prompts, script)))
 
+        with_metadata = [
+            valid[0],
+            valid[1],
+            {
+                "id": 20,
+                "role": "session_meta",
+                "content": None,
+                "tool_calls": None,
+                "tool_call_id": None,
+                "tool_name": None,
+                "function_call": None,
+                "tools": [{"type": "function", "function": {"name": "official_tool"}}],
+                "model": "official-model",
+                "timestamp": 1.0,
+            },
+            valid[2],
+            valid[3],
+            {"id": 21, "role": "session_meta", "content": None, "platform": "wecom"},
+            valid[4],
+            valid[5],
+            valid[6],
+            valid[7],
+            {"id": 22, "role": "session_meta", "content": None, "tools": []},
+        ]
+        retained = copy.deepcopy(with_metadata)
+        self.assertEqual(2, len(builder._live_endpoints(with_metadata, prompts, script)))
+        self.assertEqual(retained, with_metadata)
+
+        adversarial_carriers = (
+            ("nonempty-content", {"content": "hidden conversational text"}),
+            ("push-tool-calls", {"tool_calls": [{
+                "id": "push-1",
+                "function": {"name": "datasage_push", "arguments": "{}"},
+            }]}),
+            ("fake-tool-result", {"tool_call_id": "push-1", "tool_name": "datasage_push"}),
+            ("legacy-function-call", {"function_call": {"name": "datasage_push", "arguments": "{}"}}),
+        )
+        session_meta_index = next(
+            index for index, item in enumerate(with_metadata) if item.get("role") == "session_meta"
+        )
+        for label, carriers in adversarial_carriers:
+            adversarial = copy.deepcopy(with_metadata)
+            adversarial[session_meta_index].update(carriers)
+            unchanged = copy.deepcopy(adversarial)
+            with self.subTest(carrier=label), self.assertRaisesRegex(
+                ValueError, "session_meta contains conversational or tool-flow payload"
+            ):
+                builder._live_endpoints(adversarial, prompts, script)
+            self.assertEqual(unchanged, adversarial)
+
+        unsupported = copy.deepcopy(with_metadata)
+        unsupported.insert(-1, {"id": 23, "role": "audit_meta", "content": None})
+        with self.assertRaisesRegex(ValueError, "unsupported conversational role"):
+            builder._live_endpoints(unsupported, prompts, script)
+
         mutations = []
 
         def mutation(label, callback, pattern):
@@ -843,6 +898,7 @@ class ReleaseEligibilityTests(unittest.TestCase):
         for label, callback in (
             ("case-order", lambda value: value["clarify_reply_script"].reverse()),
             ("turn-order", lambda value: value["clarify_reply_script"][0].__setitem__("turn", 2)),
+            ("projection-policy", lambda value: value["inbound"].__setitem__("endpoint_projection_policy", "drop_all_metadata")),
         ):
             forged_contract = copy.deepcopy(contract)
             callback(forged_contract)

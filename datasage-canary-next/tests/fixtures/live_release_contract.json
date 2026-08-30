@@ -1,5 +1,5 @@
 {
-  "schema": "datasage-live-release-contract/v3",
+  "schema": "datasage-live-release-contract/v4",
   "scope": "test_only_official_hermes_wecom_inbound_live_release",
   "subject": {
     "name": "datasage-canary-next",
@@ -94,6 +94,7 @@
     "title_template": "datasage-live-{commit12}-run-{run_index}",
     "started_at_policy": "not_before_subject_commit_timestamp",
     "prompt_policy": "exactly_two_ordered_tracked_golden_user_prompts",
+    "endpoint_projection_policy": "canonical_jsonl_raw_retained_endpoint_ignores_only_carrier_free_exact_session_meta_unknown_roles_fail_closed",
     "terminal_policy": "terminal_nonempty_assistant_and_closed_tool_flow"
   },
   "review_policy": {

@@ -2175,7 +2175,7 @@ class LiveReleaseEvidenceBoundaryTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual("datasage-live-release-contract/v3", contract["schema"])
+        self.assertEqual("datasage-live-release-contract/v4", contract["schema"])
         self.assertEqual(2, contract["case_plan"]["turns_per_session"])
         self.assertEqual(2, len(contract["case_plan"]["case_ids"]))
         self.assertEqual(3, contract["case_plan"]["runs"])
@@ -2202,6 +2202,10 @@ class LiveReleaseEvidenceBoundaryTests(unittest.TestCase):
         self.assertEqual("wecom", contract["inbound"]["platform"])
         self.assertEqual("dm", contract["inbound"]["chat_type"])
         self.assertEqual("sha256_only", contract["inbound"]["identity_storage"])
+        self.assertEqual(
+            "canonical_jsonl_raw_retained_endpoint_ignores_only_carrier_free_exact_session_meta_unknown_roles_fail_closed",
+            contract["inbound"]["endpoint_projection_policy"],
+        )
         self.assertEqual(
             "4d497bc168a1782eeaffb82b3cfa1f9ae212e86d9fa6dea721fe34712a3179e7",
             contract["inbound"]["expected_user_id_sha256"],
@@ -2369,6 +2373,95 @@ class LiveReleaseEvidenceBoundaryTests(unittest.TestCase):
         self.assertEqual(2, len(runner._endpoints(closed, prompts, script)))
         with self.assertRaisesRegex(RuntimeError, "next non-system|unclosed tool flow"):
             runner._endpoints([*closed[:2], *closed[3:]], prompts, script)
+
+    def test_endpoint_projection_ignores_only_session_meta_and_retains_raw_export(self):
+        runner = self._runner_module()
+        prompts = ["first", "second"]
+        contract = json.loads(
+            (PROFILE_ROOT / "tests" / "fixtures" / "live_release_contract.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        script = contract["clarify_reply_script"]
+        question = "Which governed definition should be used?"
+        choices = ["Definition A", "Definition B"]
+        raw_messages = [
+            {"id": 1, "role": "user", "content": "first"},
+            {
+                "id": 2,
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{
+                    "id": "clarify-1",
+                    "function": {
+                        "name": "clarify",
+                        "arguments": json.dumps({"question": question, "choices": choices}),
+                    },
+                }],
+            },
+            {
+                "id": 3,
+                "role": "session_meta",
+                "content": None,
+                "tool_calls": None,
+                "tool_call_id": None,
+                "tool_name": None,
+                "function_call": None,
+                "tools": [{"type": "function", "function": {"name": "official_tool"}}],
+                "model": "official-model",
+                "timestamp": 1.0,
+            },
+            {
+                "id": 4,
+                "role": "tool",
+                "tool_call_id": "clarify-1",
+                "tool_name": "clarify",
+                "content": json.dumps({
+                    "question": question,
+                    "choices_offered": choices,
+                    "user_response": script[0]["fixed_response"],
+                }, ensure_ascii=False),
+            },
+            {"id": 5, "role": "assistant", "content": "final one", "tool_calls": None},
+            {"id": 6, "role": "session_meta", "content": None, "platform": "wecom"},
+            {"id": 7, "role": "user", "content": "second"},
+            {"id": 8, "role": "assistant", "content": "final two", "tool_calls": None},
+            {"id": 9, "role": "session_meta", "content": None, "tools": []},
+        ]
+        payload = json.dumps({"id": "official-session", "messages": raw_messages}, ensure_ascii=False)
+        _, exported_messages = runner._export(payload)
+        retained = copy.deepcopy(exported_messages)
+
+        self.assertEqual([(1, 5), (7, 8)], [item[:2] for item in runner._endpoints(exported_messages, prompts, script)])
+        self.assertEqual(retained, exported_messages)
+        self.assertEqual(3, sum(item.get("role") == "session_meta" for item in exported_messages))
+
+        adversarial_carriers = (
+            ("nonempty-content", {"content": "hidden conversational text"}),
+            ("push-tool-calls", {"tool_calls": [{
+                "id": "push-1",
+                "function": {"name": "datasage_push", "arguments": "{}"},
+            }]}),
+            ("fake-tool-result", {"tool_call_id": "push-1", "tool_name": "datasage_push"}),
+            ("legacy-function-call", {"function_call": {"name": "datasage_push", "arguments": "{}"}}),
+        )
+        session_meta_index = next(
+            index for index, item in enumerate(exported_messages) if item.get("role") == "session_meta"
+        )
+        for label, carriers in adversarial_carriers:
+            adversarial = copy.deepcopy(exported_messages)
+            adversarial[session_meta_index].update(carriers)
+            unchanged = copy.deepcopy(adversarial)
+            with self.subTest(carrier=label), self.assertRaisesRegex(
+                RuntimeError, "session_meta contains conversational or tool-flow payload"
+            ):
+                runner._endpoints(adversarial, prompts, script)
+            self.assertEqual(unchanged, adversarial)
+
+        unsupported = copy.deepcopy(exported_messages)
+        unsupported.insert(-1, {"id": 10, "role": "audit_meta", "content": None})
+        with self.assertRaisesRegex(RuntimeError, "unsupported conversational role"):
+            runner._endpoints(unsupported, prompts, script)
 
     def test_clarify_replies_are_bound_per_turn_and_fail_closed(self):
         runner = self._runner_module()

@@ -42,10 +42,16 @@ HOST_EVIDENCE_SCHEMA = "datasage-host-compaction-evidence/v1"
 PERFORMANCE_EVIDENCE_SCHEMA = "datasage-performance-evidence/v1"
 LIVE_EVIDENCE_SCHEMA = "datasage-live-release-evidence/v2"
 PERFORMANCE_CONTRACT_SCHEMA = "datasage-performance-non-db-contract/v1"
-LIVE_CONTRACT_SCHEMA = "datasage-live-release-contract/v3"
+LIVE_CONTRACT_SCHEMA = "datasage-live-release-contract/v4"
 HOST_PRODUCER_PATH = "tests/test_host_compaction_e2e.py"
 PERFORMANCE_PRODUCER_PATH = "tests/run_performance_evidence.py"
 LIVE_PRODUCER_PATH = "tests/run_live_release_evidence.py"
+SESSION_META_CONVERSATIONAL_FIELDS = (
+    "content", "api_content", "tool_calls", "tool_call_id", "tool_name",
+    "function_call", "name", "effect_disposition", "finish_reason",
+    "reasoning", "reasoning_content", "reasoning_details",
+    "codex_reasoning_items", "codex_message_items",
+)
 GOLDEN_SUITE_PATH = "plugins/datasage-query/e2e/golden_expert_cases.json"
 TRANSCRIPT_ADAPTER_PATH = "plugins/datasage-query/e2e/canary_transcript_adapter.py"
 GOLDEN_SCORER_PATH = "plugins/datasage-query/e2e/golden_expert_scorer.py"
@@ -1159,7 +1165,7 @@ def _validate_live_contract(contract: dict[str, object]) -> dict[str, object]:
         raise ValueError("live contract command shapes differ from the pinned official CLI/test commands")
     inbound = _require_exact_keys(
         contract["inbound"],
-        {"platform", "chat_type", "expected_user_id_sha256", "expected_chat_id_sha256", "identity_storage", "session_input", "title_template", "started_at_policy", "prompt_policy", "terminal_policy"},
+        {"platform", "chat_type", "expected_user_id_sha256", "expected_chat_id_sha256", "identity_storage", "session_input", "title_template", "started_at_policy", "prompt_policy", "endpoint_projection_policy", "terminal_policy"},
         "live contract.inbound",
     )
     expected_identity = "4d497bc168a1782eeaffb82b3cfa1f9ae212e86d9fa6dea721fe34712a3179e7"
@@ -1173,6 +1179,7 @@ def _validate_live_contract(contract: dict[str, object]) -> dict[str, object]:
         "title_template": "datasage-live-{commit12}-run-{run_index}",
         "started_at_policy": "not_before_subject_commit_timestamp",
         "prompt_policy": "exactly_two_ordered_tracked_golden_user_prompts",
+        "endpoint_projection_policy": "canonical_jsonl_raw_retained_endpoint_ignores_only_carrier_free_exact_session_meta_unknown_roles_fail_closed",
         "terminal_policy": "terminal_nonempty_assistant_and_closed_tool_flow",
     }:
         raise ValueError("live inbound contract semantics are unsupported")
@@ -1560,6 +1567,17 @@ def _live_endpoints(
     clarify_reply_script: object,
 ) -> list[tuple[int, int, str]]:
     policies = _live_clarify_turn_policies(clarify_reply_script, len(prompts))
+    conversation_messages = []
+    for item in messages:
+        role = item.get("role")
+        if role == "session_meta":
+            if any(item.get(field) not in (None, "", [], {}) for field in SESSION_META_CONVERSATIONAL_FIELDS):
+                raise ValueError("session_meta contains conversational or tool-flow payload")
+            continue
+        if role not in {"system", "user", "assistant", "tool"}:
+            raise ValueError("official export contains an unsupported conversational role")
+        conversation_messages.append(item)
+    messages = conversation_messages
     if [item.get("content") for item in messages if item.get("role") == "user"] != prompts:
         raise ValueError("official export user turns are not exactly the two ordered Golden prompts")
     first_user = next(index for index, item in enumerate(messages) if item.get("role") == "user")
