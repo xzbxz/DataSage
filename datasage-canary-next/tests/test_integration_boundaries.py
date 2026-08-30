@@ -2175,10 +2175,20 @@ class LiveReleaseEvidenceBoundaryTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual("datasage-live-release-contract/v2", contract["schema"])
+        self.assertEqual("datasage-live-release-contract/v3", contract["schema"])
         self.assertEqual(2, contract["case_plan"]["turns_per_session"])
         self.assertEqual(2, len(contract["case_plan"]["case_ids"]))
         self.assertEqual(3, contract["case_plan"]["runs"])
+        self.assertEqual(
+            contract["case_plan"]["case_ids"],
+            [item["case_id"] for item in contract["clarify_reply_script"]],
+        )
+        self.assertEqual([1, 2], [item["turn"] for item in contract["clarify_reply_script"]])
+        self.assertEqual([1, 1], [item["maximum_calls"] for item in contract["clarify_reply_script"]])
+        self.assertEqual(
+            ["fixed_text", "fixed_text"],
+            [item["strategy"] for item in contract["clarify_reply_script"]],
+        )
         shapes = contract["execution"]["command_shapes"]
         prefix = ["{python}", "-B", "-m", "hermes_cli.main"]
         self.assertEqual({"session_export", "adapter", "scorer"}, set(shapes))
@@ -2319,21 +2329,245 @@ class LiveReleaseEvidenceBoundaryTests(unittest.TestCase):
     def test_terminal_assistant_allows_closed_clarify_but_rejects_pending_tool(self):
         runner = self._runner_module()
         prompts = ["first", "second"]
+        contract = json.loads(
+            (PROFILE_ROOT / "tests" / "fixtures" / "live_release_contract.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        script = contract["clarify_reply_script"]
+        question = "Which governed definition should be used?"
+        choices = ["Definition A", "Definition B"]
         closed = [
             {"id": 1, "role": "user", "content": "first"},
-            {"id": 2, "role": "assistant", "content": None, "tool_calls": [{"id": "clarify-1", "function": {"name": "clarify"}}]},
-            {"id": 3, "role": "tool", "tool_call_id": "clarify-1", "tool_name": "clarify", "content": "declined"},
+            {
+                "id": 2,
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{
+                    "id": "clarify-1",
+                    "function": {
+                        "name": "clarify",
+                        "arguments": json.dumps({"question": question, "choices": choices}),
+                    },
+                }],
+            },
+            {
+                "id": 3,
+                "role": "tool",
+                "tool_call_id": "clarify-1",
+                "tool_name": "clarify",
+                "content": json.dumps({
+                    "question": question,
+                    "choices_offered": choices,
+                    "user_response": script[0]["fixed_response"],
+                }, ensure_ascii=False),
+            },
             {"id": 4, "role": "assistant", "content": "final one", "tool_calls": None},
             {"id": 5, "role": "user", "content": "second"},
             {"id": 6, "role": "assistant", "content": "final two", "tool_calls": None},
         ]
-        self.assertEqual(2, len(runner._endpoints(closed, prompts)))
-        with self.assertRaisesRegex(RuntimeError, "unclosed tool flow"):
-            runner._endpoints([*closed[:2], *closed[3:]], prompts)
+        self.assertEqual(2, len(runner._endpoints(closed, prompts, script)))
+        with self.assertRaisesRegex(RuntimeError, "next non-system|unclosed tool flow"):
+            runner._endpoints([*closed[:2], *closed[3:]], prompts, script)
+
+    def test_clarify_replies_are_bound_per_turn_and_fail_closed(self):
+        runner = self._runner_module()
+        prompts = ["first", "second"]
+        contract = json.loads(
+            (PROFILE_ROOT / "tests" / "fixtures" / "live_release_contract.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        script = contract["clarify_reply_script"]
+
+        def clarify_pair(call_id, question, choices, response, *, arguments=None, result=None):
+            arguments = arguments or {"question": question, "choices": choices}
+            result = result or {
+                "question": question,
+                "choices_offered": choices,
+                "user_response": response,
+            }
+            return [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": call_id,
+                        "function": {"name": "clarify", "arguments": json.dumps(arguments)},
+                    }],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "tool_name": "clarify",
+                    "content": json.dumps(result, ensure_ascii=False),
+                },
+            ]
+
+        first_pair = clarify_pair(
+            "clarify-1", "Pick a governed definition", ["A", "B"], script[0]["fixed_response"]
+        )
+        second_pair = clarify_pair(
+            "clarify-2", "Which Thailand entity?", None, script[1]["fixed_response"]
+        )
+        valid = [
+            {"id": 1, "role": "user", "content": "first"},
+            *first_pair,
+            {"id": 4, "role": "assistant", "content": "final one", "tool_calls": None},
+            {"id": 5, "role": "user", "content": "second"},
+            *second_pair,
+            {"id": 8, "role": "assistant", "content": "final two", "tool_calls": None},
+        ]
+        self.assertEqual(2, len(runner._endpoints(valid, prompts, script)))
+
+        tampered = copy.deepcopy(valid)
+        payload = json.loads(tampered[2]["content"])
+        payload["user_response"] = script[1]["fixed_response"]
+        tampered[2]["content"] = json.dumps(payload, ensure_ascii=False)
+        with self.assertRaisesRegex(RuntimeError, "fixed Golden response"):
+            runner._endpoints(tampered, prompts, script)
+
+        tampered = copy.deepcopy(valid)
+        payload = json.loads(tampered[2]["content"])
+        payload["question"] = "forged"
+        tampered[2]["content"] = json.dumps(payload)
+        with self.assertRaisesRegex(RuntimeError, "does not bind its call"):
+            runner._endpoints(tampered, prompts, script)
+
+        tampered = copy.deepcopy(valid)
+        payload = json.loads(tampered[2]["content"])
+        payload["extra"] = True
+        tampered[2]["content"] = json.dumps(payload)
+        with self.assertRaisesRegex(RuntimeError, "official shape"):
+            runner._endpoints(tampered, prompts, script)
+
+        batch = copy.deepcopy(valid)
+        batch[1]["tool_calls"][0]["function"]["arguments"] = json.dumps({
+            "question": "batch",
+            "questions": [{"question": "one"}, {"question": "two"}],
+        })
+        with self.assertRaisesRegex(RuntimeError, "single-question shape"):
+            runner._endpoints(batch, prompts, script)
+
+        multi_select = copy.deepcopy(valid)
+        multi_select[1]["tool_calls"][0]["function"]["arguments"] = json.dumps({
+            "question": "Pick a governed definition",
+            "choices": ["A", "B"],
+            "multi_select": True,
+        })
+        with self.assertRaisesRegex(RuntimeError, "scalar single-question"):
+            runner._endpoints(multi_select, prompts, script)
+
+        extra_argument = copy.deepcopy(valid)
+        extra_argument[1]["tool_calls"][0]["function"]["arguments"] = json.dumps({
+            "question": "Pick a governed definition", "choices": ["A"], "extra": True,
+        })
+        with self.assertRaisesRegex(RuntimeError, "single-question shape"):
+            runner._endpoints(extra_argument, prompts, script)
+
+        duplicate_argument = copy.deepcopy(valid)
+        duplicate_argument[1]["tool_calls"][0]["function"]["arguments"] = (
+            '{"question":"one","question":"two","choices":["A"]}'
+        )
+        with self.assertRaisesRegex(RuntimeError, "invalid JSON"):
+            runner._endpoints(duplicate_argument, prompts, script)
+
+        non_json = copy.deepcopy(valid)
+        non_json[2]["content"] = "not-json"
+        with self.assertRaisesRegex(RuntimeError, "invalid JSON"):
+            runner._endpoints(non_json, prompts, script)
+
+        duplicate_result = copy.deepcopy(valid)
+        duplicate_result[2]["content"] = (
+            '{"question":"Pick a governed definition","question":"forged",'
+            '"choices_offered":["A","B"],"user_response":"x"}'
+        )
+        with self.assertRaisesRegex(RuntimeError, "invalid JSON"):
+            runner._endpoints(duplicate_result, prompts, script)
+
+        wrong_choices = copy.deepcopy(valid)
+        payload = json.loads(wrong_choices[2]["content"])
+        payload["choices_offered"] = ["B", "A"]
+        wrong_choices[2]["content"] = json.dumps(payload, ensure_ascii=False)
+        with self.assertRaisesRegex(RuntimeError, "does not bind its call"):
+            runner._endpoints(wrong_choices, prompts, script)
+
+        wrong_id = copy.deepcopy(valid)
+        wrong_id[2]["tool_call_id"] = "orphan"
+        with self.assertRaisesRegex(RuntimeError, "next non-system"):
+            runner._endpoints(wrong_id, prompts, script)
+
+        wrong_name = copy.deepcopy(valid)
+        wrong_name[2]["tool_name"] = "datasage_query"
+        with self.assertRaisesRegex(RuntimeError, "name does not match"):
+            runner._endpoints(wrong_name, prompts, script)
+
+        interposed = copy.deepcopy(valid)
+        interposed.insert(2, {"role": "assistant", "content": "interposed", "tool_calls": None})
+        with self.assertRaisesRegex(RuntimeError, "next non-system"):
+            runner._endpoints(interposed, prompts, script)
+
+        result_before = [valid[0], valid[2], valid[1], *valid[3:]]
+        with self.assertRaisesRegex(RuntimeError, "not bound"):
+            runner._endpoints(result_before, prompts, script)
+
+        parallel = copy.deepcopy(valid)
+        parallel[1]["tool_calls"].append({
+            "id": "parallel",
+            "function": {"name": "datasage_catalog", "arguments": "{}"},
+        })
+        with self.assertRaisesRegex(RuntimeError, "only tool call"):
+            runner._endpoints(parallel, prompts, script)
+
+        prior_pending = copy.deepcopy(valid)
+        prior_pending.insert(1, {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{
+                "id": "ordinary-pending",
+                "function": {"name": "datasage_catalog", "arguments": "{}"},
+            }],
+        })
+        prior_pending.insert(4, {
+            "role": "tool",
+            "tool_call_id": "ordinary-pending",
+            "tool_name": "datasage_catalog",
+            "content": "{}",
+        })
+        with self.assertRaisesRegex(RuntimeError, "prior tool calls"):
+            runner._endpoints(prior_pending, prompts, script)
+
+        missing_recommended_choices = copy.deepcopy(valid)
+        missing_recommended_choices[1]["tool_calls"][0]["function"]["arguments"] = json.dumps({
+            "question": "Pick a governed definition",
+        })
+        payload = json.loads(missing_recommended_choices[2]["content"])
+        payload["choices_offered"] = None
+        missing_recommended_choices[2]["content"] = json.dumps(payload, ensure_ascii=False)
+        with self.assertRaisesRegex(RuntimeError, "did not offer a recommended choice"):
+            runner._endpoints(missing_recommended_choices, prompts, script)
+
+        extra = copy.deepcopy(valid)
+        extra[3:3] = clarify_pair(
+            "clarify-extra", "Again?", ["A"], script[0]["fixed_response"]
+        )
+        with self.assertRaisesRegex(RuntimeError, "extra clarify call"):
+            runner._endpoints(extra, prompts, script)
+
+        ordinary_user_reply = copy.deepcopy(valid)
+        ordinary_user_reply.insert(2, {"id": 99, "role": "user", "content": script[0]["fixed_response"]})
+        with self.assertRaisesRegex(RuntimeError, "exactly the two ordered Golden prompts"):
+            runner._endpoints(ordinary_user_reply, prompts, script)
 
     def test_inbound_capture_rejects_push_and_tool_name_entitlement_bypass(self):
         runner = self._runner_module()
         prompts = ["first", "second"]
+        contract = json.loads(
+            (PROFILE_ROOT / "tests" / "fixtures" / "live_release_contract.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        script = contract["clarify_reply_script"]
 
         def transcript(function_name, tool_name, content):
             return [
@@ -2351,13 +2585,13 @@ class LiveReleaseEvidenceBoundaryTests(unittest.TestCase):
             ]
 
         with self.assertRaisesRegex(RuntimeError, "datasage_push is forbidden"):
-            runner._endpoints(transcript("datasage_push", "datasage_push", "{}"), prompts)
+            runner._endpoints(transcript("datasage_push", "datasage_push", "{}"), prompts, script)
 
         denial = json.dumps({"error": {"code": "DATA_ENTITLEMENT_DENIED"}})
         for tool_name in ("datasage_catalog", ""):
             with self.subTest(tool_name=tool_name), self.assertRaisesRegex(RuntimeError, "name does not match"):
                 runner._endpoints(
-                    transcript("datasage_query", tool_name, denial), prompts
+                    transcript("datasage_query", tool_name, denial), prompts, script
                 )
 
     def test_capture_stage_cleanup_is_scoped_to_exact_private_root(self):

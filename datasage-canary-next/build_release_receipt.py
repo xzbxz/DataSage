@@ -42,7 +42,7 @@ HOST_EVIDENCE_SCHEMA = "datasage-host-compaction-evidence/v1"
 PERFORMANCE_EVIDENCE_SCHEMA = "datasage-performance-evidence/v1"
 LIVE_EVIDENCE_SCHEMA = "datasage-live-release-evidence/v2"
 PERFORMANCE_CONTRACT_SCHEMA = "datasage-performance-non-db-contract/v1"
-LIVE_CONTRACT_SCHEMA = "datasage-live-release-contract/v2"
+LIVE_CONTRACT_SCHEMA = "datasage-live-release-contract/v3"
 HOST_PRODUCER_PATH = "tests/test_host_compaction_e2e.py"
 PERFORMANCE_PRODUCER_PATH = "tests/run_performance_evidence.py"
 LIVE_PRODUCER_PATH = "tests/run_live_release_evidence.py"
@@ -1086,6 +1086,7 @@ def _evaluate_performance_evidence(
 def _validate_live_contract(contract: dict[str, object]) -> dict[str, object]:
     top = {
         "schema", "scope", "subject", "host", "source_paths", "case_plan",
+        "clarify_reply_script",
         "execution", "inbound", "review_policy", "capture_integrity_policy",
         "python_provenance_policy", "python_provenance_approval", "outbound", "runtime_readiness_policy",
     }
@@ -1126,6 +1127,11 @@ def _validate_live_contract(contract: dict[str, object]) -> dict[str, object]:
         raise ValueError("live contract must use one two-turn session per run")
     if _require_int(plan["runs"], "live contract.case_plan.runs") != 3:
         raise ValueError("live contract must require exactly three runs")
+    clarify_policies = _live_clarify_turn_policies(
+        contract["clarify_reply_script"], len(case_ids)
+    )
+    if [item["case_id"] for item in clarify_policies] != case_ids:
+        raise ValueError("clarify reply script case order differs from the Golden plan")
     execution = _require_exact_keys(
         contract["execution"],
         {"timeout_seconds", "command_shapes"},
@@ -1466,7 +1472,94 @@ def _subject_commit_timestamp(commit: str) -> datetime:
     return _live_timestamp(value, "subject commit timestamp")
 
 
-def _live_endpoints(messages: list[dict[str, object]], prompts: list[str]) -> list[tuple[int, int, str]]:
+def _live_clarify_turn_policies(reply_script: object, prompt_count: int) -> list[dict[str, object]]:
+    if not isinstance(reply_script, list) or len(reply_script) != prompt_count:
+        raise ValueError("clarify reply script must declare every Golden turn exactly once")
+    policies: list[dict[str, object]] = []
+    keys = {"case_id", "turn", "maximum_calls", "strategy", "fixed_response"}
+    for index, value in enumerate(reply_script, 1):
+        if not isinstance(value, dict) or set(value) != keys:
+            raise ValueError("clarify reply script entry has an invalid shape")
+        if not isinstance(value["case_id"], str) or not value["case_id"] or value["turn"] != index:
+            raise ValueError("clarify reply script is missing or out of Golden turn order")
+        if type(value["maximum_calls"]) is not int or value["maximum_calls"] != 1:
+            raise ValueError("clarify reply script must allow at most one call per Golden turn")
+        strategy, fixed = value["strategy"], value["fixed_response"]
+        if index == 1:
+            if (
+                strategy != "fixed_text"
+                or fixed != "仅用于本次测试：采用你列出的第 1 个推荐口径继续，并在答案中明确该口径。"
+            ):
+                raise ValueError("first Golden turn clarify reply policy is unsupported")
+        elif strategy != "fixed_text" or fixed != "暂不确认，请列出候选供我选择。":
+            raise ValueError("second Golden turn clarify reply policy is unsupported")
+        policies.append(value)
+    return policies
+
+
+def _live_clarify_call_spec(function: dict[str, object]) -> dict[str, object]:
+    arguments = function.get("arguments")
+    if not isinstance(arguments, str) or not arguments:
+        raise ValueError("clarify tool call arguments are not strict JSON text")
+    try:
+        payload = json.loads(
+            arguments,
+            object_pairs_hook=_strict_object,
+            parse_constant=_reject_json_constant,
+        )
+    except (TypeError, ValueError) as error:
+        raise ValueError("clarify tool call arguments are invalid JSON") from error
+    allowed = {"question", "choices", "multi_select"}
+    if not isinstance(payload, dict) or not set(payload).issubset(allowed):
+        raise ValueError("clarify tool call is not the supported single-question shape")
+    question = payload.get("question")
+    if not isinstance(question, str) or not question.strip():
+        raise ValueError("clarify tool call has no nonempty question")
+    choices = payload.get("choices")
+    if choices is not None:
+        if (
+            not isinstance(choices, list)
+            or not 1 <= len(choices) <= 4
+            or not all(isinstance(item, str) and item.strip() for item in choices)
+        ):
+            raise ValueError("clarify tool call choices are invalid")
+        choices = [item.strip() for item in choices]
+    multi_select = payload.get("multi_select", False)
+    if type(multi_select) is not bool or multi_select:
+        raise ValueError("clarify reply script supports only scalar single-question replies")
+    return {"question": question.strip(), "choices_offered": choices}
+
+
+def _validate_live_clarify_result(content: object, call: dict[str, object], policy: dict[str, object]) -> None:
+    if not isinstance(content, str) or not content:
+        raise ValueError("clarify tool result is not strict JSON text")
+    try:
+        result = json.loads(
+            content,
+            object_pairs_hook=_strict_object,
+            parse_constant=_reject_json_constant,
+        )
+    except (TypeError, ValueError) as error:
+        raise ValueError("clarify tool result is invalid JSON") from error
+    if not isinstance(result, dict) or set(result) != {"question", "choices_offered", "user_response"}:
+        raise ValueError("clarify tool result has an invalid official shape")
+    if result["question"] != call["question"] or result["choices_offered"] != call["choices_offered"]:
+        raise ValueError("clarify tool result does not bind its call")
+    response = result["user_response"]
+    if policy["turn"] == 1:
+        choices = call["choices_offered"]
+        if not isinstance(choices, list) or not choices:
+            raise ValueError("first Golden clarify did not offer a recommended choice")
+    if response != policy["fixed_response"]:
+        raise ValueError("clarify reply does not match the fixed Golden response")
+
+
+def _live_endpoints(
+    messages: list[dict[str, object]],
+    prompts: list[str],
+    clarify_reply_script: object,
+) -> list[tuple[int, int, str]]:
+    policies = _live_clarify_turn_policies(clarify_reply_script, len(prompts))
     if [item.get("content") for item in messages if item.get("role") == "user"] != prompts:
         raise ValueError("official export user turns are not exactly the two ordered Golden prompts")
     first_user = next(index for index, item in enumerate(messages) if item.get("role") == "user")
@@ -1474,7 +1567,8 @@ def _live_endpoints(messages: list[dict[str, object]], prompts: list[str]) -> li
         raise ValueError("captured transcript has a non-system message before the first Golden prompt")
     endpoints = []
     start = 0
-    for prompt in prompts:
+    for turn_index, prompt in enumerate(prompts):
+        policy = policies[turn_index]
         positions = [index for index in range(start, len(messages)) if messages[index].get("role") == "user" and messages[index].get("content") == prompt]
         if len(positions) != 1:
             raise ValueError("captured Golden prompt is not unique")
@@ -1487,9 +1581,22 @@ def _live_endpoints(messages: list[dict[str, object]], prompts: list[str]) -> li
         final = visible[-1]
         if final.get("role") != "assistant" or not isinstance(final.get("content"), str) or not final["content"] or final.get("tool_calls") not in (None, []):
             raise ValueError("captured turn does not end in a terminal assistant answer")
-        pending: dict[str, tuple[int, str]] = {}
+        pending: dict[str, tuple[int, str, dict[str, object] | None]] = {}
         completed: set[str] = set()
+        clarify_calls = 0
         for relative_index, message in enumerate(segment):
+            pending_clarify = [
+                call_id for call_id, (_, name, _) in pending.items() if name == "clarify"
+            ]
+            if pending_clarify and message.get("role") != "system":
+                if (
+                    len(pending_clarify) != 1
+                    or message.get("role") != "tool"
+                    or message.get("tool_call_id") != pending_clarify[0]
+                ):
+                    raise ValueError(
+                        "clarify tool result is not the next non-system message"
+                    )
             calls = message.get("tool_calls")
             if calls not in (None, []):
                 if message.get("role") != "assistant" or not isinstance(calls, list):
@@ -1504,7 +1611,21 @@ def _live_endpoints(messages: list[dict[str, object]], prompts: list[str]) -> li
                         raise ValueError("captured tool call has no valid function name")
                     if function_name == "datasage_push":
                         raise ValueError("datasage_push is forbidden in inbound live evidence")
-                    pending[call_id] = (relative_index, function_name)
+                    clarify_call = None
+                    if function_name == "clarify":
+                        if len(calls) != 1:
+                            raise ValueError(
+                                "clarify must be the assistant message's only tool call"
+                            )
+                        if pending:
+                            raise ValueError(
+                                "clarify requires all prior tool calls to be closed"
+                            )
+                        clarify_calls += 1
+                        if clarify_calls > policy["maximum_calls"]:
+                            raise ValueError("captured turn has an extra clarify call")
+                        clarify_call = _live_clarify_call_spec(function)
+                    pending[call_id] = (relative_index, function_name, clarify_call)
             if message.get("role") == "tool":
                 call_id = message.get("tool_call_id")
                 tool_name = message.get("tool_name")
@@ -1512,11 +1633,15 @@ def _live_endpoints(messages: list[dict[str, object]], prompts: list[str]) -> li
                     raise ValueError("datasage_push is forbidden in inbound live evidence")
                 if not isinstance(call_id, str) or call_id not in pending:
                     raise ValueError("captured tool result is not bound to a prior tool call")
-                call_index, function_name = pending.pop(call_id)
+                call_index, function_name, clarify_call = pending.pop(call_id)
                 if not isinstance(tool_name, str) or not tool_name or tool_name != function_name:
                     raise ValueError("captured tool result name does not match its tool call")
                 if call_index >= relative_index:
                     raise ValueError("captured tool result precedes its tool call")
+                if function_name == "clarify":
+                    if clarify_call is None:
+                        raise ValueError("clarify tool result has no declared call")
+                    _validate_live_clarify_result(message.get("content"), clarify_call, policy)
                 completed.add(call_id)
         if pending:
             raise ValueError("captured turn has an unclosed tool flow")
@@ -2028,7 +2153,11 @@ def _evaluate_live_evidence(
                 raise ValueError("captured session identity/lineage is invalid or reused")
             lineages.add(lineage)
             expected_user_prompts = [golden_by_id[case_id]["prompt"] for case_id in plan["case_ids"]]
-            endpoints = _live_endpoints(messages, expected_user_prompts)
+            endpoints = _live_endpoints(
+                messages,
+                expected_user_prompts,
+                contract["clarify_reply_script"],
+            )
             _reject_entitlement_denial(messages)
             final_hashes = [item[2] for item in endpoints]
             if session["final_answer_sha256"] != final_hashes:

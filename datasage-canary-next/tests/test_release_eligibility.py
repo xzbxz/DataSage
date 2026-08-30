@@ -681,6 +681,7 @@ class ReleaseEligibilityTests(unittest.TestCase):
     def test_builder_binds_tool_names_before_entitlement_and_rejects_push(self):
         builder = _builder()
         prompts = ["first", "second"]
+        script = _live_contract()["clarify_reply_script"]
 
         def transcript(function_name, tool_name, content):
             return [
@@ -698,22 +699,155 @@ class ReleaseEligibilityTests(unittest.TestCase):
             ]
 
         clarify = transcript("clarify", "clarify", "declined")
-        self.assertEqual(2, len(builder._live_endpoints(clarify, prompts)))
+        clarify[1]["tool_calls"][0]["function"]["arguments"] = json.dumps({
+            "question": "Pick a governed definition",
+            "choices": ["A", "B"],
+        })
+        clarify[2]["content"] = json.dumps({
+            "question": "Pick a governed definition",
+            "choices_offered": ["A", "B"],
+            "user_response": script[0]["fixed_response"],
+        }, ensure_ascii=False)
+        self.assertEqual(2, len(builder._live_endpoints(clarify, prompts, script)))
         with self.assertRaisesRegex(ValueError, "datasage_push is forbidden"):
             builder._live_endpoints(
-                transcript("datasage_push", "datasage_push", "{}"), prompts
+                transcript("datasage_push", "datasage_push", "{}"), prompts, script
             )
 
         denial = json.dumps({"error": {"code": "DATA_ENTITLEMENT_DENIED"}})
         for tool_name in ("datasage_catalog", ""):
             with self.subTest(tool_name=tool_name), self.assertRaisesRegex(ValueError, "name does not match"):
                 builder._live_endpoints(
-                    transcript("datasage_query", tool_name, denial), prompts
+                    transcript("datasage_query", tool_name, denial), prompts, script
                 )
         correctly_bound = transcript("datasage_query", "datasage_query", denial)
-        builder._live_endpoints(correctly_bound, prompts)
+        builder._live_endpoints(correctly_bound, prompts, script)
         with self.assertRaisesRegex(ValueError, "DATA_ENTITLEMENT_DENIED"):
             builder._reject_entitlement_denial(correctly_bound)
+
+    def test_builder_clarify_reply_contract_rejects_order_and_transcript_tampering(self):
+        builder = _builder()
+        contract = _live_contract()
+        script = contract["clarify_reply_script"]
+        prompts = ["first", "second"]
+
+        def pair(call_id, question, choices, response):
+            return [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": call_id,
+                        "function": {
+                            "name": "clarify",
+                            "arguments": json.dumps({"question": question, "choices": choices}),
+                        },
+                    }],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "tool_name": "clarify",
+                    "content": json.dumps({
+                        "question": question,
+                        "choices_offered": choices,
+                        "user_response": response,
+                    }, ensure_ascii=False),
+                },
+            ]
+
+        valid = [
+            {"id": 1, "role": "user", "content": "first"},
+            *pair("c1", "Pick one", ["A", "B"], script[0]["fixed_response"]),
+            {"id": 4, "role": "assistant", "content": "final one", "tool_calls": None},
+            {"id": 5, "role": "user", "content": "second"},
+            *pair("c2", "Which entity?", None, script[1]["fixed_response"]),
+            {"id": 8, "role": "assistant", "content": "final two", "tool_calls": None},
+        ]
+        self.assertEqual(2, len(builder._live_endpoints(valid, prompts, script)))
+
+        mutations = []
+
+        def mutation(label, callback, pattern):
+            value = copy.deepcopy(valid)
+            callback(value)
+            mutations.append((label, value, pattern))
+
+        mutation("orphan", lambda value: value[2].__setitem__("tool_call_id", "orphan"), "next non-system")
+        mutation("wrong-name", lambda value: value[2].__setitem__("tool_name", "datasage_query"), "name does not match")
+        mutation("interposed", lambda value: value.insert(2, {"role": "assistant", "content": "interposed", "tool_calls": None}), "next non-system")
+        mutation("question", lambda value: value[2].__setitem__("content", json.dumps({"question": "forged", "choices_offered": ["A", "B"], "user_response": script[0]["fixed_response"]}, ensure_ascii=False)), "does not bind")
+        mutation("choices", lambda value: value[2].__setitem__("content", json.dumps({"question": "Pick one", "choices_offered": ["B", "A"], "user_response": script[0]["fixed_response"]}, ensure_ascii=False)), "does not bind")
+        mutation("response", lambda value: value[2].__setitem__("content", json.dumps({"question": "Pick one", "choices_offered": ["A", "B"], "user_response": "forged"})), "fixed Golden response")
+        mutation("extra-result-key", lambda value: value[2].__setitem__("content", json.dumps({"question": "Pick one", "choices_offered": ["A", "B"], "user_response": script[0]["fixed_response"], "extra": True}, ensure_ascii=False)), "official shape")
+        mutation("non-json", lambda value: value[2].__setitem__("content", "not-json"), "invalid JSON")
+        mutation("duplicate-result-key", lambda value: value[2].__setitem__("content", '{"question":"Pick one","question":"forged","choices_offered":["A","B"],"user_response":"x"}'), "invalid JSON")
+        mutation("batch", lambda value: value[1]["tool_calls"][0]["function"].__setitem__("arguments", json.dumps({"question": "batch", "questions": [{"question": "one"}]})), "single-question shape")
+        mutation("multi-select", lambda value: value[1]["tool_calls"][0]["function"].__setitem__("arguments", json.dumps({"question": "Pick one", "choices": ["A", "B"], "multi_select": True})), "scalar single-question")
+        mutation("duplicate-argument-key", lambda value: value[1]["tool_calls"][0]["function"].__setitem__("arguments", '{"question":"one","question":"two","choices":["A"]}'), "invalid JSON")
+        mutation("extra-argument-key", lambda value: value[1]["tool_calls"][0]["function"].__setitem__("arguments", json.dumps({"question": "Pick one", "choices": ["A"], "extra": True})), "single-question shape")
+        mutation("ordinary-user-reply", lambda value: value.insert(2, {"id": 99, "role": "user", "content": script[0]["fixed_response"]}), "exactly the two ordered")
+        for label, value, pattern in mutations:
+            with self.subTest(mutation=label), self.assertRaisesRegex(ValueError, pattern):
+                builder._live_endpoints(value, prompts, script)
+
+        missing = [*valid[:2], *valid[3:]]
+        with self.assertRaisesRegex(ValueError, "next non-system|unclosed"):
+            builder._live_endpoints(missing, prompts, script)
+
+        result_before = [valid[0], valid[2], valid[1], *valid[3:]]
+        with self.assertRaisesRegex(ValueError, "not bound"):
+            builder._live_endpoints(result_before, prompts, script)
+
+        parallel = copy.deepcopy(valid)
+        parallel[1]["tool_calls"].append({
+            "id": "parallel",
+            "function": {"name": "datasage_catalog", "arguments": "{}"},
+        })
+        with self.assertRaisesRegex(ValueError, "only tool call"):
+            builder._live_endpoints(parallel, prompts, script)
+
+        prior_pending = copy.deepcopy(valid)
+        prior_pending.insert(1, {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{
+                "id": "ordinary-pending",
+                "function": {"name": "datasage_catalog", "arguments": "{}"},
+            }],
+        })
+        prior_pending.insert(4, {
+            "role": "tool",
+            "tool_call_id": "ordinary-pending",
+            "tool_name": "datasage_catalog",
+            "content": "{}",
+        })
+        with self.assertRaisesRegex(ValueError, "prior tool calls"):
+            builder._live_endpoints(prior_pending, prompts, script)
+
+        missing_recommended_choices = copy.deepcopy(valid)
+        missing_recommended_choices[1]["tool_calls"][0]["function"]["arguments"] = json.dumps({
+            "question": "Pick one",
+        })
+        payload = json.loads(missing_recommended_choices[2]["content"])
+        payload["choices_offered"] = None
+        missing_recommended_choices[2]["content"] = json.dumps(payload, ensure_ascii=False)
+        with self.assertRaisesRegex(ValueError, "did not offer a recommended choice"):
+            builder._live_endpoints(missing_recommended_choices, prompts, script)
+
+        extra = copy.deepcopy(valid)
+        extra[3:3] = pair("extra", "Again?", ["A"], script[0]["fixed_response"])
+        with self.assertRaisesRegex(ValueError, "extra clarify call"):
+            builder._live_endpoints(extra, prompts, script)
+
+        for label, callback in (
+            ("case-order", lambda value: value["clarify_reply_script"].reverse()),
+            ("turn-order", lambda value: value["clarify_reply_script"][0].__setitem__("turn", 2)),
+        ):
+            forged_contract = copy.deepcopy(contract)
+            callback(forged_contract)
+            with self.subTest(contract=label), self.assertRaises(ValueError):
+                builder._validate_live_contract(forged_contract)
 
     def test_receipt_identity_comparison_is_exact(self):
         builder = _builder()

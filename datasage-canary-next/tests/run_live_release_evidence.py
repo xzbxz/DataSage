@@ -268,7 +268,94 @@ def _fail_on_nonretryable_tool_result(messages: list[dict[str, object]]) -> None
             )
 
 
-def _endpoints(messages: list[dict[str, object]], prompts: list[str]) -> list[tuple[int, int, str]]:
+def _clarify_turn_policies(reply_script: object, prompt_count: int) -> list[dict[str, object]]:
+    if not isinstance(reply_script, list) or len(reply_script) != prompt_count:
+        raise RuntimeError("clarify reply script must declare every Golden turn exactly once")
+    policies: list[dict[str, object]] = []
+    keys = {"case_id", "turn", "maximum_calls", "strategy", "fixed_response"}
+    for index, value in enumerate(reply_script, 1):
+        if not isinstance(value, dict) or set(value) != keys:
+            raise RuntimeError("clarify reply script entry has an invalid shape")
+        if not isinstance(value["case_id"], str) or not value["case_id"] or value["turn"] != index:
+            raise RuntimeError("clarify reply script is missing or out of Golden turn order")
+        if type(value["maximum_calls"]) is not int or value["maximum_calls"] != 1:
+            raise RuntimeError("clarify reply script must allow at most one call per Golden turn")
+        strategy, fixed = value["strategy"], value["fixed_response"]
+        if index == 1:
+            if (
+                strategy != "fixed_text"
+                or fixed != "仅用于本次测试：采用你列出的第 1 个推荐口径继续，并在答案中明确该口径。"
+            ):
+                raise RuntimeError("first Golden turn clarify reply policy is unsupported")
+        elif strategy != "fixed_text" or fixed != "暂不确认，请列出候选供我选择。":
+            raise RuntimeError("second Golden turn clarify reply policy is unsupported")
+        policies.append(value)
+    return policies
+
+
+def _clarify_call_spec(function: dict[str, object]) -> dict[str, object]:
+    arguments = function.get("arguments")
+    if not isinstance(arguments, str) or not arguments:
+        raise RuntimeError("clarify tool call arguments are not strict JSON text")
+    try:
+        payload = json.loads(
+            arguments,
+            object_pairs_hook=_strict_object,
+            parse_constant=_reject_constant,
+        )
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("clarify tool call arguments are invalid JSON") from exc
+    allowed = {"question", "choices", "multi_select"}
+    if not isinstance(payload, dict) or not set(payload).issubset(allowed):
+        raise RuntimeError("clarify tool call is not the supported single-question shape")
+    question = payload.get("question")
+    if not isinstance(question, str) or not question.strip():
+        raise RuntimeError("clarify tool call has no nonempty question")
+    choices = payload.get("choices")
+    if choices is not None:
+        if (
+            not isinstance(choices, list)
+            or not 1 <= len(choices) <= 4
+            or not all(isinstance(item, str) and item.strip() for item in choices)
+        ):
+            raise RuntimeError("clarify tool call choices are invalid")
+        choices = [item.strip() for item in choices]
+    multi_select = payload.get("multi_select", False)
+    if type(multi_select) is not bool or multi_select:
+        raise RuntimeError("clarify reply script supports only scalar single-question replies")
+    return {"question": question.strip(), "choices_offered": choices}
+
+
+def _validate_clarify_result(content: object, call: dict[str, object], policy: dict[str, object]) -> None:
+    if not isinstance(content, str) or not content:
+        raise RuntimeError("clarify tool result is not strict JSON text")
+    try:
+        result = json.loads(
+            content,
+            object_pairs_hook=_strict_object,
+            parse_constant=_reject_constant,
+        )
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("clarify tool result is invalid JSON") from exc
+    if not isinstance(result, dict) or set(result) != {"question", "choices_offered", "user_response"}:
+        raise RuntimeError("clarify tool result has an invalid official shape")
+    if result["question"] != call["question"] or result["choices_offered"] != call["choices_offered"]:
+        raise RuntimeError("clarify tool result does not bind its call")
+    response = result["user_response"]
+    if policy["turn"] == 1:
+        choices = call["choices_offered"]
+        if not isinstance(choices, list) or not choices:
+            raise RuntimeError("first Golden clarify did not offer a recommended choice")
+    if response != policy["fixed_response"]:
+        raise RuntimeError("clarify reply does not match the fixed Golden response")
+
+
+def _endpoints(
+    messages: list[dict[str, object]],
+    prompts: list[str],
+    clarify_reply_script: object,
+) -> list[tuple[int, int, str]]:
+    policies = _clarify_turn_policies(clarify_reply_script, len(prompts))
     if [item.get("content") for item in messages if item.get("role") == "user"] != prompts:
         raise RuntimeError("official export user turns are not exactly the two ordered Golden prompts")
     first_user = next(index for index, item in enumerate(messages) if item.get("role") == "user")
@@ -276,7 +363,8 @@ def _endpoints(messages: list[dict[str, object]], prompts: list[str]) -> list[tu
         raise RuntimeError("captured transcript has a non-system message before the first Golden prompt")
     result = []
     start = 0
-    for prompt in prompts:
+    for turn_index, prompt in enumerate(prompts):
+        policy = policies[turn_index]
         users = [index for index in range(start, len(messages)) if messages[index].get("role") == "user" and messages[index].get("content") == prompt]
         if len(users) != 1:
             raise RuntimeError("captured prompt is not unique in the official export")
@@ -294,9 +382,22 @@ def _endpoints(messages: list[dict[str, object]], prompts: list[str]) -> list[tu
             or final.get("tool_calls") not in (None, [])
         ):
             raise RuntimeError("captured turn does not end in a terminal assistant answer")
-        pending: dict[str, tuple[int, str]] = {}
+        pending: dict[str, tuple[int, str, dict[str, object] | None]] = {}
         completed: set[str] = set()
+        clarify_calls = 0
         for relative_index, message in enumerate(segment):
+            pending_clarify = [
+                call_id for call_id, (_, name, _) in pending.items() if name == "clarify"
+            ]
+            if pending_clarify and message.get("role") != "system":
+                if (
+                    len(pending_clarify) != 1
+                    or message.get("role") != "tool"
+                    or message.get("tool_call_id") != pending_clarify[0]
+                ):
+                    raise RuntimeError(
+                        "clarify tool result is not the next non-system message"
+                    )
             tool_calls = message.get("tool_calls")
             if tool_calls not in (None, []):
                 if message.get("role") != "assistant" or not isinstance(tool_calls, list):
@@ -311,7 +412,21 @@ def _endpoints(messages: list[dict[str, object]], prompts: list[str]) -> list[tu
                         raise RuntimeError("captured tool call has no valid function name")
                     if function_name == "datasage_push":
                         raise RuntimeError("datasage_push is forbidden in inbound live evidence")
-                    pending[call_id] = (relative_index, function_name)
+                    clarify_call = None
+                    if function_name == "clarify":
+                        if len(tool_calls) != 1:
+                            raise RuntimeError(
+                                "clarify must be the assistant message's only tool call"
+                            )
+                        if pending:
+                            raise RuntimeError(
+                                "clarify requires all prior tool calls to be closed"
+                            )
+                        clarify_calls += 1
+                        if clarify_calls > policy["maximum_calls"]:
+                            raise RuntimeError("captured turn has an extra clarify call")
+                        clarify_call = _clarify_call_spec(function)
+                    pending[call_id] = (relative_index, function_name, clarify_call)
             if message.get("role") == "tool":
                 call_id = message.get("tool_call_id")
                 tool_name = message.get("tool_name")
@@ -319,11 +434,15 @@ def _endpoints(messages: list[dict[str, object]], prompts: list[str]) -> list[tu
                     raise RuntimeError("datasage_push is forbidden in inbound live evidence")
                 if not isinstance(call_id, str) or call_id not in pending:
                     raise RuntimeError("captured tool result is not bound to a prior tool call")
-                call_index, function_name = pending.pop(call_id)
+                call_index, function_name, clarify_call = pending.pop(call_id)
                 if not isinstance(tool_name, str) or not tool_name or tool_name != function_name:
                     raise RuntimeError("captured tool result name does not match its tool call")
                 if call_index >= relative_index:
                     raise RuntimeError("captured tool result precedes its tool call")
+                if function_name == "clarify":
+                    if clarify_call is None:
+                        raise RuntimeError("clarify tool result has no declared call")
+                    _validate_clarify_result(message.get("content"), clarify_call, policy)
                 completed.add(call_id)
         if pending:
             raise RuntimeError("captured turn has an unclosed tool flow")
@@ -492,7 +611,11 @@ def _capture(args: argparse.Namespace, contract: dict[str, object], golden: dict
             session_id = origin.pop("session_id")
             if session_id != requested_session_id:
                 raise RuntimeError("official export does not match the exact requested session")
-            endpoints = _endpoints(messages, [case["prompt"] for case in cases])
+            endpoints = _endpoints(
+                messages,
+                [case["prompt"] for case in cases],
+                contract["clarify_reply_script"],
+            )
             _fail_on_nonretryable_tool_result(messages)
             export_ref = _artifact(export_path, logical_path=logical_run_dir / export_path.name)
             artifact_refs = [export_record["stdout"], export_record["stderr"], export_ref]
@@ -613,7 +736,11 @@ def _finalize(args: argparse.Namespace, contract: dict[str, object], golden: dic
         )
         if origin.pop("session_id") != session_id:
             raise RuntimeError("frozen session origin does not bind the exported session")
-        endpoints = _endpoints(messages, [case["prompt"] for case in cases])
+        endpoints = _endpoints(
+            messages,
+            [case["prompt"] for case in cases],
+            contract["clarify_reply_script"],
+        )
         _fail_on_nonretryable_tool_result(messages)
         session_record = captured["session"]
         if (

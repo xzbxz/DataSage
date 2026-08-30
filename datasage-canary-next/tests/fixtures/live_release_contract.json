@@ -1,5 +1,5 @@
 {
-  "schema": "datasage-live-release-contract/v2",
+  "schema": "datasage-live-release-contract/v3",
   "scope": "test_only_official_hermes_wecom_inbound_live_release",
   "subject": {
     "name": "datasage-canary-next",
@@ -24,6 +24,22 @@
     "turns_per_session": 2,
     "runs": 3
   },
+  "clarify_reply_script": [
+    {
+      "case_id": "ambiguity_10_rc5_vietnam_scorecard",
+      "turn": 1,
+      "maximum_calls": 1,
+      "strategy": "fixed_text",
+      "fixed_response": "仅用于本次测试：采用你列出的第 1 个推荐口径继续，并在答案中明确该口径。"
+    },
+    {
+      "case_id": "multiturn_08_rc5_thailand_followup",
+      "turn": 2,
+      "maximum_calls": 1,
+      "strategy": "fixed_text",
+      "fixed_response": "暂不确认，请列出候选供我选择。"
+    }
+  ],
   "execution": {
     "timeout_seconds": 180,
     "command_shapes": {
