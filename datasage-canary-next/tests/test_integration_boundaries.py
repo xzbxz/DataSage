@@ -29,7 +29,7 @@ from tools import tool_search as hermes_tool_search
 from tools import write_approval as hermes_write_approval
 from tools.registry import ToolRegistry, registry as hermes_registry
 
-from plugin_registration_probe import probe_registration
+from plugin_registration_probe import RegistrationProbe, probe_registration
 
 
 PROFILE_ROOT = Path(__file__).resolve().parents[1]
@@ -1982,6 +1982,8 @@ class DistributionBoundaryTests(unittest.TestCase):
         required_runtime_assets = {
             "plugins/datasage-query/plugin.yaml",
             "plugins/datasage-query/__init__.py",
+            "plugins/datasage-query/db_executor.py",
+            "plugins/datasage-query/receipt_cache.py",
             "plugins/datasage-query/tools.py",
             "plugins/datasage-query/vendor/pymysql/__init__.py",
             "plugins/datasage-query/vendor/pymysql-1.2.0.dist-info/METADATA",
@@ -2034,6 +2036,8 @@ class DistributionBoundaryTests(unittest.TestCase):
                 "config.yaml",
                 "profile.yaml",
                 "plugins/datasage-query/plugin.yaml",
+                "plugins/datasage-query/db_executor.py",
+                "plugins/datasage-query/receipt_cache.py",
                 "plugins/datasage-query/tools.py",
                 "plugins/datasage-query/vendor/pymysql/__init__.py",
                 "skills/business-analytics/datasage/SKILL.md",
@@ -2055,6 +2059,100 @@ class DistributionBoundaryTests(unittest.TestCase):
                 {relative for relative in source_only if (installed / relative).exists()},
             )
             self.assertEqual([], list(installed.rglob("*.pyc")))
+
+    def test_materialized_plugin_loads_registers_and_runs_database_free_preflight(self):
+        import hermes_cli.plugins as plugins_module
+        from hermes_cli.profile_distribution import _copy_dist_payload, read_manifest
+
+        package_prefix = "hermes_plugins.datasage_query"
+        prior_modules = {
+            name: module
+            for name, module in sys.modules.items()
+            if name == package_prefix or name.startswith(package_prefix + ".")
+        }
+        prior_bare_scope = dict(plugins_module._BARE_MODULE_SCOPE)
+        for name in prior_modules:
+            sys.modules.pop(name, None)
+
+        try:
+            with tempfile.TemporaryDirectory() as temporary:
+                installed = Path(temporary) / "installed"
+                manifest_data = read_manifest(PROFILE_ROOT)
+                self.assertIsNotNone(manifest_data)
+                _copy_dist_payload(
+                    PROFILE_ROOT,
+                    installed,
+                    manifest_data,
+                    preserve_config=False,
+                )
+
+                with mock.patch.dict(
+                    os.environ,
+                    {"HERMES_HOME": str(installed)},
+                    clear=False,
+                ):
+                    plugin_root = installed / "plugins" / "datasage-query"
+                    manager = PluginManager(scope_key=str(installed))
+                    manifest = manager._parse_manifest(
+                        plugin_root / "plugin.yaml",
+                        plugin_root,
+                        "user",
+                        "",
+                    )
+                    self.assertIsNotNone(manifest)
+                    module = manager._load_directory_module(manifest)
+                    registration = RegistrationProbe()
+                    module.register(registration)
+
+                    self.assertEqual(
+                        {
+                            "datasage_catalog",
+                            "datasage_entity_resolve",
+                            "datasage_query",
+                        },
+                        {item["name"] for item in registration.tools},
+                    )
+                    for imported in (
+                        module.tools.db_executor,
+                        module.tools.receipt_cache,
+                    ):
+                        self.assertTrue(
+                            Path(imported.__file__).resolve().is_relative_to(
+                                installed.resolve()
+                            )
+                        )
+
+                    receipt = module.tools._current_metric_detail_receipt(
+                        "delivery",
+                        "delivery_amount",
+                    )
+                    self.assertRegex(receipt, r"^[0-9a-f]{64}$")
+
+                    response = json.loads(
+                        module.tools.entitlement_guarded_datasage_query(
+                            {
+                                "requests": [
+                                    {
+                                        "request_id": "installed_preflight",
+                                        "domain": "delivery",
+                                        "metric": "delivery_amount",
+                                        "dimensions": [],
+                                    }
+                                ]
+                            }
+                        )
+                    )
+                    self.assertEqual(
+                        "DATA_ENTITLEMENT_DENIED",
+                        response["error"]["code"],
+                    )
+        finally:
+            for name in list(sys.modules):
+                if name == package_prefix or name.startswith(package_prefix + "."):
+                    sys.modules.pop(name, None)
+            sys.modules.update(prior_modules)
+            plugins_module._BARE_MODULE_SCOPE.clear()
+            plugins_module._BARE_MODULE_SCOPE.update(prior_bare_scope)
 
     def test_distribution_allows_reviewed_bundled_skill_sync(self):
         distribution = (PROFILE_ROOT / "distribution.yaml").read_text(

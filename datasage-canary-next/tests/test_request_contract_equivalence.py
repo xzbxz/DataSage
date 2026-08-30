@@ -241,6 +241,50 @@ class RequestContractEquivalenceTests(unittest.TestCase):
             schemas.REQUEST["properties"]["metric_filters"]
             ["additionalProperties"]["oneOf"][-1]["maxItems"],
         )
+        self.assertEqual(
+            request_contract.PUBLIC_ROW_LIMIT_MIN,
+            schemas.REQUEST["properties"]["limit"]["minimum"],
+        )
+        self.assertEqual(
+            request_contract.PUBLIC_ROW_LIMIT_MAX,
+            schemas.REQUEST["properties"]["limit"]["maximum"],
+        )
+
+    def test_limit_and_order_by_shape_fail_closed_in_schema_and_runtime(self):
+        valid = (
+            _request(limit=request_contract.PUBLIC_ROW_LIMIT_MIN),
+            _request(limit=request_contract.PUBLIC_ROW_LIMIT_MAX),
+            _request(order_by={"field": "metric_value", "direction": "desc"}),
+        )
+        invalid = (
+            _request(limit=0),
+            _request(limit=-1),
+            _request(limit=request_contract.PUBLIC_ROW_LIMIT_MAX + 1),
+            _request(limit=True),
+            _request(
+                order_by={
+                    "field": "metric_value",
+                    "direction": "desc",
+                    "unexpected": True,
+                }
+            ),
+            _request(order_by={"field": "metric_value"}),
+            _request(order_by={"field": "metric-value", "direction": "desc"}),
+            _request(order_by={"field": "metric_value", "direction": "DESC"}),
+        )
+        for request in valid:
+            with self.subTest(valid=request):
+                self.assertRequestEquivalent(request, True)
+        for request in invalid:
+            with self.subTest(invalid=request):
+                self.assertRequestEquivalent(request, False)
+
+        with mock.patch.object(tools, "_bounded_int", return_value=10):
+            self.assertEqual(10, tools._metric_query_limit(_request(limit=100)))
+            for invalid_limit in (0, -1, 101, True):
+                with self.subTest(executor_limit=invalid_limit):
+                    with self.assertRaises(tools.QueryFailure):
+                        tools._metric_query_limit(_request(limit=invalid_limit))
 
     def test_compilers_share_group_dimension_limit_policy(self):
         self.assertEqual(
@@ -494,6 +538,50 @@ class RequestContractEquivalenceTests(unittest.TestCase):
         validated = execute.call_args.kwargs.get("_validated_query_envelope")
         self.assertIsInstance(
             validated, request_contract.ValidatedQueryEnvelope
+        )
+        self.assertIsInstance(
+            execute.call_args.kwargs.get("_period_observed_on"), date
+        )
+
+    def test_runtime_guard_preserves_frozen_observed_date_on_ready_path(self):
+        args = {"requests": [_request()]}
+        envelope = request_contract.validate_query_envelope(args)
+        observed_on = date(2026, 8, 30)
+        with (
+            mock.patch.object(
+                runtime_health,
+                "query_readiness_status",
+                return_value={"ready": True},
+            ),
+            mock.patch.object(
+                tools,
+                "datasage_query",
+                return_value=json.dumps({"status": "success"}),
+            ) as execute,
+        ):
+            payload = json.loads(
+                tools.runtime_guarded_datasage_query(
+                    args,
+                    _validated_query_envelope=envelope,
+                    _period_observed_on=observed_on,
+                )
+            )
+
+        self.assertEqual("success", payload["status"])
+        self.assertEqual(
+            observed_on,
+            execute.call_args.kwargs.get("_period_observed_on"),
+        )
+
+    def test_retry_contract_is_caller_directed_without_fake_executor_count(self):
+        failure = tools.QueryFailure("QUERY_TIMEOUT", "Query timed out.", timeout=True)
+        metadata = tools._caller_retry_metadata(failure)
+        self.assertTrue(metadata["retryable"])
+        self.assertEqual(1, metadata["max_retry_attempts"])
+        self.assertIn("调用方", metadata["retry_advice"])
+        self.assertNotIn(
+            "execution_retry_count",
+            tools._failure_result("q1", failure, 1),
         )
 
     def test_nested_calculations_fail_before_entitlement_readiness_or_database(self):

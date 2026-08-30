@@ -137,10 +137,6 @@ REQUEST = {
         "time_range": {
             "type": "object",
             "additionalProperties": False,
-            "description": (
-                "Resolved business range with inclusive start and exclusive end. "
-                "It must satisfy the versioned common query policy returned by datasage_catalog."
-            ),
             "properties": {
                 "start": {
                     "type": "string",
@@ -304,15 +300,18 @@ REQUEST = {
             "properties": {
                 "field": {
                     "type": "string",
-                    "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                    "pattern": request_contract.ORDER_BY_FIELD_PATTERN,
                     "description": (
                         "For metric-value ranking use metric_value, not the metric code. A governed dimension "
                         "output or period may be used only when intentionally sorting that output."
                     ),
                 },
-                "direction": {"type": "string", "enum": ["asc", "desc"]},
+                "direction": {
+                    "type": "string",
+                    "enum": list(request_contract.ORDER_BY_DIRECTIONS),
+                },
             },
-            "required": ["field", "direction"],
+            "required": list(request_contract.ORDER_BY_FIELDS),
             "description": (
                 "Ascending or descending output ordering. Metric codes are accepted as compatibility aliases "
                 "and normalized by the tool to metric_value."
@@ -320,8 +319,8 @@ REQUEST = {
         },
         "limit": {
             "type": "integer",
-            "minimum": 1,
-            "maximum": 100,
+            "minimum": request_contract.PUBLIC_ROW_LIMIT_MIN,
+            "maximum": request_contract.PUBLIC_ROW_LIMIT_MAX,
             "description": "Maximum returned rows; the environment cap can reduce it further.",
         },
     },

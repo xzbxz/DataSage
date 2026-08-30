@@ -4,25 +4,6 @@ contract_role: plugin_physical_execution
 business_name: 库存事实、未动销与周转分析
 tables: [vk_dw.inventory_barcode_detail_dw, vk_dwd.inventory_cost_dwd, vk_dw.goods_turnover_basic_data_dw, vk_dwd.goods_detail_dwd, vk_dwd.whse_info_dwd]
 
-defaults:
-  currency: RMB
-  current_inventory_source: current_barcode_snapshot
-  current_inventory_scope: total
-  current_on_hand_scope: on_hand
-  historical_inventory_source: month_end_cost_snapshot
-  recent_history: latest_6_available_snapshot_months
-  turnover_period: latest_12_complete_accounting_months
-  turnover_primary_output: cost_turnover_days
-  turnover_guidance_output: ddp_turnover_days
-  ranking_limit: 10
-  ready_goods_scope: [备货, 试备货]
-  slow_moving_threshold: null
-  turnover_formula:
-    common: average_inventory_amount * period_natural_days / period_net_delivery_rmb
-    cost: average_cost_amount_rmb * period_natural_days / period_net_delivery_rmb
-    ddp: average_ddp_amount_rmb * period_natural_days / period_net_delivery_rmb
-    average_inventory: trapezoid_with_opening_and_ending_half_weight
-
 dimension_sources:
   product_master: &product_master {type: governed_join, dataset: vk_dwd.goods_detail_dwd, local_column: goods_id, remote_column: goods_id, cardinality: many_to_one}
   warehouse_master: &warehouse_master {type: governed_join, dataset: vk_dwd.whse_info_dwd, local_column: whse_id, remote_column: whse_id, cardinality: many_to_one}

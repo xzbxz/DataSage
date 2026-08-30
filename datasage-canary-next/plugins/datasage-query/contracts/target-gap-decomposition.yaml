@@ -1,21 +1,10 @@
 version: datasage-target-gap-decomposition/v1
 status: active
-purpose: "Govern a complete additive decomposition of target gap for questions such as 为什么目标没达成 without claiming causality."
 
 applicability:
   metrics: [delivery_target_completion, receipt_target_completion]
   attribution_mode: transaction_detail
   dimensions: [customer, department, organization]
-  excluded_modes:
-    salesperson_allocation: DATA_RECONCILIATION_REQUIRED
-
-algebra:
-  target_amount_rmb: additive
-  actual_amount_rmb: additive
-  gap_amount_rmb: target_amount_rmb - actual_amount_rmb
-  partition_reconciliation: sum(gap_amount_rmb) = overall_gap_amount_rmb
-  completion_rate_additive: false
-  overall_completion_rate: overall_actual_amount_rmb / overall_target_amount_rmb
 
 valid_target_data_states: [set, zero]
 fail_closed_target_data_states: [missing, incomplete, not_set_for_future]
@@ -23,27 +12,8 @@ fail_closed_target_data_states: [missing, incomplete, not_set_for_future]
 receipt:
   version: datasage-target-gap-reconciliation/v1
   operation: complete_target_gap_decomposition
-  required_amount_checks:
-    - sum(partition.target_amount_rmb) = overall.target_amount_rmb
-    - sum(partition.actual_amount_rmb) = overall.actual_amount_rmb
-    - sum(partition.gap_amount_rmb) = overall.gap_amount_rmb
-  required_identity_checks:
-    - metric
-    - attribution_mode
-    - time_range
-    - calendar_month
-    - metric_filters
-    - snapshot
-  interpretation_boundary: "A reconciled receipt proves which partition gaps compose the overall gap; it does not prove business causality."
+  interpretation_code: additive_gap_composition_not_causal
 
 rollout:
   status: active
   model_visible_operation: true
-  required_proofs:
-    - same_snapshot_overall_and_partition
-    - full_partition_even_when_return_rows_are_truncated
-    - scope_and_period_identity
-    - target_actual_and_gap_three_way_reconciliation
-    - target_state_completeness
-    - typed_failure_receipt
-  activation_rule: "Keep complete_target_gap_decomposition exposed only while every proof is enforced by the executor and covered by success, truncation, mismatch, and invalid-state tests."

@@ -14,7 +14,7 @@ import re
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping, Sequence
 
-from . import capability_contract
+from . import capability_contract, contract_store
 
 
 EVIDENCE_BUNDLE_VERSION = "evidence-bundle/v1"
@@ -163,19 +163,27 @@ def _target_gap_reconciliation_is_valid(result: Mapping[str, Any]) -> bool:
     claims = result.get("claim_ledger")
     if (
         not isinstance(reconciliation, Mapping)
-        or reconciliation.get("version")
-        != "datasage-target-gap-reconciliation/v1"
+        or not isinstance(claims, list)
+        or not claims
+    ):
+        return False
+    try:
+        contract = contract_store.read_target_gap_contract()
+    except (
+        contract_store.ContractStoreError,
+        capability_contract.CapabilityContractError,
+    ):
+        return False
+    if (
+        reconciliation.get("version") != contract.receipt_version
         or reconciliation.get("status") != "reconciled"
-        or reconciliation.get("operation")
-        != "complete_target_gap_decomposition"
+        or reconciliation.get("operation") != contract.receipt_operation
         or reconciliation.get("reconciliation_id")
         != _canonical_reconciliation_id(reconciliation)
         or reconciliation.get("completion_rate_aggregated") is not False
         or reconciliation.get("causal_attribution_authorized") is not False
         or reconciliation.get("interpretation_boundary")
-        != "additive_gap_composition_not_causal"
-        or not isinstance(claims, list)
-        or not claims
+        != contract.receipt_interpretation_code
         or any(
             not isinstance(claim, Mapping)
             or not _claim_is_validly_sealed(claim)

@@ -14,9 +14,14 @@ from typing import Any
 
 PUBLIC_REQUEST_LIMIT = 10
 PUBLIC_CALCULATION_LIMIT = 10
+PUBLIC_ROW_LIMIT_MIN = 1
+PUBLIC_ROW_LIMIT_MAX = 100
 MAX_GROUP_DIMENSIONS = 5
 MAX_METRIC_FILTERS = 12
 MAX_FILTER_VALUES = 50
+ORDER_BY_FIELDS = ("field", "direction")
+ORDER_BY_DIRECTIONS = ("asc", "desc")
+ORDER_BY_FIELD_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]*$"
 
 
 @dataclass(frozen=True)
@@ -84,6 +89,14 @@ def valid_string(value: Any, contract: StringContract) -> bool:
     if not contract.min_length <= len(value) <= contract.max_length:
         return False
     return not contract.require_nonblank or bool(value.strip())
+
+
+def valid_public_row_limit(value: Any) -> bool:
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and PUBLIC_ROW_LIMIT_MIN <= value <= PUBLIC_ROW_LIMIT_MAX
+    )
 
 
 def validate_calculations(

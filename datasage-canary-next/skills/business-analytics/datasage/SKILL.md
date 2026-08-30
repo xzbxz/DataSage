@@ -1,6 +1,6 @@
 ---
 name: datasage
-description: Analyze governed company metrics for business decisions.
+description: Analyze new internal company facts through governed DataSage metrics; not public research or user-provided data.
 version: 0.15.0-rc8
 author: datasage
 platforms: [windows]
@@ -24,15 +24,17 @@ Choose the route adaptively; this is not a mandatory call sequence.
 
 ## Governing references
 
-- `datasage.query-rules/v1` in `references/query-rules.md` is the detailed
+- [`datasage.query-rules/v1`](references/query-rules.md) is the detailed
   request-construction policy. Load it with
   `skill_view(name="datasage", file_path="references/query-rules.md")` before
   the first query when its rules are not already present in the current context.
-- `datasage.answer-boundary/v1` in `references/answer-boundary.md` is the
+- [`datasage.answer-boundary/v1`](references/answer-boundary.md) is the
   detailed interpretation and final-answer policy. Load it before a nontrivial
   comparison, ranking, target or benchmark judgment, decomposition, causal
-  discussion, or answer involving truncated, partial, or failed evidence.
-- Use `references/entity-guidance.md` for unresolved entity ambiguity.
+  discussion, multi-row calculation, or answer involving zero, empty,
+  undefined, truncated, partial, failed, or timeout evidence.
+- Load [`datasage.entity-guidance/v1`](references/entity-guidance.md) before
+  resolving an ambiguous entity, unknown geography, or uncertain alias.
 - The live catalog, schema, and tool result remain authoritative for available
   metrics, request fields, capabilities, and returned evidence.
 
@@ -48,23 +50,21 @@ Choose the route adaptively; this is not a mandatory call sequence.
    and disclose unavailable profitability. Only successfully queried lenses are
    evidence; other material lenses remain unassessed and limit the headline.
 3. Choose and query the exact governed metric under
-   `datasage.query-rules/v1`. Resolve an entity only when ambiguity can change
-   the result.
+   [`datasage.query-rules/v1`](references/query-rules.md). Resolve an entity
+   only when ambiguity can change the result.
 4. Stop when the conclusion is decision-useful or the remaining uncertainty
    cannot be resolved with available governed operations.
 
 ## Analytical behavior
 
 - Prefer decision-relevant comparisons and exceptions over simply restating
-  rows. Use decomposition, concentration, or explanatory language only when the
-  returned population and relationship explicitly authorize it.
-- For truncated Top-N evidence, follow the hard boundaries in
-  `datasage.answer-boundary/v1`; do not turn an unreturned tail into a driver.
-- Calculate non-trivial sums, residuals, differences, ratios, or shares across
-  multiple returned rows with an available calculation tool. State the operands
-  and formula, and label the result as a derived observation.
-- Rank and test plausible explanations under `datasage.answer-boundary/v1`.
-  Give evidence-bounded advisory actions when useful.
+  rows. Use decomposition or concentration only when the returned population
+  and relationship explicitly authorize it.
+- For truncated Top-N evidence, do not turn an unreturned tail into a driver.
+- [`datasage.answer-boundary/v1`](references/answer-boundary.md) owns the full
+  interpretation rules for those cases, calculations, explanations, and
+  advisory actions. Load it before using them; multi-row arithmetic also
+  requires an available calculation tool.
 
 ## Persistent memory
 

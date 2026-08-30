@@ -34,42 +34,6 @@ facts:
     business_key: [customer_id, org_name, currency_no]
     updated_at: gmt_modified
 
-defaults:
-  occurrence_time_range: current_month
-  snapshot_time: latest_available_bill_date
-  currency: rmb
-  occurrence_department: customer_dept
-  snapshot_department: customer_dept
-  occurrence_salesperson: [final_sales_id, final_sales_name]
-  snapshot_salesperson: [sales_id, sales_name]
-  organization: org_name
-  exclude_internal_customers: true
-  debt_total_scope: signed_net_debt
-  debt_customer_scope: positive_debt_only
-  credit_join_key: [customer_id, org_name, currency_no]
-  intents:
-    receivable: {metric: receivable_occurrence_amount, answer_scope: 应收发生额人民币}
-    current_debt: {metric: current_debt_amount, answer_scope: 最新月签名净欠款人民币}
-    who_owes_us: {metric: positive_debt_amount, answer_scope: 最新月正欠款客户}
-    open_receivable: {metric: open_receivable_amount, answer_scope: 正数未结清应收人民币}
-    debt_days: {metric: debt_days, answer_scope: 最早未结清应收至今天数}
-    overdue_amount: {metric: overdue_receivable_amount, answer_scope: 按授信天数逐笔判断的逾期应收人民币}
-    excess_credit_amount: {metric: excess_credit_amount, answer_scope: "max(欠款原币减授信原币, 0)后折人民币"}
-    uncredited_debt: {metric: uncredited_positive_debt_amount, answer_scope: 无授信记录客户的正欠款人民币}
-    aging: {metric: aging_total_amount, answer_scope: 最新月账龄结构人民币}
-
-analysis_defaults:
-  occurrence_overview_time: current_natural_month
-  occurrence_trend_without_time: latest_30_natural_days_by_day
-  occurrence_change_without_time:
-    current: latest_30_natural_days
-    comparison: preceding_30_natural_days
-  debt_trend_without_time: latest_6_available_snapshot_months
-  snapshot_comparison_months: 3
-  ranking_limit: 10
-  change_observation_limit: 10
-  disclosure: 说明数据来源、时间、人民币或原币、默认不含内部客户，以及签名净欠款或正欠款口径。
-
 value_contract_templates:
   entity_exact: &vc_entity_exact
     kind: entity_exact

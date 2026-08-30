@@ -25,27 +25,6 @@ facts:
     time_field: bill_time
     updated_at: gmt_modified
 
-defaults:
-  time_range: current_month
-  recent_without_unit: latest_30_natural_days
-  currency: rmb
-  department: customer_dept
-  organization: org_name
-  salesperson: [final_sales_id, final_sales_name]
-  salesperson_ledger: transaction_detail
-  include_internal_customers: true
-  receipt_usage_scope: all
-  intents:
-    receipt_or_collection: {metric: receipt_amount, answer_scope: 收款人民币金额}
-    actual_receipt: {metric: actual_receipt_amount, answer_scope: 实收人民币金额}
-    receipt_count: {metric: receipt_bill_count, answer_scope: 收款单数}
-    refund: {metric: refund_amount, answer_scope: 退款人民币金额}
-    actual_refund: {metric: actual_refund_amount, answer_scope: 实退人民币金额}
-    refund_count: {metric: refund_bill_count, answer_scope: 退款单数}
-    net_receipt: {metric: net_receipt_amount, answer_scope: 净收款人民币金额}
-    refund_original: {metric: refund_amount_original, answer_scope: 退款原币金额}
-    net_receipt_original: {metric: net_receipt_amount_original, answer_scope: 按币种的净收款原币金额}
-
 ledger_policy:
   default: transaction_detail
   transaction_detail:
@@ -57,17 +36,6 @@ ledger_policy:
     triggers: [目标, 协作, 分摊, 分摊业绩]
     positive_fact: vk_dwd.receive_bill_split_dwd
     negative_fact: vk_dwd.receive_return_bill_split_dwd
-
-analysis_defaults:
-  overview_time: current_natural_month
-  trend_without_time: latest_30_natural_days_by_day
-  change_without_time:
-    current: latest_30_natural_days
-    comparison: preceding_30_natural_days
-  ranking_limit: 10
-  change_observation_limit: 10
-  comparison_kind: previous_period
-  disclosure: 说明时间、指标类型、人民币口径、内部客户与收款用途范围。
 
 value_contract_templates:
   entity_exact: &vc_entity_exact

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal
 import hashlib
@@ -32,6 +33,8 @@ package.__path__ = [str(PLUGIN_ROOT)]
 sys.modules[TEST_PACKAGE] = package
 
 contracts = importlib.import_module(f"{TEST_PACKAGE}.contracts")
+capability_contract = importlib.import_module(f"{TEST_PACKAGE}.capability_contract")
+contract_store = importlib.import_module(f"{TEST_PACKAGE}.contract_store")
 entities = importlib.import_module(f"{TEST_PACKAGE}.entities")
 schemas = importlib.import_module(f"{TEST_PACKAGE}.schemas")
 tools = importlib.import_module(f"{TEST_PACKAGE}.tools")
@@ -1903,7 +1906,7 @@ class BusinessContractTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual(5, semantics["defaults"]["max_business_dimensions"])
+        self.assertNotIn("defaults", semantics)
         expected = {
             "delivery_target_amount": 3,
             "receipt_target_amount": 3,
@@ -1916,7 +1919,169 @@ class BusinessContractTests(unittest.TestCase):
                     {"requests": [{"domain": "target", "metric": metric_code}]}
                 )
             )
-            self.assertEqual(limit, payload["results"][0]["metric"]["max_group_dimensions"])
+            self.assertEqual(
+                limit,
+                payload["results"][0]["metric"]["max_group_dimensions"],
+            )
+
+    def test_query_policy_has_one_typed_validator(self) -> None:
+        raw = yaml.safe_load(
+            (PLUGIN_ROOT / "contracts" / "query-policy.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        policy = capability_contract.parse_query_policy(raw)
+        self.assertEqual(raw, policy.as_mapping())
+        self.assertEqual(raw, contracts._query_policy_projection())
+
+        malformed = []
+        for key, value in (
+            ("max_days", True),
+            ("max_days", 0),
+            ("wider_analysis", "silently_widen"),
+        ):
+            candidate = copy.deepcopy(raw)
+            candidate["governed_metric_time_range"][key] = value
+            malformed.append(candidate)
+        with_extra_root = copy.deepcopy(raw)
+        with_extra_root["planner_hint"] = "choose a metric"
+        malformed.append(with_extra_root)
+        for candidate in malformed:
+            with self.subTest(candidate=candidate), self.assertRaises(
+                capability_contract.CapabilityContractError
+            ) as caught:
+                capability_contract.parse_query_policy(candidate)
+            self.assertEqual("CONTRACT_UNAVAILABLE", caught.exception.code)
+
+    def test_value_contract_parser_owns_typed_normalization_and_rejections(self) -> None:
+        raw = {
+            "kind": "closed",
+            "allowed_values": ["m", "y"],
+            "canonical_aliases": {"M": "m"},
+            "business_meanings": {"m": "metre", "y": "yard"},
+        }
+        contract = capability_contract.parse_value_contract(raw)
+        self.assertEqual(raw, contract.as_mapping())
+        self.assertEqual("m", contract.normalize_filter_value("M"))
+        self.assertEqual(["m", "y"], contract.normalize_filter_value(["M", "y"]))
+
+        malformed = (
+            {"kind": "closed", "allowed_values": [1, 1]},
+            {"kind": "closed", "allowed_values": [None]},
+            {
+                "kind": "closed",
+                "allowed_values": ["m"],
+                "canonical_aliases": {"M": None},
+            },
+            {
+                "kind": "closed",
+                "allowed_values": ["m"],
+                "business_meanings": {"m": ""},
+            },
+            {"kind": "source_exact", "allowed_values": ["invented"]},
+            {"kind": "source_exact", "unused_hint": "shadow policy"},
+        )
+        for candidate in malformed:
+            with self.subTest(candidate=candidate), self.assertRaises(
+                capability_contract.CapabilityContractError
+            ):
+                capability_contract.parse_value_contract(candidate)
+            with self.assertRaises(contracts.ContractFailure):
+                contracts._value_contract_projection(candidate, dimension="test")
+        for invalid_filter in (None, [], ["m", None]):
+            with self.subTest(invalid_filter=invalid_filter), self.assertRaises(
+                capability_contract.CapabilityContractError
+            ):
+                contract.normalize_filter_value(invalid_filter)
+
+    def test_executor_consumes_shared_typed_policy_and_value_contracts(self) -> None:
+        policy = contract_store.read_query_policy()
+        with mock.patch.object(
+            tools.contract_store,
+            "read_query_policy",
+            return_value=replace(policy, max_days=17),
+        ):
+            self.assertEqual(17, tools._max_metric_range_days())
+
+        definition = {
+            "filterable": True,
+            "value_contract": {
+                "kind": "closed",
+                "allowed_values": ["m"],
+                "canonical_aliases": {"M": "m"},
+            },
+        }
+        with mock.patch.object(
+            tools.capability_contract,
+            "parse_value_contract",
+            wraps=capability_contract.parse_value_contract,
+        ) as shared_parser:
+            normalized = tools._validate_metric_filter_value_contracts(
+                {"metric_filters": {"unit": "M"}},
+                {"dimensions": {"unit": definition}},
+            )
+        self.assertEqual("m", normalized["metric_filters"]["unit"])
+        shared_parser.assert_called_once_with(
+            definition["value_contract"],
+            filterable_default=True,
+        )
+
+    def test_dataset_global_blocked_columns_remain_runtime_consumed(self) -> None:
+        datasets = contracts._read_yaml(
+            "plugins/datasage-query/contracts/datasets.yaml"
+        )
+        blocked = tools._blocked_columns(
+            datasets,
+            datasets["datasets"]["vk_dwd.customer_dwd"],
+        )
+        self.assertIn("cost_price", blocked)
+        self.assertIn("partner_ids", blocked)
+        with self.assertRaises(tools.QueryFailure) as caught:
+            tools._approved_column(
+                "cost_price",
+                {"cost_price"},
+                blocked,
+            )
+        self.assertEqual("COLUMN_NOT_ALLOWED", caught.exception.code)
+
+    def test_target_gap_typed_contract_rejects_malformed_authority(self) -> None:
+        raw = yaml.safe_load(
+            (PLUGIN_ROOT / "contracts" / "target-gap-decomposition.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        contract = capability_contract.parse_target_gap_contract(raw)
+        self.assertEqual("datasage-target-gap-decomposition/v1", contract.version)
+        self.assertEqual(
+            "additive_gap_composition_not_causal",
+            contract.receipt_interpretation_code,
+        )
+        self.assertEqual(contract, contract_store.read_target_gap_contract())
+
+        malformed = []
+        duplicate_metric = copy.deepcopy(raw)
+        duplicate_metric["applicability"]["metrics"].append(
+            duplicate_metric["applicability"]["metrics"][0]
+        )
+        malformed.append(duplicate_metric)
+        overlapping_state = copy.deepcopy(raw)
+        overlapping_state["fail_closed_target_data_states"].append("set")
+        malformed.append(overlapping_state)
+        missing_boundary = copy.deepcopy(raw)
+        missing_boundary["receipt"].pop("interpretation_code")
+        malformed.append(missing_boundary)
+        inactive_rollout = copy.deepcopy(raw)
+        inactive_rollout["rollout"]["status"] = "disabled"
+        malformed.append(inactive_rollout)
+        shadow_field = copy.deepcopy(raw)
+        shadow_field["algebra"] = {"gap": "target - actual"}
+        malformed.append(shadow_field)
+        for candidate in malformed:
+            with self.subTest(candidate=candidate), self.assertRaises(
+                capability_contract.CapabilityContractError
+            ) as caught:
+                capability_contract.parse_target_gap_contract(candidate)
+            self.assertEqual("CONTRACT_UNAVAILABLE", caught.exception.code)
 
     def test_target_gap_operation_is_projected_from_versioned_contract(self) -> None:
         expected = {
@@ -1966,6 +2131,15 @@ class BusinessContractTests(unittest.TestCase):
         self.assertFalse(receipt["completion_rate_aggregated"])
         self.assertFalse(receipt["causal_attribution_authorized"])
         self.assertTrue(tools.evidence._target_gap_reconciliation_is_valid(partition))
+        typed_contract = contract_store.read_target_gap_contract()
+        with mock.patch.object(
+            tools.evidence.contract_store,
+            "read_target_gap_contract",
+            return_value=replace(typed_contract, receipt_version="different/v1"),
+        ):
+            self.assertFalse(
+                tools.evidence._target_gap_reconciliation_is_valid(partition)
+            )
         self.assertIn("target_gap_composition", tools.evidence._supports(partition))
 
     def test_target_gap_truncation_returns_typed_not_reconciled(self) -> None:

@@ -209,10 +209,6 @@ def _sha256_path(path: Path) -> str:
     return _sha256_bytes(path.read_bytes())
 
 
-def _receiver_sha256(value: str) -> str:
-    return _sha256_bytes(value.encode("utf-8"))
-
-
 def _require_exact_keys(payload: object, keys: set[str], label: str) -> dict[str, object]:
     if not isinstance(payload, dict):
         raise ValueError(f"{label} must be an object")

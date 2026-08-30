@@ -47,12 +47,14 @@ distribution_owned:
   - plugins/datasage-query/contracts/receivable-semantics.yaml
   - plugins/datasage-query/contracts/target-gap-decomposition.yaml
   - plugins/datasage-query/contracts/target-semantics.yaml
+  - plugins/datasage-query/db_executor.py
   - plugins/datasage-query/db_runtime.py
   - plugins/datasage-query/db_security.py
   - plugins/datasage-query/entities.py
   - plugins/datasage-query/entitlements.py
   - plugins/datasage-query/evidence.py
   - plugins/datasage-query/plugin.yaml
+  - plugins/datasage-query/receipt_cache.py
   - plugins/datasage-query/request_contract.py
   - plugins/datasage-query/runtime_health.py
   - plugins/datasage-query/schemas.py

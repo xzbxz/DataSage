@@ -48,10 +48,9 @@ Rule ID: `datasage.query-rules/v1`
 - Original-currency amounts may be used only when explicitly requested. If a
   currency is named, filter to it. If original currency is requested without a
   named currency, group by the governed currency dimension.
-- Never add unlike original currencies.
-- Preserve the returned sign, unit, scale, and ratio convention. A ratio of
-  `0.125` may be displayed as `12.5%`; a returned percentage must not be
-  multiplied twice.
+- For result display or conversion, load
+  [`datasage.answer-boundary/v1`](answer-boundary.md), which owns returned sign,
+  unit, scale, currency, and ratio interpretation.
 
 ## Typed requests
 
@@ -63,39 +62,27 @@ Rule ID: `datasage.query-rules/v1`
 - A follow-up may reuse context understood by Hermes, but every new
   `datasage_query` call must carry a complete request. No plugin-private
   conversation state may be required.
-- Use `datasage_entity_resolve` only for entity search or after exact preflight
-  cannot prove a unique identity. Resolve again only when new user context or a
-  newly returned ambiguity materially changes the candidate space and another
-  resolution can change the result. Never repeat the same resolution input or
-  candidates merely for confirmation; there is no fixed attempt count.
+- Before calling `datasage_entity_resolve` for entity ambiguity, load
+  [`datasage.entity-guidance/v1`](entity-guidance.md), which owns when to resolve
+  and when another resolution attempt is justified.
 
-## Comparisons and decomposition
+## Interpretation hand-off
 
-- Growth rate is defined only when the governed comparison/base value permits
-  it; otherwise preserve the returned undefined state.
-- Contribution or share is defined only against a returned governed total.
-- Negative governed net values remain negative unless the metric explicitly
-  defines a positive-only meaning.
-- A returned dimensional row may be called a structural contributor only when
-  the tool establishes a complete additive reconciliation to a compatible
-  overall comparison through either a fully returned partition or a declared
-  same-statement full-partition aggregate proof. The latter authorizes returned
-  rows only; it does not expose the unreturned tail or establish causality.
-- Do not construct groups, related-party subtotals, cross-row shares, driver
-  counts, or residual attribution without a governed operation that supports
-  that request.
+- Construct comparisons, decompositions, groups, subtotals, shares, driver
+  counts, and residual attribution only through capabilities exposed by the
+  exact metric contract.
+- Before interpreting any such result, load
+  [`datasage.answer-boundary/v1`](answer-boundary.md). It solely owns whether a
+  returned comparison, contribution, decomposition, or truncation authorizes a
+  structural, evaluative, or causal statement.
 
-## Ledgers and entities
+## Ledgers
 
 - Use the ledger selected by the exact metric contract. Do not mix transaction,
   allocation, target, receipt, inventory, or receivable ledgers because their
   labels look similar.
 - Aggregate facts to the required grain before joining another fact or target
   dataset.
-- Resolve entities by stable registered identities. Do not fuzzy-select an
-  ambiguous organization, department, customer, salesperson, product,
-  warehouse, color, or supplier.
-- Preserve stable IDs inside query plans and expose business labels to users.
 
 ## Safety and cost
 
@@ -110,22 +97,10 @@ Rule ID: `datasage.query-rules/v1`
 - Do not expose SQL, tables, fields, keys, metric codes, dataset codes,
   credentials, tool payloads, or internal traces to business users.
 
-## Failure semantics
+## Result-state hand-off
 
-- `success + rows`: answer only from the returned rows.
-- `success + zero`: report a verified zero.
-- `success + empty`: report no matching records; do not relabel it as zero.
-- `success + undefined`: matching evidence exists but the requested formula is
-  not defined; do not relabel it as zero.
-- `success + truncated`: disclose that only a bounded leading result is shown;
-  an ordinary truncated ranking cannot establish reconciliation, while an
-  explicit same-statement full-partition aggregate proof authorizes structural
-  contribution only for rows actually returned.
-- partial batch: keep successful evidence and disclose each missing result.
-- ambiguity: ask one concise business clarification.
-- failed or timeout: state that this data operation is unavailable and provide
-  no number.
-
-A query failure is local to that operation. It must not poison the Hermes
-session, force future messages into a data route, or block unrelated
-conversation.
+[`datasage.answer-boundary/v1`](answer-boundary.md) solely owns interpretation
+and disclosure of typed result states. Load it before interpreting any state
+other than complete returned rows. Query failures remain scoped to the
+operation; the answer policy defines how valid independent evidence and
+ordinary conversation continue.

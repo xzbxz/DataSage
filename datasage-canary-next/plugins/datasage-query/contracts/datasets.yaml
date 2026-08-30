@@ -1,9 +1,6 @@
 version: datasage-mini-datasets/v9
 
 defaults:
-  max_detail_rows: 100
-  max_requests_per_call: 10
-  default_currency: rmb
   blocked_columns:
     - cost
     - cost_price

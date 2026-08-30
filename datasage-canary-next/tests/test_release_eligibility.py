@@ -1735,12 +1735,14 @@ class ReleaseEligibilityTests(unittest.TestCase):
     def test_tracked_source_is_bound_to_subject_commit_blob_and_worktree(self):
         builder = _builder()
         commit = builder._git_commit(builder.ROOT)
-        source = builder.MANIFEST
+        # Use a stable tracked fixture so this policy test remains meaningful
+        # while an unreleased manifest change is under review in the worktree.
+        source = builder.ROOT / "profile.yaml"
         digest = builder._sha256_path(source)
         checked = builder._validate_hashed_source(
-            {"path": "distribution.yaml", "sha256": digest},
-            label="manifest",
-            expected_path="distribution.yaml",
+            {"path": "profile.yaml", "sha256": digest},
+            label="source",
+            expected_path="profile.yaml",
             subject_commit=commit,
         )
         self.assertEqual(source, checked)
@@ -1748,9 +1750,9 @@ class ReleaseEligibilityTests(unittest.TestCase):
         with mock.patch.object(builder, "_git_output", side_effect=ValueError("untracked")):
             with self.assertRaisesRegex(ValueError, "untracked"):
                 builder._validate_hashed_source(
-                    {"path": "distribution.yaml", "sha256": digest},
-                    label="manifest",
-                    expected_path="distribution.yaml",
+                    {"path": "profile.yaml", "sha256": digest},
+                    label="source",
+                    expected_path="profile.yaml",
                     subject_commit=commit,
                 )
 
@@ -1761,9 +1763,9 @@ class ReleaseEligibilityTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(ValueError, "worktree content differs"):
                 builder._validate_hashed_source(
-                    {"path": "distribution.yaml", "sha256": builder._sha256_bytes(different)},
-                    label="manifest",
-                    expected_path="distribution.yaml",
+                    {"path": "profile.yaml", "sha256": builder._sha256_bytes(different)},
+                    label="source",
+                    expected_path="profile.yaml",
                     subject_commit=commit,
                 )
 

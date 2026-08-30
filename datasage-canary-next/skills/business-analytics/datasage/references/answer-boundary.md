@@ -119,7 +119,8 @@ cannot repair an earlier unsupported assertion.
 - Uniqueness, extrema, and population-wide claims require a complete compatible
   population.
 - `calendar_evidence.period_state` describes the requested window, not source
-  freshness. Formal MoM or YoY requires comparison compatibility. On mismatch,
+  freshness. Formal MoM or YoY requires comparison compatibility, and growth
+  remains undefined when the governed base does not permit it. On mismatch,
   keep compatible scoped facts but do not assert a final trend or forecast; use
   matched elapsed windows when useful.
 - A new governed metric or business relationship must come from a successful
@@ -160,8 +161,8 @@ cannot repair an earlier unsupported assertion.
 
 ## Units and numeric scale
 
-- Preserve the returned unit and scale. Never relabel a value without applying
-  and checking the required conversion.
+- Preserve the returned sign, unit, and scale. Never relabel a value without
+  applying and checking the required conversion.
 - RMB amounts use yuan unless explicitly converted. To display 万元, divide
   yuan by `10000` and label the result.
 - Preserve ratio conventions and do not multiply a returned percentage twice.

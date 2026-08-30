@@ -43,47 +43,6 @@ return_fact:
   time_field: statement_time
   updated_at: gmt_modified
 
-defaults:
-  time_policy: current_natural_month
-  recent_without_unit: latest_30_natural_days
-  currency: rmb
-  original_currency_policy: bare_group_by_currency_or_explicit_currency_filter
-  original_currency_resolution:
-    bare_request: group_by_currency
-    named_currency: filter_named_currency
-    mixed_currency_total: forbidden
-  exclude_internal_customer: true
-  salesperson_ledger: transaction_detail
-  intents:
-    sales_volume:
-      phrases: [销量]
-      metrics: [delivery_amount, delivery_roll_count]
-      scope: period_flow_net_delivery
-      answer_note: 默认按当期流量净出库口径，同时返回净出库金额和净出库卷数，不附带订单数。
-    order_count:
-      phrases: [订单数, 单数]
-      metric: delivery_order_count
-      scope: delivery
-      answer_note: 默认按出库订单数口径；用户明确说下单订单数时改用 placed_order_count。
-    warehouse_delivery:
-      phrases: [按仓库看出库, 仓库出库]
-      metrics: [warehouse_delivery_amount, warehouse_delivery_roll_count]
-      scope: actual_warehouse_period_flow_net_delivery
-      attribution_mode: actual_outbound_minus_actual_return_inbound
-      answer_note: 按实际出库仓统计毛出库，按实际退入仓扣减退货；必须说明退货按实际退入仓扣减。
-    physical_net_delivery:
-      phrases: [按批次看出库, 按条码看出库, 按次品项看出库]
-      metrics: [warehouse_delivery_amount, warehouse_delivery_roll_count]
-      dimensions: [batch_no, barcode, defective_item]
-      scope: period_flow_net_delivery_by_each_fact_value
-      answer_note: 未限定毛出库时继续采用期间净出库；毛出库与退货按各自事实记录的同一维度值独立聚合后相减。
-    gross_only_physical_dimension:
-      phrases: [按原条码看毛出库, 按缸号看毛出库]
-      metrics: [warehouse_gross_delivery_amount, warehouse_gross_delivery_roll_count]
-      dimensions: [source_barcode, cylinder_no]
-      scope: physical_gross_delivery_only
-      answer_note: 原条码和缸号只支持用户明确要求毛出库；未限定口径的出库请求不得静默返回毛值，必须说明净出库能力边界。
-
 ledger_policy:
   default: transaction_detail
   transaction_detail:
@@ -96,17 +55,6 @@ ledger_policy:
     handoff_domain: target
     triggers: [目标, 协作, 分摊, 分摊业绩]
     ordinary_queries_must_not_use: [vk_dwd.sale_bill_split_dwd]
-
-analysis_defaults:
-  overview_time: current_natural_month
-  trend_without_time: latest_30_natural_days_by_day
-  change_without_time:
-    current: latest_30_natural_days
-    comparison: preceding_30_natural_days
-  ranking_limit: 10
-  change_observation_limit: 10
-  comparison_kind: previous_period
-  disclosure: 回答必须说明工具返回的实际时间范围，以及与用户问题相关的出库或下单口径、仓库归因、原币分组和当前主数据补充，并披露固定排除内部客户。
 
 execution_policy:
   business_summary_mode: metric_only

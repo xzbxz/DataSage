@@ -4,20 +4,6 @@ contract_role: plugin_physical_execution
 target_gap_decomposition_contract: contracts/target-gap-decomposition.yaml
 business_name: 目标完成证据分析
 tables: [vk_dwd.delivery_target_split_dwd, vk_dwd.sale_bill_split_dwd, vk_dwd.delivery_return_detail_dwd, vk_dwd.receive_target_split_dwd, vk_dwd.receive_bill_split_dwd, vk_dwd.receive_return_bill_split_dwd, vk_dwd.receive_return_bill_detail_dwd, vk_dwd.delivery_target_detail_dwd, vk_dwd.sale_bill_goods_detail_dwd, vk_dwd.receive_target_dwd, vk_dwd.receive_bill_detail_dwd]
-defaults:
-  time_scope: current_month
-  currency: RMB
-  ranking_limit: 10
-  zero_target_completion_rate: null
-  attribution_mode_required: true
-  max_business_dimensions: 5
-  monthly_trend_bucket: month
-  name_alignment: exact
-  current_month_progress: full_month_target_vs_actual_to_date
-  future_period_behavior: target_only
-  trend_without_time: latest_6_natural_months_including_current
-  mixed_past_current_future: monthly_breakdown_required
-  missing_target_display: 未设置目标
 ledger_policy:
   transaction_detail:
     use_for: [ordinary_target, customer_target, department_target, organization_target, overall_target]

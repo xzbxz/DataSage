@@ -10,7 +10,9 @@ from __future__ import annotations
 import calendar
 from collections.abc import Mapping
 from copy import deepcopy
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
+import math
 import re
 from typing import Any
 
@@ -86,6 +88,10 @@ PUBLIC_COMPARISON_KINDS = (
     *FLOW_COMPARISON_KINDS,
     SNAPSHOT_MONTHS_BEFORE_COMPARISON,
 )
+QUERY_POLICY_PATH = "plugins/datasage-query/contracts/query-policy.yaml"
+TARGET_GAP_CONTRACT_PATH = (
+    "plugins/datasage-query/contracts/target-gap-decomposition.yaml"
+)
 
 
 class CapabilityContractError(ValueError):
@@ -109,6 +115,347 @@ _FIXED_FILTER_OPERATORS = frozenset({"eq", "ne", "gt", "gte", "lt", "lte"})
 _CALENDAR_MONTH = re.compile(
     r"^(?!0000-)(?!9999-12$)[0-9]{4}-(?:0[1-9]|1[0-2])$"
 )
+_VALUE_CONTRACT_KINDS = frozenset({"closed", "source_exact", "entity_exact"})
+_VALUE_SCALAR_TYPES = (str, int, float, bool)
+
+
+@dataclass(frozen=True)
+class QueryPolicy:
+    """Validated query-policy facts shared by planner and executor."""
+
+    version: str
+    start_inclusive: bool
+    end_exclusive: bool
+    max_days: int
+    wider_analysis: str
+
+    def as_mapping(self) -> dict[str, Any]:
+        return {
+            "version": self.version,
+            "governed_metric_time_range": {
+                "start_inclusive": self.start_inclusive,
+                "end_exclusive": self.end_exclusive,
+                "max_days": self.max_days,
+                "wider_analysis": self.wider_analysis,
+            },
+        }
+
+
+@dataclass(frozen=True)
+class ValueContract:
+    """One validated dimension-value contract and its exact projection."""
+
+    kind: str
+    filterable: bool
+    allowed_values: tuple[Any, ...] = ()
+    canonical_aliases: tuple[tuple[Any, Any], ...] = ()
+    business_meanings: tuple[tuple[Any, str], ...] = ()
+    _projection: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+
+    def as_mapping(self) -> dict[str, Any]:
+        return deepcopy(self._projection)
+
+    def normalize_filter_value(self, raw_value: Any) -> Any:
+        """Validate and normalize one scalar or non-empty scalar list."""
+
+        is_list = isinstance(raw_value, list)
+        values = raw_value if is_list else [raw_value]
+        if not values or any(not is_value_scalar(value) for value in values):
+            raise CapabilityContractError(
+                "INVALID_INPUT",
+                "Dimension filter values must be non-null finite scalars.",
+            )
+        if self.kind != "closed":
+            return deepcopy(raw_value)
+        allowed = {_typed_scalar_key(value) for value in self.allowed_values}
+        aliases = {
+            _typed_scalar_key(alias): canonical
+            for alias, canonical in self.canonical_aliases
+        }
+        normalized = [
+            aliases.get(_typed_scalar_key(value), value) for value in values
+        ]
+        if any(_typed_scalar_key(value) not in allowed for value in normalized):
+            raise CapabilityContractError(
+                "FILTER_VALUE_NOT_ALLOWED",
+                "Dimension filter value is outside the governed closed set.",
+            )
+        return normalized if is_list else normalized[0]
+
+
+@dataclass(frozen=True)
+class TargetGapContract:
+    """Minimal executable facts from the target-gap YAML authority."""
+
+    version: str
+    metrics: tuple[str, ...]
+    attribution_mode: str
+    dimensions: tuple[str, ...]
+    valid_target_data_states: tuple[str, ...]
+    fail_closed_target_data_states: tuple[str, ...]
+    receipt_version: str
+    receipt_operation: str
+    receipt_interpretation_code: str
+
+
+def parse_query_policy(raw: Any) -> QueryPolicy:
+    """Parse the sole supported version of the common query policy."""
+
+    if not isinstance(raw, Mapping):
+        raise CapabilityContractError(
+            "CONTRACT_UNAVAILABLE", "Common query policy must be a mapping."
+        )
+    time_range = raw.get("governed_metric_time_range")
+    if (
+        raw.get("version") != "datasage-query-policy/v1"
+        or set(raw) != {"version", "governed_metric_time_range"}
+        or not isinstance(time_range, Mapping)
+        or set(time_range)
+        != {"start_inclusive", "end_exclusive", "max_days", "wider_analysis"}
+        or time_range.get("start_inclusive") is not True
+        or time_range.get("end_exclusive") is not True
+        or not isinstance(time_range.get("max_days"), int)
+        or isinstance(time_range.get("max_days"), bool)
+        or time_range["max_days"] < 1
+        or time_range.get("wider_analysis")
+        != "split_into_independently_bounded_periods"
+    ):
+        raise CapabilityContractError(
+            "CONTRACT_UNAVAILABLE", "Common query policy is invalid."
+        )
+    return QueryPolicy(
+        version=str(raw["version"]),
+        start_inclusive=True,
+        end_exclusive=True,
+        max_days=int(time_range["max_days"]),
+        wider_analysis=str(time_range["wider_analysis"]),
+    )
+
+
+def is_value_scalar(value: Any) -> bool:
+    return isinstance(value, _VALUE_SCALAR_TYPES) and not (
+        isinstance(value, float) and not math.isfinite(value)
+    )
+
+
+def _typed_scalar_key(value: Any) -> tuple[type[Any], Any]:
+    return type(value), value
+
+
+def parse_value_contract(
+    raw: Any,
+    *,
+    filterable_default: bool = True,
+) -> ValueContract:
+    """Validate one value contract, including typed uniqueness and aliases."""
+
+    if not isinstance(raw, Mapping):
+        raise CapabilityContractError(
+            "CONTRACT_UNAVAILABLE", "Dimension value contract must be a mapping."
+        )
+    kind = raw.get("kind")
+    if kind not in _VALUE_CONTRACT_KINDS:
+        raise CapabilityContractError(
+            "CONTRACT_UNAVAILABLE", "Dimension value contract kind is invalid."
+        )
+    allowed_keys = {"kind", "filterable", "model_rule"}
+    if kind == "closed":
+        allowed_keys.update(
+            {"allowed_values", "canonical_aliases", "business_meanings"}
+        )
+    if set(raw) - allowed_keys:
+        raise CapabilityContractError(
+            "CONTRACT_UNAVAILABLE", "Dimension value contract has unknown fields."
+        )
+    model_rule = raw.get("model_rule")
+    if model_rule is not None and (
+        not isinstance(model_rule, str) or not model_rule.strip()
+    ):
+        raise CapabilityContractError(
+            "CONTRACT_UNAVAILABLE", "Dimension model rule is invalid."
+        )
+    filterable = raw.get("filterable", filterable_default)
+    if not isinstance(filterable, bool):
+        raise CapabilityContractError(
+            "CONTRACT_UNAVAILABLE", "Dimension filterability must be boolean."
+        )
+
+    allowed_values: tuple[Any, ...] = ()
+    canonical_aliases: tuple[tuple[Any, Any], ...] = ()
+    business_meanings: tuple[tuple[Any, str], ...] = ()
+    if kind == "closed":
+        allowed = raw.get("allowed_values")
+        if (
+            not isinstance(allowed, list)
+            or not allowed
+            or any(not is_value_scalar(value) for value in allowed)
+        ):
+            raise CapabilityContractError(
+                "CONTRACT_UNAVAILABLE",
+                "Closed value contract requires non-null finite scalar values.",
+            )
+        typed_allowed = {_typed_scalar_key(value) for value in allowed}
+        if len(typed_allowed) != len(allowed):
+            raise CapabilityContractError(
+                "CONTRACT_UNAVAILABLE", "Closed value contract contains duplicates."
+            )
+        allowed_values = tuple(allowed)
+
+        aliases = raw.get("canonical_aliases")
+        if aliases is not None:
+            if not isinstance(aliases, Mapping):
+                raise CapabilityContractError(
+                    "CONTRACT_UNAVAILABLE", "Canonical aliases must be a mapping."
+                )
+            alias_keys = {
+                _typed_scalar_key(alias)
+                for alias in aliases
+                if is_value_scalar(alias)
+            }
+            if len(alias_keys) != len(aliases):
+                raise CapabilityContractError(
+                    "CONTRACT_UNAVAILABLE", "Canonical aliases contain invalid keys."
+                )
+            for alias, canonical in aliases.items():
+                alias_key = _typed_scalar_key(alias)
+                canonical_key = (
+                    _typed_scalar_key(canonical)
+                    if is_value_scalar(canonical)
+                    else None
+                )
+                if (
+                    canonical_key not in typed_allowed
+                    or alias_key in typed_allowed
+                    or canonical_key in alias_keys
+                ):
+                    raise CapabilityContractError(
+                        "CONTRACT_UNAVAILABLE",
+                        "Canonical alias must map directly to a distinct allowed value.",
+                    )
+            canonical_aliases = tuple(aliases.items())
+
+        meanings = raw.get("business_meanings")
+        if meanings is not None:
+            if not isinstance(meanings, Mapping) or any(
+                not is_value_scalar(key)
+                or not isinstance(value, str)
+                or not value.strip()
+                for key, value in meanings.items()
+            ):
+                raise CapabilityContractError(
+                    "CONTRACT_UNAVAILABLE", "Business meanings are invalid."
+                )
+            business_meanings = tuple(meanings.items())
+    elif "canonical_aliases" in raw or "allowed_values" in raw:
+        raise CapabilityContractError(
+            "CONTRACT_UNAVAILABLE",
+            "Only a closed value contract may declare allowed values or aliases.",
+        )
+
+    return ValueContract(
+        kind=str(kind),
+        filterable=filterable,
+        allowed_values=allowed_values,
+        canonical_aliases=canonical_aliases,
+        business_meanings=business_meanings,
+        _projection=deepcopy(dict(raw)),
+    )
+
+
+def _unique_nonempty_strings(value: Any, *, field_name: str) -> tuple[str, ...]:
+    if (
+        not isinstance(value, list)
+        or not value
+        or any(not isinstance(item, str) or not item for item in value)
+        or len(set(value)) != len(value)
+    ):
+        raise CapabilityContractError(
+            "CONTRACT_UNAVAILABLE", f"Target-gap {field_name} is invalid."
+        )
+    return tuple(value)
+
+
+def parse_target_gap_contract(raw: Any) -> TargetGapContract:
+    """Parse the executable target-gap facts consumed across all boundaries."""
+
+    if not isinstance(raw, Mapping):
+        raise CapabilityContractError(
+            "CONTRACT_UNAVAILABLE", "Target-gap contract must be a mapping."
+        )
+    applicability = raw.get("applicability")
+    receipt = raw.get("receipt")
+    rollout = raw.get("rollout")
+    if (
+        set(raw)
+        != {
+            "version",
+            "status",
+            "applicability",
+            "valid_target_data_states",
+            "fail_closed_target_data_states",
+            "receipt",
+            "rollout",
+        }
+        or raw.get("version") != "datasage-target-gap-decomposition/v1"
+        or raw.get("status") != "active"
+        or not isinstance(applicability, Mapping)
+        or set(applicability) != {"metrics", "attribution_mode", "dimensions"}
+        or not isinstance(receipt, Mapping)
+        or set(receipt) != {"version", "operation", "interpretation_code"}
+        or not isinstance(rollout, Mapping)
+        or set(rollout) != {"status", "model_visible_operation"}
+        or rollout.get("status") != "active"
+        or rollout.get("model_visible_operation") is not True
+    ):
+        raise CapabilityContractError(
+            "CONTRACT_UNAVAILABLE", "Target-gap capability is not active."
+        )
+    metrics = _unique_nonempty_strings(
+        applicability.get("metrics"), field_name="metrics"
+    )
+    dimensions = _unique_nonempty_strings(
+        applicability.get("dimensions"), field_name="dimensions"
+    )
+    attribution_mode = applicability.get("attribution_mode")
+    if not isinstance(attribution_mode, str) or not attribution_mode:
+        raise CapabilityContractError(
+            "CONTRACT_UNAVAILABLE", "Target-gap attribution mode is invalid."
+        )
+    valid_states = _unique_nonempty_strings(
+        raw.get("valid_target_data_states"), field_name="valid target states"
+    )
+    failed_states = _unique_nonempty_strings(
+        raw.get("fail_closed_target_data_states"),
+        field_name="fail-closed target states",
+    )
+    if set(valid_states) & set(failed_states):
+        raise CapabilityContractError(
+            "CONTRACT_UNAVAILABLE", "Target-gap target states overlap."
+        )
+    receipt_version = receipt.get("version")
+    receipt_operation = receipt.get("operation")
+    interpretation_code = receipt.get("interpretation_code")
+    if (
+        not isinstance(receipt_version, str)
+        or not receipt_version
+        or receipt_operation != "complete_target_gap_decomposition"
+        or not isinstance(interpretation_code, str)
+        or not interpretation_code
+    ):
+        raise CapabilityContractError(
+            "CONTRACT_UNAVAILABLE", "Target-gap receipt contract is invalid."
+        )
+    return TargetGapContract(
+        version=str(raw["version"]),
+        metrics=metrics,
+        attribution_mode=attribution_mode,
+        dimensions=dimensions,
+        valid_target_data_states=valid_states,
+        fail_closed_target_data_states=failed_states,
+        receipt_version=receipt_version,
+        receipt_operation=str(receipt_operation),
+        receipt_interpretation_code=interpretation_code,
+    )
 
 
 def _metric_group_dimension_limit(metric: Mapping[str, Any]) -> int:

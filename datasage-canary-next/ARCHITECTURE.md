@@ -30,9 +30,10 @@ Skill 不拥有指标能力、权限、receipt、物理查询或结论授权，�
 
 ### Capability contract：可验证事实
 
-`plugins/datasage-query/capability_contract.py` 是请求字段所有权和物理执行成本
-的单一合同。它只描述可确定验证的事实：字段属于哪个 domain、允许枚举、
-目标指标是否需要归因方式、公开分支和物理操作预算，以及 schema 条件。
+`plugins/datasage-query/capability_contract.py` 是请求字段所有权、物理执行成本、
+公共查询策略、维度值域和 target-gap receipt 事实的 typed 单一合同。
+`contract_store.py` 只负责受限路径和缓存；catalog、executor 与 evidence 通过
+同一 parser 读取这些事实，不各自维护枚举或 validator。
 
 现有 `*-semantics.yaml` 继续作为 v0.15 指标定义和物理查询来源。新增普通
 指标不需要再维护一份路由注册表；能力合同也不能包含 prompt 关键词、recipe、
@@ -58,6 +59,9 @@ SOUL 只保留专家身份与事实/假设/建议等高层原则；动态期间�
 | `datasage.entity-guidance/v1` | Skill 实体指导 | Hermes 按需加载、库存测试 | 模型安全投影；不能创建或覆盖实体映射 |
 | `datasage.answer-boundary/v1` | Skill 最终回答策略 | Hermes 按需加载、库存测试 | 详细回答边界；插件不注册 prompt 副本 |
 | `datasage.entity-maintainer-rationale/v1` | 插件维护者 | 维护者、库存测试 | 源码仓库中的非模型、非运行时文档；不进入发行载荷，只有落入 registry/domain semantics 并有测试才生效 |
+| `query-policy.yaml`、维度 `value_contract`、`target-gap-decomposition.yaml` | Capability contract | catalog、executor、evidence | 只保留被 typed parser 消费的机器字段；未知或影子字段 fail closed |
+| `receipt_cache.py` | 指标详情 receipt 缓存 | `tools.py` receipt gate | 只缓存由相关合同文件签名绑定的 catalog 投影；合同变化自动失效，不拥有业务语义 |
+| `db_executor.py` | 只读数据库执行生命周期 | `tools.py` 单语句与一致性快照外壳 | 统一连接、事务、时限、取行与清理；公共错误码、业务序列化和数据库安全策略仍由组合边界拥有 |
 | plugin contracts/schema/results | DataSage plugin | plugin runtime、Hermes tools | 指标能力、权限、执行与返回证据的确定性权威 |
 
 发行与模型权威是两回事：`entity-rules-maintainer.md` 只留在源码仓库供审计，
@@ -112,9 +116,10 @@ Golden 测试改为“必需能力 + 禁止行为 + 语义结论”约束。它�
 
 ## 多轮与宿主边界
 
-最新用户消息必须高于 Memory、压缩摘要、旧任务、旧草稿和门禁纠偏文本。
-Profile 只允许 Memory 保存稳定偏好和稳定事实，不保存 receipt、临时 period、
-临时 entity、工具步骤或模型草稿。
+Profile Memory 只保存声明式的稳定偏好和稳定事实；`USER.md`
+明确记录当前请求和用户纠正代表最新意图，可以取代旧偏好。Profile
+不将指令式工作流、receipt、临时 period、临时 entity、工具步骤或模型草稿
+写入 Memory。宿主角色优先级不由 Profile 重新定义。
 
 Memory 永远不是查询语法、指标/实体 ID、别名、地域映射、catalog 能力或插件
 运行状态的权威来源；即使旧 Memory 中存在此类内容，Hermes 也不得采纳，必须
@@ -133,10 +138,9 @@ Hermes 宿主的上下文压缩顺序不在 Profile 插件控制范围内。本�
 fixture，要求压缩后保留用户纠正、当前 period/scope/entity/metric 和事实/假设
 区分；在宿主 E2E 通过前不得宣称该能力已由 Profile 自身修复。
 
-未知自然语言地域不能由维度枚举自动升级为受控筛选值。枚举值只证明数据库中
-观察到了哪些标签，不证明国家、区域代码或部门之间的别名关系，也不能成为
-长期 Memory 事实。缺少稳定映射时由 Hermes 请求用户选择或提供映射；插件不
-维护事件型国家到区域代码候选表。
+未知地域与实体别名的模型处理由 `datasage.entity-guidance/v1` 唯一拥有；
+可执行身份仍只来自插件 registry 与 domain semantics。本架构只声明这条所有权
+边界，不复制实体选择、澄清或 Memory 行为正文。
 
 ### Hermes 内建 Skill 选择约束
 
@@ -145,12 +149,14 @@ fixture，要求压缩后保留用户纠正、当前 period/scope/entity/metric 
 全局列表按平台取并集；宿主没有持久 allowlist。因此本 Profile 在精确锁定
 `hermes_requires: ==0.20.5` 的同时，用完整 denylist 模拟保守 allowlist，只启用：
 
-- `document-to-action-items`、`meeting-action-items`：从文档和会议材料生成有出处的
-  决策、义务与待办；
 - `docx`、`xlsx`、`pdf`、`powerpoint`、`ocr-and-documents`：处理常见办公文件，
   包括提取、生成、编辑与验证；
-- `grounded-citations`：为外部事实建立可验证引用；
-- `weekly-review-planning`：把既有承诺、阻塞和下一步整理为周度工作计划。
+
+只保留了 `metadata.hermes.related_skills` 在启用集合内闭合的办公文件
+Skill。`document-to-action-items`、`meeting-action-items`、`grounded-citations` 和
+`weekly-review-planning` 会将流程引向当前禁用的外部账号型或专项 Skill，
+因而不作为可见入口。`hermes-agent` 仍禁用；Profile 不为满足宿主的
+自助提示而扩大自修改权限。
 
 未启用外部账号型、代码开发型、桌面控制型、社交媒体型、创意媒体型和功能重叠
 但边界更窄的 Skill（例如 `nano-pdf`）。内建 Skill 仍由 Hermes 拥有，本 Profile

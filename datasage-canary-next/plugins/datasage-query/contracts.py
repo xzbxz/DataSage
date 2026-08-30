@@ -51,9 +51,6 @@ def metric_comparison_kinds(definition: Mapping[str, Any]) -> list[str]:
     }:
         return list(FLOW_COMPARISON_KINDS)
     return []
-_QUERY_POLICY_PATH = (
-    "plugins/datasage-query/contracts/query-policy.yaml"
-)
 _FORBIDDEN_MODEL_KEYS = {
     "aggregation",
     "column",
@@ -138,26 +135,16 @@ def execution_contracts(domain: str) -> tuple[dict[str, Any], dict[str, Any]]:
 def _query_policy_projection() -> dict[str, Any]:
     """Load the single versioned planning/execution policy authority."""
 
-    policy = _read_yaml(_QUERY_POLICY_PATH)
-    time_range = policy.get("governed_metric_time_range")
-    if (
-        policy.get("version") != "datasage-query-policy/v1"
-        or set(policy) != {"version", "governed_metric_time_range"}
-        or not isinstance(time_range, Mapping)
-        or set(time_range)
-        != {"start_inclusive", "end_exclusive", "max_days", "wider_analysis"}
-        or time_range.get("start_inclusive") is not True
-        or time_range.get("end_exclusive") is not True
-        or not isinstance(time_range.get("max_days"), int)
-        or isinstance(time_range.get("max_days"), bool)
-        or time_range["max_days"] < 1
-        or time_range.get("wider_analysis")
-        != "split_into_independently_bounded_periods"
-    ):
+    try:
+        policy = contract_store.read_query_policy()
+    except (
+        contract_store.ContractStoreError,
+        capability_contract.CapabilityContractError,
+    ) as exc:
         raise ContractFailure(
             "CONTRACT_UNAVAILABLE", "common query policy is invalid"
-        )
-    return _copy_guidance(policy)
+        ) from exc
+    return _copy_guidance(policy.as_mapping())
 
 
 def _copy_guidance(value: Any) -> Any:
@@ -319,7 +306,12 @@ def _assert_business_safe_tree(
             )
 
 
-def _value_contract_projection(raw: Any, *, dimension: str) -> dict[str, Any] | None:
+def _value_contract_projection(
+    raw: Any,
+    *,
+    dimension: str,
+    filterable_default: bool = True,
+) -> dict[str, Any] | None:
     if raw is None:
         return None
     if not isinstance(raw, Mapping):
@@ -328,61 +320,17 @@ def _value_contract_projection(raw: Any, *, dimension: str) -> dict[str, Any] | 
             f"dimension {dimension} has an invalid value_contract",
         )
     _assert_business_safe_tree(raw, context=f"dimension {dimension} value_contract")
-    kind = raw.get("kind")
-    if kind not in {"closed", "source_exact", "entity_exact"}:
+    try:
+        contract = capability_contract.parse_value_contract(
+            raw,
+            filterable_default=filterable_default,
+        )
+    except capability_contract.CapabilityContractError as exc:
         raise ContractFailure(
             "CONTRACT_UNAVAILABLE",
-            f"dimension {dimension} has an unsupported value_contract kind",
-        )
-    if "filterable" in raw and not isinstance(raw.get("filterable"), bool):
-        raise ContractFailure(
-            "CONTRACT_UNAVAILABLE",
-            f"dimension {dimension} has an invalid filterable policy",
-        )
-    if kind == "closed":
-        allowed = raw.get("allowed_values")
-        if (
-            not isinstance(allowed, list)
-            or not allowed
-            or any(isinstance(item, (Mapping, list, tuple)) for item in allowed)
-        ):
-            raise ContractFailure(
-                "CONTRACT_UNAVAILABLE",
-                f"dimension {dimension} has an invalid closed value contract",
-            )
-        meanings = raw.get("business_meanings")
-        if meanings is not None and not isinstance(meanings, Mapping):
-            raise ContractFailure(
-                "CONTRACT_UNAVAILABLE",
-                f"dimension {dimension} has invalid business meanings",
-            )
-        aliases = raw.get("canonical_aliases")
-        if aliases is not None:
-            if not isinstance(aliases, Mapping):
-                raise ContractFailure(
-                    "CONTRACT_UNAVAILABLE",
-                    f"dimension {dimension} has invalid canonical aliases",
-                )
-            alias_names = set(aliases)
-            for alias, canonical in aliases.items():
-                if (
-                    not isinstance(alias, str)
-                    or not alias
-                    or isinstance(canonical, (Mapping, list, tuple))
-                    or canonical not in allowed
-                    or alias in allowed
-                    or canonical in alias_names
-                ):
-                    raise ContractFailure(
-                        "CONTRACT_UNAVAILABLE",
-                        f"dimension {dimension} has a malformed or chained canonical alias",
-                    )
-    elif "canonical_aliases" in raw:
-        raise ContractFailure(
-            "CONTRACT_UNAVAILABLE",
-            f"dimension {dimension} allows aliases only for a closed value contract",
-        )
-    return _copy_guidance(raw)
+            f"dimension {dimension} has an invalid value_contract",
+        ) from exc
+    return _copy_guidance(contract.as_mapping())
 
 
 def _metric_dimension_contract(
@@ -530,49 +478,24 @@ def _target_gap_decomposition_projection(
             "CONTRACT_UNAVAILABLE",
             "target gap decomposition contract reference is invalid",
         )
-    contract = _read_yaml(f"plugins/datasage-query/{reference}")
-    applicability = contract.get("applicability")
-    receipt = contract.get("receipt")
-    rollout = contract.get("rollout")
-    if (
-        contract.get("version") != "datasage-target-gap-decomposition/v1"
-        or contract.get("status") != "active"
-        or not isinstance(applicability, Mapping)
-        or not isinstance(receipt, Mapping)
-        or not isinstance(rollout, Mapping)
-        or rollout.get("status") != "active"
-        or rollout.get("model_visible_operation") is not True
-        or receipt.get("operation") != "complete_target_gap_decomposition"
-    ):
+    try:
+        contract = contract_store.read_target_gap_contract(
+            f"plugins/datasage-query/{reference}"
+        )
+    except (
+        contract_store.ContractStoreError,
+        capability_contract.CapabilityContractError,
+    ) as exc:
         raise ContractFailure(
             "CONTRACT_UNAVAILABLE",
             "target gap decomposition capability is not active",
-        )
-    metric_codes = applicability.get("metrics")
-    dimensions = applicability.get("dimensions")
-    attribution_mode = applicability.get("attribution_mode")
-    if (
-        not isinstance(metric_codes, list)
-        or not metric_codes
-        or any(not isinstance(value, str) for value in metric_codes)
-        or len(set(metric_codes)) != len(metric_codes)
-        or not isinstance(dimensions, list)
-        or not dimensions
-        or any(not isinstance(value, str) for value in dimensions)
-        or len(set(dimensions)) != len(dimensions)
-        or not isinstance(attribution_mode, str)
-        or not attribution_mode
-    ):
-        raise ContractFailure(
-            "CONTRACT_UNAVAILABLE",
-            "target gap decomposition applicability is invalid",
-        )
+        ) from exc
     return {
-        "version": contract.get("version"),
-        "operation": receipt["operation"],
-        "metrics": list(metric_codes),
-        "dimensions": list(dimensions),
-        "required_attribution_mode": attribution_mode,
+        "version": contract.version,
+        "operation": contract.receipt_operation,
+        "metrics": list(contract.metrics),
+        "dimensions": list(contract.dimensions),
+        "required_attribution_mode": contract.attribution_mode,
     }
 
 
@@ -782,7 +705,9 @@ def _model_semantic_projection(
             business_definition = definition.get("semantics")
         label = _safe_business_text(definition.get("label"), physical_identifiers)
         value_contract = _value_contract_projection(
-            definition.get("value_contract"), dimension=code
+            definition.get("value_contract"),
+            dimension=code,
+            filterable_default=definition.get("filterable", True),
         )
         if label is None or value_contract is None:
             raise ContractFailure(

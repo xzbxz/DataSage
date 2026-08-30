@@ -28,7 +28,6 @@ from .analytical_queries import AnalysisQueryError, build_analytical_metric_quer
 from .capability_contract import (
     AvailabilityContractError,
     CapabilityContractError,
-    DOMAIN_SOURCES,
     MATCHED_ELAPSED_COVERAGE,
     PHYSICAL_EXECUTION_BUDGET,
     PREVIOUS_PERIOD_COMPARISON,
@@ -49,9 +48,11 @@ from . import (
     capability_contract,
     contract_store,
     contracts,
+    db_executor,
     db_runtime,
     entities,
     evidence,
+    receipt_cache,
     request_contract,
     settings,
     sql_identifiers,
@@ -64,15 +65,8 @@ _QUERY_CONCURRENCY_LOCK = threading.Lock()
 _ACTIVE_QUERY_CALLS = 0
 
 _DOMAINS = set(SUPPORTED_DOMAINS)
-_SEMANTIC_PATHS = {
-    domain: DOMAIN_SOURCES[domain]["semantics"] for domain in SUPPORTED_DOMAINS
-}
-_COLUMN_IDENTIFIER = re.compile(r"^[A-Za-z0-9_]+$")
 _MYSQL_MONTH_FORMAT = "%%Y-%%m"
 _MYSQL_DAY_FORMAT = "%%Y-%%m-%%d"
-_QUERY_POLICY_PATH = (
-    "plugins/datasage-query/contracts/query-policy.yaml"
-)
 _FILTER_OPERATORS = {
     "eq": "=",
     "ne": "<>",
@@ -112,7 +106,6 @@ _ORDER_DELIVERY_ALIGNMENT_METRICS = {
     "placed_order_count",
     "delivery_order_count",
 }
-_INVENTORY_SCOPES = {"total", "on_hand", "available", "allocated", "in_transit"}
 _SNAPSHOT_TIME_SOURCES = {
     "latest_snapshot",
     "latest_non_null_snapshot",
@@ -318,8 +311,8 @@ def _validate_detail_request_capabilities(
         raise
 
 
-def _current_metric_detail_receipt(domain: str, metric_code: str) -> str:
-    """Recompute the current batch-safe per-detail receipt."""
+def _build_current_metric_detail_receipt(domain: str, metric_code: str) -> str:
+    """Build and validate one current per-detail receipt from the catalog."""
 
     payload = json.loads(
         contracts.datasage_catalog(
@@ -346,6 +339,23 @@ def _current_metric_detail_receipt(domain: str, metric_code: str) -> str:
             stage="contract_load",
         )
     return detail_receipt
+
+
+def _current_metric_detail_receipt(domain: str, metric_code: str) -> str:
+    """Return a contract-signature-current per-detail receipt."""
+
+    try:
+        return receipt_cache.get_metric_capability_receipt(
+            domain,
+            metric_code,
+            builder=_build_current_metric_detail_receipt,
+        )
+    except (OSError, contract_store.ContractStoreError) as exc:
+        raise QueryFailure(
+            "CONTRACT_UNAVAILABLE",
+            "当前指标详情收据无法生成。",
+            stage="contract_load",
+        ) from exc
 
 
 def _validate_metric_detail_gate(
@@ -426,31 +436,37 @@ def _read_yaml(relative_path: str) -> dict[str, Any]:
         raise QueryFailure("CONTRACT_UNAVAILABLE", "暂时无法读取业务语义。") from exc
 
 
+def _target_gap_contract() -> capability_contract.TargetGapContract:
+    """Read the single typed target-gap contract at the query boundary."""
+
+    try:
+        return contract_store.read_target_gap_contract()
+    except (
+        contract_store.ContractStoreError,
+        capability_contract.CapabilityContractError,
+    ) as exc:
+        raise QueryFailure(
+            "CONTRACT_UNAVAILABLE",
+            "目标差距分解合同无效。",
+            stage="contract_load",
+        ) from exc
+
+
 def _max_metric_range_days() -> int:
     """Read the executor limit from the same authority exposed to planning."""
 
-    policy = _read_yaml(_QUERY_POLICY_PATH)
-    time_range = policy.get("governed_metric_time_range")
-    if (
-        policy.get("version") != "datasage-query-policy/v1"
-        or set(policy) != {"version", "governed_metric_time_range"}
-        or not isinstance(time_range, Mapping)
-        or set(time_range)
-        != {"start_inclusive", "end_exclusive", "max_days", "wider_analysis"}
-        or time_range.get("start_inclusive") is not True
-        or time_range.get("end_exclusive") is not True
-        or not isinstance(time_range.get("max_days"), int)
-        or isinstance(time_range.get("max_days"), bool)
-        or time_range["max_days"] < 1
-        or time_range.get("wider_analysis")
-        != "split_into_independently_bounded_periods"
-    ):
+    try:
+        policy = contract_store.read_query_policy()
+    except (
+        contract_store.ContractStoreError,
+        capability_contract.CapabilityContractError,
+    ) as exc:
         raise QueryFailure(
             "CONTRACT_UNAVAILABLE",
             "治理查询时间策略无效。",
             stage="contract_load",
-        )
-    return int(time_range["max_days"])
+        ) from exc
+    return policy.max_days
 
 
 def _validate_governed_request_time_range(request: Mapping[str, Any]) -> None:
@@ -487,14 +503,42 @@ def _contracts(domain: str) -> tuple[dict[str, Any], dict[str, Any]]:
     return datasets, semantics
 
 
-_VALUE_CONTRACT_KINDS = {"closed", "source_exact", "entity_exact"}
-_VALUE_SCALAR_TYPES = (str, int, float, bool)
+def _parsed_value_contract(
+    definition: Mapping[str, Any],
+) -> capability_contract.ValueContract:
+    """Adapt the shared value-contract parser to the query error boundary."""
+
+    try:
+        return capability_contract.parse_value_contract(
+            definition.get("value_contract"),
+            filterable_default=definition.get("filterable", True),
+        )
+    except capability_contract.CapabilityContractError as exc:
+        raise QueryFailure(
+            exc.code,
+            exc.message,
+            stage=(
+                "input_validation"
+                if exc.code in {"INVALID_INPUT", "FILTER_VALUE_NOT_ALLOWED"}
+                else "contract_load"
+            ),
+        ) from exc
 
 
-def _is_value_scalar(value: Any) -> bool:
-    return isinstance(value, _VALUE_SCALAR_TYPES) and not (
-        isinstance(value, float) and not math.isfinite(value)
-    )
+def _normalize_value_contract_filter(
+    value_contract: capability_contract.ValueContract,
+    raw_value: Any,
+) -> Any:
+    """Adapt shared filter normalization errors to the query boundary."""
+
+    try:
+        return value_contract.normalize_filter_value(raw_value)
+    except capability_contract.CapabilityContractError as exc:
+        raise QueryFailure(
+            exc.code,
+            exc.message,
+            stage="input_validation",
+        ) from exc
 
 
 def _validate_value_contract_definitions(semantics: Mapping[str, Any]) -> None:
@@ -514,75 +558,8 @@ def _validate_value_contract_definitions(semantics: Mapping[str, Any]) -> None:
                 "维度取值合同格式无效。",
                 stage="contract_load",
             )
-        value_contract = raw_definition.get("value_contract")
-        if not isinstance(value_contract, Mapping):
-            raise QueryFailure(
-                "CONTRACT_UNAVAILABLE",
-                "维度缺少唯一取值合同。",
-                stage="contract_load",
-            )
-        kind = value_contract.get("kind")
-        if kind not in _VALUE_CONTRACT_KINDS:
-            raise QueryFailure(
-                "CONTRACT_UNAVAILABLE",
-                "维度取值合同类型无效。",
-                stage="contract_load",
-            )
-        filterable = value_contract.get("filterable", raw_definition.get("filterable", True))
-        if not isinstance(filterable, bool):
-            raise QueryFailure(
-                "CONTRACT_UNAVAILABLE",
-                "维度过滤能力定义无效。",
-                stage="contract_load",
-            )
-        if kind == "closed":
-            allowed_values = value_contract.get("allowed_values")
-            if (
-                not isinstance(allowed_values, list)
-                or not allowed_values
-                or any(not _is_value_scalar(value) for value in allowed_values)
-            ):
-                raise QueryFailure(
-                    "CONTRACT_UNAVAILABLE",
-                    "封闭维度缺少有效允许值。",
-                    stage="contract_load",
-                )
-            typed_values = {(type(value), value) for value in allowed_values}
-            if len(typed_values) != len(allowed_values):
-                raise QueryFailure(
-                    "CONTRACT_UNAVAILABLE",
-                    "封闭维度允许值存在重复。",
-                    stage="contract_load",
-                )
-            canonical_aliases = value_contract.get("canonical_aliases")
-            if canonical_aliases is not None:
-                if not isinstance(canonical_aliases, Mapping) or any(
-                    not _is_value_scalar(alias)
-                    or not _is_value_scalar(canonical)
-                    or (type(canonical), canonical) not in typed_values
-                    for alias, canonical in canonical_aliases.items()
-                ):
-                    raise QueryFailure(
-                        "CONTRACT_UNAVAILABLE",
-                        "封闭维度规范别名定义无效。",
-                        stage="contract_load",
-                    )
-            meanings = value_contract.get("business_meanings")
-            if meanings is not None and (
-                not isinstance(meanings, Mapping)
-                or any(
-                    not _is_value_scalar(key)
-                    or not isinstance(value, str)
-                    or not value.strip()
-                    for key, value in meanings.items()
-                )
-            ):
-                raise QueryFailure(
-                    "CONTRACT_UNAVAILABLE",
-                    "封闭维度业务含义定义无效。",
-                    stage="contract_load",
-                )
-        if kind == "entity_exact" and not isinstance(
+        value_contract = _parsed_value_contract(raw_definition)
+        if value_contract.kind == "entity_exact" and not isinstance(
             raw_definition.get("identity_filter"), Mapping
         ):
             raise QueryFailure(
@@ -590,7 +567,10 @@ def _validate_value_contract_definitions(semantics: Mapping[str, Any]) -> None:
                 "实体维度缺少稳定身份过滤定义。",
                 stage="contract_load",
             )
-        if kind == "source_exact" and raw_definition.get("normalization") is not None:
+        if (
+            value_contract.kind == "source_exact"
+            and raw_definition.get("normalization") is not None
+        ):
             raise QueryFailure(
                 "CONTRACT_UNAVAILABLE",
                 "原值精确维度不能同时声明运行时改写规则。",
@@ -657,64 +637,30 @@ def _validate_metric_filter_value_contracts(
         if not isinstance(definition, Mapping):
             # The governed metric validator will report an unsupported role.
             continue
-        value_contract = definition.get("value_contract")
-        if not isinstance(value_contract, Mapping):
-            raise QueryFailure(
-                "CONTRACT_UNAVAILABLE",
-                "过滤维度缺少唯一取值合同。",
-                stage="contract_load",
-            )
-        if value_contract.get("filterable", definition.get("filterable", True)) is False:
+        value_contract = _parsed_value_contract(definition)
+        if not value_contract.filterable:
             raise QueryFailure(
                 "UNSUPPORTED_DIMENSION_FILTER",
                 "该维度仅支持分组展示，不能作为筛选条件。",
                 stage="input_validation",
             )
-        values = raw_value if isinstance(raw_value, list) else [raw_value]
-        if not values or any(not _is_value_scalar(value) for value in values):
-            raise QueryFailure(
-                "INVALID_INPUT",
-                "维度筛选值必须是非空标量或非空标量列表。",
-                stage="input_validation",
+        if value_contract.kind == "closed":
+            normalized_filters[code] = _normalize_value_contract_filter(
+                value_contract, raw_value
             )
-        kind = value_contract.get("kind")
-        if kind == "closed":
-            allowed = {
-                (type(value), value) for value in value_contract.get("allowed_values", [])
-            }
-            aliases = {
-                (type(alias), alias): canonical
-                for alias, canonical in (value_contract.get("canonical_aliases") or {}).items()
-            }
-            canonical_values = [
-                aliases.get((type(value), value), value) for value in values
-            ]
-            if any((type(value), value) not in allowed for value in canonical_values):
-                raise QueryFailure(
-                    "FILTER_VALUE_NOT_ALLOWED",
-                    "筛选值不在该维度的受控允许值中。",
-                    stage="input_validation",
-                )
-            normalized_filters[code] = (
-                canonical_values if isinstance(raw_value, list) else canonical_values[0]
-            )
-        elif kind == "source_exact":
+        elif value_contract.kind == "source_exact":
+            _normalize_value_contract_filter(value_contract, raw_value)
             # Exact source values pass through byte-for-byte; this layer never
             # normalizes, expands, translates, or guesses a replacement.
             continue
-        elif kind == "entity_exact":
+        elif value_contract.kind == "entity_exact":
+            _normalize_value_contract_filter(value_contract, raw_value)
             if code not in (request.get("_entity_bindings") or {}):
                 raise QueryFailure(
                     "ENTITY_IDENTITY_UNAVAILABLE",
                     "实体筛选未完成稳定身份绑定。",
                     stage="entity_preflight",
                 )
-        else:
-            raise QueryFailure(
-                "CONTRACT_UNAVAILABLE",
-                "过滤维度取值合同类型无效。",
-                stage="contract_load",
-            )
     normalized_request["metric_filters"] = normalized_filters
     return normalized_request
 
@@ -749,14 +695,14 @@ def _quote_identifier(value: str) -> str:
     try:
         return sql_identifiers.quote_identifier(value)
     except sql_identifiers.SqlIdentifierError as exc:
-        raise QueryFailure("INVALID_PLAN", "查询包含无效字段标识。")
+        raise QueryFailure("INVALID_PLAN", "查询包含无效字段标识。") from exc
 
 
 def _quote_table(value: str) -> str:
     try:
         return sql_identifiers.quote_table(value)
     except sql_identifiers.SqlIdentifierError as exc:
-        raise QueryFailure("INVALID_PLAN", "查询包含无效数据表标识。")
+        raise QueryFailure("INVALID_PLAN", "查询包含无效数据表标识。") from exc
 
 
 def _qualified_identifier(alias: str, column: str) -> str:
@@ -1242,6 +1188,43 @@ def _validate_request(
                 f"Use at most {request_contract.MAX_GROUP_DIMENSIONS} unique governed dimension codes."
             ),
         )
+    order_by = request.get("order_by")
+    if order_by is not None:
+        supplied_fields = set(order_by) if isinstance(order_by, Mapping) else set()
+        if (
+            not isinstance(order_by, Mapping)
+            or supplied_fields != set(request_contract.ORDER_BY_FIELDS)
+            or not isinstance(order_by.get("field"), str)
+            or re.fullmatch(
+                request_contract.ORDER_BY_FIELD_PATTERN,
+                order_by.get("field", ""),
+            )
+            is None
+            or order_by.get("direction") not in request_contract.ORDER_BY_DIRECTIONS
+        ):
+            raise QueryFailure(
+                "INVALID_INPUT",
+                "order_by 必须且只能包含有效的 field 和 direction。",
+                path=field_path("order_by"),
+                hint="Use exactly {'field': '<governed output>', 'direction': 'asc|desc'}.",
+            )
+    requested_limit = request.get("limit")
+    if requested_limit is not None and not request_contract.valid_public_row_limit(
+        requested_limit
+    ):
+        raise QueryFailure(
+            "INVALID_INPUT",
+            (
+                "limit 必须是 "
+                f"{request_contract.PUBLIC_ROW_LIMIT_MIN} 到 "
+                f"{request_contract.PUBLIC_ROW_LIMIT_MAX} 的整数。"
+            ),
+            path=field_path("limit"),
+            hint=(
+                f"Use an integer between {request_contract.PUBLIC_ROW_LIMIT_MIN} "
+                f"and {request_contract.PUBLIC_ROW_LIMIT_MAX}."
+            ),
+        )
     metric_filters = request.get("metric_filters")
     if metric_filters is not None:
         if (
@@ -1259,7 +1242,10 @@ def _validate_request(
             if (
                 not values
                 or len(values) > request_contract.MAX_FILTER_VALUES
-                or any(not _is_value_scalar(value) for value in values)
+                or any(
+                    not capability_contract.is_value_scalar(value)
+                    for value in values
+                )
             ):
                 raise QueryFailure(
                     "INVALID_INPUT",
@@ -1429,6 +1415,7 @@ def _validate_request(
             )
     complete_target_gap = request.get("complete_target_gap_decomposition")
     if complete_target_gap is not None:
+        target_gap_contract = _target_gap_contract()
         dimension = (
             complete_target_gap.get("dimension")
             if isinstance(complete_target_gap, Mapping)
@@ -1437,7 +1424,7 @@ def _validate_request(
         if (
             not isinstance(complete_target_gap, Mapping)
             or set(complete_target_gap) != {"dimension"}
-            or dimension not in {"customer", "department", "organization"}
+            or dimension not in target_gap_contract.dimensions
         ):
             raise QueryFailure(
                 "INVALID_INPUT",
@@ -1459,12 +1446,9 @@ def _validate_request(
             )
         if (
             domain != "target"
-            or request.get("metric")
-            not in {
-                "delivery_target_completion",
-                "receipt_target_completion",
-            }
-            or request.get("attribution_mode") != "transaction_detail"
+            or request.get("metric") not in target_gap_contract.metrics
+            or request.get("attribution_mode")
+            != target_gap_contract.attribution_mode
         ):
             raise QueryFailure(
                 "UNSUPPORTED_TARGET_GAP_DECOMPOSITION",
@@ -1798,19 +1782,13 @@ def _validate_target_gap_decomposition_capability(
         if isinstance(metrics, Mapping) and isinstance(request, Mapping)
         else None
     )
-    contract = _read_yaml(
-        "plugins/datasage-query/contracts/target-gap-decomposition.yaml"
-    )
-    applicability = contract.get("applicability")
+    contract = _target_gap_contract()
     if (
-        contract.get("version") != "datasage-target-gap-decomposition/v1"
-        or contract.get("status") != "active"
-        or not isinstance(applicability, Mapping)
-        or not isinstance(request, Mapping)
+        not isinstance(request, Mapping)
         or request.get("domain") != "target"
-        or request.get("metric") not in applicability.get("metrics", [])
-        or request.get("attribution_mode") != applicability.get("attribution_mode")
-        or dimension not in applicability.get("dimensions", [])
+        or request.get("metric") not in contract.metrics
+        or request.get("attribution_mode") != contract.attribution_mode
+        or dimension not in contract.dimensions
         or not isinstance(metric, Mapping)
         or metric.get("query_kind") != "target_completion"
     ):
@@ -1869,7 +1847,7 @@ def _validate_inventory_metric_scope(request: Mapping[str, Any]) -> dict[str, An
     scope = normalized.get("inventory_scope")
     if normalized.get("domain") != "inventory" or normalized.get("mode") != "metric":
         return normalized
-    if scope is not None and scope not in _INVENTORY_SCOPES:
+    if scope is not None and scope not in capability_contract.INVENTORY_SCOPES:
         raise QueryFailure("INVALID_INPUT", "库存范围不受支持。")
     return normalized
 
@@ -3009,13 +2987,25 @@ def _metric_order_clause(request: Mapping[str, Any], dimension_outputs: Sequence
 
 
 def _metric_query_limit(request: Mapping[str, Any]) -> int:
-    """Validate and cap the public row limit without touching a data source."""
+    """Validate the public row limit and apply only the documented environment cap."""
 
-    environment_cap = _bounded_int("max_rows", 100, 1, 100)
+    environment_cap = _bounded_int(
+        "max_rows",
+        request_contract.PUBLIC_ROW_LIMIT_MAX,
+        request_contract.PUBLIC_ROW_LIMIT_MIN,
+        request_contract.PUBLIC_ROW_LIMIT_MAX,
+    )
     requested_limit = request.get("limit", environment_cap)
-    if not isinstance(requested_limit, int) or isinstance(requested_limit, bool):
-        raise QueryFailure("INVALID_INPUT", "limit 必须是整数。")
-    return max(1, min(environment_cap, requested_limit))
+    if not request_contract.valid_public_row_limit(requested_limit):
+        raise QueryFailure(
+            "INVALID_INPUT",
+            (
+                "limit 必须是 "
+                f"{request_contract.PUBLIC_ROW_LIMIT_MIN} 到 "
+                f"{request_contract.PUBLIC_ROW_LIMIT_MAX} 的整数。"
+            ),
+        )
+    return min(environment_cap, requested_limit)
 
 
 def _validate_pre_entity_metric_plan(
@@ -3420,7 +3410,11 @@ def _build_ratio_metric_core(
 
 
 def _approved_column(column: Any, allowed: set[str], blocked: set[str]) -> str:
-    if not isinstance(column, str) or _COLUMN_IDENTIFIER.fullmatch(column) is None:
+    try:
+        sql_identifiers.quote_identifier(column)
+    except sql_identifiers.SqlIdentifierError:
+        raise QueryFailure("INVALID_PLAN", "字段标识无效。")
+    if not isinstance(column, str):
         raise QueryFailure("INVALID_PLAN", "字段标识无效。")
     if column not in allowed or column.lower() in blocked:
         raise QueryFailure("COLUMN_NOT_ALLOWED", "查询引用了未批准或敏感字段。")
@@ -3564,89 +3558,48 @@ def _execute_with_source(
     *,
     deadline_at: float | None = None,
 ) -> tuple[list[dict[str, Any]], bool, dict[str, Any]]:
-    connection = None
-    source_evidence_ref: dict[str, Any] | None = None
-    expected_timeout = False
+    executor = db_executor.ReadOnlyDbExecutor(
+        mode="single_statement",
+        connection_factory=_connect,
+        confirm_read_only_transaction=confirm_mysql_read_only_transaction,
+        query_timeout_seconds=_bounded_int(
+            "mysql_query_timeout_seconds", 30, 1, 300
+        ),
+        deadline_at=deadline_at,
+        row_mapper=lambda row: {
+            str(key): _json_value(value) for key, value in row.items()
+        },
+    )
     try:
-        remaining = None if deadline_at is None else deadline_at - time.monotonic()
-        if remaining is not None and remaining <= 0:
-            raise QueryFailure("BATCH_DEADLINE_EXCEEDED", "本次批量查询已达到总时限。", timeout=True)
-        configured_timeout = _bounded_int("mysql_query_timeout_seconds", 30, 1, 300)
-        connect_budget = configured_timeout if remaining is None else min(
-            configured_timeout, max(1, math.floor(remaining))
-        )
-        connection = _connect(
-            connect_timeout_seconds=connect_budget,
-            read_timeout_seconds=connect_budget,
-        )
-        remaining = None if deadline_at is None else deadline_at - time.monotonic()
-        if remaining is not None and remaining <= 1:
-            raise QueryFailure("BATCH_DEADLINE_EXCEEDED", "本次批量查询已达到总时限。", timeout=True)
-        query_timeout = configured_timeout if remaining is None else min(
-            configured_timeout, max(1, math.floor(remaining))
-        )
-        with connection.cursor() as cursor:
-            cursor.execute("SET SESSION time_zone = '+08:00'")
-            cursor.execute("SET SESSION MAX_EXECUTION_TIME = %s", (query_timeout * 1000,))
-            cursor.execute("START TRANSACTION READ ONLY")
-            source_evidence_ref = confirm_mysql_read_only_transaction(connection)
-            cursor.execute(sql, tuple(params))
-            raw_rows = cursor.fetchmany(limit + 1)
-            if deadline_at is not None and time.monotonic() > deadline_at:
-                raise QueryFailure("BATCH_DEADLINE_EXCEEDED", "本次批量查询已达到总时限。", timeout=True)
-            truncated = len(raw_rows) > limit
-            rows = raw_rows[:limit]
-            return (
-                [
-                    {str(key): _json_value(value) for key, value in row.items()}
-                    for row in rows
-                ],
-                truncated,
-                source_evidence_ref,
-            )
+        result = executor.execute(sql, params, limit)
+        return result.rows, result.truncated, result.source_evidence_ref
     except DatabaseSecurityError as exc:
         raise QueryFailure(
             "DATABASE_IDENTITY_CHANGED",
             "Database source identity changed during query execution.",
             stage="database_security",
-            source_evidence_ref=source_evidence_ref,
+            source_evidence_ref=executor.source_evidence_ref,
+        ) from exc
+    except db_executor.DeadlineExceeded as exc:
+        raise QueryFailure(
+            "BATCH_DEADLINE_EXCEEDED",
+            "本次批量查询已达到总时限。",
+            timeout=True,
+            source_evidence_ref=executor.source_evidence_ref,
         ) from exc
     except QueryFailure as failure:
-        expected_timeout = failure.timeout
-        if source_evidence_ref is not None:
-            failure.source_evidence_ref = dict(source_evidence_ref)
+        if executor.source_evidence_ref is not None:
+            failure.source_evidence_ref = executor.source_evidence_ref
         raise
     except Exception as exc:
-        text = str(exc).lower()
-        error_code = exc.args[0] if getattr(exc, "args", ()) else None
-        server_timeout = error_code == 3024 or "maximum statement execution time exceeded" in text
-        timeout = server_timeout or isinstance(exc, TimeoutError) or "timeout" in text or "timed out" in text
-        expected_timeout = timeout
+        mapped = _database_query_failure(exc)
         failure = QueryFailure(
-            "SERVER_STATEMENT_TIMEOUT" if server_timeout else "QUERY_TIMEOUT" if timeout else "QUERY_FAILED",
-            "查询超时。" if timeout else "数据库查询失败。",
-            timeout=timeout,
-            source_evidence_ref=source_evidence_ref,
+            mapped.code,
+            "查询超时。" if mapped.timeout else "数据库查询失败。",
+            timeout=mapped.timeout,
         )
+        failure.source_evidence_ref = executor.source_evidence_ref
         raise failure from exc
-    finally:
-        if connection is not None:
-            try:
-                connection.rollback()
-            except Exception as exc:
-                logger.warning(
-                    "datasage_query rollback_failed after_timeout=%s error_type=%s",
-                    expected_timeout,
-                    type(exc).__name__,
-                )
-            try:
-                connection.close()
-            except Exception as exc:
-                logger.warning(
-                    "datasage_query connection_close_failed after_timeout=%s error_type=%s",
-                    expected_timeout,
-                    type(exc).__name__,
-                )
 
 
 def _execute(
@@ -3708,76 +3661,51 @@ class _ConsistentSnapshotExecutor:
 
     def __init__(self, *, deadline_at: float | None = None) -> None:
         self.deadline_at = deadline_at
-        self.connection: Any = None
+        self._executor: db_executor.ReadOnlyDbExecutor | None = None
         self.marker: str | None = None
-        self.expected_timeout = False
         self.closed = False
         self.poisoned_failure: QueryFailure | None = None
         self.source_evidence_ref: dict[str, Any] | None = None
 
     def __enter__(self) -> "_ConsistentSnapshotExecutor":
         try:
-            remaining = (
-                None
-                if self.deadline_at is None
-                else self.deadline_at - time.monotonic()
+            self._executor = db_executor.ReadOnlyDbExecutor(
+                mode="consistent_snapshot",
+                connection_factory=_connect,
+                confirm_read_only_transaction=confirm_mysql_read_only_transaction,
+                query_timeout_seconds=_bounded_int(
+                    "mysql_query_timeout_seconds", 30, 1, 300
+                ),
+                deadline_at=self.deadline_at,
+                row_mapper=lambda row: {
+                    str(key): _json_value(value) for key, value in row.items()
+                },
             )
-            if remaining is not None and remaining <= 0:
-                raise QueryFailure(
-                    "BATCH_DEADLINE_EXCEEDED",
-                    "The batch query deadline has been exceeded.",
-                    timeout=True,
-                )
-            configured_timeout = _bounded_int(
-                "mysql_query_timeout_seconds", 30, 1, 300
-            )
-            connect_budget = (
-                configured_timeout
-                if remaining is None
-                else min(configured_timeout, max(1, math.floor(remaining)))
-            )
-            self.connection = _connect(
-                connect_timeout_seconds=connect_budget,
-                read_timeout_seconds=connect_budget,
-            )
-            remaining = (
-                None
-                if self.deadline_at is None
-                else self.deadline_at - time.monotonic()
-            )
-            if remaining is not None and remaining <= 1:
-                raise QueryFailure(
-                    "BATCH_DEADLINE_EXCEEDED",
-                    "The batch query deadline has been exceeded.",
-                    timeout=True,
-                )
-            with self.connection.cursor() as cursor:
-                cursor.execute("SET SESSION time_zone = '+08:00'")
-                cursor.execute(
-                    "SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ"
-                )
-                cursor.execute(
-                    "START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY"
-                )
-            self.source_evidence_ref = confirm_mysql_read_only_transaction(
-                self.connection
-            )
-            self.marker = f"snapshot_group_{uuid.uuid4().hex}"
+            self._executor.__enter__()
+            self.marker = self._executor.marker
+            self.source_evidence_ref = self._executor.source_evidence_ref
             return self
         except DatabaseSecurityError as exc:
+            self.close()
             raise QueryFailure(
                 "DATABASE_IDENTITY_CHANGED",
                 "Database source identity changed during query execution.",
                 stage="database_security",
                 source_evidence_ref=self.source_evidence_ref,
             ) from exc
+        except db_executor.DeadlineExceeded as exc:
+            self.close()
+            raise QueryFailure(
+                "BATCH_DEADLINE_EXCEEDED",
+                "The batch query deadline has been exceeded.",
+                timeout=True,
+                source_evidence_ref=self.source_evidence_ref,
+            ) from exc
         except QueryFailure as failure:
-            self.expected_timeout = failure.timeout
             self.close()
             raise
         except Exception as exc:
             failure = _database_query_failure(exc)
-            self.expected_timeout = failure.timeout
             self.close()
             raise failure from exc
 
@@ -3789,9 +3717,6 @@ class _ConsistentSnapshotExecutor:
         *,
         deadline_at: float | None = None,
     ) -> tuple[list[dict[str, Any]], bool, dict[str, Any]]:
-        effective_deadline = (
-            deadline_at if deadline_at is not None else self.deadline_at
-        )
         try:
             if self.poisoned_failure is not None:
                 poisoned = self.poisoned_failure
@@ -3804,7 +3729,7 @@ class _ConsistentSnapshotExecutor:
                     source_evidence_ref=self.source_evidence_ref,
                 )
             if (
-                self.connection is None
+                self._executor is None
                 or self.closed
                 or self.marker is None
                 or self.source_evidence_ref is None
@@ -3813,105 +3738,49 @@ class _ConsistentSnapshotExecutor:
                     "QUERY_FAILED",
                     "Database query failed.",
                 )
-            remaining = (
-                None
-                if effective_deadline is None
-                else effective_deadline - time.monotonic()
+            result = self._executor.execute(
+                sql,
+                params,
+                limit,
+                deadline_at=deadline_at,
             )
-            if remaining is not None and remaining <= 0:
-                raise QueryFailure(
-                    "BATCH_DEADLINE_EXCEEDED",
-                    "The batch query deadline has been exceeded.",
-                    timeout=True,
-                )
-            configured_timeout = _bounded_int(
-                "mysql_query_timeout_seconds", 30, 1, 300
+            return result.rows, result.truncated, result.source_evidence_ref
+        except db_executor.DeadlineExceeded as exc:
+            failure = QueryFailure(
+                "BATCH_DEADLINE_EXCEEDED",
+                "The batch query deadline has been exceeded.",
+                timeout=True,
+                source_evidence_ref=self.source_evidence_ref,
             )
-            query_timeout = (
-                configured_timeout
-                if remaining is None
-                else min(configured_timeout, max(1, math.floor(remaining)))
-            )
-            with self.connection.cursor() as cursor:
-                cursor.execute(
-                    "SET SESSION MAX_EXECUTION_TIME = %s",
-                    (query_timeout * 1000,),
-                )
-                cursor.execute(sql, tuple(params))
-                raw_rows = cursor.fetchmany(limit + 1)
-            if (
-                effective_deadline is not None
-                and time.monotonic() > effective_deadline
-            ):
-                raise QueryFailure(
-                    "BATCH_DEADLINE_EXCEEDED",
-                    "The batch query deadline has been exceeded.",
-                    timeout=True,
-                )
-            truncated = len(raw_rows) > limit
-            return (
-                [
-                    {
-                        str(key): _json_value(value)
-                        for key, value in row.items()
-                    }
-                    for row in raw_rows[:limit]
-                ],
-                truncated,
-                dict(self.source_evidence_ref),
-            )
+            self._remember_failure(failure)
+            raise failure from exc
         except QueryFailure as failure:
-            self.expected_timeout = failure.timeout
-            if self.source_evidence_ref is not None:
-                failure.source_evidence_ref = dict(self.source_evidence_ref)
-            if self.poisoned_failure is None:
-                self.poisoned_failure = QueryFailure(
-                    failure.code,
-                    failure.message,
-                    timeout=failure.timeout,
-                    stage=failure.stage,
-                    retryable=failure.retryable,
-                    source_evidence_ref=failure.source_evidence_ref,
-                )
+            self._remember_failure(failure)
             raise
         except Exception as exc:
             failure = _database_query_failure(exc)
-            if self.source_evidence_ref is not None:
-                failure.source_evidence_ref = dict(self.source_evidence_ref)
-            self.expected_timeout = failure.timeout
-            if self.poisoned_failure is None:
-                self.poisoned_failure = QueryFailure(
-                    failure.code,
-                    failure.message,
-                    timeout=failure.timeout,
-                    stage=failure.stage,
-                    retryable=failure.retryable,
-                    source_evidence_ref=failure.source_evidence_ref,
-                )
+            self._remember_failure(failure)
             raise failure from exc
+
+    def _remember_failure(self, failure: QueryFailure) -> None:
+        if self.source_evidence_ref is not None:
+            failure.source_evidence_ref = dict(self.source_evidence_ref)
+        if self.poisoned_failure is None:
+            self.poisoned_failure = QueryFailure(
+                failure.code,
+                failure.message,
+                timeout=failure.timeout,
+                stage=failure.stage,
+                retryable=failure.retryable,
+                source_evidence_ref=failure.source_evidence_ref,
+            )
 
     def close(self) -> None:
         if self.closed:
             return
         self.closed = True
-        if self.connection is None:
-            return
-        try:
-            self.connection.rollback()
-        except Exception as exc:
-            logger.warning(
-                "datasage_query rollback_failed after_timeout=%s error_type=%s",
-                self.expected_timeout,
-                type(exc).__name__,
-            )
-        try:
-            self.connection.close()
-        except Exception as exc:
-            logger.warning(
-                "datasage_query connection_close_failed after_timeout=%s error_type=%s",
-                self.expected_timeout,
-                type(exc).__name__,
-            )
+        if self._executor is not None:
+            self._executor.close()
 
     def __exit__(self, *_args: Any) -> None:
         self.close()
@@ -3935,7 +3804,6 @@ def _audit(event: Mapping[str, Any]) -> None:
             "data_state",
             "row_count",
             "elapsed_ms",
-            "execution_retry_count",
             "preflight_status",
             "failure_stage",
             "error_code",
@@ -3998,7 +3866,9 @@ def _audit_ref(value: Any) -> str | None:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
-def _retry_metadata(failure: QueryFailure) -> dict[str, Any]:
+def _caller_retry_metadata(failure: QueryFailure) -> dict[str, Any]:
+    """Describe whether a caller may safely submit the same request again."""
+
     retryable = (
         failure.retryable
         if failure.retryable is not None
@@ -4020,7 +3890,7 @@ def _retry_metadata(failure: QueryFailure) -> dict[str, Any]:
             else 1
         )
         advice = (
-            f"至少等待 {retry_after_seconds} 秒后最多重试一次；重试必须保持同一 request_id、"
+            f"调用方至少等待 {retry_after_seconds} 秒后最多重新提交一次；重新提交必须保持同一 request_id、"
             "指标、维度、筛选、时间和比较语义，不得缩减问题或替换指标。"
         )
     else:
@@ -4040,7 +3910,7 @@ def _public_error(failure: QueryFailure) -> dict[str, Any]:
     error = {
         "code": failure.code,
         "message": failure.message,
-        **_retry_metadata(failure),
+        **_caller_retry_metadata(failure),
     }
     if failure.path is not None:
         error["path"] = failure.path
@@ -5989,6 +5859,7 @@ def _target_gap_claim_amounts(
 def _target_gap_failure_reason(
     overall: Mapping[str, Any] | None,
     partition: Mapping[str, Any],
+    contract: capability_contract.TargetGapContract,
 ) -> str:
     error = partition.get("error")
     if isinstance(error, Mapping) and error.get("code") == (
@@ -6034,7 +5905,7 @@ def _target_gap_failure_reason(
     if any(
         not isinstance(claim.get("states"), Mapping)
         or claim["states"].get("target_data_state")
-        not in {"set", "zero"}
+        not in contract.valid_target_data_states
         or claim["states"].get("period_state")
         in {"not_started", "includes_future"}
         for claim in all_claims
@@ -6063,6 +5934,9 @@ def _finalize_target_gap_decompositions(
 ) -> None:
     """Emit an independent amount reconciliation; never authorize causality."""
 
+    if not operation_partitions:
+        return
+    contract = _target_gap_contract()
     result_by_id = {
         str(result.get("request_id")): result
         for result in results
@@ -6078,11 +5952,11 @@ def _finalize_target_gap_decompositions(
         overall = result_by_id.get(overall_id)
         if not isinstance(partition, dict):
             continue
-        reason = _target_gap_failure_reason(overall, partition)
+        reason = _target_gap_failure_reason(overall, partition, contract)
         if reason != "RECONCILIATION_NOT_ESTABLISHED" or not isinstance(overall, Mapping):
             partition["target_gap_reconciliation"] = {
                 "status": "not_reconciled",
-                "operation": "complete_target_gap_decomposition",
+                "operation": contract.receipt_operation,
                 "reason_code": reason,
                 "overall_request_id": overall_id,
                 "causal_attribution_authorized": False,
@@ -6108,9 +5982,9 @@ def _finalize_target_gap_decompositions(
             if isinstance(dimensions, list) and len(dimensions) == 1:
                 dimension = dimensions[0]
         receipt = {
-            "version": "datasage-target-gap-reconciliation/v1",
+            "version": contract.receipt_version,
             "status": "reconciled",
-            "operation": "complete_target_gap_decomposition",
+            "operation": contract.receipt_operation,
             "overall_request_id": overall_id,
             "partition_request_id": partition_id,
             "dimension": dimension,
@@ -6134,7 +6008,7 @@ def _finalize_target_gap_decompositions(
                 claim.get("claim_id") for claim in partition_claims
             ],
             "causal_attribution_authorized": False,
-            "interpretation_boundary": "additive_gap_composition_not_causal",
+            "interpretation_boundary": contract.receipt_interpretation_code,
         }
         evidence.seal_reconciliation(receipt)
         partition["target_gap_reconciliation"] = receipt
@@ -6684,7 +6558,6 @@ def _failure_result(
     *,
     business_metric_ref: str | None = None,
     business_metric_label: str | None = None,
-    execution_retry_count: int = 0,
     entity_resolution_db_call_count: int = 0,
     entity_preflight_elapsed_ms: int = 0,
     business_sql_attempted_count: int = 0,
@@ -6695,7 +6568,11 @@ def _failure_result(
         "DATA_RECONCILIATION_REQUIRED",
         "SEMANTIC_UNIT_RECONCILIATION_REQUIRED",
     }
-    error = {"code": failure.code, "message": failure.message, **_retry_metadata(failure)}
+    error = {
+        "code": failure.code,
+        "message": failure.message,
+        **_caller_retry_metadata(failure),
+    }
     result = {
         "request_id": request_id,
         "status": "timeout" if failure.timeout else "failed",
@@ -6719,7 +6596,6 @@ def _failure_result(
         "applied_time_range": None,
         "error": error,
         "elapsed_ms": elapsed_ms,
-        "execution_retry_count": execution_retry_count,
         "entity_resolution_db_call_count": entity_resolution_db_call_count,
         "entity_preflight_elapsed_ms": entity_preflight_elapsed_ms,
         "business_sql_attempted_count": business_sql_attempted_count,
@@ -7515,7 +7391,7 @@ def _calculation_failure(
         "error": {
             "code": failure.code,
             "message": failure.message,
-            **_retry_metadata(failure),
+            **_caller_retry_metadata(failure),
         },
     }
 
@@ -7536,7 +7412,9 @@ def _normalized_calculation_filter_scope(value: Any) -> dict[str, tuple[str, ...
                 "计算操作数包含无法验证的筛选字段。",
             )
         values = raw_value if isinstance(raw_value, list) else [raw_value]
-        if not values or any(not _is_value_scalar(item) for item in values):
+        if not values or any(
+            not capability_contract.is_value_scalar(item) for item in values
+        ):
             raise QueryFailure(
                 "CALCULATION_SCOPE_UNVERIFIED",
                 "计算操作数包含无法验证的筛选值。",
@@ -8457,7 +8335,6 @@ def _run_one(
     request_id = raw_request.get("request_id", "unknown") if isinstance(raw_request, dict) else "unknown"
     domain = raw_request.get("domain") if isinstance(raw_request, dict) else None
     mode = raw_request.get("mode") if isinstance(raw_request, dict) else None
-    execution_retry_count = 0
     business_sql_attempted_count = 0
     business_sql_confirmed_count = 0
     source_evidence_ref: dict[str, Any] | None = None
@@ -8678,7 +8555,6 @@ def _run_one(
             "applied_time_range": applied_time_range,
             "error": None,
             "elapsed_ms": elapsed_ms,
-            "execution_retry_count": execution_retry_count,
             "entity_resolution_db_call_count": int(
                 prepared.get("entity_resolution_db_call_count") or 0
             ),
@@ -8720,7 +8596,6 @@ def _run_one(
             elapsed_ms,
             business_metric_ref=business_metric_ref,
             business_metric_label=failure_metric_label,
-            execution_retry_count=execution_retry_count,
             entity_resolution_db_call_count=preflight_db_call_count,
             entity_preflight_elapsed_ms=entity_preflight_elapsed_ms,
             business_sql_attempted_count=business_sql_attempted_count,
@@ -8747,7 +8622,6 @@ def _run_one(
             elapsed_ms,
             business_metric_ref=business_metric_ref,
             business_metric_label=failure_metric_label,
-            execution_retry_count=execution_retry_count,
             entity_resolution_db_call_count=preflight_db_call_count,
             entity_preflight_elapsed_ms=entity_preflight_elapsed_ms,
             business_sql_attempted_count=business_sql_attempted_count,
@@ -8764,7 +8638,6 @@ def _run_one(
             "data_state": result["data_state"],
             "row_count": result["row_count"],
             "elapsed_ms": result["elapsed_ms"],
-            "execution_retry_count": result["execution_retry_count"],
             "preflight_status": preflight_status,
             "failure_stage": failure_stage,
             "error_code": (
@@ -8789,7 +8662,9 @@ def _run_one(
 def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
     """Validate, execute, and return structured evidence for one to ten requests."""
     batch_started = time.monotonic()
-    period_observed_on = _business_today()
+    period_observed_on = _kwargs.pop("_period_observed_on", None)
+    if not isinstance(period_observed_on, date):
+        period_observed_on = _business_today()
     query_slot_owned = bool(_kwargs.pop("_query_slot_owned", False))
     try:
         validated_envelope = _kwargs.pop("_validated_query_envelope", None)
@@ -9281,7 +9156,11 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
             "request_count": 0,
             "metric_contexts": [],
             "results": [],
-            "error": {"code": failure.code, "message": failure.message, **_retry_metadata(failure)},
+            "error": {
+                "code": failure.code,
+                "message": failure.message,
+                **_caller_retry_metadata(failure),
+            },
         }
     except Exception:
         logger.exception("datasage_query unexpected handler failure")
@@ -9291,7 +9170,11 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
             "request_count": 0,
             "metric_contexts": [],
             "results": [],
-            "error": {"code": failure.code, "message": failure.message, **_retry_metadata(failure)},
+            "error": {
+                "code": failure.code,
+                "message": failure.message,
+                **_caller_retry_metadata(failure),
+            },
         }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
@@ -9313,7 +9196,7 @@ def datasage_query(args: dict[str, Any], **kwargs: Any) -> str:
             "error": {
                 "code": failure.code,
                 "message": failure.message,
-                **_retry_metadata(failure),
+                **_caller_retry_metadata(failure),
             },
         }
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -9426,6 +9309,7 @@ def runtime_guarded_datasage_query(
             return datasage_query(
                 args,
                 _validated_query_envelope=validated_envelope,
+                _period_observed_on=period_observed_on,
                 **kwargs,
             )
 
@@ -9571,7 +9455,7 @@ def runtime_guarded_datasage_query(
             "error": {
                 "code": failure.code,
                 "message": failure.message,
-                **_retry_metadata(failure),
+                **_caller_retry_metadata(failure),
             },
         }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))

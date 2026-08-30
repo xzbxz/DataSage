@@ -92,6 +92,9 @@ class ExpertArchitectureTests(unittest.TestCase):
             ["datasage_catalog", "datasage_query"],
             hermes["requires_tools"],
         )
+        description = metadata["description"]
+        self.assertIn("new internal company facts", description)
+        self.assertIn("not public research or user-provided data", description)
 
     def test_general_clarification_and_git_in_place_policy_have_one_owner(self):
         soul = (PROFILE_ROOT / "SOUL.md").read_text(encoding="utf-8")

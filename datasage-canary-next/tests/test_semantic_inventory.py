@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from pathlib import Path
 import re
 import unittest
@@ -13,40 +11,6 @@ import yaml
 
 PROFILE_ROOT = Path(__file__).resolve().parents[1]
 CONTRACT_ROOT = PROFILE_ROOT / "plugins" / "datasage-query" / "contracts"
-BASELINE_PARSED_SHA256 = {
-    "customer_risk-semantics.yaml": "1641c882ddb935b5a5f1a1d17d243c7c1327109a75292d43e3512816d4cd8ba5",
-    "delivery-semantics.yaml": "80ead8c04e4d78fdc7fd3b5fee2e27d0e21b0b1c6a05625fe77306d605cd2424",
-    "inventory-semantics.yaml": "b17b52899dbd179c8994ce370d30d64468a06ab59129dc01894fb35b78cb05cb",
-    "receipt-semantics.yaml": "5978c0775ca8c10c65c68a222286e7d079c67cb56af3e23cb009f40cdee586b3",
-    "receivable-semantics.yaml": "1b7686a7dbb5d5efe0a0d24bf6a79a0e38efd062d8366b3541e587a8ea928a34",
-    "target-semantics.yaml": "2d2e720601cc4e08ff85ed88b2ca06729f06a3fd821e85b11f8a06fffa1a7fc6",
-}
-LIFECYCLE_KEYS = {"owner", "activation_gate", "review", "lifecycle"}
-
-
-def _canonical_digest(value: object) -> str:
-    rendered = json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
-
-
-def _without_pending_lifecycle(value: object) -> object:
-    if isinstance(value, dict):
-        pending = value.get("status") == "pending_validation"
-        return {
-            key: _without_pending_lifecycle(item)
-            for key, item in value.items()
-            if not (pending and key in LIFECYCLE_KEYS)
-        }
-    if isinstance(value, list):
-        return [_without_pending_lifecycle(item) for item in value]
-    return value
-
-
 class SemanticSingleSourceTests(unittest.TestCase):
     def test_answer_notes_alias_identical_disclosure_text_without_value_drift(self):
         pair_count = 0
@@ -72,15 +36,33 @@ class SemanticSingleSourceTests(unittest.TestCase):
         self.assertEqual(65, len(anchor_names))
         self.assertEqual(anchor_names, alias_names)
 
-    def test_anchor_refactor_preserves_the_prechange_parsed_contract(self):
+    def test_machine_contracts_exclude_unconsumed_root_defaults(self):
         for path in sorted(CONTRACT_ROOT.glob("*-semantics.yaml")):
             with self.subTest(path=path.name):
                 parsed = yaml.safe_load(path.read_text(encoding="utf-8"))
-                normalized = _without_pending_lifecycle(parsed)
-                self.assertEqual(
-                    BASELINE_PARSED_SHA256[path.name],
-                    _canonical_digest(normalized),
-                )
+                self.assertNotIn("defaults", parsed)
+                self.assertNotIn("analysis_defaults", parsed)
+        datasets = yaml.safe_load(
+            (CONTRACT_ROOT / "datasets.yaml").read_text(encoding="utf-8")
+        )
+        self.assertEqual({"blocked_columns"}, set(datasets.get("defaults", {})))
+
+    def test_value_contract_templates_are_consumed_by_yaml_aliases(self):
+        consumed_templates = 0
+        for path in sorted(CONTRACT_ROOT.glob("*-semantics.yaml")):
+            parsed = yaml.safe_load(path.read_text(encoding="utf-8"))
+            templates = parsed.get("value_contract_templates", {})
+            dimensions = parsed.get("dimensions", {})
+            for template in templates.values():
+                references = [
+                    definition
+                    for definition in dimensions.values()
+                    if isinstance(definition, dict)
+                    and definition.get("value_contract") is template
+                ]
+                self.assertTrue(references, f"unused value contract template in {path.name}")
+                consumed_templates += 1
+        self.assertGreater(consumed_templates, 0)
 
 
 class PendingCapabilityLifecycleTests(unittest.TestCase):

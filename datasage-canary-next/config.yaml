@@ -86,8 +86,8 @@ skills:
   # Git is authoritative; tracked expert guidance requires operator approval.
   write_approval: true
   # Hermes 0.20.5 has a denylist rather than a persistent bundled-skill
-  # allowlist. Keep only the reviewed document, spreadsheet, presentation,
-  # citation, and action-item capabilities active. The architecture test
+  # allowlist. Keep only the reviewed local document, spreadsheet, and
+  # presentation capabilities active. The architecture test
   # compares this list with the pinned host inventory so an upgrade cannot
   # activate a newly bundled skill without review.
   disabled:
@@ -111,6 +111,7 @@ skills:
     - computer-use
     - design-md
     - dogfood
+    - document-to-action-items
     - email-inbox-triage
     - evaluating-llms-harness
     - excalidraw
@@ -123,6 +124,7 @@ skills:
     - github-pr-workflow
     - github-repo-management
     - google-workspace
+    - grounded-citations
     - hermes-agent
     - hermes-agent-skill-authoring
     - himalaya
@@ -134,6 +136,7 @@ skills:
     - llm-wiki
     - manim-video
     - maps
+    - meeting-action-items
     - merge-reconciler
     - nano-pdf
     - node-inspect-debugger
@@ -162,6 +165,7 @@ skills:
     - test-driven-development
     - touchdesigner-mcp
     - weights-and-biases
+    - weekly-review-planning
     - xurl
     - youtube-content
 platforms:

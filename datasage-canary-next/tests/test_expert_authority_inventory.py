@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import unittest
 from unittest import mock
 
@@ -17,15 +18,33 @@ PROFILE_ROOT = Path(__file__).resolve().parents[1]
 SKILL_ROOT = PROFILE_ROOT / "skills" / "business-analytics" / "datasage"
 PLUGIN_ROOT = PROFILE_ROOT / "plugins" / "datasage-query"
 REVIEWED_NATIVE_SKILLS = {
-    "document-to-action-items",
     "docx",
-    "grounded-citations",
-    "meeting-action-items",
     "ocr-and-documents",
     "pdf",
     "powerpoint",
-    "weekly-review-planning",
     "xlsx",
+}
+DATASAGE_REFERENCE_OWNERS = {
+    "datasage.query-rules/v1": "references/query-rules.md",
+    "datasage.entity-guidance/v1": "references/entity-guidance.md",
+    "datasage.answer-boundary/v1": "references/answer-boundary.md",
+}
+DATASAGE_ARCHITECTURE_ROWS = {
+    "datasage.query-rules/v1": (
+        "Skill 请求规则",
+        "Hermes 按需加载、库存测试",
+        "请求构造方法；live schema/catalog 拥有可用字段和值",
+    ),
+    "datasage.entity-guidance/v1": (
+        "Skill 实体指导",
+        "Hermes 按需加载、库存测试",
+        "模型安全投影；不能创建或覆盖实体映射",
+    ),
+    "datasage.answer-boundary/v1": (
+        "Skill 最终回答策略",
+        "Hermes 按需加载、库存测试",
+        "详细回答边界；插件不注册 prompt 副本",
+    ),
 }
 
 
@@ -46,18 +65,101 @@ def _bundled_skill_inventory() -> dict[str, dict[str, object]]:
 class ExpertAuthorityInventoryTests(unittest.TestCase):
     def test_model_reference_owners_consumers_and_lifecycle_are_inventoried(self):
         architecture = (PROFILE_ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")
-        expected = {
-            "datasage.query-rules/v1": "references/query-rules.md",
-            "datasage.entity-guidance/v1": "references/entity-guidance.md",
-            "datasage.answer-boundary/v1": "references/answer-boundary.md",
-        }
-        for rule_id, relative_path in expected.items():
+        for rule_id, relative_path in DATASAGE_REFERENCE_OWNERS.items():
             content = (SKILL_ROOT / relative_path).read_text(encoding="utf-8")
             self.assertIn(rule_id, content)
-            self.assertIn(rule_id, architecture)
-        self.assertIn("Owner", architecture)
-        self.assertIn("Consumer", architecture)
-        self.assertIn("生命周期", architecture)
+            row = re.search(
+                rf"^\| `{re.escape(rule_id)}` \| ([^|]+) \| ([^|]+) \| ([^|]+) \|$",
+                architecture,
+                re.MULTILINE,
+            )
+            self.assertIsNotNone(row, f"missing architecture row for {rule_id}")
+            self.assertEqual(
+                DATASAGE_ARCHITECTURE_ROWS[rule_id],
+                tuple(cell.strip() for cell in row.groups()),
+            )
+
+        discovered_references = {
+            f"references/{path.name}"
+            for path in (SKILL_ROOT / "references").glob("*.md")
+        }
+        self.assertEqual(
+            set(DATASAGE_REFERENCE_OWNERS.values()),
+            discovered_references,
+            "every model-visible reference must be registered to one Rule ID owner",
+        )
+
+    def test_rule_definitions_are_unique_and_rule_links_reach_their_owner(self):
+        documents = [SKILL_ROOT / "SKILL.md"] + sorted(
+            (SKILL_ROOT / "references").glob("*.md")
+        )
+        definitions: dict[str, list[Path]] = {}
+        for path in documents:
+            text = path.read_text(encoding="utf-8")
+            for rule_id in re.findall(r"^Rule ID: `([^`]+)`$", text, re.MULTILINE):
+                definitions.setdefault(rule_id, []).append(path)
+
+        self.assertEqual(set(DATASAGE_REFERENCE_OWNERS), set(definitions))
+        for rule_id, owners in definitions.items():
+            with self.subTest(rule_id=rule_id):
+                self.assertEqual(
+                    [SKILL_ROOT / DATASAGE_REFERENCE_OWNERS[rule_id]],
+                    owners,
+                )
+
+        linked_edges: set[tuple[str, str]] = set()
+        link_pattern = re.compile(r"\[`(datasage\.[^`]+/v\d+)`\]\(([^)#]+\.md)\)")
+        for source in documents:
+            text = source.read_text(encoding="utf-8")
+            links = link_pattern.findall(text)
+            linked_rule_ids = [rule_id for rule_id, _link in links]
+            defined_rule_ids = re.findall(
+                r"^Rule ID: `([^`]+)`$", text, re.MULTILINE
+            )
+            mentioned_rule_ids = re.findall(r"`(datasage\.[^`]+/v\d+)`", text)
+            self.assertEqual(
+                sorted(defined_rule_ids + linked_rule_ids),
+                sorted(mentioned_rule_ids),
+                f"bare or malformed rule reference in {source}",
+            )
+            for rule_id, link in links:
+                target = (source.parent / link).resolve()
+                with self.subTest(source=source.name, rule_id=rule_id):
+                    self.assertTrue(target.is_file(), f"missing rule target: {target}")
+                    target_text = target.read_text(encoding="utf-8")
+                    self.assertIn(f"Rule ID: `{rule_id}`", target_text)
+                linked_edges.add((source.name, rule_id))
+
+        self.assertTrue(
+            {
+                ("SKILL.md", "datasage.query-rules/v1"),
+                ("SKILL.md", "datasage.answer-boundary/v1"),
+                ("SKILL.md", "datasage.entity-guidance/v1"),
+                ("query-rules.md", "datasage.answer-boundary/v1"),
+                ("query-rules.md", "datasage.entity-guidance/v1"),
+            }.issubset(linked_edges)
+        )
+
+    def test_skill_routes_complex_quantitative_work_to_answer_owner(self):
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        governing = skill.split("## Governing references", 1)[1].split(
+            "## Workflow", 1
+        )[0]
+        answer_owner = governing.split("datasage.answer-boundary/v1", 1)[1]
+        self.assertIn("Load it before", answer_owner)
+        for trigger in (
+            "comparison",
+            "ranking",
+            "target",
+            "decomposition",
+            "causal",
+            "multi-row calculation",
+            "truncated",
+            "partial",
+            "failed",
+        ):
+            with self.subTest(trigger=trigger):
+                self.assertIn(trigger, answer_owner)
 
     def test_maintainer_rationale_cannot_become_model_or_runtime_authority(self):
         maintainer = (
@@ -163,7 +265,20 @@ class ExpertAuthorityInventoryTests(unittest.TestCase):
                 hermes_skill_utils._raw_config_cache_clear()
         for name in REVIEWED_NATIVE_SKILLS:
             self.assertIn("windows", inventory[name]["platforms"])
+            related = set(
+                inventory[name]
+                .get("metadata", {})
+                .get("hermes", {})
+                .get("related_skills", [])
+            )
+            bundled_related = related.intersection(inventory)
+            self.assertTrue(
+                bundled_related.issubset(REVIEWED_NATIVE_SKILLS),
+                f"enabled bundled Skill {name} points to disabled companions: "
+                f"{sorted(bundled_related - REVIEWED_NATIVE_SKILLS)}",
+            )
         self.assertIn("skills.disabled", architecture)
+        self.assertIn("related_skills", architecture)
         self.assertIn("快照差异审查", architecture)
         self.assertIn("新增、删除或重命名", architecture)
 

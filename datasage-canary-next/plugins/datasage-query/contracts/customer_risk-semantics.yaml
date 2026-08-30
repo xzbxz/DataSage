@@ -19,24 +19,6 @@ tables:
   - vk_dwd.receive_return_bill_detail_dwd
   - vk_dwd.customer_dwd
 
-defaults:
-  currency: rmb
-  exclude_internal_customers: true
-  current_snapshot: latest_available
-  snapshot_comparison_months: 3
-  activity_comparison:
-    current: latest_3_completed_natural_months
-    comparison: preceding_3_completed_natural_months
-  peer_scope:
-    default: same_customer_department
-    override_when_user_specifies: [customer_type, customer_region, customer_category]
-    minimum_rule: 样本不足时只展示客户自身历史，不输出横向结论。
-  formal_dso_period: latest_12_completed_natural_months
-  formal_dso_target_days: null
-  delivery_receipt_period: latest_3_completed_natural_months
-  attention_limit_per_lane: 5
-  attention_unique_customer_cap: 15
-
 dimensions:
   customer:
     label: 客户

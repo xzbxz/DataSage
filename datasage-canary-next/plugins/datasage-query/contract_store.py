@@ -6,12 +6,15 @@ This module owns path containment and the file-signature cache.  Callers map
 
 from __future__ import annotations
 
+import hashlib
 import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from . import capability_contract
 
 
 class ContractStoreError(Exception):
@@ -40,10 +43,32 @@ def trusted_path(relative_path: str) -> Path:
     return path
 
 
+def _contract_bytes(relative_path: str) -> tuple[Path, bytes, str]:
+    try:
+        path = trusted_path(relative_path)
+        content = path.read_bytes()
+    except ContractStoreError:
+        raise
+    except OSError as exc:
+        raise ContractStoreError(
+            "CONTRACT_UNAVAILABLE", "contract could not be read"
+        ) from exc
+    return path, content, hashlib.sha256(content).hexdigest()
+
+
+def content_signature(relative_path: str) -> tuple[str, str]:
+    """Return a content-bound signature for one trusted contract file."""
+
+    _path, _content, digest = _contract_bytes(relative_path)
+    return relative_path, digest
+
+
 @lru_cache(maxsize=64)
-def parse_yaml_cached(path_text: str, modified_ns: int, size: int) -> dict[str, Any]:
-    del modified_ns, size
-    value = yaml.safe_load(Path(path_text).read_text(encoding="utf-8"))
+def parse_yaml_cached(
+    path_text: str, content_sha256: str, content_text: str
+) -> dict[str, Any]:
+    del path_text, content_sha256
+    value = yaml.safe_load(content_text)
     if not isinstance(value, dict):
         raise ContractStoreError(
             "CONTRACT_UNAVAILABLE", "contract root must be a mapping"
@@ -53,12 +78,28 @@ def parse_yaml_cached(path_text: str, modified_ns: int, size: int) -> dict[str, 
 
 def read_yaml(relative_path: str) -> dict[str, Any]:
     try:
-        path = trusted_path(relative_path)
-        stat = path.stat()
-        return parse_yaml_cached(str(path), stat.st_mtime_ns, stat.st_size)
+        path, content, digest = _contract_bytes(relative_path)
+        text = content.decode("utf-8")
+        return parse_yaml_cached(str(path), digest, text)
     except ContractStoreError:
         raise
-    except (OSError, yaml.YAMLError) as exc:
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
         raise ContractStoreError(
             "CONTRACT_UNAVAILABLE", "contract could not be read"
         ) from exc
+
+
+def read_query_policy() -> capability_contract.QueryPolicy:
+    """Read and validate the common query policy through its sole parser."""
+
+    return capability_contract.parse_query_policy(
+        read_yaml(capability_contract.QUERY_POLICY_PATH)
+    )
+
+
+def read_target_gap_contract(
+    relative_path: str = capability_contract.TARGET_GAP_CONTRACT_PATH,
+) -> capability_contract.TargetGapContract:
+    """Read the minimal executable target-gap contract."""
+
+    return capability_contract.parse_target_gap_contract(read_yaml(relative_path))
