@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import ast
 import copy
+from datetime import date, datetime
+import hashlib
 import importlib.util
 import json
 import os
@@ -795,6 +797,380 @@ class DistributionBoundaryTests(unittest.TestCase):
             "arguments": {"requests": [request]},
             "result": {"status": "success", "results": [result]},
         }
+
+    @staticmethod
+    def _metric_detail_call(adapter, domain, metric, time_policy):
+        payload = {
+            "status": "success",
+            "catalog_version": "datasage-metric-catalog/v1",
+            "contract_role": "governed_metric_catalog",
+            "query_policy": {},
+            "results": [
+                {
+                    "level": "metric",
+                    "domain": domain,
+                    "metric": {"code": metric, "time_policy": time_policy},
+                }
+            ],
+        }
+        payload["content_hash"] = adapter._sha256(payload)
+        return {
+            "name": "datasage_catalog",
+            "arguments": {"requests": [{"domain": domain, "metric": metric}]},
+            "result": payload,
+        }
+
+    @staticmethod
+    def _query_call(requests, results, covered_ids):
+        requests_by_id = {
+            request.get("request_id"): request
+            for request in requests
+            if isinstance(request, dict)
+        }
+        normalized_results = []
+        for result in results:
+            normalized = dict(result)
+            if normalized.get("status") == "success":
+                request = requests_by_id.get(normalized.get("request_id"), {})
+                metric_ref = "metric_" + hashlib.sha256(
+                    f"{request.get('domain')}\0{request.get('metric')}".encode("utf-8")
+                ).hexdigest()[:16]
+                normalized.setdefault("data_state", "rows")
+                normalized.setdefault("business_metric_ref", metric_ref)
+                normalized.setdefault("business_metric_label", "Delivery amount")
+                normalized.setdefault("row_count", 1)
+                normalized.setdefault(
+                    "rows",
+                    [
+                        {
+                            "claim_id": "claim_" + "a" * 20,
+                            "dimensions": [],
+                            "facts": {"metric_value": "1"},
+                            "states": {"metric_data_state": "complete"},
+                            "allowed_relations": ["observation"],
+                            "unit": "CNY",
+                            "currency": "CNY",
+                        }
+                    ],
+                )
+                normalized.setdefault("truncated", False)
+                normalized.setdefault(
+                    "applied_time_range",
+                    (
+                        {
+                            **request["time_range"],
+                            "source": "explicit",
+                            "calendar_evidence": {
+                                "version": "calendar-period-evidence/v2",
+                                "observation_basis": "business_clock_query_observation",
+                                "observed_on": "2026-08-30",
+                                "period_state": "in_progress",
+                                "source_freshness": "not_proven",
+                            },
+                        }
+                        if isinstance(request.get("time_range"), dict)
+                        else {
+                            "source": "current_snapshot",
+                            "as_of_date": "2026-08-30",
+                            "resolution_state": "resolved",
+                        }
+                    ),
+                )
+                normalized.setdefault("error", None)
+            normalized_results.append(normalized)
+        return {
+            "name": "datasage_query",
+            "arguments": {"requests": requests},
+            "result": {
+                "model_wire_version": "datasage-query-model-wire/v3",
+                "evidence_bundle": {
+                    "items": [
+                        {"status": "success", "request_id": request_id}
+                        for request_id in covered_ids
+                    ]
+                },
+                "results": normalized_results,
+            },
+        }
+
+    def test_time_requires_successful_result_and_matching_coverage(self):
+        adapter = _load_e2e_module("canary_transcript_adapter")
+        request = {
+            "request_id": "r1",
+            "domain": "delivery",
+            "metric": "delivery_amount",
+            "time_range": {"start": "2026-01-01", "end": "2026-09-01"},
+        }
+        failed_plan, _ = adapter._normalize(
+            [self._query_call([request], [{"request_id": "r1", "status": "error"}], [])]
+        )
+        missing_coverage_plan, missing_coverage_evidence = adapter._normalize(
+            [self._query_call([request], [{"request_id": "r1", "status": "success"}], [])]
+        )
+        successful_plan, successful_evidence = adapter._normalize(
+            [self._query_call([request], [{"request_id": "r1", "status": "success"}], ["r1"])]
+        )
+        self.assertEqual("no_query", failed_plan["time_semantics"])
+        self.assertEqual("no_query", missing_coverage_plan["time_semantics"])
+        self.assertIn("TRANSCRIPT_REQUEST_RESULT_MISMATCH", missing_coverage_evidence["error_codes"])
+        self.assertEqual("range:2026-01-01/2026-09-01", successful_plan["time_semantics"])
+        self.assertEqual(["query", "coverage"], successful_evidence["receipts"])
+
+    def test_bound_catalog_and_covered_queries_derive_ytd_flow_snapshot_semantics(self):
+        adapter = _load_e2e_module("canary_transcript_adapter")
+        requests = [
+            {
+                "request_id": "flow",
+                "domain": "delivery",
+                "metric": "delivery_amount",
+                "dimensions": ["department"],
+                "time_range": {"start": "2026-01-01", "end": "2026-09-01"},
+            },
+            {
+                "request_id": "snapshot",
+                "domain": "receivable",
+                "metric": "overdue_receivable_amount",
+                "dimensions": ["department"],
+            },
+        ]
+        calls = [
+            self._metric_detail_call(adapter, "delivery", "delivery_amount", "current_month"),
+            self._metric_detail_call(adapter, "receivable", "overdue_receivable_amount", "current_snapshot"),
+            self._query_call(
+                requests,
+                [
+                    {"request_id": "flow", "status": "success"},
+                    {"request_id": "snapshot", "status": "success"},
+                ],
+                ["flow", "snapshot"],
+            ),
+        ]
+        plan, evidence = adapter._normalize(calls)
+        self.assertEqual("2026_ytd_flows_with_separate_snapshots", plan["time_semantics"])
+        self.assertIn("metric_detail", evidence["receipts"])
+        self.assertIn("coverage", evidence["receipts"])
+        failed_snapshot_calls = calls[:2] + [
+            self._query_call(
+                requests,
+                [
+                    {"request_id": "flow", "status": "success"},
+                    {"request_id": "snapshot", "status": "error"},
+                ],
+                ["flow"],
+            )
+        ]
+        failed_snapshot_plan, _ = adapter._normalize(failed_snapshot_calls)
+        self.assertNotEqual(
+            "2026_ytd_flows_with_separate_snapshots",
+            failed_snapshot_plan["time_semantics"],
+        )
+
+    def test_only_structured_unconfirmed_ambiguity_derives_clarification(self):
+        adapter = _load_e2e_module("canary_transcript_adapter")
+        arguments = {
+            "token": "Thailand",
+            "domain": "delivery",
+            "metric": "delivery_amount",
+        }
+        ambiguous = {
+            "status": "ambiguous",
+            "resolution_path": "master_candidate_query",
+            "token": "Thailand",
+            "must_clarify": True,
+            "must_stop_business_query": True,
+            "candidate_count": 2,
+            "candidate_count_is_lower_bound": False,
+            "truncated": False,
+            "candidates": [
+                {
+                    "entity_type": "department",
+                    "canonical_id": "d1",
+                    "canonical_code": "BKK",
+                    "display_name": "Thailand department",
+                    "filter_values": ["Thailand department"],
+                    "match_kind": "contains",
+                    "confidence": "candidate",
+                    "filter_role": "department",
+                },
+                {
+                    "entity_type": "customer_region",
+                    "canonical_id": "r1",
+                    "canonical_code": "TH",
+                    "display_name": "Thailand region",
+                    "filter_values": ["Thailand region"],
+                    "match_kind": "contains",
+                    "confidence": "candidate",
+                    "filter_role": "customer_region",
+                },
+            ],
+        }
+        plan, evidence = adapter._normalize(
+            [{"name": "datasage_entity_resolve", "arguments": arguments, "result": ambiguous}]
+        )
+        self.assertIn("clarify_entity_mapping", plan["operations"])
+        self.assertIn("ENTITY_AMBIGUOUS", evidence["error_codes"])
+        self.assertTrue(adapter._is_unconfirmed_entity_ambiguity(plan, evidence))
+
+        continued_plan = copy.deepcopy(plan)
+        continued_evidence = copy.deepcopy(evidence)
+        continued_evidence["query_attempted"] = True
+        self.assertFalse(
+            adapter._is_unconfirmed_entity_ambiguity(continued_plan, continued_evidence)
+        )
+        noncanonical = dict(ambiguous, must_stop_business_query=False)
+        noncanonical_plan, noncanonical_evidence = adapter._normalize(
+            [{"name": "datasage_entity_resolve", "arguments": arguments, "result": noncanonical}]
+        )
+        self.assertNotIn("clarify_entity_mapping", noncanonical_plan["operations"])
+        self.assertNotIn("ENTITY_AMBIGUOUS", noncanonical_evidence["error_codes"])
+
+        for invalid_arguments, invalid_payload in (
+            ({}, ambiguous),
+            (arguments, dict(ambiguous, token="different")),
+            (arguments, dict(ambiguous, candidate_count=1)),
+            (
+                arguments,
+                {
+                    **ambiguous,
+                    "candidates": [
+                        {
+                            key: value
+                            for key, value in candidate.items()
+                            if key not in {"canonical_id", "canonical_code"}
+                        }
+                        for candidate in ambiguous["candidates"]
+                    ],
+                },
+            ),
+        ):
+            invalid_plan, invalid_evidence = adapter._normalize(
+                [
+                    {
+                        "name": "datasage_entity_resolve",
+                        "arguments": invalid_arguments,
+                        "result": invalid_payload,
+                    }
+                ]
+            )
+            self.assertNotIn("clarify_entity_mapping", invalid_plan["operations"])
+            self.assertNotIn("ENTITY_AMBIGUOUS", invalid_evidence["error_codes"])
+
+    def test_live_success_requires_substantive_business_evidence(self):
+        adapter = _load_e2e_module("canary_transcript_adapter")
+        request = {
+            "request_id": "flow",
+            "domain": "delivery",
+            "metric": "delivery_amount",
+            "time_range": {"start": "2026-01-01", "end": "2026-09-01"},
+        }
+        call = self._query_call(
+            [request], [{"request_id": "flow", "status": "success"}], ["flow"]
+        )
+        call["result"]["source_evidence_ref"] = {
+            "schema": adapter.MODEL_SOURCE_REFERENCE_SCHEMA,
+            "source_ref_sha256": "a" * 64,
+        }
+        empty_call = copy.deepcopy(call)
+        empty_call["result"]["results"][0].update(row_count=0, rows=[])
+        empty_plan, empty_evidence = adapter._normalize(
+            [empty_call],
+            expected_business_database_ref_sha256="a" * 64,
+            expected_observed_on=date(2026, 8, 30),
+        )
+        self.assertEqual(0, empty_evidence["successful_queries"])
+        self.assertEqual("no_query", empty_plan["time_semantics"])
+
+        placeholder_call = copy.deepcopy(call)
+        placeholder_call["result"]["results"][0].update(
+            business_metric_ref="placeholder",
+            applied_time_range={},
+            rows=[{"x": "x"}],
+        )
+        placeholder_plan, placeholder_evidence = adapter._normalize(
+            [placeholder_call],
+            expected_business_database_ref_sha256="a" * 64,
+            expected_observed_on=date(2026, 8, 30),
+        )
+        self.assertEqual(0, placeholder_evidence["successful_queries"])
+        self.assertEqual("no_query", placeholder_plan["time_semantics"])
+
+        valid_plan, valid_evidence = adapter._normalize(
+            [call],
+            expected_business_database_ref_sha256="a" * 64,
+            expected_observed_on=date(2026, 8, 30),
+        )
+        self.assertEqual(1, valid_evidence["successful_queries"])
+        self.assertEqual(
+            "range:2026-01-01/2026-09-01", valid_plan["time_semantics"]
+        )
+
+    def test_live_ytd_composite_is_bound_to_capture_observation_month(self):
+        adapter = _load_e2e_module("canary_transcript_adapter")
+        requests = [
+            {
+                "request_id": "flow",
+                "domain": "delivery",
+                "metric": "delivery_amount",
+                "time_range": {"start": "2026-01-01", "end": "2026-09-01"},
+            },
+            {
+                "request_id": "snapshot",
+                "domain": "receivable",
+                "metric": "overdue_receivable_amount",
+            },
+        ]
+        calls = [
+            self._metric_detail_call(adapter, "delivery", "delivery_amount", "current_month"),
+            self._metric_detail_call(
+                adapter,
+                "receivable",
+                "overdue_receivable_amount",
+                "current_snapshot",
+            ),
+            self._query_call(
+                requests,
+                [
+                    {"request_id": "flow", "status": "success"},
+                    {"request_id": "snapshot", "status": "success"},
+                ],
+                ["flow", "snapshot"],
+            ),
+        ]
+        current_plan, _ = adapter._normalize(
+            calls, expected_observed_on=date(2026, 8, 30)
+        )
+        stale_plan, _ = adapter._normalize(
+            calls, expected_observed_on=date(2026, 7, 31)
+        )
+        self.assertEqual(
+            "2026_ytd_flows_with_separate_snapshots",
+            current_plan["time_semantics"],
+        )
+        self.assertNotEqual(
+            "2026_ytd_flows_with_separate_snapshots",
+            stale_plan["time_semantics"],
+        )
+
+    def test_empty_calls_do_not_emit_semantic_receipts(self):
+        adapter = _load_e2e_module("canary_transcript_adapter")
+        _plan, evidence = adapter._normalize(
+            [
+                {
+                    "name": "datasage_catalog",
+                    "arguments": {"requests": []},
+                    "result": {"status": "success", "results": []},
+                },
+                {
+                    "name": "datasage_entity_resolve",
+                    "arguments": {},
+                    "result": {"status": "ambiguous", "candidates": []},
+                },
+                self._query_call([], [], []),
+            ]
+        )
+        self.assertNotIn("catalog", evidence["receipts"])
+        self.assertNotIn("entity_resolution", evidence["receipts"])
+        self.assertNotIn("query", evidence["receipts"])
 
     def test_first_persisted_scorecard_call_derives_existing_operation(self):
         adapter = _load_e2e_module("canary_transcript_adapter")
@@ -1781,44 +2157,51 @@ class DistributionBoundaryTests(unittest.TestCase):
 
 
 class LiveReleaseEvidenceBoundaryTests(unittest.TestCase):
-    def test_live_contract_is_fixed_to_official_cli_and_two_by_three_plan(self):
+    @staticmethod
+    def _runner_module():
+        path = PROFILE_ROOT / "tests" / "run_live_release_evidence.py"
+        spec = importlib.util.spec_from_file_location(
+            "_datasage_live_release_evidence_test", path
+        )
+        if spec is None or spec.loader is None:
+            raise RuntimeError("cannot load live release evidence runner")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_live_contract_is_fixed_to_official_wecom_inbound_and_two_by_three_plan(self):
         contract = json.loads(
             (PROFILE_ROOT / "tests" / "fixtures" / "live_release_contract.json").read_text(
                 encoding="utf-8"
             )
         )
-        self.assertEqual("datasage-live-release-contract/v1", contract["schema"])
+        self.assertEqual("datasage-live-release-contract/v2", contract["schema"])
         self.assertEqual(2, contract["case_plan"]["turns_per_session"])
         self.assertEqual(2, len(contract["case_plan"]["case_ids"]))
         self.assertEqual(3, contract["case_plan"]["runs"])
         shapes = contract["execution"]["command_shapes"]
         prefix = ["{python}", "-B", "-m", "hermes_cli.main"]
-        self.assertEqual(prefix + ["chat", "-Q"], shapes["initial_turn"][:6])
-        self.assertIn("--query-file", shapes["initial_turn"])
-        self.assertEqual(prefix + ["chat", "-Q"], shapes["resume_turn"][:6])
-        self.assertIn("--resume", shapes["resume_turn"])
-        self.assertIn("{exact_session_id}", shapes["resume_turn"])
+        self.assertEqual({"session_export", "adapter", "scorer"}, set(shapes))
         self.assertEqual(prefix + ["sessions", "export"], shapes["session_export"][:6])
         self.assertIn("--session-id", shapes["session_export"])
-        self.assertEqual(prefix + ["send", "--to", "wecom"], shapes["outbound"][:7])
         self.assertEqual(["{python}", "-B", "{adapter}"], shapes["adapter"][:3])
         self.assertEqual(["{python}", "-B", "{scorer}"], shapes["scorer"][:3])
         rendered = json.dumps(shapes, sort_keys=True)
         for forbidden in ('"latest"', '"-c"', '"--continue"', '"-z"', '"--oneshot"'):
             self.assertNotIn(forbidden, rendered)
-        self.assertEqual(
-            "protocol_or_api_ack_not_user_read",
-            contract["outbound"]["evidence_semantics"],
-        )
-        self.assertEqual("sha256_only", contract["outbound"]["target_storage"])
+        self.assertEqual("wecom", contract["inbound"]["platform"])
+        self.assertEqual("dm", contract["inbound"]["chat_type"])
+        self.assertEqual("sha256_only", contract["inbound"]["identity_storage"])
         self.assertEqual(
             "4d497bc168a1782eeaffb82b3cfa1f9ae212e86d9fa6dea721fe34712a3179e7",
-            contract["outbound"]["expected_target_sha256"],
+            contract["inbound"]["expected_user_id_sha256"],
         )
         self.assertEqual(
-            "standalone_send_has_no_delivery_obligation",
-            contract["outbound"]["ledger_evidence"],
+            contract["inbound"]["expected_user_id_sha256"],
+            contract["inbound"]["expected_chat_id_sha256"],
         )
+        self.assertEqual("forbidden_in_finalize", contract["outbound"]["collection"])
+        self.assertEqual("not_verified", contract["outbound"]["status"])
         self.assertEqual(2, contract["review_policy"]["reviews_per_run_case"])
         self.assertEqual(2, len(set(contract["review_policy"]["trusted_reviewer_id_sha256"])))
         self.assertEqual(
@@ -1834,7 +2217,7 @@ class LiveReleaseEvidenceBoundaryTests(unittest.TestCase):
             contract["python_provenance_policy"]["site_packages"],
         )
         self.assertEqual(
-            "hermes_cli_main_session_export_send_from_pinned_checkout",
+            "hermes_cli_main_session_export_from_pinned_checkout",
             contract["python_provenance_policy"]["import_origins"],
         )
         self.assertFalse(contract["runtime_readiness_policy"]["configuration_values_recorded"])
@@ -1865,8 +2248,7 @@ class LiveReleaseEvidenceBoundaryTests(unittest.TestCase):
         self.assertNotIn("latest", source)
         self.assertNotIn("_rebind", source)
         self.assertNotIn("command[-len(template):]", source)
-        self.assertIn('_expand(shapes["initial_turn"]', source)
-        self.assertIn('_expand(shapes["session_export"]', source)
+        self.assertIn('shapes["session_export"]', source)
         self.assertIn("canary_transcript_adapter.py", source)
         self.assertIn("golden_expert_scorer.py", source)
         self.assertIn('"private" / commit', source)
@@ -1874,11 +2256,152 @@ class LiveReleaseEvidenceBoundaryTests(unittest.TestCase):
         self.assertIn('choices=("capture", "finalize")', source)
         self.assertIn("PYTHONNOUSERSITE", source)
         self.assertIn("partial finalize artifacts exist", source)
-        self.assertIn("expected_target_sha256", source)
+        self.assertIn("expected_user_id_sha256", source)
         self.assertIn("_set_read_only", source)
         self.assertIn("capture.sha256", source)
         self.assertIn("_python_provenance", source)
         self.assertNotIn('ack.get("target")', source)
+        self.assertIn(".capture-stage-", source)
+        self.assertIn("stage.replace(root)", source)
+        self.assertNotIn('shapes["outbound"]', source)
+        self.assertNotIn("protocol probe", source)
+        self.assertIn('"processes": {"session_export": export_record}', source)
+        self.assertIn('"processes": {"adapter": adapter_record, "scorer": scorer_record}', source)
+
+    def test_wecom_capture_requires_exact_three_unique_session_ids_before_runtime(self):
+        runner = self._runner_module()
+        contract = json.loads(
+            (PROFILE_ROOT / "tests" / "fixtures" / "live_release_contract.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        args = types.SimpleNamespace(session_ids=["one", "one", "three"])
+        with mock.patch.object(runner, "_runtime") as runtime:
+            with self.assertRaisesRegex(RuntimeError, "three unique ordered"):
+                with mock.patch.object(runner, "_require_capture_caller_readiness"):
+                    runner._capture(args, contract, {}, object())
+        runtime.assert_not_called()
+
+    def test_wecom_session_origin_requires_dm_hash_title_and_commit_time(self):
+        runner = self._runner_module()
+        contract = json.loads(
+            (PROFILE_ROOT / "tests" / "fixtures" / "live_release_contract.json").read_text(encoding="utf-8")
+        )
+        identity = "synthetic-self"
+        digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+        contract["inbound"]["expected_user_id_sha256"] = digest
+        contract["inbound"]["expected_chat_id_sha256"] = digest
+        session = {
+            "id": "complete-session",
+            "source": "wecom",
+            "chat_type": "dm",
+            "user_id": identity,
+            "chat_id": identity,
+            "title": "datasage-live-111111111111-run-1",
+            "started_at": "2026-08-30T00:00:01+00:00",
+        }
+        origin = runner._session_origin(
+            session,
+            contract=contract,
+            commit="1" * 40,
+            run_index=1,
+            commit_timestamp=datetime.fromisoformat("2026-08-30T00:00:00+00:00"),
+        )
+        self.assertEqual(digest, origin["user_id_sha256"])
+        self.assertEqual(digest, origin["chat_id_sha256"])
+        for key, value in (("source", "cli"), ("chat_type", "group"), ("title", "wrong")):
+            with self.subTest(key=key), self.assertRaises(RuntimeError):
+                runner._session_origin(
+                    {**session, key: value}, contract=contract, commit="1" * 40,
+                    run_index=1, commit_timestamp=datetime.fromisoformat("2026-08-30T00:00:00+00:00"),
+                )
+
+    def test_terminal_assistant_allows_closed_clarify_but_rejects_pending_tool(self):
+        runner = self._runner_module()
+        prompts = ["first", "second"]
+        closed = [
+            {"id": 1, "role": "user", "content": "first"},
+            {"id": 2, "role": "assistant", "content": None, "tool_calls": [{"id": "clarify-1", "function": {"name": "clarify"}}]},
+            {"id": 3, "role": "tool", "tool_call_id": "clarify-1", "tool_name": "clarify", "content": "declined"},
+            {"id": 4, "role": "assistant", "content": "final one", "tool_calls": None},
+            {"id": 5, "role": "user", "content": "second"},
+            {"id": 6, "role": "assistant", "content": "final two", "tool_calls": None},
+        ]
+        self.assertEqual(2, len(runner._endpoints(closed, prompts)))
+        with self.assertRaisesRegex(RuntimeError, "unclosed tool flow"):
+            runner._endpoints([*closed[:2], *closed[3:]], prompts)
+
+    def test_inbound_capture_rejects_push_and_tool_name_entitlement_bypass(self):
+        runner = self._runner_module()
+        prompts = ["first", "second"]
+
+        def transcript(function_name, tool_name, content):
+            return [
+                {"id": 1, "role": "user", "content": "first"},
+                {
+                    "id": 2,
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{"id": "call-1", "function": {"name": function_name}}],
+                },
+                {"id": 3, "role": "tool", "tool_call_id": "call-1", "tool_name": tool_name, "content": content},
+                {"id": 4, "role": "assistant", "content": "final one", "tool_calls": None},
+                {"id": 5, "role": "user", "content": "second"},
+                {"id": 6, "role": "assistant", "content": "final two", "tool_calls": None},
+            ]
+
+        with self.assertRaisesRegex(RuntimeError, "datasage_push is forbidden"):
+            runner._endpoints(transcript("datasage_push", "datasage_push", "{}"), prompts)
+
+        denial = json.dumps({"error": {"code": "DATA_ENTITLEMENT_DENIED"}})
+        for tool_name in ("datasage_catalog", ""):
+            with self.subTest(tool_name=tool_name), self.assertRaisesRegex(RuntimeError, "name does not match"):
+                runner._endpoints(
+                    transcript("datasage_query", tool_name, denial), prompts
+                )
+
+    def test_capture_stage_cleanup_is_scoped_to_exact_private_root(self):
+        runner = self._runner_module()
+        commit = "1" * 40
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary) / "evidence"
+            private = evidence / "private"
+            stage = private / f".capture-stage-{commit}-{'a' * 32}"
+            stage.mkdir(parents=True)
+            (stage / "partial").write_text("partial", encoding="utf-8")
+            with mock.patch.object(runner, "EVIDENCE_DIR", evidence):
+                runner._cleanup_capture_stage(stage, commit)
+                self.assertFalse(stage.exists())
+                outside = evidence / f".capture-stage-{commit}-{'b' * 32}"
+                outside.mkdir()
+                with self.assertRaisesRegex(RuntimeError, "unscoped"):
+                    runner._cleanup_capture_stage(outside, commit)
+                self.assertTrue(outside.exists())
+
+    def test_nonretryable_entitlement_is_detected_from_structured_tool_result(self):
+        runner = self._runner_module()
+        denied = [
+            {
+                "role": "tool",
+                "tool_name": "datasage_catalog",
+                "content": json.dumps(
+                    {"error": {"code": "DATA_ENTITLEMENT_DENIED"}}
+                ),
+            }
+        ]
+        with self.assertRaisesRegex(RuntimeError, "nonretryable DATA_ENTITLEMENT_DENIED"):
+            runner._fail_on_nonretryable_tool_result(denied)
+        runner._fail_on_nonretryable_tool_result(
+            [
+                {
+                    "role": "tool",
+                    "tool_name": "datasage_catalog",
+                    "content": json.dumps(
+                        {"status": "error", "message": "DATA_ENTITLEMENT_DENIED"}
+                    ),
+                }
+            ]
+        )
 
     def test_live_contract_reuses_the_tracked_golden_cases_without_legacy_ids(self):
         suite = json.loads(
@@ -1902,6 +2425,8 @@ class LiveReleaseEvidenceBoundaryTests(unittest.TestCase):
         ]
         self.assertEqual([1, 2], [case["turn"] for case in selected])
         self.assertEqual(1, len({case["conversation_id"] for case in selected}))
+        self.assertEqual([5, 2], [len(case["required_conclusions"]) for case in selected])
+        self.assertEqual("no_query", selected[1]["plan_constraints"]["time_semantics"])
         self.assertNotIn("session_id", contract)
         self.assertNotIn("message_id", json.dumps(contract, sort_keys=True))
 

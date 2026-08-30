@@ -10,6 +10,8 @@ as an explicit reviewer assertion or remain ``unreviewed``.
 from __future__ import annotations
 
 import argparse
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 import os
@@ -279,6 +281,381 @@ def _time_token(request: dict[str, Any]) -> str:
     return current
 
 
+def _composite_time_token(
+    requests: list[dict[str, Any]],
+    catalog_time_policies: dict[tuple[str, str], str],
+    *,
+    expected_observed_on: date | None = None,
+) -> str | None:
+    flow_years: set[str] = set()
+    has_separate_snapshot = False
+    for request in requests:
+        domain = request.get("domain")
+        metric = request.get("metric")
+        if not isinstance(domain, str) or not isinstance(metric, str):
+            continue
+        policy = catalog_time_policies.get((domain, metric))
+        period = request.get("time_range")
+        if policy == "current_month" and isinstance(period, dict):
+            start, end = period.get("start"), period.get("end")
+            try:
+                start_date = date.fromisoformat(start) if isinstance(start, str) else None
+                end_date = date.fromisoformat(end) if isinstance(end, str) else None
+            except ValueError:
+                start_date = end_date = None
+            if (
+                start_date is not None
+                and end_date is not None
+                and (start_date.month, start_date.day) == (1, 1)
+                and end_date.year == start_date.year
+                and end_date > start_date
+                and (
+                    expected_observed_on is None
+                    or (
+                        start_date.year == expected_observed_on.year
+                        and end_date
+                        == date(
+                            expected_observed_on.year
+                            + (1 if expected_observed_on.month == 12 else 0),
+                            1 if expected_observed_on.month == 12 else expected_observed_on.month + 1,
+                            1,
+                        )
+                    )
+                )
+            ):
+                flow_years.add(str(start_date.year))
+        elif (
+            policy == "current_snapshot"
+            and "calendar_month" not in request
+            and "time_range" not in request
+        ):
+            has_separate_snapshot = True
+    if len(flow_years) == 1 and has_separate_snapshot:
+        return f"{next(iter(flow_years))}_ytd_flows_with_separate_snapshots"
+    return None
+
+
+def _is_canonical_entity_ambiguity(
+    args: dict[str, Any], payload: dict[str, Any]
+) -> bool:
+    token = args.get("token")
+    if not isinstance(token, str) or not token or len(token) > 128:
+        return False
+    domain = args.get("domain")
+    metric = args.get("metric")
+    entity_types = args.get("entity_types")
+    has_bound_metric = isinstance(domain, str) and bool(domain) and isinstance(metric, str) and bool(metric)
+    has_explicit_types = (
+        isinstance(entity_types, list)
+        and bool(entity_types)
+        and len(entity_types) == len(set(entity_types))
+        and all(isinstance(item, str) and item for item in entity_types)
+    )
+    if not has_bound_metric and not has_explicit_types:
+        return False
+    candidates = payload.get("candidates")
+    candidate_count = payload.get("candidate_count")
+    resolution_path = payload.get("resolution_path")
+    lower_bound = payload.get("candidate_count_is_lower_bound")
+    truncated = payload.get("truncated")
+    if (
+        payload.get("status") != "ambiguous"
+        or resolution_path
+        not in {
+            "registered_exact",
+            "registered_and_master_exact",
+            "master_candidate_query",
+            "master_exact_short_token",
+        }
+        or payload.get("token") != token
+        or payload.get("must_clarify") is not True
+        or payload.get("must_stop_business_query") is not True
+        or not isinstance(candidates, list)
+        or not candidates
+        or type(candidate_count) is not int
+        or candidate_count < len(candidates)
+        or candidate_count < 2
+        or type(lower_bound) is not bool
+        or type(truncated) is not bool
+        or (candidate_count != len(candidates) and truncated is not True)
+        or (lower_bound is True and truncated is not True)
+    ):
+        return False
+    allowed_types = set(entity_types) if has_explicit_types else None
+    identities: list[bytes] = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            return False
+        entity_type = candidate.get("entity_type")
+        display_name = candidate.get("display_name")
+        filter_values = candidate.get("filter_values")
+        normalized_token = " ".join(token.strip().casefold().split())
+        if (
+            not isinstance(entity_type, str)
+            or not entity_type
+            or (allowed_types is not None and entity_type not in allowed_types)
+            or not isinstance(display_name, str)
+            or not display_name
+            or not isinstance(filter_values, list)
+            or not filter_values
+            or any(not isinstance(value, str) or not value for value in filter_values)
+            or candidate.get("match_kind")
+            not in {"registered_exact", "exact", "prefix", "contains"}
+            or candidate.get("confidence") not in {"exact", "candidate"}
+            or (
+                not (
+                    isinstance(candidate.get("canonical_id"), str)
+                    and bool(candidate["canonical_id"])
+                )
+                and not (
+                    isinstance(candidate.get("canonical_code"), str)
+                    and bool(candidate["canonical_code"])
+                )
+                and candidate.get("match_kind") != "registered_exact"
+            )
+            or (
+                has_bound_metric
+                and not (
+                    isinstance(candidate.get("filter_role"), str)
+                    and re.fullmatch(
+                        r"[a-z][a-z0-9_]{0,63}", candidate["filter_role"]
+                    )
+                    is not None
+                )
+                and not (
+                    isinstance(candidate.get("filter_role_candidates"), list)
+                    and bool(candidate["filter_role_candidates"])
+                    and all(
+                        isinstance(role, str)
+                        and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", role)
+                        is not None
+                        for role in candidate["filter_role_candidates"]
+                    )
+                )
+            )
+            or (
+                candidate.get("match_kind") != "registered_exact"
+                and not any(
+                    normalized_token in " ".join(value.casefold().split())
+                    or " ".join(value.casefold().split()) in normalized_token
+                    for value in (
+                        display_name,
+                        *filter_values,
+                        *(
+                            [candidate["canonical_id"]]
+                            if isinstance(candidate.get("canonical_id"), str)
+                            and candidate["canonical_id"]
+                            else []
+                        ),
+                        *(
+                            [candidate["canonical_code"]]
+                            if isinstance(candidate.get("canonical_code"), str)
+                            and candidate["canonical_code"]
+                            else []
+                        ),
+                    )
+                )
+            )
+        ):
+            return False
+        identities.append(
+            _canonical(
+                {
+                    "entity_type": entity_type,
+                    "canonical_id": candidate.get("canonical_id"),
+                    "canonical_code": candidate.get("canonical_code"),
+                    "display_name": display_name,
+                    "filter_values": filter_values,
+                }
+            )
+        )
+    return len(identities) == len(set(identities))
+
+
+def _applied_time_matches_live_request(
+    value: Any,
+    request: dict[str, Any],
+    expected_observed_on: date,
+) -> bool:
+    if not isinstance(value, dict) or not value:
+        return False
+    requested = request.get("time_range")
+    candidates = [value]
+    current = value.get("current")
+    if isinstance(current, dict):
+        candidates.append(current)
+    if isinstance(requested, dict):
+        matching = [
+            candidate
+            for candidate in candidates
+            if candidate.get("start") == requested.get("start")
+            and candidate.get("end") == requested.get("end")
+            and isinstance(candidate.get("source"), str)
+            and bool(candidate["source"])
+        ]
+        if not matching:
+            return False
+        calendar = matching[0].get("calendar_evidence")
+        try:
+            start_date = date.fromisoformat(str(requested.get("start")))
+            end_date = date.fromisoformat(str(requested.get("end")))
+        except ValueError:
+            return False
+        expected_period_state = (
+            "completed"
+            if end_date <= expected_observed_on
+            else "not_started"
+            if start_date > expected_observed_on
+            else "in_progress"
+        )
+        return (
+            start_date < end_date
+            and isinstance(calendar, dict)
+            and calendar.get("version") == "calendar-period-evidence/v2"
+            and calendar.get("observation_basis")
+            == "business_clock_query_observation"
+            and calendar.get("observed_on") == expected_observed_on.isoformat()
+            and calendar.get("period_state") == expected_period_state
+            and calendar.get("source_freshness") == "not_proven"
+        )
+    source = value.get("source")
+    if source == "current_snapshot":
+        try:
+            as_of_date = date.fromisoformat(str(value.get("as_of_date")))
+        except ValueError:
+            return False
+        return (
+            as_of_date == expected_observed_on
+            and value.get("resolution_state") == "resolved"
+        )
+    if source in {"latest_snapshot", "latest_non_null_snapshot", "latest_snapshot_offset"}:
+        snapshot_month = value.get("snapshot_month")
+        try:
+            snapshot_date = date.fromisoformat(f"{snapshot_month}-01")
+        except ValueError:
+            return False
+        return (
+            snapshot_date <= expected_observed_on.replace(day=1)
+            and value.get("resolution_state") == "resolved"
+        )
+    return False
+
+
+def _has_finite_business_fact(facts: dict[str, Any]) -> bool:
+    for value in facts.values():
+        if isinstance(value, bool) or value is None:
+            continue
+        try:
+            number = Decimal(str(value))
+        except (InvalidOperation, ValueError):
+            continue
+        if number.is_finite():
+            return True
+    return False
+
+
+def _has_substantive_live_query_evidence(
+    result: dict[str, Any],
+    *,
+    request: dict[str, Any] | None,
+    expected_observed_on: date | None,
+    wire_version: Any,
+) -> bool:
+    if result.get("status") != "success":
+        return False
+    row_count = result.get("row_count")
+    expected_metric_ref = (
+        "metric_"
+        + hashlib.sha256(
+            f"{request.get('domain')}\0{request.get('metric')}".encode("utf-8")
+        ).hexdigest()[:16]
+        if isinstance(request, dict)
+        else None
+    )
+    if (
+        wire_version != "datasage-query-model-wire/v3"
+        or not isinstance(request, dict)
+        or expected_observed_on is None
+        or type(row_count) is not int
+        or row_count <= 0
+        or result.get("business_metric_ref") != expected_metric_ref
+        or not isinstance(result.get("business_metric_label"), str)
+        or not result["business_metric_label"]
+        or result.get("data_state")
+        not in {"complete", "rows", "zero", "truncated", "incomplete"}
+        or type(result.get("truncated")) is not bool
+        or not _applied_time_matches_live_request(
+            result.get("applied_time_range"), request, expected_observed_on
+        )
+        or result.get("error") is not None
+    ):
+        return False
+    rows = result.get("rows")
+    required_row_keys = {
+        "claim_id",
+        "dimensions",
+        "facts",
+        "states",
+        "allowed_relations",
+        "unit",
+        "currency",
+    }
+    return (
+        isinstance(rows, list)
+        and len(rows) == row_count
+        and all(
+            isinstance(row, dict)
+            and set(row) == required_row_keys
+            and isinstance(row.get("claim_id"), str)
+            and re.fullmatch(r"claim_[0-9a-f]{20}", row["claim_id"]) is not None
+            and isinstance(row.get("dimensions"), list)
+            and all(
+                isinstance(dimension, dict)
+                and set(dimension) == {"label", "value"}
+                and isinstance(dimension.get("label"), str)
+                and bool(dimension["label"])
+                and isinstance(dimension.get("value"), str)
+                and bool(dimension["value"])
+                for dimension in row["dimensions"]
+            )
+            and isinstance(row.get("facts"), dict)
+            and bool(row["facts"])
+            and all(
+                isinstance(key, str)
+                and re.fullmatch(r"[a-z][a-z0-9_]{0,79}", key) is not None
+                for key in row["facts"]
+            )
+            and _has_finite_business_fact(row["facts"])
+            and isinstance(row.get("states"), dict)
+            and all(
+                isinstance(key, str)
+                and re.fullmatch(r"[a-z][a-z0-9_]{0,79}", key) is not None
+                and isinstance(value, str)
+                and bool(value)
+                for key, value in row["states"].items()
+            )
+            and isinstance(row.get("allowed_relations"), list)
+            and "observation" in row["allowed_relations"]
+            and all(
+                isinstance(relation, str) and bool(relation)
+                for relation in row["allowed_relations"]
+            )
+            and (
+                row.get("unit") is None
+                or (isinstance(row.get("unit"), str) and bool(row["unit"]))
+            )
+            and (
+                row.get("currency") is None
+                or (
+                    isinstance(row.get("currency"), str)
+                    and bool(row["currency"])
+                )
+            )
+            for row in rows
+        )
+    )
+
+
 def _extract_calls(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
     result_rows: dict[str, sqlite3.Row] = {}
     for row in rows:
@@ -468,6 +845,7 @@ def _normalize(
     *,
     expected_business_database_ref_sha256: str | None = None,
     typed_context_bindings: bool = False,
+    expected_observed_on: date | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     domains: list[str] = []
     metrics: list[str] = []
@@ -480,8 +858,12 @@ def _normalize(
     requested_ids: list[str] = []
     result_ids: list[str] = []
     successful_ids: set[str] = set()
+    substantive_successful_ids: set[str] = set()
     failed_ids: set[str] = set()
     coverage_ids: set[str] = set()
+    request_time_tokens: dict[str, str] = {}
+    request_by_id: dict[str, dict[str, Any]] = {}
+    catalog_time_policies: dict[tuple[str, str], str] = {}
     decomposition_ids: set[str] = set()
     reconciled_ids: set[str] = set()
     decomposition_overall_ids: dict[str, str] = {}
@@ -501,9 +883,17 @@ def _normalize(
         args = call["arguments"]
         payload = call["result"]
         if name == "datasage_catalog" and payload.get("status") == "success":
-            _ordered_add(receipts, "catalog")
             requests = args.get("requests") or []
             results = payload.get("results") or []
+            if (
+                isinstance(requests, list)
+                and requests
+                and all(isinstance(request, dict) and request for request in requests)
+                and isinstance(results, list)
+                and results
+                and all(isinstance(result, dict) and result for result in results)
+            ):
+                _ordered_add(receipts, "catalog")
             if (
                 call_index == 0
                 and len(requests) == 1
@@ -517,17 +907,35 @@ def _normalize(
                 _ordered_add(operations, _PERFORMANCE_SCORECARD_FIRST)
             if _is_bound_metric_detail_catalog_call(args, payload):
                 _ordered_add(receipts, "metric_detail")
+                request = requests[0]
+                metric = results[0]["metric"]
+                time_policy = metric.get("time_policy")
+                if isinstance(time_policy, str):
+                    catalog_time_policies[(request["domain"], request["metric"])] = time_policy
             for request in requests:
                 if isinstance(request, dict):
                     _ordered_add(domains, request.get("domain"))
                     _ordered_add(metrics, request.get("metric"))
         elif name == "datasage_entity_resolve":
-            _ordered_add(receipts, "entity_resolution")
+            if (
+                isinstance(args.get("token"), str)
+                and bool(args["token"])
+                and payload.get("status") in {"resolved", "ambiguous", "not_found"}
+                and isinstance(payload.get("resolution_path"), str)
+                and bool(payload["resolution_path"])
+            ):
+                _ordered_add(receipts, "entity_resolution")
             _ordered_add(domains, args.get("domain"))
             _ordered_add(metrics, args.get("metric"))
             for entity_type in args.get("entity_types") or []:
                 _ordered_add(dimensions, entity_type)
+            for candidate in payload.get("candidates") or []:
+                if isinstance(candidate, dict):
+                    _ordered_add(dimensions, candidate.get("entity_type"))
             _ordered_add(operations, "entity_preflight")
+            if _is_canonical_entity_ambiguity(args, payload):
+                _ordered_add(error_codes, "ENTITY_AMBIGUOUS")
+                _ordered_add(operations, "clarify_entity_mapping")
         elif name == "datasage_query":
             if expected_business_database_ref_sha256 is not None:
                 reference = payload.get("source_evidence_ref")
@@ -542,7 +950,6 @@ def _normalize(
                         "live fixture business database source binding changed"
                     )
             query_attempted = True
-            _ordered_add(receipts, "query")
             requests = args.get("requests") or []
             if len(requests) > 1:
                 _ordered_add(operations, "parallel_evidence")
@@ -557,7 +964,10 @@ def _normalize(
                     request.get("metric_filters"), typed=typed_context_bindings
                 ).items():
                     filter_fingerprints[key] = digest
-                _ordered_add(time_tokens, _time_token(request))
+                request_id = request.get("request_id")
+                if isinstance(request_id, str) and request_id:
+                    request_time_tokens[request_id] = _time_token(request)
+                    request_by_id[request_id] = request
                 comparison = request.get("comparison")
                 if isinstance(comparison, dict):
                     _ordered_add(operations, comparison.get("kind"))
@@ -633,6 +1043,15 @@ def _normalize(
                             if isinstance(request_id, str) and request_id:
                                 coverage_ids.add(request_id)
             results = payload.get("results")
+            if (
+                isinstance(requests, list)
+                and requests
+                and all(isinstance(request, dict) and request for request in requests)
+                and isinstance(results, list)
+                and results
+                and all(isinstance(result, dict) and result for result in results)
+            ):
+                _ordered_add(receipts, "query")
             if isinstance(results, list):
                 for result in results:
                     if not isinstance(result, dict):
@@ -645,6 +1064,16 @@ def _normalize(
                     result_ids.append(request_id)
                     if result.get("status") == "success":
                         successful_ids.add(request_id)
+                        if (
+                            expected_business_database_ref_sha256 is None
+                            or _has_substantive_live_query_evidence(
+                                result,
+                                request=request_by_id.get(request_id),
+                                expected_observed_on=expected_observed_on,
+                                wire_version=payload.get("model_wire_version"),
+                            )
+                        ):
+                            substantive_successful_ids.add(request_id)
                     else:
                         failed_ids.add(request_id)
                     truncated = truncated or result.get("truncated") is True
@@ -708,7 +1137,11 @@ def _normalize(
     ):
         request_result_integrity = False
         _ordered_add(error_codes, "TRANSCRIPT_REQUEST_RESULT_MISMATCH")
-    successful_queries = len(successful_ids)
+    if request_result_integrity:
+        for request_id in requested_ids:
+            if request_id in substantive_successful_ids and request_id in coverage_ids:
+                _ordered_add(time_tokens, request_time_tokens.get(request_id))
+    successful_queries = len(substantive_successful_ids)
     failed_queries = len(failed_ids | (expected_result_set - result_set))
     if expected_result_set and request_result_integrity:
         _ordered_add(receipts, "coverage")
@@ -743,7 +1176,20 @@ def _normalize(
         _ordered_add(receipts, "entitlement")
         if not query_attempted:
             _ordered_add(operations, "deny_before_data_access")
-    time_semantics = (
+    composite_time = _composite_time_token(
+        [
+            request_by_id[request_id]
+            for request_id in requested_ids
+            if request_id in request_by_id
+            and request_id in substantive_successful_ids
+            and request_id in coverage_ids
+        ]
+        if request_result_integrity
+        else [],
+        catalog_time_policies,
+        expected_observed_on=expected_observed_on,
+    )
+    time_semantics = composite_time or (
         time_tokens[0]
         if len(time_tokens) == 1
         else "multi:" + _sha256(time_tokens)
@@ -769,6 +1215,17 @@ def _normalize(
             "query_attempted": query_attempted,
             "error_codes": error_codes,
         },
+    )
+
+
+def _is_unconfirmed_entity_ambiguity(
+    plan: dict[str, Any], evidence: dict[str, Any]
+) -> bool:
+    return (
+        "entity_resolution" in evidence["receipts"]
+        and "ENTITY_AMBIGUOUS" in evidence["error_codes"]
+        and "clarify_entity_mapping" in plan["operations"]
+        and evidence["query_attempted"] is False
     )
 
 
@@ -1030,6 +1487,17 @@ def adapt(
     turns = bindings.get("turns")
     if not isinstance(captured_at, str) or not captured_at or not isinstance(turns, list) or not turns:
         raise ValueError("bindings captured_at and non-empty turns are required")
+    captured_observed_on: date | None = None
+    if live_fixture:
+        try:
+            captured_timestamp = datetime.fromisoformat(
+                captured_at.replace("Z", "+00:00")
+            )
+        except ValueError as exc:
+            raise ValueError("live bindings captured_at must be an ISO-8601 timestamp") from exc
+        if captured_timestamp.tzinfo is None:
+            raise ValueError("live bindings captured_at must include a timezone offset")
+        captured_observed_on = captured_timestamp.date()
     if any(not isinstance(turn, dict) for turn in turns):
         raise ValueError("turn bindings must be objects")
     test_ids = [turn.get("test_id") for turn in turns]
@@ -1038,7 +1506,10 @@ def adapt(
 
     candidate_rows: list[dict[str, Any]] = []
     receipt_turns: list[dict[str, Any]] = []
-    previous: dict[str, tuple[str, str]] = {}
+    previous: dict[
+        str,
+        tuple[str, str, bool, frozenset[str], frozenset[str]],
+    ] = {}
     connection = _connection or _open_read_only(state_db)
     owns_connection = _connection is None
     try:
@@ -1109,9 +1580,19 @@ def adapt(
                     else None
                 ),
                 typed_context_bindings=live_fixture,
+                expected_observed_on=captured_observed_on,
             )
             signature = _sha256({key: value for key, value in plan.items() if key != "context_action"})
             prior = previous.get(conversation)
+            ambiguity_preserve = (
+                prior is not None
+                and prior[0] == binding["session_id"]
+                and _is_unconfirmed_entity_ambiguity(plan, evidence)
+                and bool(plan["domains"])
+                and bool(plan["metrics"])
+                and set(plan["domains"]).issubset(prior[3])
+                and set(plan["metrics"]).issubset(prior[4])
+            )
             final_answer_sha256 = _sha256(final_row["content"])
             conclusions, review, trace = _review(
                 binding.get("review"),
@@ -1178,7 +1659,7 @@ def adapt(
                 plan["context_action"] = "new"
             elif prior[0] != binding["session_id"]:
                 plan["context_action"] = "reset"
-            elif prior[1] == signature:
+            elif ambiguity_preserve or prior[1] == signature:
                 plan["context_action"] = "preserve"
             else:
                 plan["context_action"] = "replace"
@@ -1186,9 +1667,17 @@ def adapt(
                 _validate_live_context_bindings(plan.get("context_bindings"))
             if prior is not None and plan["context_action"] in {"preserve", "replace"}:
                 _ordered_add(evidence["receipts"], "context_transition")
+            if ambiguity_preserve and prior[2]:
+                _ordered_add(evidence["receipts"], "catalog")
             if plan["context_action"] == "reset":
                 _ordered_add(evidence["receipts"], "session_reset")
-            previous[conversation] = (binding["session_id"], signature)
+            previous[conversation] = (
+                binding["session_id"],
+                signature,
+                "catalog" in evidence["receipts"],
+                frozenset(plan["domains"]),
+                frozenset(plan["metrics"]),
+            )
             transcript_projection = [
                 {
                     "id": row["id"],

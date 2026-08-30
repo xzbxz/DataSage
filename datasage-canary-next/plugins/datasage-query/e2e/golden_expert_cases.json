@@ -441,7 +441,7 @@
     {
       "id": "multiturn_08_rc5_thailand_followup", "category": "multiturn", "conversation_id": "rc5_live_20260825_200011", "turn": 2,
       "prompt": "泰国呢",
-      "plan_constraints": {"domains": [], "metrics": [], "dimensions": ["department"], "operations": ["clarify_entity_mapping"], "time_semantics": "2026_ytd_pending_entity_confirmation", "context_action": "preserve", "must_not_metrics": [], "must_not_operations": ["paired_comparison", "fixed_scorecard_bundle", "fixed_metric_count", "fixed_call_order"]},
+      "plan_constraints": {"domains": [], "metrics": [], "dimensions": ["department"], "operations": ["clarify_entity_mapping"], "time_semantics": "no_query", "context_action": "preserve", "must_not_metrics": [], "must_not_operations": ["paired_comparison", "fixed_scorecard_bundle", "fixed_metric_count", "fixed_call_order"]},
       "required_conclusions": ["ask_entity_clarification", "state_no_unconfirmed_entity_substitution"],
       "allowed_conclusions": ["ask_entity_clarification", "state_no_unconfirmed_entity_substitution", "report_entity_candidates", "disclose_data_limits"],
       "forbidden_conclusions": ["assume_thailand_equals_bkk_without_confirmation", "claim_benchmarkless_absolute_scale_is_small", "claim_cross_scope_magnitude_ratio_without_compatible_population", "claim_opposite_trends_without_aligned_period_series", "claim_formal_trend_from_partial_period_mismatch", "claim_scope_incompatible_cross_metric_strength", "invent_result"],

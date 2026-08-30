@@ -291,7 +291,7 @@ def _live_manifest(contract=None):
     contract = contract or _live_contract()
     return {
         "release_target": contract["subject"]["version"],
-        "transcript_source": "cli",
+        "transcript_source": "wecom",
         "trusted_replay_gate": {
             "case_ids": copy.deepcopy(contract["case_plan"]["case_ids"]),
             "required_replay_runs_per_case": contract["case_plan"]["runs"],
@@ -483,14 +483,23 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
         receipt = {
             "schema": "datasage-canary-receipt/v1",
             "captured_at": "2026-08-29T00:00:00+00:00",
-            "source": {"platform": "cli", "sqlite_mode": "ro", "query_only": True, "state_db_identity_sha256": database_identity},
+            "source": {"platform": "wecom", "sqlite_mode": "ro", "query_only": True, "state_db_identity_sha256": database_identity},
             "profile_artifact": profile,
             "state_db_identity_sha256": database_identity,
             "candidate_cases_sha256": sha(candidate_cases),
             "turns": turns,
         }
         receipt["receipt_sha256"] = sha(receipt)
-        return session_id, {"id": session_id, "messages": messages}, {
+        return session_id, {
+            "id": session_id,
+            "source": "wecom",
+            "chat_type": "dm",
+            "user_id": "synthetic-test-identity",
+            "chat_id": "synthetic-test-identity",
+            "title": f"datasage-live-{subject['profile_git_commit'][:12]}-run-{run_index}",
+            "started_at": "2026-08-29T00:00:00+00:00",
+            "messages": messages,
+        }, {
             "schema": "datasage-golden-expert-candidate/v1",
             "profile_artifact": profile,
             "state_db_identity_sha256": database_identity,
@@ -555,11 +564,6 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
         run_dir = evidence_dir / "private" / subject["profile_git_commit"] / f"run-{run_index}"
         run_dir.mkdir(parents=True)
         session_id, export, candidate, external_reviews = candidate_and_export(run_index)
-        prompt_paths = []
-        for turn, case_id in enumerate(case_ids, 1):
-            prompt_path = run_dir / f"turn-{turn}.txt"
-            prompt_path.write_text(golden[case_id]["prompt"], encoding="utf-8")
-            prompt_paths.append(prompt_path)
         export_path = run_dir / "session.jsonl"
         export_path.write_text(json.dumps(export, ensure_ascii=False) + "\n", encoding="utf-8")
         candidate_path = run_dir / "candidate.json"
@@ -573,43 +577,36 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
         score = scorer.score(scorer.select_suite(suite, case_ids), candidate)
         score_path = run_dir / "score.json"
         score_path.write_text(json.dumps(score, ensure_ascii=False), encoding="utf-8")
-        nonce = f"{run_index:032x}"
-        message_path = run_dir / "outbound.txt"
-        message_path.write_text(f"DataSage live release protocol probe {nonce}", encoding="utf-8")
-        ack_path = run_dir / "ack.json"
-        ack_path.write_text(json.dumps({"success": True, "chat_id": "test-receiver", "message_id": f"opaque-{run_index}"}), encoding="utf-8")
         export_ref = artifact(export_path)
         candidate_ref = artifact(candidate_path)
         reviews_ref = artifact(reviews_path)
         score_ref = artifact(score_path)
-        message_ref = artifact(message_path)
-        ack_ref = artifact(ack_path)
         session_sha = sha_bytes(session_id.encode("utf-8"))
         capture_bindings = {
-            "initial_turn": {"python": python, "prompt_file": str(prompt_paths[0])},
-            "resume_turn": {"python": python, "exact_session_id": session_id, "prompt_file": str(prompt_paths[1])},
             "session_export": {"python": python, "exact_session_id": session_id},
         }
         capture_processes = {
             name: process(
                 commands[name], run_index * 10 + offset, run_dir, name.replace("_", "-"), capture_bindings[name],
-                export_path.read_bytes() if name == "session_export" else b"",
-                (f"session_id: {session_id}\n".encode("utf-8") if name in {"initial_turn", "resume_turn"} else b""),
+                export_path.read_bytes(),
             )
-            for offset, name in enumerate(("initial_turn", "resume_turn", "session_export"), 1)
+            for offset, name in enumerate(("session_export",), 1)
         }
-        prompt_refs = [artifact(path) for path in prompt_paths]
-        capture_artifacts = [*prompt_refs]
-        for name in ("initial_turn", "resume_turn", "session_export"):
+        capture_artifacts = []
+        for name in ("session_export",):
             capture_artifacts.extend((capture_processes[name]["stdout"], capture_processes[name]["stderr"]))
         capture_artifacts.append(export_ref)
         captures.append({
             "run_index": run_index,
             "case_ids": copy.deepcopy(case_ids),
-            "prompts": prompt_refs,
             "processes": capture_processes,
             "session": {
-                "source": "cli", "export_format": "jsonl", "turns": 2,
+                "source": "wecom", "chat_type": "dm",
+                "user_id_sha256": contract["inbound"]["expected_user_id_sha256"],
+                "chat_id_sha256": contract["inbound"]["expected_chat_id_sha256"],
+                "title": f"datasage-live-{subject['profile_git_commit'][:12]}-run-{run_index}",
+                "started_at": "2026-08-29T00:00:00+00:00",
+                "export_format": "jsonl", "turns": 2,
                 "lineage_sha256": sha([session_id]), "session_id_sha256": session_sha,
                 "final_answer_sha256": [external_reviews[0]["final_answer_sha256"], external_reviews[2]["final_answer_sha256"]],
                 "export": export_ref,
@@ -619,7 +616,6 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
         finalize_bindings = {
             "adapter": {"python": python, "adapter": str(builder.ROOT / builder.TRANSCRIPT_ADAPTER_PATH), "state_db": state_db, "bindings": str(bindings_path), "candidate": str(candidate_path)},
             "scorer": {"python": python, "scorer": str(builder.ROOT / builder.GOLDEN_SCORER_PATH), "golden_suite": str(builder.ROOT / builder.GOLDEN_SUITE_PATH), "case_1": case_ids[0], "case_2": case_ids[1], "candidate": str(candidate_path), "score_report": str(score_path)},
-            "outbound": {"python": python, "message_file": str(message_path)},
         }
         runs.append(
             {
@@ -628,26 +624,20 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
                 "processes": {
                     name: process(
                         commands[name], run_index * 10 + offset, run_dir, name, finalize_bindings[name],
-                        ack_path.read_bytes() if name == "outbound" else b"",
                     )
-                    for offset, name in enumerate(("adapter", "scorer", "outbound"), start=4)
+                    for offset, name in enumerate(("adapter", "scorer"), start=4)
                 },
                 "candidate": candidate_ref,
                 "score_report": score_ref,
                 "reviews": reviews_ref,
-                "outbound": {
-                    "target_sha256": contract["outbound"]["expected_target_sha256"],
-                    "nonce_sha256": sha_bytes(nonce.encode("utf-8")),
-                    "message": message_ref,
-                    "ack": ack_ref,
-                    "ledger_evidence": "standalone_send_has_no_delivery_obligation",
-                },
             }
         )
     source = lambda path: {"path": path, "sha256": TEST_SHA}
     capture_path = evidence_dir / "private" / subject["profile_git_commit"] / "capture.json"
     capture_path.write_text(json.dumps({
-        "schema": "datasage-live-capture/v1",
+        "schema": "datasage-live-capture/v2",
+        "captured_at": "2026-08-29T00:00:00+00:00",
+        "subject_commit_timestamp": "2026-08-28T00:00:00+00:00",
         "subject": subject,
         "host": {"hermes_version": "0.20.5", "hermes_git_commit": TEST_HERMES_COMMIT},
         "contract": source("tests/fixtures/live_release_contract.json"),
@@ -664,7 +654,9 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
         reviews_path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
         run["reviews"] = artifact(reviews_path)
     return {
-        "schema": "datasage-live-release-evidence/v1",
+        "schema": "datasage-live-release-evidence/v2",
+        "captured_at": "2026-08-29T00:00:00+00:00",
+        "subject_commit_timestamp": "2026-08-28T00:00:00+00:00",
         "subject": subject,
         "host": {
             "hermes_version": "0.20.5",
@@ -686,6 +678,43 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
 
 
 class ReleaseEligibilityTests(unittest.TestCase):
+    def test_builder_binds_tool_names_before_entitlement_and_rejects_push(self):
+        builder = _builder()
+        prompts = ["first", "second"]
+
+        def transcript(function_name, tool_name, content):
+            return [
+                {"id": 1, "role": "user", "content": "first"},
+                {
+                    "id": 2,
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{"id": "call-1", "function": {"name": function_name}}],
+                },
+                {"id": 3, "role": "tool", "tool_call_id": "call-1", "tool_name": tool_name, "content": content},
+                {"id": 4, "role": "assistant", "content": "final one", "tool_calls": None},
+                {"id": 5, "role": "user", "content": "second"},
+                {"id": 6, "role": "assistant", "content": "final two", "tool_calls": None},
+            ]
+
+        clarify = transcript("clarify", "clarify", "declined")
+        self.assertEqual(2, len(builder._live_endpoints(clarify, prompts)))
+        with self.assertRaisesRegex(ValueError, "datasage_push is forbidden"):
+            builder._live_endpoints(
+                transcript("datasage_push", "datasage_push", "{}"), prompts
+            )
+
+        denial = json.dumps({"error": {"code": "DATA_ENTITLEMENT_DENIED"}})
+        for tool_name in ("datasage_catalog", ""):
+            with self.subTest(tool_name=tool_name), self.assertRaisesRegex(ValueError, "name does not match"):
+                builder._live_endpoints(
+                    transcript("datasage_query", tool_name, denial), prompts
+                )
+        correctly_bound = transcript("datasage_query", "datasage_query", denial)
+        builder._live_endpoints(correctly_bound, prompts)
+        with self.assertRaisesRegex(ValueError, "DATA_ENTITLEMENT_DENIED"):
+            builder._reject_entitlement_denial(correctly_bound)
+
     def test_receipt_identity_comparison_is_exact(self):
         builder = _builder()
         actual = {
@@ -858,7 +887,7 @@ class ReleaseEligibilityTests(unittest.TestCase):
         )
         self.assertEqual(contract["host"], live_contract["host"])
 
-    def test_raw_live_evidence_derives_all_five_live_gates(self):
+    def test_raw_wecom_inbound_evidence_derives_live_gates_but_not_outbound(self):
         builder = _builder()
         subject = _subject()
         contract = _live_contract()
@@ -868,7 +897,8 @@ class ReleaseEligibilityTests(unittest.TestCase):
             with (
                 mock.patch.object(builder, "EVIDENCE_DIR", evidence_dir),
                 mock.patch.object(builder, "_validate_hashed_source", return_value=Path("checked")),
-                mock.patch.object(builder, "_receiver_sha256", return_value=contract["outbound"]["expected_target_sha256"]),
+                mock.patch.object(builder, "_subject_commit_timestamp", return_value=builder._live_timestamp("2026-08-28T00:00:00+00:00", "test")),
+                mock.patch.object(builder, "_validate_wecom_session_origin", side_effect=lambda exported, *_args, **_kwargs: exported["id"]),
                 mock.patch.object(builder, "_is_read_only", return_value=True),
                 mock.patch.object(builder, "_current_python_provenance", return_value=report["python_provenance"]["before"]),
             ):
@@ -892,11 +922,18 @@ class ReleaseEligibilityTests(unittest.TestCase):
             "best_effort_not_same_user_adversarial",
             result["live_model_replay"]["capture_integrity"],
         )
-        self.assertEqual("protocol_api_ack_verified", result["outbound_delivery"]["status"])
+        self.assertEqual("missing", result["outbound_delivery"]["status"])
         self.assertEqual("protocol_or_api_ack_not_user_read", result["outbound_delivery"]["evidence_semantics"])
         self.assertEqual("passed", result["stability"]["status"])
         self.assertEqual("complete", result["live_replay_runs"]["status"])
-        self.assertTrue({code for code, _ in builder.LIVE_BLOCKERS}.isdisjoint(codes))
+        self.assertEqual(
+            {
+                "OUTBOUND_DELIVERY_NOT_VERIFIED",
+                "HOST_COMPACTION_NOT_VERIFIED",
+                "PERFORMANCE_COST_NOT_VERIFIED",
+            },
+            codes,
+        )
 
     def test_review_excerpt_binding_and_internal_label_laundering_are_rejected(self):
         builder = _builder()
@@ -1065,7 +1102,7 @@ class ReleaseEligibilityTests(unittest.TestCase):
             evidence["capture"].update({"sha256": hashlib.sha256(payload).hexdigest(), "bytes": len(payload)})
 
         def bool_exit(evidence, root):
-            mutate_capture(evidence, root, lambda capture: capture["runs"][0]["processes"]["initial_turn"].__setitem__("exit_code", True))
+            mutate_capture(evidence, root, lambda capture: capture["runs"][0]["processes"]["session_export"].__setitem__("exit_code", True))
 
         def duplicate_run(evidence, _root):
             evidence["runs"][1]["run_index"] = 1
@@ -1078,7 +1115,7 @@ class ReleaseEligibilityTests(unittest.TestCase):
 
         def forged_argv(evidence, root):
             def change(capture):
-                record = capture["runs"][0]["processes"]["resume_turn"]
+                record = capture["runs"][0]["processes"]["session_export"]
                 token = next(item for item in record["argv"] if isinstance(item, dict) and item.get("binding") == "exact_session_id")
                 token["value_sha256"] = "9" * 64
                 record["argv_sha256"] = builder._sha256_bytes(builder._canonical_json_bytes(record["argv"]))
@@ -1097,9 +1134,10 @@ class ReleaseEligibilityTests(unittest.TestCase):
 
         def sync_capture_and_reviews(evidence, root, capture):
             for captured in capture["runs"]:
-                refs = [*captured["prompts"]]
-                for name in ("initial_turn", "resume_turn", "session_export"):
-                    refs.extend((captured["processes"][name]["stdout"], captured["processes"][name]["stderr"]))
+                refs = [
+                    captured["processes"]["session_export"]["stdout"],
+                    captured["processes"]["session_export"]["stderr"],
+                ]
                 refs.append(captured["session"]["export"])
                 captured["artifact_set_sha256"] = builder._sha256_bytes(builder._canonical_json_bytes(refs))
             capture_path = root / evidence["capture"]["path"]
@@ -1119,22 +1157,6 @@ class ReleaseEligibilityTests(unittest.TestCase):
                 review_path.write_text(json.dumps(review_set, ensure_ascii=False), encoding="utf-8")
                 review_payload = review_path.read_bytes()
                 run["reviews"].update({"sha256": hashlib.sha256(review_payload).hexdigest(), "bytes": len(review_payload)})
-
-        def retained_session_stderr(evidence, root, payload, names):
-            capture_path = root / evidence["capture"]["path"]
-            capture = json.loads(capture_path.read_text(encoding="utf-8"))
-            for name in names:
-                ref = capture["runs"][0]["processes"][name]["stderr"]
-                path = root / ref["path"]
-                path.write_bytes(payload)
-                ref.update({"sha256": hashlib.sha256(payload).hexdigest(), "bytes": len(payload)})
-            sync_capture_and_reviews(evidence, root, capture)
-
-        def empty_initial_session_stderr(evidence, root):
-            retained_session_stderr(evidence, root, b"", ("initial_turn",))
-
-        def stale_session_stderr(evidence, root):
-            retained_session_stderr(evidence, root, b"session_id: stale-private-session\n", ("initial_turn", "resume_turn"))
 
         def review_wrong_session(evidence, root):
             mutate_json_ref(evidence, root, evidence["runs"][0]["reviews"], lambda value: value["reviews"][0].__setitem__("session_id_sha256", "9" * 64))
@@ -1184,9 +1206,10 @@ class ReleaseEligibilityTests(unittest.TestCase):
             stdout_path.write_bytes(payload)
             stdout_ref.update({"sha256": digest, "bytes": len(payload)})
             captured = capture["runs"][0]
-            refs = [*captured["prompts"]]
-            for name in ("initial_turn", "resume_turn", "session_export"):
-                refs.extend((captured["processes"][name]["stdout"], captured["processes"][name]["stderr"]))
+            refs = [
+                captured["processes"]["session_export"]["stdout"],
+                captured["processes"]["session_export"]["stderr"],
+            ]
             refs.append(captured["session"]["export"])
             captured["artifact_set_sha256"] = builder._sha256_bytes(builder._canonical_json_bytes(refs))
             capture_path.write_text(json.dumps(capture, ensure_ascii=False), encoding="utf-8")
@@ -1232,7 +1255,7 @@ class ReleaseEligibilityTests(unittest.TestCase):
         def synchronized_capture_rewrite_without_external_review(evidence, root):
             capture_path = root / evidence["capture"]["path"]
             capture = json.loads(capture_path.read_text(encoding="utf-8"))
-            capture["runs"][0]["processes"]["initial_turn"]["duration_ns"] += 1
+            capture["runs"][0]["processes"]["session_export"]["duration_ns"] += 1
             capture_path.write_text(json.dumps(capture, ensure_ascii=False), encoding="utf-8")
             payload = capture_path.read_bytes()
             digest = hashlib.sha256(payload).hexdigest()
@@ -1244,9 +1267,6 @@ class ReleaseEligibilityTests(unittest.TestCase):
 
         def replaced_python_proof(evidence, _root):
             evidence["python_provenance"]["before"]["executable"]["sha256"] = "9" * 64
-
-        def forged_target_hash(evidence, _root):
-            evidence["runs"][0]["outbound"]["target_sha256"] = "9" * 64
 
         def rescored_candidate_failure(evidence, root):
             ref = evidence["runs"][0]["candidate"]
@@ -1268,32 +1288,6 @@ class ReleaseEligibilityTests(unittest.TestCase):
             digest = hashlib.sha256(payload).hexdigest()
             ref.update({"sha256": digest, "bytes": len(payload)})
 
-        def ack_without_id(evidence, root):
-            path = root / evidence["runs"][0]["outbound"]["ack"]["path"]
-            path.write_text(json.dumps({"success": True, "data": "not-an-ack-id"}), encoding="utf-8")
-            payload = path.read_bytes()
-            evidence["runs"][0]["outbound"]["ack"].update(
-                {"sha256": hashlib.sha256(payload).hexdigest(), "bytes": len(payload)}
-            )
-            stdout_ref = evidence["runs"][0]["processes"]["outbound"]["stdout"]
-            stdout_path = root / stdout_ref["path"]
-            stdout_path.write_bytes(payload)
-            stdout_ref.update({"sha256": hashlib.sha256(payload).hexdigest(), "bytes": len(payload)})
-
-        def ack_target_fallback(evidence, root):
-            ack_ref = evidence["runs"][0]["outbound"]["ack"]
-            path = root / ack_ref["path"]
-            payload = json.dumps({"success": True, "target": "test-receiver", "message_id": "opaque"}).encode("utf-8")
-            path.write_bytes(payload)
-            ack_ref.update({"sha256": hashlib.sha256(payload).hexdigest(), "bytes": len(payload)})
-            stdout_ref = evidence["runs"][0]["processes"]["outbound"]["stdout"]
-            stdout_path = root / stdout_ref["path"]
-            stdout_path.write_bytes(payload)
-            stdout_ref.update({"sha256": hashlib.sha256(payload).hexdigest(), "bytes": len(payload)})
-
-        def forged_ledger(evidence, _root):
-            evidence["runs"][0]["outbound"]["ledger"] = {"pending": 0, "attempting": 0, "failed": 0}
-
         mutations = (
             bool_exit, duplicate_run, stale_commit, forged_pass_summary,
             forged_argv, forged_export_hash, rescored_candidate_failure,
@@ -1301,8 +1295,6 @@ class ReleaseEligibilityTests(unittest.TestCase):
             review_plan_trace, duplicate_review, review_disagrees, review_excerpt_hash_forged, static_case_review,
             candidate_bool_message_id, candidate_unknown_field, duplicate_export_key, extra_old_user_history,
             synchronized_capture_rewrite_without_external_review, replaced_python_proof,
-            empty_initial_session_stderr, stale_session_stderr,
-            forged_target_hash, ack_without_id, ack_target_fallback, forged_ledger,
         )
         for mutate in mutations:
             with self.subTest(mutation=mutate.__name__), tempfile.TemporaryDirectory() as temporary:
@@ -1313,7 +1305,8 @@ class ReleaseEligibilityTests(unittest.TestCase):
                 with (
                     mock.patch.object(builder, "EVIDENCE_DIR", evidence_dir),
                     mock.patch.object(builder, "_validate_hashed_source", return_value=Path("checked")),
-                    mock.patch.object(builder, "_receiver_sha256", return_value=contract["outbound"]["expected_target_sha256"]),
+                    mock.patch.object(builder, "_subject_commit_timestamp", return_value=builder._live_timestamp("2026-08-28T00:00:00+00:00", "test")),
+                    mock.patch.object(builder, "_validate_wecom_session_origin", side_effect=lambda exported, *_args, **_kwargs: exported["id"]),
                     mock.patch.object(builder, "_is_read_only", return_value=True),
                     mock.patch.object(builder, "_current_python_provenance", return_value=expected_python),
                 ):
@@ -1355,7 +1348,8 @@ class ReleaseEligibilityTests(unittest.TestCase):
                 with (
                     mock.patch.object(builder, "EVIDENCE_DIR", evidence_dir),
                     mock.patch.object(builder, "_validate_hashed_source", return_value=Path("checked")),
-                    mock.patch.object(builder, "_receiver_sha256", return_value=contract["outbound"]["expected_target_sha256"]),
+                    mock.patch.object(builder, "_subject_commit_timestamp", return_value=builder._live_timestamp("2026-08-28T00:00:00+00:00", "test")),
+                    mock.patch.object(builder, "_validate_wecom_session_origin", side_effect=lambda exported, *_args, **_kwargs: exported["id"]),
                     mock.patch.object(builder, "_is_read_only", return_value=readonly),
                     python_patch,
                 ):
@@ -1366,7 +1360,7 @@ class ReleaseEligibilityTests(unittest.TestCase):
                     )
                 self.assertIn("LIVE_RELEASE_EVIDENCE_INVALID", {item["code"] for item in result["blockers"]})
 
-    def test_live_ack_actual_receiver_must_match_anonymous_contract_pin(self):
+    def test_wecom_inbound_actual_identity_must_match_anonymous_contract_pin(self):
         builder = _builder()
         subject, contract = _subject(), _live_contract()
         with tempfile.TemporaryDirectory() as temporary:
@@ -1375,6 +1369,7 @@ class ReleaseEligibilityTests(unittest.TestCase):
             with (
                 mock.patch.object(builder, "EVIDENCE_DIR", evidence_dir),
                 mock.patch.object(builder, "_validate_hashed_source", return_value=Path("checked")),
+                mock.patch.object(builder, "_subject_commit_timestamp", return_value=builder._live_timestamp("2026-08-28T00:00:00+00:00", "test")),
                 mock.patch.object(builder, "_is_read_only", return_value=True),
                 mock.patch.object(builder, "_current_python_provenance", return_value=evidence["python_provenance"]["before"]),
             ):

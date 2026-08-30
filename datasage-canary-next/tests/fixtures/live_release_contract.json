@@ -1,6 +1,6 @@
 {
-  "schema": "datasage-live-release-contract/v1",
-  "scope": "test_only_official_hermes_cli_live_release",
+  "schema": "datasage-live-release-contract/v2",
+  "scope": "test_only_official_hermes_wecom_inbound_live_release",
   "subject": {
     "name": "datasage-canary-next",
     "version": "0.15.0-rc8"
@@ -26,39 +26,7 @@
   },
   "execution": {
     "timeout_seconds": 180,
-    "max_turns": 20,
-    "run_budget_seconds": 120,
     "command_shapes": {
-      "initial_turn": [
-        "{python}",
-        "-B",
-        "-m",
-        "hermes_cli.main",
-        "chat",
-        "-Q",
-        "--max-turns",
-        "20",
-        "--run-budget",
-        "120",
-        "--query-file",
-        "{prompt_file}"
-      ],
-      "resume_turn": [
-        "{python}",
-        "-B",
-        "-m",
-        "hermes_cli.main",
-        "chat",
-        "-Q",
-        "--resume",
-        "{exact_session_id}",
-        "--max-turns",
-        "20",
-        "--run-budget",
-        "120",
-        "--query-file",
-        "{prompt_file}"
-      ],
       "session_export": [
         "{python}",
         "-B",
@@ -97,20 +65,20 @@
         "{candidate}",
         "--output",
         "{score_report}"
-      ],
-      "outbound": [
-        "{python}",
-        "-B",
-        "-m",
-        "hermes_cli.main",
-        "send",
-        "--to",
-        "wecom",
-        "--json",
-        "--file",
-        "{message_file}"
       ]
     }
+  },
+  "inbound": {
+    "platform": "wecom",
+    "chat_type": "dm",
+    "expected_user_id_sha256": "4d497bc168a1782eeaffb82b3cfa1f9ae212e86d9fa6dea721fe34712a3179e7",
+    "expected_chat_id_sha256": "4d497bc168a1782eeaffb82b3cfa1f9ae212e86d9fa6dea721fe34712a3179e7",
+    "identity_storage": "sha256_only",
+    "session_input": "exactly_three_ordered_complete_session_ids",
+    "title_template": "datasage-live-{commit12}-run-{run_index}",
+    "started_at_policy": "not_before_subject_commit_timestamp",
+    "prompt_policy": "exactly_two_ordered_tracked_golden_user_prompts",
+    "terminal_policy": "terminal_nonempty_assistant_and_closed_tool_flow"
   },
   "review_policy": {
     "reviews_per_run_case": 2,
@@ -132,7 +100,7 @@
     "sys_path": "fixed_runner_path_sha256",
     "site_packages": "effective_path_pth_and_customization_content_sha256",
     "customization_modules": "sitecustomize_and_usercustomize_forbidden",
-    "import_origins": "hermes_cli_main_session_export_send_from_pinned_checkout",
+    "import_origins": "hermes_cli_main_session_export_from_pinned_checkout",
     "checks": "capture_and_finalize_pre_post"
   },
   "python_provenance_approval": {
@@ -208,27 +176,20 @@
         "path": "hermes_cli/session_export.py",
         "sha256": "4b3cf67d407a161861022e7dc75cf78e0ad7266860f01f6bce41dc9e5bd6fbdd",
         "bytes": 13275
-      },
-      {
-        "module": "hermes_cli.send_cmd",
-        "path": "hermes_cli/send_cmd.py",
-        "sha256": "351c5534a50570dc91bc751ffad5eb486209df392b35f253b7ecf71d792dd7de",
-        "bytes": 18403
       }
     ]
   },
   "outbound": {
-    "platform": "wecom",
-    "expected_target_sha256": "4d497bc168a1782eeaffb82b3cfa1f9ae212e86d9fa6dea721fe34712a3179e7",
-    "target_storage": "sha256_only",
-    "message_nonce": "random_per_run_sha256_only",
+    "collection": "forbidden_in_finalize",
+    "status": "not_verified",
     "evidence_semantics": "protocol_or_api_ack_not_user_read",
-    "ledger_evidence": "standalone_send_has_no_delivery_obligation"
+    "release_blocker": "OUTBOUND_DELIVERY_NOT_VERIFIED"
   },
   "runtime_readiness_policy": {
     "database_account": "external_gate_not_auto_passed",
     "database_tls": "external_gate_not_auto_passed",
     "wecom_configuration": "required_for_live_execution",
-    "configuration_values_recorded": false
+    "configuration_values_recorded": false,
+    "trusted_caller_readiness": "official_wecom_inbound_session_origin_verified"
   }
 }
