@@ -52,15 +52,14 @@ def _registry() -> dict[str, Any]:
     signature = []
     try:
         for relative_path in _REGISTRY_DEPENDENCIES:
-            stat = contract_store.trusted_path(relative_path).stat()
-            signature.append((relative_path, stat.st_mtime_ns, stat.st_size))
-    except OSError as exc:
+            signature.append(contract_store.content_signature(relative_path))
+    except (OSError, contract_store.ContractStoreError) as exc:
         raise EntityFailure("CONTRACT_UNAVAILABLE", "实体注册表依赖不可用。") from exc
     return _registry_cached(tuple(signature))
 
 
 @lru_cache(maxsize=16)
-def _registry_cached(_signature: tuple[tuple[str, int, int], ...]) -> dict[str, Any]:
+def _registry_cached(_signature: tuple[tuple[str, str], ...]) -> dict[str, Any]:
     try:
         registry = contracts._read_yaml(_REGISTRY_PATH)
     except contracts.ContractFailure as exc:

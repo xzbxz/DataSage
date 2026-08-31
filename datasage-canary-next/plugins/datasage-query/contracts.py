@@ -1174,26 +1174,12 @@ def datasage_catalog(args: dict[str, Any], **_kwargs: Any) -> str:
             )
         if len(set(normalized)) != len(normalized):
             raise ContractFailure("INVALID_INPUT", "同一个目录请求不能重复。")
-        local_failures: list[dict[str, Any]] = []
         if any(view == "performance_scorecard" for _, _, view in normalized) and len(
             normalized
         ) > 1:
-            local_failures = [
-                {
-                    "request_index": index,
-                    "error": {
-                        "code": "REDUNDANT_WITH_SCORECARD",
-                        "message": (
-                            "performance_scorecard 必须单独请求；冗余目录分支未执行。"
-                        ),
-                    },
-                }
-                for index, (_, _, view) in enumerate(normalized)
-                if view != "performance_scorecard"
-            ]
-            normalized = [
-                item for item in normalized if item[2] == "performance_scorecard"
-            ]
+            raise ContractFailure(
+                "INVALID_INPUT", "performance_scorecard 必须单独请求。"
+            )
         results: list[dict[str, Any]] = []
         for domain, metric, view in normalized:
             if view == "performance_scorecard":
@@ -1215,15 +1201,12 @@ def datasage_catalog(args: dict[str, Any], **_kwargs: Any) -> str:
                 result = _catalog_summary(domain, planner)
             results.append(result)
         payload: dict[str, Any] = {
-            "status": "partial" if local_failures else "success",
+            "status": "success",
             "catalog_version": _CATALOG_VERSION,
             "contract_role": "governed_metric_catalog",
             "query_policy": _query_policy_projection(),
             "results": results,
         }
-        if local_failures:
-            payload["failed_request_count"] = len(local_failures)
-            payload["failures"] = local_failures
         payload["content_hash"] = hashlib.sha256(
             json.dumps(
                 payload,

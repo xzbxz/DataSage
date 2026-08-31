@@ -142,11 +142,13 @@ class ExpertAuthorityInventoryTests(unittest.TestCase):
 
     def test_skill_routes_complex_quantitative_work_to_answer_owner(self):
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
-        governing = skill.split("## Governing references", 1)[1].split(
-            "## Workflow", 1
-        )[0]
+        governing = " ".join(
+            skill.split("## Quick Reference", 1)[1]
+            .split("## Procedure", 1)[0]
+            .split()
+        )
         answer_owner = governing.split("datasage.answer-boundary/v1", 1)[1]
-        self.assertIn("Load it before", answer_owner)
+        self.assertIn("Load `references/answer-boundary.md` before", answer_owner)
         for trigger in (
             "comparison",
             "ranking",
@@ -219,8 +221,16 @@ class ExpertAuthorityInventoryTests(unittest.TestCase):
                     removed_dataset_sections.intersection(definition),
                 )
 
-        tools_text = (PLUGIN_ROOT / "tools.py").read_text(encoding="utf-8")
-        self.assertNotIn("_EVIDENCE_INTERPRETATION", tools_text)
+        plugin, registration = probe_registration(
+            PLUGIN_ROOT,
+            package_name="datasage_removed_authority_runtime_probe",
+        )
+        self.assertFalse(hasattr(plugin.tools, "_EVIDENCE_INTERPRETATION"))
+        self.assertEqual(
+            {"datasage_catalog", "datasage_entity_resolve", "datasage_query"},
+            {item["name"] for item in registration.tools},
+        )
+        self.assertTrue(all(callable(item["handler"]) for item in registration.tools))
 
         repository_ignore = (PROFILE_ROOT.parent / ".gitignore").read_text(
             encoding="utf-8"

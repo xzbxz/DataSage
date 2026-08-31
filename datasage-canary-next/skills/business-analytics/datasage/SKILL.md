@@ -1,6 +1,6 @@
 ---
 name: datasage
-description: Analyze new internal company facts through governed DataSage metrics; not public research or user-provided data.
+description: Governed DataSage company facts; not public/user-provided.
 version: 0.15.0-rc8
 author: datasage
 platforms: [windows]
@@ -8,70 +8,97 @@ metadata:
   hermes:
     tags: [data, analytics, business, internal]
     requires_toolsets: [datasage-query]
-    requires_tools: [datasage_catalog, datasage_query]
+    requires_tools: [datasage_catalog, datasage_entity_resolve, datasage_query]
 ---
 
-# DataSage
+# DataSage Skill
 
-Use this skill only when the answer needs new internal company facts. Ordinary
+Use this skill only when the answer needs new internal company facts; ordinary
 conversation, public research, user-provided data, and writing remain normal
-Hermes work.
+Hermes work. Answer with the smallest sufficient governed evidence. Choose the
+route adaptively; this is not a mandatory call sequence.
 
-## Objective
+## When to Use
 
-Answer the business question with the smallest sufficient governed evidence.
-Choose the route adaptively; this is not a mandatory call sequence.
+- Use it for business questions that require new governed DataSage company
+  facts, metrics, comparisons, rankings, or operating-performance evidence.
+- Do not use it for ordinary conversation, public research, user-provided data,
+  or writing that does not require new internal facts.
 
-## Governing references
+## Prerequisites
 
-- [`datasage.query-rules/v1`](references/query-rules.md) is the detailed
-  request-construction policy. Load it with
-  `skill_view(name="datasage", file_path="references/query-rules.md")` before
-  the first query when its rules are not already present in the current context.
-- [`datasage.answer-boundary/v1`](references/answer-boundary.md) is the
-  detailed interpretation and final-answer policy. Load it before a nontrivial
-  comparison, ranking, target or benchmark judgment, decomposition, causal
-  discussion, multi-row calculation, or answer involving zero, empty,
-  undefined, truncated, partial, failed, or timeout evidence.
-- Load [`datasage.entity-guidance/v1`](references/entity-guidance.md) before
-  resolving an ambiguous entity, unknown geography, or uncertain alias.
+- The `datasage-query` toolset and its `datasage_catalog`,
+  `datasage_entity_resolve`, and `datasage_query` tools must be available.
 - The live catalog, schema, and tool result remain authoritative for available
   metrics, request fields, capabilities, and returned evidence.
 
-## Workflow
+## How to Run
+
+Load only the governing reference needed for the current step with
+`skill_view(name="datasage", file_path="references/<file>.md")`. Then follow the
+adaptive procedure below; a reference already present in context need not be
+loaded again.
+
+## Quick Reference
+
+- [`datasage.query-rules/v1`](references/query-rules.md) solely owns detailed
+  request construction. Load `references/query-rules.md` before the first query
+  when its rules are not already present.
+- [`datasage.entity-guidance/v1`](references/entity-guidance.md) solely owns
+  entity resolution, confirmation, and turn-boundary behavior. Load
+  `references/entity-guidance.md` for an ambiguous entity, unknown geography,
+  or uncertain alias.
+- [`datasage.answer-boundary/v1`](references/answer-boundary.md) solely owns
+  detailed interpretation and final-answer policy. Load
+  `references/answer-boundary.md` before a nontrivial comparison, ranking,
+  target or benchmark judgment, decomposition, causal discussion, multi-row
+  calculation, or an answer involving zero, empty, undefined, truncated,
+  partial, failed, or timeout evidence.
+
+## Procedure
 
 1. Frame the decision, metric meaning, period, grain, and material scope.
 2. For a broad operating-performance review, decide whether the optional
-   `performance_scorecard` materially improves discovery. Use it when the user
-   asks for that standard cross-domain view or when Hermes judges its governed
-   candidate lenses to be the smallest useful starting point; otherwise discover
-   likely domains and metrics directly. When used, call it without a preceding
-   `expert_index`, choose a material subset, keep flows separate from snapshots,
-   and disclose unavailable profitability. Only successfully queried lenses are
-   evidence; other material lenses remain unassessed and limit the headline.
-3. Choose and query the exact governed metric under
-   [`datasage.query-rules/v1`](references/query-rules.md). Resolve an entity
-   only when ambiguity can change the result.
-4. Stop when the conclusion is decision-useful or the remaining uncertainty
-   cannot be resolved with available governed operations.
+   `performance_scorecard` operation of `datasage_catalog` materially improves
+   discovery. Use it when the user asks for that standard cross-domain view or
+   when its governed candidate lenses are the smallest useful starting point;
+   otherwise discover likely domains and metrics directly. When used, call it
+   without a preceding `expert_index` catalog operation, choose a material
+   subset, keep flows separate from snapshots, and disclose unavailable
+   profitability. Only successfully queried lenses are evidence; other material
+   lenses remain unassessed and limit the headline.
+3. Choose and query the exact governed metric with `datasage_catalog` and
+   `datasage_query` under
+   [`datasage.query-rules/v1`](references/query-rules.md). When entity ambiguity
+   can change the result, use `datasage_entity_resolve` and follow
+   [`datasage.entity-guidance/v1`](references/entity-guidance.md), the sole owner
+   of resolution, confirmation, and turn-boundary behavior.
+4. Interpret the result under
+   [`datasage.answer-boundary/v1`](references/answer-boundary.md). Prefer
+   decision-relevant comparisons and exceptions over restating rows; use
+   decomposition or concentration only when the returned population and
+   relationship explicitly authorize it. Multi-row arithmetic also requires an
+   available calculation tool.
+5. Before concluding a broad review, check material lens coverage once. Stop
+   when the conclusion is decision-useful or the remaining uncertainty cannot
+   be resolved with available governed operations.
 
-## Analytical behavior
+## Pitfalls
 
-- Prefer decision-relevant comparisons and exceptions over simply restating
-  rows. Use decomposition or concentration only when the returned population
-  and relationship explicitly authorize it.
 - For truncated Top-N evidence, do not turn an unreturned tail into a driver.
-- [`datasage.answer-boundary/v1`](references/answer-boundary.md) owns the full
-  interpretation rules for those cases, calculations, explanations, and
-  advisory actions. Load it before using them; multi-row arithmetic also
-  requires an available calculation tool.
+- Do not treat the procedure as a fixed planner recipe or mandatory call
+  sequence.
+- Conversation history, not persistent memory, carries transient analysis. Do
+  not save query or empty results, temporary or candidate entity mappings,
+  single-turn scope, receipts, or operating status. Propose memory only for a
+  stable cross-session preference or user-confirmed durable fact. User
+  correction wins.
 
-## Persistent memory
+## Verification
 
-Conversation history, not persistent memory, carries transient analysis. Do not
-save query or empty results, temporary or candidate entity mappings, single-turn
-scope, receipts, or operating status. Propose memory only for a stable
-cross-session preference or user-confirmed durable fact. User correction wins.
-
-Before concluding a broad review, check material lens coverage once. Stop rather
-than loop when remaining uncertainty cannot be resolved by governed operations.
+- Confirm each claim is supported by successfully returned governed evidence
+  and the applicable governing reference was loaded when needed.
+- For broad reviews, confirm material lens coverage was checked once and any
+  unassessed material lens limits the headline.
+- Stop rather than loop when remaining uncertainty cannot be resolved by
+  governed operations.

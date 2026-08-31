@@ -176,7 +176,9 @@ class CompactPayloadTests(unittest.TestCase):
             variants[1]["properties"]["view"]["const"],
         )
 
-    def test_scorecard_is_publicly_exclusive_and_runtime_localizes_mixed_calls(self):
+    def test_scorecard_is_publicly_exclusive_and_runtime_rejects_mixed_calls_atomically(
+        self,
+    ):
         mixed = {
             "requests": [
                 {"view": "performance_scorecard"},
@@ -186,14 +188,17 @@ class CompactPayloadTests(unittest.TestCase):
         with self.assertRaises(jsonschema.ValidationError):
             jsonschema.validate(mixed, schemas.DATASAGE_CATALOG["parameters"])
 
-        _raw, compact = _catalog(mixed)
-        self.assertEqual("partial", compact["status"])
-        self.assertEqual("performance_scorecard", compact["results"][0]["level"])
-        self.assertEqual(1, compact["failed_request_count"])
-        self.assertEqual(
-            "REDUNDANT_WITH_SCORECARD",
-            compact["failures"][0]["error"]["code"],
-        )
+        raw, compact = _catalog(mixed)
+        self.assertEqual("failed", compact["status"])
+        self.assertEqual("INVALID_INPUT", compact["error"]["code"])
+        for payload in (json.loads(raw), compact):
+            self.assertNotIn("results", payload)
+            self.assertNotIn("failed_request_count", payload)
+            self.assertNotIn("failures", payload)
+            self.assertNotIn(
+                "REDUNDANT_WITH_SCORECARD",
+                json.dumps(payload, ensure_ascii=False),
+            )
 
     def test_default_catalog_is_compact_and_full_view_remains_compatible(self):
         raw, compact = _catalog({"requests": [{"domain": "delivery"}]})

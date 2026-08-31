@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Convert a real Hermes/WeCom transcript into a normalized golden candidate.
+"""Convert an official Hermes session export into a normalized golden candidate.
 
-The SQLite source is opened with ``mode=ro`` and ``PRAGMA query_only=ON``.
-Business prompts, tool result rows, and final answer text are never copied into
-the output.  Free-text conclusions are never inferred: labels must be supplied
-as an explicit reviewer assertion or remain ``unreviewed``.
+The exact JSONL export bytes are the transcript content identity.  Business
+prompts, tool result rows, and final answer text are never copied into the
+output.  Free-text conclusions are never inferred: labels must be supplied as
+an explicit reviewer assertion or remain ``unreviewed``.
 """
 
 from __future__ import annotations
@@ -16,22 +16,21 @@ import hashlib
 import json
 import os
 import re
-import sqlite3
 import sys
 import tempfile
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 
-CANDIDATE_SCHEMA = "datasage-golden-expert-candidate/v1"
-BINDING_SCHEMA = "datasage-canary-bindings/v1"
-LIVE_BINDING_SCHEMA = "datasage-canary-bindings/v2-live-fixture"
-RECEIPT_SCHEMA = "datasage-canary-receipt/v1"
+CANDIDATE_SCHEMA = "datasage-golden-expert-candidate/v2"
+BINDING_SCHEMA = "datasage-canary-bindings/v2"
+LIVE_BINDING_SCHEMA = "datasage-canary-bindings/v3-live-fixture"
+RECEIPT_SCHEMA = "datasage-canary-receipt/v2"
 PLAN_TRACE_SCHEMA = "datasage-structured-plan-trace/v1"
-REVIEW_SCHEMA = "datasage-review-assertion/v2"
-WATERMARK_SCHEMA = "datasage-replay-watermark/v1"
-LIVE_WATERMARK_SCHEMA = "datasage-replay-watermark/v2-live-fixture"
+REVIEW_SCHEMA = "datasage-review-assertion/v3"
+WATERMARK_SCHEMA = "datasage-replay-watermark/v2"
+LIVE_WATERMARK_SCHEMA = "datasage-replay-watermark/v3-live-fixture"
+OFFICIAL_EXPORT_FORMAT = "hermes_sessions_export_jsonl"
 CONTEXT_FINGERPRINT_SCHEMA = "datasage-context-binding-fingerprint/v1"
 MODEL_SOURCE_REFERENCE_SCHEMA = "datasage-query-model-source-reference/v1"
 LEGACY_SOURCE_EVIDENCE_SCHEMA = "datasage-query-source-evidence/v1"
@@ -145,24 +144,47 @@ def _write_json_atomic(path: Path, value: Any) -> None:
         Path(handle.name).unlink(missing_ok=True)
 
 
-def _database_identity(path: Path) -> str:
-    resolved = path.resolve(strict=True)
-    stat = resolved.stat()
-    connection = _open_read_only(path)
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"non-finite JSON is forbidden: {value}")
+
+
+def _strict_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON property: {key}")
+        result[key] = value
+    return result
+
+
+def parse_official_session_export(
+    payload: bytes | str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Parse one full, strict ``hermes sessions export --format jsonl`` row."""
+
     try:
-        schemas = connection.execute(
-            "SELECT name,sql FROM sqlite_master "
-            "WHERE name IN ('sessions','messages') ORDER BY name"
-        ).fetchall()
-        return _sha256(
-            {
-                "path": str(resolved),
-                "file_identity": [stat.st_dev, stat.st_ino],
-                "schemas": [[row[0], row[1]] for row in schemas],
-            }
-        )
-    finally:
-        connection.close()
+        text = payload.decode("utf-8", "strict") if isinstance(payload, bytes) else payload
+        rows = [
+            json.loads(
+                line,
+                object_pairs_hook=_strict_object,
+                parse_constant=_reject_json_constant,
+            )
+            for line in text.splitlines()
+            if line.strip()
+        ]
+    except (TypeError, UnicodeDecodeError, ValueError) as exc:
+        raise ValueError("official export is not strict JSON") from exc
+    if len(rows) != 1 or not isinstance(rows[0], dict):
+        raise ValueError("official export did not contain exactly one session")
+    messages = rows[0].get("messages")
+    if (
+        not isinstance(messages, list)
+        or not messages
+        or any(not isinstance(item, dict) for item in messages)
+    ):
+        raise ValueError("official export contains invalid messages")
+    return rows[0], messages
 
 
 def _watermark(
@@ -172,7 +194,7 @@ def _watermark(
     turn: int,
     canonical_prompt_sha256: str,
     user_message_id: int,
-    database_identity_sha256: str,
+    session_export_sha256: str,
     profile: dict[str, str],
     fixture_attestation_sha256: str | None = None,
     business_database_ref_sha256: str | None = None,
@@ -198,7 +220,7 @@ def _watermark(
             "turn": turn,
             "canonical_prompt_sha256": canonical_prompt_sha256,
             "user_message_id": user_message_id,
-            "database_identity_sha256": database_identity_sha256,
+            "session_export_sha256": session_export_sha256,
             "artifact_id": profile["artifact_id"],
             "payload_sha256": profile["payload_sha256"],
             **(
@@ -656,18 +678,18 @@ def _has_substantive_live_query_evidence(
     )
 
 
-def _extract_calls(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
-    result_rows: dict[str, sqlite3.Row] = {}
-    for row in rows:
+def _extract_calls(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    result_rows: dict[str, tuple[int, dict[str, Any]]] = {}
+    for row_position, row in enumerate(rows):
         if row["role"] == "tool" and row["tool_call_id"]:
             call_id = str(row["tool_call_id"])
             if call_id in result_rows:
                 raise ValueError(f"duplicate tool result for call {call_id}")
-            result_rows[call_id] = row
+            result_rows[call_id] = (row_position, row)
 
     calls: list[dict[str, Any]] = []
     used_results: set[str] = set()
-    for row in rows:
+    for row_position, row in enumerate(rows):
         if row["role"] != "assistant" or not row["tool_calls"]:
             continue
         parsed = _json_value(row["tool_calls"], f"message {row['id']} tool_calls")
@@ -696,9 +718,12 @@ def _extract_calls(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
             call_id = item.get("id") or item.get("call_id")
             if not isinstance(call_id, str) or not call_id:
                 raise ValueError(f"message {row['id']} DataSage call has no ID")
-            tool_row = result_rows.get(call_id)
-            if tool_row is None:
+            result_entry = result_rows.get(call_id)
+            if result_entry is None:
                 raise ValueError(f"DataSage call {call_id} has no persisted tool result")
+            tool_position, tool_row = result_entry
+            if tool_position <= row_position:
+                raise ValueError(f"DataSage call {call_id} result precedes its declaration")
             if tool_row["tool_name"] != name:
                 raise ValueError(f"DataSage call {call_id} result tool name mismatch")
             if call_id in used_results:
@@ -720,7 +745,7 @@ def _extract_calls(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
             )
     orphaned = sorted(
         call_id
-        for call_id, row in result_rows.items()
+        for call_id, (_, row) in result_rows.items()
         if row["tool_name"] in PUBLIC_TOOLS and call_id not in used_results
     )
     if orphaned:
@@ -1351,7 +1376,7 @@ def _review(
     required = {
         "schema", "status", "test_id", "artifact_id", "payload_sha256",
         "session_id", "user_message_id", "canonical_prompt_sha256",
-        "database_identity_sha256", "watermark_sha256",
+        "session_export_sha256", "watermark_sha256",
         "final_answer_sha256", "reviewer_id", "labels",
     }
     live_fields = {
@@ -1400,55 +1425,70 @@ def _review(
     )
 
 
-def _open_read_only(path: Path) -> sqlite3.Connection:
-    resolved = path.resolve(strict=True).as_posix()
-    uri = f"file:{quote(resolved, safe='/:')}?mode=ro"
-    connection = sqlite3.connect(uri, uri=True)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA query_only=ON")
-    if connection.execute("PRAGMA query_only").fetchone()[0] != 1:
-        connection.close()
-        raise ValueError("SQLite query_only could not be enabled")
-    return connection
-
-
-def _turn_rows(
-    connection: sqlite3.Connection,
+def _turn_messages(
+    session: dict[str, Any],
+    messages: list[dict[str, Any]],
     binding: dict[str, Any],
     expected_source: str,
-) -> tuple[sqlite3.Row, sqlite3.Row, list[sqlite3.Row]]:
+    expected_profile: str,
+) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
     session_id = binding.get("session_id")
     user_id = binding.get("user_message_id")
     final_id = binding.get("final_message_id")
-    if not isinstance(session_id, str) or not session_id or not isinstance(user_id, int) or not isinstance(final_id, int) or user_id >= final_id:
+    if (
+        not isinstance(session_id, str)
+        or not session_id
+        or type(user_id) is not int
+        or type(final_id) is not int
+        or user_id >= final_id
+    ):
         raise ValueError("turn binding session/message IDs are invalid")
-    rows = connection.execute(
-        "SELECT m.id,m.session_id,m.role,m.content,m.tool_call_id,m.tool_calls,m.tool_name,"
-        "m.platform_message_id,s.source,s.profile_name "
-        "FROM messages AS m JOIN sessions AS s ON s.id=m.session_id "
-        "WHERE m.session_id=? AND m.active=1 AND m.id BETWEEN ? AND ? ORDER BY m.id",
-        (session_id, user_id, final_id),
-    ).fetchall()
-    if not rows or rows[0]["id"] != user_id or rows[-1]["id"] != final_id:
-        raise ValueError("bound transcript endpoints do not exist or are inactive")
-    user_row, final_row = rows[0], rows[-1]
-    if user_row["role"] != "user" or final_row["role"] != "assistant":
-        raise ValueError("bound transcript endpoints must be user then final assistant")
-    if user_row["source"] != expected_source:
+    exported_session_id = session.get("id") or session.get("session_id")
+    if exported_session_id != session_id:
+        raise ValueError("bound session does not match the official export")
+    if session.get("source") != expected_source:
         raise ValueError(
             f"bound session source is not the declared {expected_source!r} transcript source"
         )
+    if session.get("profile_name") != expected_profile:
+        raise ValueError("bound session Profile does not match profile_artifact.profile_id")
+
+    positions: dict[int, int] = {}
+    previous_id: int | None = None
+    for position, row in enumerate(messages):
+        if not isinstance(row, dict):
+            raise ValueError("official export messages must be objects")
+        message_id = row.get("id")
+        if type(message_id) is not int or message_id <= 0:
+            raise ValueError("official export message IDs must be strict positive integers")
+        if message_id in positions:
+            raise ValueError("official export contains duplicate message IDs")
+        if previous_id is not None and message_id <= previous_id:
+            raise ValueError("official export message IDs are not strictly increasing")
+        if row.get("session_id") != session_id:
+            raise ValueError("official export contains a cross-session message")
+        if type(row.get("active")) is not int or row["active"] != 1:
+            raise ValueError("official export message active flag must be integer 1")
+        positions[message_id] = position
+        previous_id = message_id
+
+    if user_id not in positions or final_id not in positions:
+        raise ValueError("bound transcript endpoints do not exist or are inactive")
+    user_position, final_position = positions[user_id], positions[final_id]
+    if user_position >= final_position:
+        raise ValueError("bound transcript endpoint positions are invalid")
+    rows = messages[user_position : final_position + 1]
+    user_row, final_row = rows[0], rows[-1]
+    if user_row["role"] != "user" or final_row["role"] != "assistant":
+        raise ValueError("bound transcript endpoints must be user then final assistant")
     if not isinstance(final_row["content"], str) or not final_row["content"]:
         raise ValueError("final assistant answer is missing")
     return user_row, final_row, rows
 
 
 def adapt(
-    state_db: Path,
+    session_export: bytes | str,
     bindings: dict[str, Any],
-    *,
-    _connection: sqlite3.Connection | None = None,
-    _database_identity_override: str | None = None,
 ) -> dict[str, Any]:
     if not isinstance(bindings, dict) or bindings.get("schema") not in {
         BINDING_SCHEMA,
@@ -1460,7 +1500,7 @@ def adapt(
     live_fixture = bindings.get("schema") == LIVE_BINDING_SCHEMA
     allowed_binding_keys = {
         "schema", "captured_at", "transcript_source", "profile_artifact",
-        "state_db_identity_sha256", "turns",
+        "session_export_sha256", "turns",
     }
     if set(bindings) - allowed_binding_keys:
         raise ValueError("bindings contain unknown keys")
@@ -1473,17 +1513,21 @@ def adapt(
             "'datasage-trusted-replay'"
         )
     captured_at = bindings.get("captured_at")
-    supplied_database_identity = bindings.get("state_db_identity_sha256")
-    actual_database_identity = (
-        _database_identity_override
-        if _database_identity_override is not None
-        else _database_identity(state_db)
+    payload = (
+        session_export
+        if isinstance(session_export, bytes)
+        else session_export.encode("utf-8")
     )
+    session, messages = parse_official_session_export(payload)
+    supplied_export_identity = bindings.get("session_export_sha256")
+    actual_export_identity = hashlib.sha256(payload).hexdigest()
     if (
-        not isinstance(supplied_database_identity, str)
-        or supplied_database_identity != actual_database_identity
+        not isinstance(supplied_export_identity, str)
+        or supplied_export_identity != actual_export_identity
     ):
-        raise ValueError("bindings state_db_identity_sha256 does not match the transcript database")
+        raise ValueError(
+            "bindings session_export_sha256 does not match the official export"
+        )
     turns = bindings.get("turns")
     if not isinstance(captured_at, str) or not captured_at or not isinstance(turns, list) or not turns:
         raise ValueError("bindings captured_at and non-empty turns are required")
@@ -1510,242 +1554,231 @@ def adapt(
         str,
         tuple[str, str, bool, frozenset[str], frozenset[str]],
     ] = {}
-    connection = _connection or _open_read_only(state_db)
-    owns_connection = _connection is None
-    try:
-        for binding in sorted(turns, key=lambda item: (str(item.get("conversation_id")), int(item.get("turn", 0)))):
-            required_keys = {
-                "test_id", "conversation_id", "turn", "session_id",
-                "user_message_id", "final_message_id", "canonical_prompt_sha256",
-                "watermark_sha256",
+    for binding in sorted(turns, key=lambda item: (str(item.get("conversation_id")), int(item.get("turn", 0)))):
+        required_keys = {
+            "test_id", "conversation_id", "turn", "session_id",
+            "user_message_id", "final_message_id", "canonical_prompt_sha256",
+            "watermark_sha256",
+        }
+        if live_fixture:
+            required_keys |= {
+                "fixture_attestation_sha256",
+                "business_database_ref_sha256",
             }
-            if live_fixture:
-                required_keys |= {
-                    "fixture_attestation_sha256",
-                    "business_database_ref_sha256",
-                }
-            if set(binding) - (required_keys | {"review", "session_lineage"}) or not required_keys.issubset(binding):
-                raise ValueError(f"turn {binding.get('test_id')!r} has invalid binding keys")
-            conversation = binding["conversation_id"]
-            turn_number = binding["turn"]
-            if not isinstance(conversation, str) or not conversation or not isinstance(turn_number, int) or turn_number < 1:
-                raise ValueError("conversation_id/turn are invalid")
-            user_row, final_row, rows = _turn_rows(
-                connection,
-                binding,
-                transcript_source,
+        if set(binding) - (required_keys | {"review", "session_lineage"}) or not required_keys.issubset(binding):
+            raise ValueError(f"turn {binding.get('test_id')!r} has invalid binding keys")
+        conversation = binding["conversation_id"]
+        turn_number = binding["turn"]
+        if not isinstance(conversation, str) or not conversation or not isinstance(turn_number, int) or turn_number < 1:
+            raise ValueError("conversation_id/turn are invalid")
+        user_row, final_row, rows = _turn_messages(
+            session,
+            messages,
+            binding,
+            transcript_source,
+            profile["profile_id"],
+        )
+        canonical_prompt_sha256 = binding["canonical_prompt_sha256"]
+        if (
+            not isinstance(canonical_prompt_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", canonical_prompt_sha256) is None
+            or _sha256(user_row["content"] if isinstance(user_row["content"], str) else "")
+            != canonical_prompt_sha256
+        ):
+            raise ValueError(
+                f"turn {binding['test_id']!r} does not match its canonical prompt hash"
             )
-            if user_row["profile_name"] != profile["profile_id"]:
-                raise ValueError(
-                    f"turn {binding['test_id']!r} session Profile does not match "
-                    "profile_artifact.profile_id"
-                )
-            canonical_prompt_sha256 = binding["canonical_prompt_sha256"]
-            if (
-                not isinstance(canonical_prompt_sha256, str)
-                or re.fullmatch(r"[0-9a-f]{64}", canonical_prompt_sha256) is None
-                or _sha256(user_row["content"] if isinstance(user_row["content"], str) else "")
-                != canonical_prompt_sha256
-            ):
-                raise ValueError(
-                    f"turn {binding['test_id']!r} does not match its canonical prompt hash"
-                )
-            expected_watermark = _watermark(
-                test_id=binding["test_id"],
-                conversation_id=conversation,
-                turn=turn_number,
-                canonical_prompt_sha256=canonical_prompt_sha256,
-                user_message_id=user_row["id"],
-                database_identity_sha256=actual_database_identity,
-                profile=profile,
-                fixture_attestation_sha256=(
-                    binding.get("fixture_attestation_sha256")
+        expected_watermark = _watermark(
+            test_id=binding["test_id"],
+            conversation_id=conversation,
+            turn=turn_number,
+            canonical_prompt_sha256=canonical_prompt_sha256,
+            user_message_id=user_row["id"],
+            session_export_sha256=actual_export_identity,
+            profile=profile,
+            fixture_attestation_sha256=(
+                binding.get("fixture_attestation_sha256")
+                if live_fixture
+                else None
+            ),
+            business_database_ref_sha256=(
+                binding.get("business_database_ref_sha256")
+                if live_fixture
+                else None
+            ),
+        )
+        if binding["watermark_sha256"] != expected_watermark:
+            raise ValueError(f"turn {binding['test_id']!r} replay watermark is invalid")
+        calls = _extract_calls(rows)
+        plan, evidence = _normalize(
+            calls,
+            expected_business_database_ref_sha256=(
+                binding["business_database_ref_sha256"]
+                if live_fixture
+                else None
+            ),
+            typed_context_bindings=live_fixture,
+            expected_observed_on=captured_observed_on,
+        )
+        signature = _sha256({key: value for key, value in plan.items() if key != "context_action"})
+        prior = previous.get(conversation)
+        ambiguity_preserve = (
+            prior is not None
+            and prior[0] == binding["session_id"]
+            and _is_unconfirmed_entity_ambiguity(plan, evidence)
+            and bool(plan["domains"])
+            and bool(plan["metrics"])
+            and set(plan["domains"]).issubset(prior[3])
+            and set(plan["metrics"]).issubset(prior[4])
+        )
+        final_answer_sha256 = _sha256(final_row["content"])
+        conclusions, review, trace = _review(
+            binding.get("review"),
+            expected={
+                "test_id": binding["test_id"],
+                "artifact_id": profile["artifact_id"],
+                "payload_sha256": profile["payload_sha256"],
+                "session_id": binding["session_id"],
+                "user_message_id": user_row["id"],
+                "canonical_prompt_sha256": canonical_prompt_sha256,
+                "session_export_sha256": actual_export_identity,
+                "watermark_sha256": expected_watermark,
+                "final_answer_sha256": final_answer_sha256,
+                **(
+                    {
+                        "fixture_attestation_sha256": binding[
+                            "fixture_attestation_sha256"
+                        ],
+                        "business_database_ref_sha256": binding[
+                            "business_database_ref_sha256"
+                        ],
+                    }
                     if live_fixture
-                    else None
+                    else {}
                 ),
-                business_database_ref_sha256=(
-                    binding.get("business_database_ref_sha256")
-                    if live_fixture
-                    else None
-                ),
-            )
-            if binding["watermark_sha256"] != expected_watermark:
-                raise ValueError(f"turn {binding['test_id']!r} replay watermark is invalid")
-            calls = _extract_calls(rows)
-            plan, evidence = _normalize(
-                calls,
-                expected_business_database_ref_sha256=(
-                    binding["business_database_ref_sha256"]
-                    if live_fixture
-                    else None
-                ),
-                typed_context_bindings=live_fixture,
-                expected_observed_on=captured_observed_on,
-            )
-            signature = _sha256({key: value for key, value in plan.items() if key != "context_action"})
-            prior = previous.get(conversation)
-            ambiguity_preserve = (
-                prior is not None
-                and prior[0] == binding["session_id"]
-                and _is_unconfirmed_entity_ambiguity(plan, evidence)
-                and bool(plan["domains"])
-                and bool(plan["metrics"])
-                and set(plan["domains"]).issubset(prior[3])
-                and set(plan["metrics"]).issubset(prior[4])
-            )
-            final_answer_sha256 = _sha256(final_row["content"])
-            conclusions, review, trace = _review(
-                binding.get("review"),
-                expected={
-                    "test_id": binding["test_id"],
-                    "artifact_id": profile["artifact_id"],
-                    "payload_sha256": profile["payload_sha256"],
-                    "session_id": binding["session_id"],
-                    "user_message_id": user_row["id"],
-                    "canonical_prompt_sha256": canonical_prompt_sha256,
-                    "database_identity_sha256": actual_database_identity,
-                    "watermark_sha256": expected_watermark,
-                    "final_answer_sha256": final_answer_sha256,
-                    **(
-                        {
-                            "fixture_attestation_sha256": binding[
-                                "fixture_attestation_sha256"
-                            ],
-                            "business_database_ref_sha256": binding[
-                                "business_database_ref_sha256"
-                            ],
-                        }
-                        if live_fixture
-                        else {}
-                    ),
-                },
-            )
-            lineage = binding.get("session_lineage", [])
-            if (
-                not isinstance(lineage, list)
-                or any(not isinstance(item, str) or not item for item in lineage)
-                or len(lineage) != len(set(lineage))
-            ):
-                raise ValueError("session_lineage must contain unique session IDs")
-            if trace is not None:
-                _validate_performance_scorecard_trace(plan, trace)
-                for field in ("domains", "metrics", "dimensions"):
-                    if not set(plan[field]).issubset(set(trace[field])):
-                        raise ValueError(
-                            f"review plan_trace.{field} contradicts persisted tool plan"
-                        )
-                plan = dict(trace)
-                if live_fixture:
-                    _validate_live_context_bindings(plan.get("context_bindings"))
-                action = plan["context_action"]
-                if prior is None and action not in {"new", "reset"}:
-                    raise ValueError("first bound turn must be new or an explicit reset")
-                if prior is not None:
-                    same_lineage = (
-                        prior[0] == binding["session_id"]
-                        or (
-                            len(lineage) >= 2
-                            and lineage[0] == prior[0]
-                            and lineage[-1] == binding["session_id"]
-                        )
+            },
+        )
+        lineage = binding.get("session_lineage", [])
+        if (
+            not isinstance(lineage, list)
+            or any(not isinstance(item, str) or not item for item in lineage)
+            or len(lineage) != len(set(lineage))
+        ):
+            raise ValueError("session_lineage must contain unique session IDs")
+        if trace is not None:
+            _validate_performance_scorecard_trace(plan, trace)
+            for field in ("domains", "metrics", "dimensions"):
+                if not set(plan[field]).issubset(set(trace[field])):
+                    raise ValueError(
+                        f"review plan_trace.{field} contradicts persisted tool plan"
                     )
-                    if action == "reset" and same_lineage:
-                        raise ValueError("reset plan_trace did not create a new session lineage")
-                    if action in {"preserve", "replace"} and not same_lineage:
-                        raise ValueError("context transition is not backed by session lineage")
-                    if action == "new":
-                        raise ValueError("non-initial turn cannot use context_action=new")
-            elif prior is None:
-                plan["context_action"] = "new"
-            elif prior[0] != binding["session_id"]:
-                plan["context_action"] = "reset"
-            elif ambiguity_preserve or prior[1] == signature:
-                plan["context_action"] = "preserve"
-            else:
-                plan["context_action"] = "replace"
+            plan = dict(trace)
             if live_fixture:
                 _validate_live_context_bindings(plan.get("context_bindings"))
-            if prior is not None and plan["context_action"] in {"preserve", "replace"}:
-                _ordered_add(evidence["receipts"], "context_transition")
-            if ambiguity_preserve and prior[2]:
-                _ordered_add(evidence["receipts"], "catalog")
-            if plan["context_action"] == "reset":
-                _ordered_add(evidence["receipts"], "session_reset")
-            previous[conversation] = (
-                binding["session_id"],
-                signature,
-                "catalog" in evidence["receipts"],
-                frozenset(plan["domains"]),
-                frozenset(plan["metrics"]),
-            )
-            transcript_projection = [
-                {
-                    "id": row["id"],
-                    "role": row["role"],
-                    "tool_name": row["tool_name"],
-                    "tool_call_id": row["tool_call_id"],
-                    "tool_calls": row["tool_calls"],
-                    "content": row["content"],
-                }
-                for row in rows
-            ]
-            candidate_row = {
-                "id": binding["test_id"],
-                "session_id": binding["session_id"],
-                "session_lineage": list(lineage),
-                "plan": plan,
-                "conclusions": conclusions,
-                "conclusion_review": review,
-                "evidence": evidence,
+            action = plan["context_action"]
+            if prior is None and action not in {"new", "reset"}:
+                raise ValueError("first bound turn must be new or an explicit reset")
+            if prior is not None:
+                same_lineage = (
+                    prior[0] == binding["session_id"]
+                    or (
+                        len(lineage) >= 2
+                        and lineage[0] == prior[0]
+                        and lineage[-1] == binding["session_id"]
+                    )
+                )
+                if action == "reset" and same_lineage:
+                    raise ValueError("reset plan_trace did not create a new session lineage")
+                if action in {"preserve", "replace"} and not same_lineage:
+                    raise ValueError("context transition is not backed by session lineage")
+                if action == "new":
+                    raise ValueError("non-initial turn cannot use context_action=new")
+        elif prior is None:
+            plan["context_action"] = "new"
+        elif prior[0] != binding["session_id"]:
+            plan["context_action"] = "reset"
+        elif ambiguity_preserve or prior[1] == signature:
+            plan["context_action"] = "preserve"
+        else:
+            plan["context_action"] = "replace"
+        if live_fixture:
+            _validate_live_context_bindings(plan.get("context_bindings"))
+        if prior is not None and plan["context_action"] in {"preserve", "replace"}:
+            _ordered_add(evidence["receipts"], "context_transition")
+        if ambiguity_preserve and prior[2]:
+            _ordered_add(evidence["receipts"], "catalog")
+        if plan["context_action"] == "reset":
+            _ordered_add(evidence["receipts"], "session_reset")
+        previous[conversation] = (
+            binding["session_id"],
+            signature,
+            "catalog" in evidence["receipts"],
+            frozenset(plan["domains"]),
+            frozenset(plan["metrics"]),
+        )
+        transcript_projection = [
+            {
+                "id": row["id"],
+                "role": row["role"],
+                "tool_name": row["tool_name"],
+                "tool_call_id": row["tool_call_id"],
+                "tool_calls": row["tool_calls"],
+                "content": row["content"],
             }
-            candidate_rows.append(candidate_row)
-            receipt_turns.append(
-                {
-                    "test_id": binding["test_id"],
-                    "conversation_id": conversation,
-                    "turn": turn_number,
-                    "session_id": binding["session_id"],
-                    "database_message_ids": [row["id"] for row in rows],
-                    "user_message_id": user_row["id"],
-                    "canonical_prompt_sha256": canonical_prompt_sha256,
-                    "database_identity_sha256": actual_database_identity,
-                    "watermark_sha256": expected_watermark,
-                    "user_platform_message_id": user_row["platform_message_id"],
-                    "final_message_id": final_row["id"],
-                    "final_platform_message_id": final_row["platform_message_id"],
-                    "final_answer_sha256": final_answer_sha256,
-                    "transcript_sha256": _sha256(transcript_projection),
-                    "candidate_case_sha256": _sha256(candidate_row),
-                    "conclusion_review": review,
-                    **(
-                        {
-                            "fixture_attestation_sha256": binding[
-                                "fixture_attestation_sha256"
-                            ],
-                            "business_database_ref_sha256": binding[
-                                "business_database_ref_sha256"
-                            ],
-                        }
-                        if live_fixture
-                        else {}
-                    ),
-                }
-            )
-    finally:
-        if owns_connection:
-            connection.close()
-
+            for row in rows
+        ]
+        candidate_row = {
+            "id": binding["test_id"],
+            "session_id": binding["session_id"],
+            "session_lineage": list(lineage),
+            "plan": plan,
+            "conclusions": conclusions,
+            "conclusion_review": review,
+            "evidence": evidence,
+        }
+        candidate_rows.append(candidate_row)
+        receipt_turns.append(
+            {
+                "test_id": binding["test_id"],
+                "conversation_id": conversation,
+                "turn": turn_number,
+                "session_id": binding["session_id"],
+                "session_export_message_ids": [row["id"] for row in rows],
+                "user_message_id": user_row["id"],
+                "canonical_prompt_sha256": canonical_prompt_sha256,
+                "session_export_sha256": actual_export_identity,
+                "watermark_sha256": expected_watermark,
+                "user_platform_message_id": user_row["platform_message_id"],
+                "final_message_id": final_row["id"],
+                "final_platform_message_id": final_row["platform_message_id"],
+                "final_answer_sha256": final_answer_sha256,
+                "transcript_sha256": _sha256(transcript_projection),
+                "candidate_case_sha256": _sha256(candidate_row),
+                "conclusion_review": review,
+                **(
+                    {
+                        "fixture_attestation_sha256": binding[
+                            "fixture_attestation_sha256"
+                        ],
+                        "business_database_ref_sha256": binding[
+                            "business_database_ref_sha256"
+                        ],
+                    }
+                    if live_fixture
+                    else {}
+                ),
+            }
+        )
     receipt_body = {
         "schema": RECEIPT_SCHEMA,
         "captured_at": captured_at,
         "source": {
             "platform": transcript_source,
-            "sqlite_mode": "ro",
-            "query_only": True,
-            "state_db_identity_sha256": actual_database_identity,
+            "format": OFFICIAL_EXPORT_FORMAT,
+            "session_export_sha256": actual_export_identity,
         },
         "profile_artifact": profile,
-        "state_db_identity_sha256": actual_database_identity,
+        "session_export_sha256": actual_export_identity,
         "candidate_cases_sha256": _sha256(candidate_rows),
         "turns": receipt_turns,
     }
@@ -1753,7 +1786,7 @@ def adapt(
     return {
         "schema": CANDIDATE_SCHEMA,
         "profile_artifact": profile,
-        "state_db_identity_sha256": actual_database_identity,
+        "session_export_sha256": actual_export_identity,
         "cases": candidate_rows,
         "canary_receipt": receipt,
     }
@@ -1770,8 +1803,17 @@ def verify_receipt(candidate: dict[str, Any]) -> bool:
     if not isinstance(cases, list) or not isinstance(turns, list) or len(cases) != len(turns):
         return False
     profile = receipt.get("profile_artifact")
-    database_identity = receipt.get("state_db_identity_sha256")
-    if not isinstance(profile, dict) or not isinstance(database_identity, str):
+    export_identity = receipt.get("session_export_sha256")
+    source = receipt.get("source")
+    if (
+        not isinstance(profile, dict)
+        or not isinstance(export_identity, str)
+        or re.fullmatch(r"[0-9a-f]{64}", export_identity) is None
+        or not isinstance(source, dict)
+        or set(source) != {"platform", "format", "session_export_sha256"}
+        or source.get("format") != OFFICIAL_EXPORT_FORMAT
+        or source.get("session_export_sha256") != export_identity
+    ):
         return False
     turn_by_id = {
         turn.get("test_id"): turn for turn in turns if isinstance(turn, dict)
@@ -1804,7 +1846,7 @@ def verify_receipt(candidate: dict[str, Any]) -> bool:
                 turn=turn.get("turn"),
                 canonical_prompt_sha256=turn.get("canonical_prompt_sha256"),
                 user_message_id=turn.get("user_message_id"),
-                database_identity_sha256=database_identity,
+                session_export_sha256=export_identity,
                 profile=profile,
                 fixture_attestation_sha256=(
                     turn.get("fixture_attestation_sha256") if live_fixture else None
@@ -1825,7 +1867,7 @@ def verify_receipt(candidate: dict[str, Any]) -> bool:
                 "session_id": turn.get("session_id"),
                 "user_message_id": turn.get("user_message_id"),
                 "canonical_prompt_sha256": turn.get("canonical_prompt_sha256"),
-                "database_identity_sha256": turn.get("database_identity_sha256"),
+                "session_export_sha256": turn.get("session_export_sha256"),
                 "watermark_sha256": turn.get("watermark_sha256"),
                 "final_answer_sha256": turn.get("final_answer_sha256"),
                 **(
@@ -1840,7 +1882,7 @@ def verify_receipt(candidate: dict[str, Any]) -> bool:
         if (
             turn.get("candidate_case_sha256") != _sha256(case)
             or turn.get("conclusion_review") != review
-            or turn.get("database_identity_sha256") != database_identity
+            or turn.get("session_export_sha256") != export_identity
             or turn.get("watermark_sha256") != expected_watermark
         ):
             case_hashes_match = False
@@ -1849,8 +1891,8 @@ def verify_receipt(candidate: dict[str, Any]) -> bool:
         isinstance(expected, str)
         and expected == _sha256(body)
         and candidate.get("profile_artifact") == receipt.get("profile_artifact")
-        and candidate.get("state_db_identity_sha256")
-        == receipt.get("state_db_identity_sha256")
+        and candidate.get("session_export_sha256")
+        == receipt.get("session_export_sha256")
         and receipt.get("candidate_cases_sha256") == _sha256(cases)
         and case_hashes_match
     )
@@ -1858,12 +1900,12 @@ def verify_receipt(candidate: dict[str, Any]) -> bool:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--state-db", type=Path, required=True)
+    parser.add_argument("--session-export", type=Path, required=True)
     parser.add_argument("--bindings", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     bindings = json.loads(args.bindings.read_text(encoding="utf-8"))
-    candidate = adapt(args.state_db, bindings)
+    candidate = adapt(args.session_export.read_bytes(), bindings)
     if not verify_receipt(candidate):
         raise RuntimeError("generated canary receipt failed self-verification")
     _write_json_atomic(args.output, candidate)

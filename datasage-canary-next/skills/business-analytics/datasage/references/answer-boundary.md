@@ -112,6 +112,9 @@ cannot repair an earlier unsupported assertion.
 - Never infer geography, category, ownership, or another entity attribute from
   a returned name. A zero comparison value establishes only zero returned value
   for that comparison period; it does not establish lifecycle-new status.
+- An empty result establishes only that the exact governed query returned no
+  rows. It does not prove that an entity or dimension value does not exist
+  outside the returned metric, period, filters, and population.
 - Do not claim concentration or dispersion from a Top-1 value or truncated
   absolute amounts. Any concentration comparison needs an explicit compatible
   denominator and a stated measure; truncation still forbids population-wide

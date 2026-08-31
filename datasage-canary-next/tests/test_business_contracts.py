@@ -642,7 +642,10 @@ class BusinessContractTests(unittest.TestCase):
         self.assertEqual("off", config["tools"]["tool_search"]["enabled"])
         content = _main_skill()
         self.assertIn("requires_toolsets: [datasage-query]", content)
-        self.assertIn("requires_tools: [datasage_catalog, datasage_query]", content)
+        self.assertIn(
+            "requires_tools: [datasage_catalog, datasage_entity_resolve, datasage_query]",
+            content,
+        )
         self.assertFalse((PROFILE_ROOT / ".no-bundled-skills").exists())
         self.assertTrue(config["skills"]["disabled"])
         self.assertFalse(
@@ -1264,6 +1267,65 @@ class BusinessContractTests(unittest.TestCase):
         runtime = json.loads(contracts.datasage_catalog(invalid))
         self.assertEqual("failed", runtime["status"])
         self.assertEqual("INVALID_INPUT", runtime["error"]["code"])
+
+    def test_catalog_scorecard_mixed_with_other_branch_fails_atomically(self) -> None:
+        scorecard = {"view": "performance_scorecard"}
+        customer_risk = {"domain": "customer_risk", "view": "expert_index"}
+        for requests in ([scorecard, customer_risk], [customer_risk, scorecard]):
+            with self.subTest(requests=requests):
+                with (
+                    mock.patch.object(
+                        contracts,
+                        "_catalog_performance_scorecard",
+                        side_effect=AssertionError("scorecard branch must not execute"),
+                    ) as scorecard_handler,
+                    mock.patch.object(
+                        contracts,
+                        "_domain_contract",
+                        side_effect=AssertionError("domain branch must not execute"),
+                    ) as domain_handler,
+                ):
+                    runtime = json.loads(
+                        contracts.datasage_catalog({"requests": requests})
+                    )
+                scorecard_handler.assert_not_called()
+                domain_handler.assert_not_called()
+                self.assertEqual("failed", runtime["status"])
+                self.assertEqual("INVALID_INPUT", runtime["error"]["code"])
+                self.assertNotIn("results", runtime)
+                self.assertNotIn("failures", runtime)
+                self.assertNotIn("failed_request_count", runtime)
+                self.assertNotIn("REDUNDANT", json.dumps(runtime, ensure_ascii=False))
+
+    def test_catalog_scorecard_alone_preserves_success_behavior(self) -> None:
+        runtime = json.loads(
+            contracts.datasage_catalog(
+                {"requests": [{"view": "performance_scorecard"}]}
+            )
+        )
+        self.assertEqual("success", runtime["status"])
+        self.assertEqual(1, len(runtime["results"]))
+        self.assertEqual("performance_scorecard", runtime["results"][0]["level"])
+        self.assertNotIn("failures", runtime)
+
+    def test_catalog_ordinary_multi_domain_preserves_success_behavior(self) -> None:
+        runtime = json.loads(
+            contracts.datasage_catalog(
+                {
+                    "requests": [
+                        {"domain": "customer_risk", "view": "expert_index"},
+                        {"domain": "delivery", "view": "expert_index"},
+                    ]
+                }
+            )
+        )
+        self.assertEqual("success", runtime["status"])
+        self.assertEqual(2, len(runtime["results"]))
+        self.assertEqual(
+            ["customer_risk", "delivery"],
+            [result["domain"] for result in runtime["results"]],
+        )
+        self.assertNotIn("failures", runtime)
 
     def test_ratio_comparison_preserves_undefined_values_as_null(self) -> None:
         request = {

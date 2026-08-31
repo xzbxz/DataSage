@@ -56,7 +56,7 @@
     "required_api_calls_per_run": 2,
     "max_duration_ns": 120000000000,
     "threshold_basis": "test_execution_safety_not_business_sla",
-    "expected_tool_schema_sha256": "d9cb8cd62d3f8440168f97c2edfcadefe9e265ba3f6e1f8c1a3df7bd4a66407e"
+    "expected_tool_schema_sha256": "41243d1518975dc7da0b9c930417b4a2283a0c97aa5de78cf5ed82f8356cfdf0"
   },
   "pricing_snapshot": {
     "schema": "deepseek-public-pricing/v1",

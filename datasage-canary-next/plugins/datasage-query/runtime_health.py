@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import hashlib
 import logging
-import os
 from pathlib import Path
 import stat
 import threading
 import time
 from typing import Any
+
+from agent.secret_scope import get_secret
+from hermes_constants import hermes_home_key
 
 from .db_security import (
     DatabaseSecurityError,
@@ -18,7 +20,7 @@ from .db_security import (
     mysql_tls_kwargs,
     mysql_tls_policy,
 )
-from . import db_runtime, settings
+from . import contract_store, db_runtime, settings
 logger = logging.getLogger(__name__)
 _LIVE_LOCK = threading.Lock()
 _LIVE_CACHE: tuple[float, str, dict[str, Any]] | None = None
@@ -40,7 +42,7 @@ class _ProfileRootFailure(RuntimeError):
 
 
 def _profile_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    return contract_store.profile_root()
 
 
 def _is_reparse(path: Path) -> bool:
@@ -129,24 +131,22 @@ def _live_cache_key() -> str:
         "DATA_QUERY_MYSQL_PASSWORD",
         "DATA_QUERY_MYSQL_SSL_CA",
     )
-    configured = settings.profile_settings()
-    if not isinstance(configured, dict):
-        configured = {}
     payload = json.dumps(
         {
+            "profile": hermes_home_key(contract_store.profile_root()),
             "connection": {
-                name: os.environ.get(name, "")
+                name: get_secret(name, "") or ""
                 for name in connection_names
             },
             "policy": {
                 # Preserve raw security values in the cache key. Strict policy
                 # validation happens before query I/O; coercing "false" to
                 # False here could otherwise reuse evidence from valid config.
-                "production_mode": configured.get("production_mode"),
-                "canary_accept_existing_account": configured.get(
+                "production_mode": settings.get("production_mode"),
+                "canary_accept_existing_account": settings.get(
                     "canary_accept_existing_account"
                 ),
-                "require_tls": configured.get("require_tls"),
+                "require_tls": settings.get("require_tls"),
                 "mysql_allowed_grant_scopes": settings.get_list(
                     "mysql_allowed_grant_scopes"
                 ),
@@ -184,7 +184,7 @@ def database_configuration_status() -> dict[str, Any]:
     missing = [
         name
         for name in _REQUIRED_DATABASE_ENV
-        if not os.environ.get(name, "").strip()
+        if not (get_secret(name, "") or "").strip()
     ]
     if missing:
         return {

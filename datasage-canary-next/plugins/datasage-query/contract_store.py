@@ -7,12 +7,12 @@ This module owns path containment and the file-signature cache.  Callers map
 from __future__ import annotations
 
 import hashlib
-import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 import yaml
+from hermes_constants import get_hermes_home
 
 from . import capability_contract
 
@@ -25,10 +25,9 @@ class ContractStoreError(Exception):
 
 
 def profile_root() -> Path:
-    configured = os.environ.get("HERMES_HOME", "").strip()
-    if configured:
-        return Path(configured).resolve()
-    return Path(__file__).resolve().parents[2]
+    """Return the active Hermes Profile root for the current call context."""
+
+    return get_hermes_home().expanduser().resolve(strict=False)
 
 
 def trusted_path(relative_path: str) -> Path:
@@ -57,10 +56,10 @@ def _contract_bytes(relative_path: str) -> tuple[Path, bytes, str]:
 
 
 def content_signature(relative_path: str) -> tuple[str, str]:
-    """Return a content-bound signature for one trusted contract file."""
+    """Return a Profile- and content-bound signature for one contract file."""
 
-    _path, _content, digest = _contract_bytes(relative_path)
-    return relative_path, digest
+    path, _content, digest = _contract_bytes(relative_path)
+    return str(path), digest
 
 
 @lru_cache(maxsize=64)

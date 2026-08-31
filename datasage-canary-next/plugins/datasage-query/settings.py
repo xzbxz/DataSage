@@ -1,41 +1,36 @@
-"""Profile-owned DataSage behavior settings.
-
-Behavior has one authority: ``config.yaml``.  Environment variables are
-reserved for connection coordinates and secrets.
-"""
+"""DataSage behavior settings supplied by the Hermes plugin context."""
 
 from __future__ import annotations
 
 import copy
+from collections.abc import Callable
 from typing import Any
 
-from hermes_cli import config as hermes_config
+
+_CONFIG_READER: Callable[[str, Any], Any] | None = None
+_MISSING = object()
 
 
-def _plugin_settings(config: Any) -> dict[str, Any]:
-    if not isinstance(config, dict):
-        return {}
-    plugins = config.get("plugins")
-    entries = plugins.get("entries") if isinstance(plugins, dict) else None
-    plugin = (
-        entries.get("datasage-query")
-        if isinstance(entries, dict)
-        else None
-    )
-    settings = plugin.get("settings") if isinstance(plugin, dict) else None
-    return copy.deepcopy(settings) if isinstance(settings, dict) else {}
+def bind_config_reader(reader: Callable[[str, Any], Any] | None) -> None:
+    """Bind the plugin-relative reader provided by ``PluginContext``."""
 
-
-def profile_settings() -> dict[str, Any]:
-    try:
-        return _plugin_settings(hermes_config.load_config_readonly())
-    except Exception:
-        return {}
+    if reader is not None and not callable(reader):
+        raise TypeError("config reader must be callable")
+    global _CONFIG_READER
+    _CONFIG_READER = reader
 
 
 def get(key: str, default: Any = None) -> Any:
-    values = profile_settings()
-    return values[key] if key in values else default
+    reader = _CONFIG_READER
+    if reader is None:
+        return default
+    try:
+        value = reader(key, _MISSING)
+        if value is _MISSING:
+            return default
+        return copy.deepcopy(value)
+    except Exception:
+        return default
 
 
 def get_int(

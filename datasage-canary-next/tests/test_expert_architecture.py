@@ -89,12 +89,81 @@ class ExpertArchitectureTests(unittest.TestCase):
         self.assertLess(len(content), 6_000)
         self.assertEqual(["datasage-query"], hermes["requires_toolsets"])
         self.assertEqual(
-            ["datasage_catalog", "datasage_query"],
+            ["datasage_catalog", "datasage_entity_resolve", "datasage_query"],
             hermes["requires_tools"],
         )
         description = metadata["description"]
-        self.assertIn("new internal company facts", description)
-        self.assertIn("not public research or user-provided data", description)
+        self.assertLessEqual(len(description), 60)
+        self.assertTrue(description.endswith("."))
+        self.assertEqual(1, description.count("."))
+        description_lower = description.casefold()
+        self.assertIn("governed datasage company facts", description_lower)
+        self.assertIn("public/user-provided", description_lower)
+        headings = [
+            "# DataSage Skill",
+            "## When to Use",
+            "## Prerequisites",
+            "## How to Run",
+            "## Quick Reference",
+            "## Procedure",
+            "## Pitfalls",
+            "## Verification",
+        ]
+        actual_headings = [
+            line for line in content.splitlines() if line.startswith("#")
+        ]
+        self.assertEqual(headings, actual_headings)
+
+    def test_entity_instructions_share_one_nonblocking_turn_boundary(self):
+        skill_root = SKILL_PATH.parent
+
+        def normalized(path: Path) -> str:
+            return " ".join(path.read_text(encoding="utf-8").split())
+
+        skill = normalized(SKILL_PATH)
+        query_rules = normalized(skill_root / "references" / "query-rules.md")
+        entity_guidance = normalized(
+            skill_root / "references" / "entity-guidance.md"
+        )
+        answer_boundary = normalized(
+            skill_root / "references" / "answer-boundary.md"
+        )
+        self.assertIn("datasage.entity-guidance/v1", skill)
+        self.assertIn("datasage.entity-guidance/v1", query_rules)
+        for required in (
+            "datasage_catalog",
+            "datasage_entity_resolve",
+            "datasage_query",
+            "same assistant tool-call batch",
+            "ordinary assistant text",
+            "end the current turn",
+            "Do not call blocking `clarify`",
+            "after the user confirms",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, entity_guidance)
+        for routed_text in (skill, query_rules):
+            self.assertNotIn("ordinary assistant text", routed_text)
+            self.assertNotIn("Do not call blocking `clarify`", routed_text)
+            self.assertNotIn("same assistant tool-call batch", routed_text)
+        self.assertIn("empty bounded candidate result", entity_guidance)
+        self.assertIn("does not prove that the entity is absent", entity_guidance)
+        self.assertNotIn("empty query", entity_guidance)
+        query_empty_boundary = (
+            "does not prove that an entity or dimension value does not exist"
+        )
+        self.assertIn(query_empty_boundary, answer_boundary)
+
+        catalog = schemas.DATASAGE_CATALOG["description"]
+        resolver = schemas.DATASAGE_ENTITY_RESOLVE["description"]
+        query = schemas.DATASAGE_QUERY["description"]
+        schema_contract = " ".join((catalog, resolver, query))
+        self.assertIn("before entity resolution or query", catalog)
+        self.assertIn("same assistant tool-call batch", resolver)
+        self.assertIn("stop before query", resolver)
+        self.assertIn("already unique or user-confirmed", query)
+        self.assertNotIn("final safety gate", schema_contract)
+        self.assertNotIn("proves user confirmation", schema_contract)
 
     def test_general_clarification_and_git_in_place_policy_have_one_owner(self):
         soul = (PROFILE_ROOT / "SOUL.md").read_text(encoding="utf-8")

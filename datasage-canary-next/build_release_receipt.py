@@ -36,22 +36,15 @@ GOLDEN_SUITE = ROOT / "plugins" / "datasage-query" / "e2e" / "golden_expert_case
 HOST_COMPACTION_FIXTURE = ROOT / "tests" / "fixtures" / "host_compaction_ordering.json"
 PERFORMANCE_CONTRACT = ROOT / "tests" / "fixtures" / "performance_non_db_contract.json"
 LIVE_RELEASE_CONTRACT = ROOT / "tests" / "fixtures" / "live_release_contract.json"
-EVIDENCE_SCHEMA = ROOT / "tests" / "contracts" / "release_evidence.schema.json"
 EVIDENCE_DIR = ROOT / "pending" / "evidence"
 HOST_EVIDENCE_SCHEMA = "datasage-host-compaction-evidence/v1"
 PERFORMANCE_EVIDENCE_SCHEMA = "datasage-performance-evidence/v1"
-LIVE_EVIDENCE_SCHEMA = "datasage-live-release-evidence/v2"
+LIVE_EVIDENCE_SCHEMA = "datasage-live-release-evidence/v3"
 PERFORMANCE_CONTRACT_SCHEMA = "datasage-performance-non-db-contract/v1"
-LIVE_CONTRACT_SCHEMA = "datasage-live-release-contract/v4"
+LIVE_CONTRACT_SCHEMA = "datasage-live-release-contract/v6"
 HOST_PRODUCER_PATH = "tests/test_host_compaction_e2e.py"
 PERFORMANCE_PRODUCER_PATH = "tests/run_performance_evidence.py"
 LIVE_PRODUCER_PATH = "tests/run_live_release_evidence.py"
-SESSION_META_CONVERSATIONAL_FIELDS = (
-    "content", "api_content", "tool_calls", "tool_call_id", "tool_name",
-    "function_call", "name", "effect_disposition", "finish_reason",
-    "reasoning", "reasoning_content", "reasoning_details",
-    "codex_reasoning_items", "codex_message_items",
-)
 GOLDEN_SUITE_PATH = "plugins/datasage-query/e2e/golden_expert_cases.json"
 TRANSCRIPT_ADAPTER_PATH = "plugins/datasage-query/e2e/canary_transcript_adapter.py"
 GOLDEN_SCORER_PATH = "plugins/datasage-query/e2e/golden_expert_scorer.py"
@@ -71,6 +64,23 @@ IDENTITY_MISMATCH_EXIT = 2
 LIVE_GATE_BLOCKED_EXIT = 3
 CANDIDATE_RECEIPT_GLOB = "*-candidate-receipt*.json"
 FINAL_RECEIPT_GLOB = "*-release-receipt.json"
+
+SESSION_META_CONVERSATIONAL_FIELDS = (
+    "content",
+    "api_content",
+    "tool_calls",
+    "tool_call_id",
+    "tool_name",
+    "function_call",
+    "name",
+    "effect_disposition",
+    "finish_reason",
+    "reasoning",
+    "reasoning_content",
+    "reasoning_details",
+    "codex_reasoning_items",
+    "codex_message_items",
+)
 
 LIVE_BLOCKERS = (
     ("LIVE_MODEL_REPLAY_NOT_VERIFIED", "Raw live-model replay evidence is not available."),
@@ -1088,7 +1098,7 @@ def _evaluate_performance_evidence(
 def _validate_live_contract(contract: dict[str, object]) -> dict[str, object]:
     top = {
         "schema", "scope", "subject", "host", "source_paths", "case_plan",
-        "clarify_reply_script",
+        "turn_completion_policy",
         "execution", "inbound", "review_policy", "capture_integrity_policy",
         "python_provenance_policy", "python_provenance_approval", "outbound", "runtime_readiness_policy",
     }
@@ -1129,11 +1139,11 @@ def _validate_live_contract(contract: dict[str, object]) -> dict[str, object]:
         raise ValueError("live contract must use one two-turn session per run")
     if _require_int(plan["runs"], "live contract.case_plan.runs") != 3:
         raise ValueError("live contract must require exactly three runs")
-    clarify_policies = _live_clarify_turn_policies(
-        contract["clarify_reply_script"], len(case_ids)
+    completion_policies = _live_turn_completion_policies(
+        contract["turn_completion_policy"], len(case_ids)
     )
-    if [item["case_id"] for item in clarify_policies] != case_ids:
-        raise ValueError("clarify reply script case order differs from the Golden plan")
+    if [item["case_id"] for item in completion_policies] != case_ids:
+        raise ValueError("turn completion policy case order differs from the Golden plan")
     execution = _require_exact_keys(
         contract["execution"],
         {"timeout_seconds", "command_shapes"},
@@ -1154,7 +1164,7 @@ def _validate_live_contract(contract: dict[str, object]) -> dict[str, object]:
     prefix = ["{python}", "-B", "-m", "hermes_cli.main"]
     expected_shapes = {
         "session_export": [*prefix, "sessions", "export", "-", "--session-id", "{exact_session_id}", "--format", "jsonl"],
-        "adapter": ["{python}", "-B", "{adapter}", "--state-db", "{state_db}", "--bindings", "{bindings}", "--output", "{candidate}"],
+        "adapter": ["{python}", "-B", "{adapter}", "--session-export", "{session_export}", "--bindings", "{bindings}", "--output", "{candidate}"],
         "scorer": ["{python}", "-B", "{scorer}", "--cases", "{golden_suite}", "--case-id", "{case_1}", "--case-id", "{case_2}", "--candidate", "{candidate}", "--output", "{score_report}"],
     }
     if command_shapes != expected_shapes:
@@ -1424,6 +1434,10 @@ def _strict_json_payload(payload: bytes, label: str) -> dict[str, object]:
     return value
 
 
+class _LiveTranscriptPolicyError(RuntimeError, ValueError):
+    """Fail-closed live policy error shared with the capture runner."""
+
+
 def _load_e2e_module(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
@@ -1433,23 +1447,249 @@ def _load_e2e_module(name: str, path: Path):
     return module
 
 
-def _export_session(payload: bytes) -> tuple[dict[str, object], list[dict[str, object]]]:
-    rows = [
-        json.loads(
-            line,
-            object_pairs_hook=_strict_object,
-            parse_constant=_reject_json_constant,
+def _export_session(
+    payload: bytes | str,
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+    adapter = _load_e2e_module(
+        "_datasage_official_export_parser",
+        ROOT / TRANSCRIPT_ADAPTER_PATH,
+    )
+    try:
+        return adapter.parse_official_session_export(payload)
+    except (TypeError, UnicodeDecodeError, ValueError) as error:
+        raise _LiveTranscriptPolicyError(str(error)) from error
+
+
+def _live_turn_completion_policies(
+    completion_policy: object, prompt_count: int
+) -> list[dict[str, object]]:
+    if not isinstance(completion_policy, list) or len(completion_policy) != prompt_count:
+        raise _LiveTranscriptPolicyError(
+            "turn completion policy must declare every Golden turn exactly once"
         )
-        for line in payload.decode("utf-8").splitlines()
-        if line.strip()
-    ]
-    if len(rows) != 1 or not isinstance(rows[0], dict):
-        raise ValueError("retained official export must contain exactly one JSONL session")
-    session = rows[0]
-    messages = session.get("messages")
-    if not isinstance(messages, list) or not messages or any(not isinstance(item, dict) for item in messages):
-        raise ValueError("retained official export has no valid messages")
-    return session, messages
+    policies: list[dict[str, object]] = []
+    keys = {
+        "case_id",
+        "turn",
+        "assistant_completion",
+        "maximum_blocking_clarify_calls",
+    }
+    for index, value in enumerate(completion_policy, 1):
+        if not isinstance(value, dict) or set(value) != keys:
+            raise _LiveTranscriptPolicyError(
+                "turn completion policy entry has an invalid shape"
+            )
+        if (
+            not isinstance(value["case_id"], str)
+            or not value["case_id"]
+            or value["turn"] != index
+        ):
+            raise _LiveTranscriptPolicyError(
+                "turn completion policy is missing or out of Golden turn order"
+            )
+        if value["assistant_completion"] != "ordinary_text":
+            raise _LiveTranscriptPolicyError(
+                "live turns must end with ordinary assistant text"
+            )
+        if (
+            type(value["maximum_blocking_clarify_calls"]) is not int
+            or value["maximum_blocking_clarify_calls"] != 0
+        ):
+            raise _LiveTranscriptPolicyError(
+                "blocking clarify tool calls must be forbidden for every live turn"
+            )
+        policies.append(value)
+    return policies
+
+
+def _live_without_transport_metadata(
+    messages: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    conversation: list[dict[str, object]] = []
+    for item in messages:
+        if item.get("function_call") is not None:
+            raise _LiveTranscriptPolicyError(
+                "legacy function_call is forbidden in live evidence"
+            )
+        role = item.get("role")
+        if role == "session_meta":
+            if any(
+                item.get(field) not in (None, "", [], {})
+                for field in SESSION_META_CONVERSATIONAL_FIELDS
+            ):
+                raise _LiveTranscriptPolicyError(
+                    "session_meta contains conversational or tool-flow payload"
+                )
+            continue
+        if role not in {"system", "user", "assistant", "tool"}:
+            raise _LiveTranscriptPolicyError(
+                "official export contains an unsupported conversational role"
+            )
+        conversation.append(item)
+    return conversation
+
+
+def _validate_live_turn_tool_flow(segment: list[dict[str, object]]) -> None:
+    pending: list[tuple[str, str, int]] = []
+    completed: set[str] = set()
+    for relative_index, message in enumerate(segment):
+        role = message.get("role")
+        tool_calls = message.get("tool_calls")
+        if tool_calls not in (None, []):
+            if role != "assistant" or not isinstance(tool_calls, list):
+                raise _LiveTranscriptPolicyError(
+                    "captured tool flow has an invalid tool-call carrier"
+                )
+            if pending:
+                raise _LiveTranscriptPolicyError(
+                    "pending tool calls must close before a new assistant tool-call batch"
+                )
+        if role == "system":
+            continue
+        if pending:
+            call_id, function_name, call_index = pending[0]
+            if role != "tool":
+                raise _LiveTranscriptPolicyError(
+                    "pending tool calls must be closed by the next non-system tool results"
+                )
+            observed_id = message.get("tool_call_id")
+            if observed_id != call_id:
+                if any(observed_id == item[0] for item in pending[1:]):
+                    raise _LiveTranscriptPolicyError(
+                        "tool results must close pending calls in declaration order"
+                    )
+                raise _LiveTranscriptPolicyError(
+                    "captured tool result is not bound to the next pending tool call"
+                )
+            tool_name = message.get("tool_name")
+            if (
+                not isinstance(tool_name, str)
+                or not tool_name
+                or tool_name != function_name
+            ):
+                raise _LiveTranscriptPolicyError(
+                    "captured tool result name does not match its tool call"
+                )
+            if call_index >= relative_index:
+                raise _LiveTranscriptPolicyError(
+                    "captured tool result precedes its tool call"
+                )
+            pending.pop(0)
+            completed.add(call_id)
+            continue
+        if role == "tool":
+            raise _LiveTranscriptPolicyError(
+                "captured tool result is not bound to a prior tool call"
+            )
+        if tool_calls in (None, []):
+            continue
+        batch_ids: set[str] = set()
+        for call in tool_calls:
+            call_id = call.get("id") if isinstance(call, dict) else None
+            function = call.get("function") if isinstance(call, dict) else None
+            function_name = function.get("name") if isinstance(function, dict) else None
+            if (
+                not isinstance(call_id, str)
+                or not call_id
+                or call_id in batch_ids
+                or call_id in completed
+            ):
+                raise _LiveTranscriptPolicyError(
+                    "captured tool flow has an invalid or duplicate tool-call ID"
+                )
+            if not isinstance(function_name, str) or not function_name:
+                raise _LiveTranscriptPolicyError(
+                    "captured tool call has no valid function name"
+                )
+            if function_name == "datasage_push":
+                raise _LiveTranscriptPolicyError(
+                    "datasage_push is forbidden in inbound live evidence"
+                )
+            if function_name == "clarify":
+                raise _LiveTranscriptPolicyError(
+                    "blocking clarify tool calls are forbidden in live evidence"
+                )
+            batch_ids.add(call_id)
+            pending.append((call_id, function_name, relative_index))
+    if pending:
+        raise _LiveTranscriptPolicyError("captured turn has an unclosed tool flow")
+
+
+def _live_endpoints(
+    messages: list[dict[str, object]],
+    prompts: list[str],
+    completion_policy: object,
+) -> list[tuple[int, int, str]]:
+    _live_turn_completion_policies(completion_policy, len(prompts))
+    conversation = _live_without_transport_metadata(messages)
+    if [
+        item.get("content") for item in conversation if item.get("role") == "user"
+    ] != prompts:
+        raise _LiveTranscriptPolicyError(
+            "official export user turns are not exactly the two ordered Golden prompts"
+        )
+    try:
+        first_user = next(
+            index
+            for index, item in enumerate(conversation)
+            if item.get("role") == "user"
+        )
+    except StopIteration as error:
+        raise _LiveTranscriptPolicyError(
+            "official export contains no Golden user prompt"
+        ) from error
+    if any(item.get("role") != "system" for item in conversation[:first_user]):
+        raise _LiveTranscriptPolicyError(
+            "captured transcript has a non-system message before the first Golden prompt"
+        )
+    result: list[tuple[int, int, str]] = []
+    start = 0
+    for prompt in prompts:
+        users = [
+            index
+            for index in range(start, len(conversation))
+            if conversation[index].get("role") == "user"
+            and conversation[index].get("content") == prompt
+        ]
+        if len(users) != 1:
+            raise _LiveTranscriptPolicyError(
+                "captured prompt is not unique in the official export"
+            )
+        user_index = users[0]
+        next_user = next(
+            (
+                index
+                for index in range(user_index + 1, len(conversation))
+                if conversation[index].get("role") == "user"
+            ),
+            len(conversation),
+        )
+        segment = conversation[user_index + 1 : next_user]
+        visible = [item for item in segment if item.get("role") != "system"]
+        if not visible:
+            raise _LiveTranscriptPolicyError(
+                "captured turn has no terminal assistant answer"
+            )
+        final = visible[-1]
+        if (
+            final.get("role") != "assistant"
+            or not isinstance(final.get("content"), str)
+            or not final["content"]
+            or final.get("tool_calls") not in (None, [])
+        ):
+            raise _LiveTranscriptPolicyError(
+                "captured turn does not end in a terminal assistant answer"
+            )
+        _validate_live_turn_tool_flow(segment)
+        user_id = conversation[user_index].get("id")
+        final_id = final.get("id")
+        if type(user_id) is not int or type(final_id) is not int or user_id >= final_id:
+            raise _LiveTranscriptPolicyError("captured turn endpoints are invalid")
+        result.append(
+            (user_id, final_id, _sha256_bytes(final["content"].encode("utf-8")))
+        )
+        start = next_user
+    return result
 
 
 def _live_timestamp(value: object, label: str) -> datetime:
@@ -1473,198 +1713,6 @@ def _subject_commit_timestamp(commit: str) -> datetime:
     _require_git_commit(commit, "live subject commit")
     value = str(_git_output(ROOT, "show", "-s", "--format=%cI", commit)).strip()
     return _live_timestamp(value, "subject commit timestamp")
-
-
-def _live_clarify_turn_policies(reply_script: object, prompt_count: int) -> list[dict[str, object]]:
-    if not isinstance(reply_script, list) or len(reply_script) != prompt_count:
-        raise ValueError("clarify reply script must declare every Golden turn exactly once")
-    policies: list[dict[str, object]] = []
-    keys = {"case_id", "turn", "maximum_calls", "strategy", "fixed_response"}
-    for index, value in enumerate(reply_script, 1):
-        if not isinstance(value, dict) or set(value) != keys:
-            raise ValueError("clarify reply script entry has an invalid shape")
-        if not isinstance(value["case_id"], str) or not value["case_id"] or value["turn"] != index:
-            raise ValueError("clarify reply script is missing or out of Golden turn order")
-        if type(value["maximum_calls"]) is not int or value["maximum_calls"] != 1:
-            raise ValueError("clarify reply script must allow at most one call per Golden turn")
-        strategy, fixed = value["strategy"], value["fixed_response"]
-        if index == 1:
-            if (
-                strategy != "fixed_text"
-                or fixed != "仅用于本次测试：采用你列出的第 1 个推荐口径继续，并在答案中明确该口径。"
-            ):
-                raise ValueError("first Golden turn clarify reply policy is unsupported")
-        elif strategy != "fixed_text" or fixed != "暂不确认，请列出候选供我选择。":
-            raise ValueError("second Golden turn clarify reply policy is unsupported")
-        policies.append(value)
-    return policies
-
-
-def _live_clarify_call_spec(function: dict[str, object]) -> dict[str, object]:
-    arguments = function.get("arguments")
-    if not isinstance(arguments, str) or not arguments:
-        raise ValueError("clarify tool call arguments are not strict JSON text")
-    try:
-        payload = json.loads(
-            arguments,
-            object_pairs_hook=_strict_object,
-            parse_constant=_reject_json_constant,
-        )
-    except (TypeError, ValueError) as error:
-        raise ValueError("clarify tool call arguments are invalid JSON") from error
-    allowed = {"question", "choices", "multi_select"}
-    if not isinstance(payload, dict) or not set(payload).issubset(allowed):
-        raise ValueError("clarify tool call is not the supported single-question shape")
-    question = payload.get("question")
-    if not isinstance(question, str) or not question.strip():
-        raise ValueError("clarify tool call has no nonempty question")
-    choices = payload.get("choices")
-    if choices is not None:
-        if (
-            not isinstance(choices, list)
-            or not 1 <= len(choices) <= 4
-            or not all(isinstance(item, str) and item.strip() for item in choices)
-        ):
-            raise ValueError("clarify tool call choices are invalid")
-        choices = [item.strip() for item in choices]
-    multi_select = payload.get("multi_select", False)
-    if type(multi_select) is not bool or multi_select:
-        raise ValueError("clarify reply script supports only scalar single-question replies")
-    return {"question": question.strip(), "choices_offered": choices}
-
-
-def _validate_live_clarify_result(content: object, call: dict[str, object], policy: dict[str, object]) -> None:
-    if not isinstance(content, str) or not content:
-        raise ValueError("clarify tool result is not strict JSON text")
-    try:
-        result = json.loads(
-            content,
-            object_pairs_hook=_strict_object,
-            parse_constant=_reject_json_constant,
-        )
-    except (TypeError, ValueError) as error:
-        raise ValueError("clarify tool result is invalid JSON") from error
-    if not isinstance(result, dict) or set(result) != {"question", "choices_offered", "user_response"}:
-        raise ValueError("clarify tool result has an invalid official shape")
-    if result["question"] != call["question"] or result["choices_offered"] != call["choices_offered"]:
-        raise ValueError("clarify tool result does not bind its call")
-    response = result["user_response"]
-    if policy["turn"] == 1:
-        choices = call["choices_offered"]
-        if not isinstance(choices, list) or not choices:
-            raise ValueError("first Golden clarify did not offer a recommended choice")
-    if response != policy["fixed_response"]:
-        raise ValueError("clarify reply does not match the fixed Golden response")
-
-
-def _live_endpoints(
-    messages: list[dict[str, object]],
-    prompts: list[str],
-    clarify_reply_script: object,
-) -> list[tuple[int, int, str]]:
-    policies = _live_clarify_turn_policies(clarify_reply_script, len(prompts))
-    conversation_messages = []
-    for item in messages:
-        role = item.get("role")
-        if role == "session_meta":
-            if any(item.get(field) not in (None, "", [], {}) for field in SESSION_META_CONVERSATIONAL_FIELDS):
-                raise ValueError("session_meta contains conversational or tool-flow payload")
-            continue
-        if role not in {"system", "user", "assistant", "tool"}:
-            raise ValueError("official export contains an unsupported conversational role")
-        conversation_messages.append(item)
-    messages = conversation_messages
-    if [item.get("content") for item in messages if item.get("role") == "user"] != prompts:
-        raise ValueError("official export user turns are not exactly the two ordered Golden prompts")
-    first_user = next(index for index, item in enumerate(messages) if item.get("role") == "user")
-    if any(item.get("role") != "system" for item in messages[:first_user]):
-        raise ValueError("captured transcript has a non-system message before the first Golden prompt")
-    endpoints = []
-    start = 0
-    for turn_index, prompt in enumerate(prompts):
-        policy = policies[turn_index]
-        positions = [index for index in range(start, len(messages)) if messages[index].get("role") == "user" and messages[index].get("content") == prompt]
-        if len(positions) != 1:
-            raise ValueError("captured Golden prompt is not unique")
-        user_index = positions[0]
-        next_user = next((index for index in range(user_index + 1, len(messages)) if messages[index].get("role") == "user"), len(messages))
-        segment = messages[user_index + 1:next_user]
-        visible = [item for item in segment if item.get("role") != "system"]
-        if not visible:
-            raise ValueError("captured turn has no terminal assistant answer")
-        final = visible[-1]
-        if final.get("role") != "assistant" or not isinstance(final.get("content"), str) or not final["content"] or final.get("tool_calls") not in (None, []):
-            raise ValueError("captured turn does not end in a terminal assistant answer")
-        pending: dict[str, tuple[int, str, dict[str, object] | None]] = {}
-        completed: set[str] = set()
-        clarify_calls = 0
-        for relative_index, message in enumerate(segment):
-            pending_clarify = [
-                call_id for call_id, (_, name, _) in pending.items() if name == "clarify"
-            ]
-            if pending_clarify and message.get("role") != "system":
-                if (
-                    len(pending_clarify) != 1
-                    or message.get("role") != "tool"
-                    or message.get("tool_call_id") != pending_clarify[0]
-                ):
-                    raise ValueError(
-                        "clarify tool result is not the next non-system message"
-                    )
-            calls = message.get("tool_calls")
-            if calls not in (None, []):
-                if message.get("role") != "assistant" or not isinstance(calls, list):
-                    raise ValueError("captured tool flow has an invalid tool-call carrier")
-                for call in calls:
-                    call_id = call.get("id") if isinstance(call, dict) else None
-                    function = call.get("function") if isinstance(call, dict) else None
-                    function_name = function.get("name") if isinstance(function, dict) else None
-                    if not isinstance(call_id, str) or not call_id or call_id in pending or call_id in completed:
-                        raise ValueError("captured tool flow has an invalid or duplicate tool-call ID")
-                    if not isinstance(function_name, str) or not function_name:
-                        raise ValueError("captured tool call has no valid function name")
-                    if function_name == "datasage_push":
-                        raise ValueError("datasage_push is forbidden in inbound live evidence")
-                    clarify_call = None
-                    if function_name == "clarify":
-                        if len(calls) != 1:
-                            raise ValueError(
-                                "clarify must be the assistant message's only tool call"
-                            )
-                        if pending:
-                            raise ValueError(
-                                "clarify requires all prior tool calls to be closed"
-                            )
-                        clarify_calls += 1
-                        if clarify_calls > policy["maximum_calls"]:
-                            raise ValueError("captured turn has an extra clarify call")
-                        clarify_call = _live_clarify_call_spec(function)
-                    pending[call_id] = (relative_index, function_name, clarify_call)
-            if message.get("role") == "tool":
-                call_id = message.get("tool_call_id")
-                tool_name = message.get("tool_name")
-                if tool_name == "datasage_push":
-                    raise ValueError("datasage_push is forbidden in inbound live evidence")
-                if not isinstance(call_id, str) or call_id not in pending:
-                    raise ValueError("captured tool result is not bound to a prior tool call")
-                call_index, function_name, clarify_call = pending.pop(call_id)
-                if not isinstance(tool_name, str) or not tool_name or tool_name != function_name:
-                    raise ValueError("captured tool result name does not match its tool call")
-                if call_index >= relative_index:
-                    raise ValueError("captured tool result precedes its tool call")
-                if function_name == "clarify":
-                    if clarify_call is None:
-                        raise ValueError("clarify tool result has no declared call")
-                    _validate_live_clarify_result(message.get("content"), clarify_call, policy)
-                completed.add(call_id)
-        if pending:
-            raise ValueError("captured turn has an unclosed tool flow")
-        user_id, final_id = messages[user_index].get("id"), final.get("id")
-        if type(user_id) is not int or type(final_id) is not int or user_id >= final_id:
-            raise ValueError("captured turn endpoints are invalid")
-        endpoints.append((user_id, final_id, _sha256_bytes(final["content"].encode("utf-8"))))
-        start = next_user
-    return endpoints
 
 
 def _validate_wecom_session_origin(
@@ -1735,7 +1783,7 @@ def _reject_entitlement_denial(messages: list[dict[str, object]]) -> None:
 def _validate_live_candidate_shape(candidate: dict[str, object]) -> None:
     _require_exact_keys(
         candidate,
-        {"schema", "profile_artifact", "state_db_identity_sha256", "cases", "canary_receipt"},
+        {"schema", "profile_artifact", "session_export_sha256", "cases", "canary_receipt"},
         "live candidate",
     )
     _require_exact_keys(candidate["profile_artifact"], {"profile_id", "artifact_id", "payload_sha256"}, "live candidate.profile_artifact")
@@ -1757,17 +1805,22 @@ def _validate_live_candidate_shape(candidate: dict[str, object]) -> None:
         _require_exact_keys(case["conclusion_review"], review_keys, f"live candidate.cases[{index}].conclusion_review")
     receipt = _require_exact_keys(
         candidate["canary_receipt"],
-        {"schema", "captured_at", "source", "profile_artifact", "state_db_identity_sha256", "candidate_cases_sha256", "turns", "receipt_sha256"},
+        {"schema", "captured_at", "source", "profile_artifact", "session_export_sha256", "candidate_cases_sha256", "turns", "receipt_sha256"},
         "live candidate.canary_receipt",
     )
-    _require_exact_keys(receipt["source"], {"platform", "sqlite_mode", "query_only", "state_db_identity_sha256"}, "live candidate receipt source")
-    _require_bool(receipt["source"]["query_only"], "live candidate receipt source.query_only")
+    source = _require_exact_keys(
+        receipt["source"],
+        {"platform", "format", "session_export_sha256"},
+        "live candidate receipt source",
+    )
+    if source["format"] != "hermes_sessions_export_jsonl":
+        raise ValueError("live candidate receipt source is not official Hermes JSONL")
     turns = receipt["turns"]
     if not isinstance(turns, list) or len(turns) != 2:
         raise ValueError("live candidate receipt must contain exactly two turns")
     turn_keys = {
-        "test_id", "conversation_id", "turn", "session_id", "database_message_ids",
-        "user_message_id", "canonical_prompt_sha256", "database_identity_sha256",
+        "test_id", "conversation_id", "turn", "session_id", "session_export_message_ids",
+        "user_message_id", "canonical_prompt_sha256", "session_export_sha256",
         "watermark_sha256", "user_platform_message_id", "final_message_id",
         "final_platform_message_id", "final_answer_sha256", "transcript_sha256",
         "candidate_case_sha256", "conclusion_review", "fixture_attestation_sha256",
@@ -1778,9 +1831,9 @@ def _validate_live_candidate_shape(candidate: dict[str, object]) -> None:
         _require_int(turn["turn"], "candidate receipt turn", minimum=1)
         _require_int(turn["user_message_id"], "candidate receipt user_message_id", minimum=1)
         _require_int(turn["final_message_id"], "candidate receipt final_message_id", minimum=1)
-        ids = turn["database_message_ids"]
+        ids = turn["session_export_message_ids"]
         if not isinstance(ids, list) or not ids or any(type(item) is not int or item < 1 for item in ids):
-            raise ValueError("candidate receipt database_message_ids must be strict positive integers")
+            raise ValueError("candidate receipt session_export_message_ids must be strict positive integers")
         _require_exact_keys(turn["conclusion_review"], review_keys, f"live candidate receipt.turns[{index}].conclusion_review")
 
 
@@ -1872,19 +1925,32 @@ def _reject_internal_conclusion_codes(final_answer: str, golden: dict[str, objec
 
 
 def _verify_live_candidate(
+    adapter,
     candidate: dict[str, object],
     export_session: dict[str, object],
     messages: list[dict[str, object]],
+    session_export_sha256: str,
     suite: dict[str, object],
     case_ids: list[str],
     subject: dict[str, str],
     reviews: dict[str, list[dict[str, object]]],
 ) -> dict[str, object]:
-    adapter = _load_e2e_module("_datasage_release_adapter", ROOT / TRANSCRIPT_ADAPTER_PATH)
     scorer = _load_e2e_module("_datasage_release_scorer", ROOT / GOLDEN_SCORER_PATH)
     _validate_live_candidate_shape(candidate)
     if adapter.verify_receipt(candidate) is not True:
         raise ValueError("existing transcript adapter rejected the retained candidate receipt")
+    receipt = candidate.get("canary_receipt")
+    receipt_source = receipt.get("source") if isinstance(receipt, dict) else None
+    if (
+        _require_sha256(session_export_sha256, "session export identity")
+        != session_export_sha256
+        or candidate.get("session_export_sha256") != session_export_sha256
+        or not isinstance(receipt, dict)
+        or receipt.get("session_export_sha256") != session_export_sha256
+        or not isinstance(receipt_source, dict)
+        or receipt_source.get("session_export_sha256") != session_export_sha256
+    ):
+        raise ValueError("retained candidate does not bind the exact session export bytes")
     if candidate.get("profile_artifact") != {
         "profile_id": subject["name"],
         "artifact_id": subject["profile_git_commit"],
@@ -1895,8 +1961,6 @@ def _verify_live_candidate(
     if not isinstance(session_id, str) or not session_id:
         raise ValueError("retained official export has no exact session ID")
     cases = candidate.get("cases")
-    receipt = candidate.get("canary_receipt")
-    receipt_source = receipt.get("source") if isinstance(receipt, dict) else None
     if not isinstance(receipt_source, dict) or receipt_source.get("platform") != "wecom" or export_session.get("source") != "wecom":
         raise ValueError("retained candidate transcript source is not WeCom inbound")
     turns = receipt.get("turns") if isinstance(receipt, dict) else None
@@ -1916,11 +1980,12 @@ def _verify_live_candidate(
         case = case_by_id[case_id]
         turn = turn_by_id[case_id]
         golden = golden_by_id.get(case_id)
-        ids = turn.get("database_message_ids")
+        ids = turn.get("session_export_message_ids")
         if (
             not isinstance(golden, dict)
             or case.get("session_id") != session_id
             or turn.get("session_id") != session_id
+            or turn.get("session_export_sha256") != session_export_sha256
             or not isinstance(ids, list)
             or not ids
             or any(type(item) is not int or item not in message_by_id for item in ids)
@@ -1962,7 +2027,7 @@ def _verify_live_candidate(
             raise ValueError("trusted reviewers did not reach exact conclusion consensus")
         consensus_reviewer_id = _review_consensus_id(review_pair)
         assertion = {
-            "schema": "datasage-review-assertion/v2",
+            "schema": "datasage-review-assertion/v3",
             "status": "reviewed",
             "test_id": case_id,
             "artifact_id": subject["profile_git_commit"],
@@ -1970,7 +2035,7 @@ def _verify_live_candidate(
             "session_id": session_id,
             "user_message_id": turn["user_message_id"],
             "canonical_prompt_sha256": turn["canonical_prompt_sha256"],
-            "database_identity_sha256": turn["database_identity_sha256"],
+            "session_export_sha256": turn["session_export_sha256"],
             "watermark_sha256": turn["watermark_sha256"],
             "final_answer_sha256": turn["final_answer_sha256"],
             "reviewer_id": consensus_reviewer_id,
@@ -1982,7 +2047,7 @@ def _verify_live_candidate(
             key: assertion[key]
             for key in (
                 "test_id", "artifact_id", "payload_sha256", "session_id",
-                "user_message_id", "canonical_prompt_sha256", "database_identity_sha256",
+                "user_message_id", "canonical_prompt_sha256", "session_export_sha256",
                 "watermark_sha256", "final_answer_sha256", "fixture_attestation_sha256",
                 "business_database_ref_sha256",
             )
@@ -2066,6 +2131,9 @@ def _evaluate_live_evidence(
         )
         for label, value, expected_path in source_bindings:
             _validate_hashed_source(value, label=label, expected_path=expected_path, subject_commit=subject_commit)
+        adapter = _load_e2e_module(
+            "_datasage_release_adapter", ROOT / TRANSCRIPT_ADAPTER_PATH
+        )
         if contract["subject"] != {"name": subject["name"], "version": subject["version"]}:
             raise ValueError("live contract subject does not match the current candidate")
         if contract["host"] != {"hermes_version": pinned_hermes, "hermes_git_commit": hermes_git_commit}:
@@ -2075,6 +2143,8 @@ def _evaluate_live_evidence(
         plan = contract["case_plan"]
         if release_validation.get("release_target") != subject["version"]:
             raise ValueError("Golden release target does not match the candidate")
+        if trusted.get("binding_schema") != adapter.LIVE_BINDING_SCHEMA:
+            raise ValueError("Golden trusted replay binding schema is unsupported")
         if trusted.get("case_ids") != plan["case_ids"] or trusted.get("required_replay_runs_per_case") != plan["runs"]:
             raise ValueError("Golden trusted replay requirements do not match the live contract")
         readiness_sha = _require_sha256(report["runtime_readiness_policy_sha256"], "runtime_readiness_policy_sha256")
@@ -2117,10 +2187,6 @@ def _evaluate_live_evidence(
         golden_by_id = {item.get("id"): item for item in suite.get("cases", []) if isinstance(item, dict)}
         command_shapes = contract["execution"]["command_shapes"]
         python = str(_canonical_hermes_python())
-        state_db_path = (ROOT / "state.db").resolve()
-        if not state_db_path.is_file():
-            raise ValueError("live evidence requires this Profile's canonical state.db")
-        state_db = str(state_db_path)
         expected_indices = set(range(1, plan["runs"] + 1))
         seen_indices: set[int] = set()
         lineages: set[str] = set()
@@ -2134,7 +2200,7 @@ def _evaluate_live_evidence(
         for position, value in enumerate(runs):
             run = _require_exact_keys(
                 value,
-                {"run_index", "case_ids", "processes", "candidate", "score_report", "reviews"},
+                {"run_index", "case_ids", "processes", "bindings", "candidate", "score_report", "reviews"},
                 f"runs[{position}]",
             )
             run_index = _require_int(run["run_index"], f"runs[{position}].run_index", minimum=1)
@@ -2170,7 +2236,7 @@ def _evaluate_live_evidence(
             endpoints = _live_endpoints(
                 messages,
                 expected_user_prompts,
-                contract["clarify_reply_script"],
+                contract["turn_completion_policy"],
             )
             _reject_entitlement_denial(messages)
             final_hashes = [item[2] for item in endpoints]
@@ -2203,16 +2269,36 @@ def _evaluate_live_evidence(
                 case_ids=list(plan["case_ids"]), review_policy=contract["review_policy"],
                 capture_sha256=report["capture"]["sha256"],
             )
+            _, bindings_payload = _live_artifact(
+                run["bindings"], subject_commit=subject_commit, run_index=run_index,
+                filename="bindings.json", label="adapter bindings",
+            )
+            bindings = _strict_json_payload(bindings_payload, "adapter bindings")
+            rebuilt_candidate = adapter.adapt(export_payload, bindings)
             _, candidate_payload = _live_artifact(run["candidate"], subject_commit=subject_commit, run_index=run_index, filename="candidate.json", label="adapter candidate")
             candidate = _strict_json_payload(candidate_payload, "adapter candidate")
-            verified = _verify_live_candidate(candidate, exported, messages, suite, list(plan["case_ids"]), report["subject"], reviews)
+            if _canonical_json_bytes(candidate) != _canonical_json_bytes(rebuilt_candidate):
+                raise ValueError(
+                    "retained candidate differs from the exact export/bindings adapter rebuild"
+                )
+            verified = _verify_live_candidate(
+                adapter,
+                candidate,
+                exported,
+                messages,
+                session["export"]["sha256"],
+                suite,
+                list(plan["case_ids"]),
+                report["subject"],
+                reviews,
+            )
             _, score_payload = _live_artifact(run["score_report"], subject_commit=subject_commit, run_index=run_index, filename="score.json", label="score report")
             if _canonical_json_bytes(_strict_json_payload(score_payload, "score report")) != _canonical_json_bytes(verified["score"]):
                 raise ValueError("retained scorer report differs from builder-recomputed Golden score")
             processes = _require_exact_keys(run["processes"], {"adapter", "scorer"}, "finalize processes")
             run_dir = EVIDENCE_DIR / f"private/{subject_commit}/run-{run_index}"
             finalize_bindings = {
-                "adapter": {"python": python, "adapter": str(ROOT / TRANSCRIPT_ADAPTER_PATH), "state_db": state_db, "bindings": str(run_dir / "bindings.json"), "candidate": str(run_dir / "candidate.json")},
+                "adapter": {"python": python, "adapter": str(ROOT / TRANSCRIPT_ADAPTER_PATH), "session_export": str(run_dir / "session.jsonl"), "bindings": str(run_dir / "bindings.json"), "candidate": str(run_dir / "candidate.json")},
                 "scorer": {"python": python, "scorer": str(ROOT / GOLDEN_SCORER_PATH), "golden_suite": str(ROOT / GOLDEN_SUITE_PATH), "case_1": plan["case_ids"][0], "case_2": plan["case_ids"][1], "candidate": str(run_dir / "candidate.json"), "score_report": str(run_dir / "score.json")},
             }
             finalize_records = {
@@ -2270,8 +2356,15 @@ def evaluate_release_gates(
     trusted = trusted if isinstance(trusted, dict) else {}
     required_runs = trusted.get("required_replay_runs_per_case")
     case_ids = trusted.get("case_ids")
+    adapter = _load_e2e_module(
+        "_datasage_release_contract_adapter", ROOT / TRANSCRIPT_ADAPTER_PATH
+    )
     valid_live_contract = type(required_runs) is int and required_runs >= 1 and isinstance(case_ids, list) and bool(case_ids)
     valid_live_contract = valid_live_contract and all(isinstance(case_id, str) and case_id for case_id in case_ids) and len(case_ids) == len(set(case_ids))
+    valid_live_contract = (
+        valid_live_contract
+        and trusted.get("binding_schema") == adapter.LIVE_BINDING_SCHEMA
+    )
     if target != version:
         blockers.append(_blocker("LIVE_REPLAY_TARGET_MISMATCH", "Live replay requirements do not target the candidate version."))
     if not valid_live_contract:

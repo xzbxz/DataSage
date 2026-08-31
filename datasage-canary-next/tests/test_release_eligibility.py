@@ -256,6 +256,7 @@ def _self_attested_live(version="0.15.0-test"):
         "live_model_replay_status": "verified",
         "release_gate_status": "eligible",
         "trusted_replay_gate": {
+            "binding_schema": "datasage-canary-bindings/v3-live-fixture",
             "case_ids": ["fabricated-case"],
             "required_replay_runs_per_case": 1,
             "completed_replay_runs_per_case": {"fabricated-case": 99},
@@ -293,6 +294,7 @@ def _live_manifest(contract=None):
         "release_target": contract["subject"]["version"],
         "transcript_source": "wecom",
         "trusted_replay_gate": {
+            "binding_schema": "datasage-canary-bindings/v3-live-fixture",
             "case_ids": copy.deepcopy(contract["case_plan"]["case_ids"]),
             "required_replay_runs_per_case": contract["case_plan"]["runs"],
         },
@@ -305,6 +307,9 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
     case_ids = contract["case_plan"]["case_ids"]
     commands = contract["execution"]["command_shapes"]
     suite = json.loads(builder.GOLDEN_SUITE.read_text(encoding="utf-8"))
+    adapter = builder._load_e2e_module(
+        "_test_live_adapter", builder.ROOT / builder.TRANSCRIPT_ADAPTER_PATH
+    )
     golden = {case["id"]: case for case in suite["cases"]}
     natural_review_evidence = {
         "ambiguity_10_rc5_vietnam_scorecard": {
@@ -337,43 +342,205 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
 
     def candidate_and_export(run_index):
         session_id = f"private-live-session-{run_index}"
-        messages = []
-        candidate_cases = []
-        turns = []
-        external_reviews = []
         profile = {
             "profile_id": subject["name"],
             "artifact_id": subject["profile_git_commit"],
             "payload_sha256": subject["content_sha256"],
         }
-        database_identity = "c" * 64
-        for offset, case_id in enumerate(case_ids):
-            case = golden[case_id]
-            user_id = offset * 2 + 1
-            final_id = user_id + 1
-            phrases = natural_review_evidence[case_id]
-            final_answer = "。".join(
-                phrase
-                for label in case["required_conclusions"]
-                for phrase in phrases[label]
-            ) + "。"
-            turn_messages = [
-                {"id": user_id, "role": "user", "tool_name": None, "tool_call_id": None, "tool_calls": None, "content": case["prompt"]},
-                {"id": final_id, "role": "assistant", "tool_name": None, "tool_call_id": None, "tool_calls": None, "content": final_answer},
-            ]
-            messages.extend(turn_messages)
+
+        def metric_detail(domain, metric, time_policy):
+            payload = {
+                "status": "success",
+                "catalog_version": "datasage-metric-catalog/v1",
+                "contract_role": "governed_metric_catalog",
+                "query_policy": {},
+                "results": [{
+                    "level": "metric", "domain": domain,
+                    "metric": {"code": metric, "time_policy": time_policy},
+                }],
+            }
+            payload["content_hash"] = adapter._sha256(payload)
+            return ({"requests": [{"domain": domain, "metric": metric}]}, payload)
+
+        database_ref_sha = "e" * 64
+        requests = [
+            {
+                "request_id": "flow", "domain": "delivery",
+                "metric": "delivery_amount", "dimensions": ["department"],
+                "time_range": {"start": "2026-01-01", "end": "2026-09-01"},
+            },
+            {
+                "request_id": "snapshot", "domain": "receivable",
+                "metric": "overdue_receivable_amount", "dimensions": ["department"],
+            },
+        ]
+        results = []
+        for request in requests:
+            applied = (
+                {
+                    **request["time_range"], "source": "explicit",
+                    "calendar_evidence": {
+                        "version": "calendar-period-evidence/v2",
+                        "observation_basis": "business_clock_query_observation",
+                        "observed_on": "2026-08-29", "period_state": "in_progress",
+                        "source_freshness": "not_proven",
+                    },
+                }
+                if "time_range" in request
+                else {
+                    "source": "current_snapshot", "as_of_date": "2026-08-29",
+                    "resolution_state": "resolved",
+                }
+            )
+            results.append({
+                "request_id": request["request_id"], "status": "success",
+                "data_state": "rows",
+                "business_metric_ref": "metric_" + sha(
+                    f"{request['domain']}\0{request['metric']}"
+                )[:16],
+                "business_metric_label": request["metric"], "row_count": 1,
+                "rows": [{
+                    "claim_id": "claim_" + hashlib.sha256(
+                        request["request_id"].encode("utf-8")
+                    ).hexdigest()[:20],
+                    "dimensions": [], "facts": {"metric_value": "1"},
+                    "states": {"metric_data_state": "complete"},
+                    "allowed_relations": ["observation"], "unit": "CNY",
+                    "currency": "CNY",
+                }],
+                "truncated": False, "applied_time_range": applied, "error": None,
+            })
+        query_call = (
+            {"requests": requests},
+            {
+                "model_wire_version": "datasage-query-model-wire/v3",
+                "source_evidence_ref": {
+                    "schema": adapter.MODEL_SOURCE_REFERENCE_SCHEMA,
+                    "source_ref_sha256": database_ref_sha,
+                },
+                "evidence_bundle": {
+                    "items": [
+                        {"status": "success", "request_id": request["request_id"]}
+                        for request in requests
+                    ]
+                },
+                "results": results,
+            },
+        )
+        entity_call = (
+            {
+                "token": "泰国", "domain": "delivery", "metric": "delivery_amount",
+                "entity_types": ["department"],
+            },
+            {
+                "status": "ambiguous", "resolution_path": "master_candidate_query",
+                "token": "泰国", "must_clarify": True,
+                "must_stop_business_query": True, "candidate_count": 2,
+                "candidate_count_is_lower_bound": False, "truncated": False,
+                "candidates": [
+                    {
+                        "entity_type": "department", "canonical_id": "thai-market",
+                        "canonical_code": "TH-MKT", "display_name": "泰国市场",
+                        "filter_values": ["泰国市场"], "match_kind": "contains",
+                        "confidence": "candidate", "filter_role": "customer_region",
+                    },
+                    {
+                        "entity_type": "department", "canonical_id": "thai-department",
+                        "canonical_code": "TH-DEPT", "display_name": "泰国部门",
+                        "filter_values": ["泰国部门"], "match_kind": "contains",
+                        "confidence": "candidate", "filter_role": "customer_region",
+                    },
+                ],
+            },
+        )
+
+        messages = []
+        prepared = []
+
+        def message(role, content=None, *, tool_calls=None, tool_name=None, tool_call_id=None):
+            row = {
+                "id": len(messages) + 1, "session_id": session_id, "active": 1,
+                "role": role, "tool_name": tool_name, "tool_call_id": tool_call_id,
+                "tool_calls": tool_calls, "platform_message_id": None,
+                "content": content,
+            }
+            messages.append(row)
+            return row["id"]
+
+        def tool_batch(specs):
+            calls = []
+            for call_id, name, arguments, _payload in specs:
+                calls.append({
+                    "id": call_id,
+                    "function": {
+                        "name": name,
+                        "arguments": json.dumps(arguments, ensure_ascii=False),
+                    },
+                })
+            message("assistant", tool_calls=calls)
+            for call_id, name, _arguments, payload in specs:
+                message(
+                    "tool", json.dumps(payload, ensure_ascii=False),
+                    tool_name=name, tool_call_id=call_id,
+                )
+
+        first = golden[case_ids[0]]
+        first_phrases = natural_review_evidence[case_ids[0]]
+        first_final = "。".join(
+            phrase for label in first["required_conclusions"]
+            for phrase in first_phrases[label]
+        ) + "。"
+        first_user = message("user", first["prompt"])
+        delivery_catalog = metric_detail("delivery", "delivery_amount", "current_month")
+        receivable_catalog = metric_detail(
+            "receivable", "overdue_receivable_amount", "current_snapshot"
+        )
+        tool_batch([
+            ("catalog-flow", "datasage_catalog", *delivery_catalog),
+            ("catalog-snapshot", "datasage_catalog", *receivable_catalog),
+        ])
+        tool_batch([("query-scorecard", "datasage_query", *query_call)])
+        first_final_id = message("assistant", first_final)
+        prepared.append((case_ids[0], first, first_user, first_final_id, first_phrases, first_final))
+
+        second = golden[case_ids[1]]
+        second_phrases = natural_review_evidence[case_ids[1]]
+        second_final = "。".join(
+            phrase for label in second["required_conclusions"]
+            for phrase in second_phrases[label]
+        ) + "。"
+        second_user = message("user", second["prompt"])
+        tool_batch([("entity-thailand", "datasage_entity_resolve", *entity_call)])
+        second_final_id = message("assistant", second_final)
+        prepared.append((case_ids[1], second, second_user, second_final_id, second_phrases, second_final))
+
+        exported = {
+            "id": session_id,
+            "source": "wecom",
+            "profile_name": subject["name"],
+            "chat_type": "dm",
+            "user_id": "synthetic-test-identity",
+            "chat_id": "synthetic-test-identity",
+            "title": f"datasage-live-{subject['profile_git_commit'][:12]}-run-{run_index}",
+            "started_at": "2026-08-29T00:00:00+00:00",
+            "messages": messages,
+        }
+        export_bytes = (json.dumps(exported, ensure_ascii=False) + "\n").encode("utf-8")
+        session_export_sha256 = sha_bytes(export_bytes)
+        turns = []
+        external_reviews = []
+        for case_id, case, user_id, final_id, phrases, final_answer in prepared:
             prompt_sha = sha_bytes(case["prompt"].encode("utf-8"))
             final_sha = sha_bytes(final_answer.encode("utf-8"))
             fixture_sha = "d" * 64
-            database_ref_sha = "e" * 64
             watermark = sha({
-                "schema": "datasage-replay-watermark/v2-live-fixture",
+                "schema": "datasage-replay-watermark/v3-live-fixture",
                 "test_id": case_id,
                 "conversation_id": case["conversation_id"],
                 "turn": case["turn"],
                 "canonical_prompt_sha256": prompt_sha,
                 "user_message_id": user_id,
-                "database_identity_sha256": database_identity,
+                "session_export_sha256": session_export_sha256,
                 "artifact_id": profile["artifact_id"],
                 "payload_sha256": profile["payload_sha256"],
                 "fixture_attestation_sha256": fixture_sha,
@@ -386,7 +553,7 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
                 "session_id": session_id,
                 "user_message_id": user_id,
                 "canonical_prompt_sha256": prompt_sha,
-                "database_identity_sha256": database_identity,
+                "session_export_sha256": session_export_sha256,
                 "watermark_sha256": watermark,
                 "final_answer_sha256": final_sha,
                 "fixture_attestation_sha256": fixture_sha,
@@ -397,8 +564,8 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
                 evidence = []
                 for label in case["required_conclusions"]:
                     excerpt = phrases[label][reviewer_index]
-                    start = final_answer.index(excerpt)
-                    evidence.append({"label": label, "start": start, "end": start + len(excerpt), "text_sha256": sha(excerpt)})
+                    excerpt_start = final_answer.index(excerpt)
+                    evidence.append({"label": label, "start": excerpt_start, "end": excerpt_start + len(excerpt), "text_sha256": sha(excerpt)})
                 external_reviews_for_case.append({
                     "run_index": run_index,
                     "case_id": case_id,
@@ -412,7 +579,7 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
                 })
             consensus_reviewer_id = builder._review_consensus_id(external_reviews_for_case)
             assertion = {
-                "schema": "datasage-review-assertion/v2",
+                "schema": "datasage-review-assertion/v3",
                 "status": "reviewed",
                 "test_id": case_id,
                 "artifact_id": profile["artifact_id"],
@@ -420,7 +587,7 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
                 "session_id": session_id,
                 "user_message_id": user_id,
                 "canonical_prompt_sha256": prompt_sha,
-                "database_identity_sha256": database_identity,
+                "session_export_sha256": session_export_sha256,
                 "watermark_sha256": watermark,
                 "final_answer_sha256": final_sha,
                 "reviewer_id": consensus_reviewer_id,
@@ -428,84 +595,29 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
                 "fixture_attestation_sha256": fixture_sha,
                 "business_database_ref_sha256": database_ref_sha,
             }
-            review = {
-                "status": "reviewed",
-                "reviewer_id_sha256": sha(consensus_reviewer_id),
-                "assertion_sha256": sha(assertion),
-                "binding_sha256": sha(binding),
-                "plan_trace_sha256": None,
-            }
-            plan = {
-                key: copy.deepcopy(value)
-                for key, value in case["plan_constraints"].items()
-                if not key.startswith("must_not_")
-            }
-            plan.setdefault("context_bindings", {"filter_fingerprints": {}})
-            observed = {
-                "id": case_id,
-                "session_id": session_id,
-                "session_lineage": [session_id],
-                "plan": plan,
-                "conclusions": copy.deepcopy(case["required_conclusions"]),
-                "conclusion_review": review,
-                "evidence": {
-                    "receipts": copy.deepcopy(case["evidence_requirements"]["required_receipts"]),
-                    "successful_queries": case["evidence_requirements"]["minimum_successful_queries"],
-                    "failed_queries": 0,
-                    "truncated": False,
-                    "reconciled": case["evidence_requirements"]["require_reconciled_decomposition"],
-                    "query_attempted": not case["evidence_requirements"]["must_not_query"],
-                    "error_codes": copy.deepcopy(case["evidence_requirements"]["required_error_codes"]),
-                },
-            }
-            candidate_cases.append(observed)
             external_reviews.extend(external_reviews_for_case)
             turns.append({
                 "test_id": case_id,
                 "conversation_id": case["conversation_id"],
                 "turn": case["turn"],
                 "session_id": session_id,
-                "database_message_ids": [user_id, final_id],
                 "user_message_id": user_id,
                 "canonical_prompt_sha256": prompt_sha,
-                "database_identity_sha256": database_identity,
                 "watermark_sha256": watermark,
-                "user_platform_message_id": None,
                 "final_message_id": final_id,
-                "final_platform_message_id": None,
-                "final_answer_sha256": final_sha,
-                "transcript_sha256": sha(turn_messages),
-                "candidate_case_sha256": sha(observed),
-                "conclusion_review": review,
                 "fixture_attestation_sha256": fixture_sha,
                 "business_database_ref_sha256": database_ref_sha,
+                "review": assertion,
             })
-        receipt = {
-            "schema": "datasage-canary-receipt/v1",
+        bindings = {
+            "schema": adapter.LIVE_BINDING_SCHEMA,
             "captured_at": "2026-08-29T00:00:00+00:00",
-            "source": {"platform": "wecom", "sqlite_mode": "ro", "query_only": True, "state_db_identity_sha256": database_identity},
-            "profile_artifact": profile,
-            "state_db_identity_sha256": database_identity,
-            "candidate_cases_sha256": sha(candidate_cases),
+            "transcript_source": "wecom", "profile_artifact": profile,
+            "session_export_sha256": session_export_sha256,
             "turns": turns,
         }
-        receipt["receipt_sha256"] = sha(receipt)
-        return session_id, {
-            "id": session_id,
-            "source": "wecom",
-            "chat_type": "dm",
-            "user_id": "synthetic-test-identity",
-            "chat_id": "synthetic-test-identity",
-            "title": f"datasage-live-{subject['profile_git_commit'][:12]}-run-{run_index}",
-            "started_at": "2026-08-29T00:00:00+00:00",
-            "messages": messages,
-        }, {
-            "schema": "datasage-golden-expert-candidate/v1",
-            "profile_artifact": profile,
-            "state_db_identity_sha256": database_identity,
-            "cases": candidate_cases,
-            "canary_receipt": receipt,
-        }, external_reviews
+        candidate = adapter.adapt(export_bytes, bindings)
+        return session_id, export_bytes, bindings, candidate, external_reviews
 
     def process(template, seed, run_dir, stream_prefix, bindings=None, stdout=b"", stderr=b""):
         bindings = bindings or {}
@@ -532,7 +644,6 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
         }
 
     python = str(builder._canonical_hermes_python())
-    state_db = str((builder.ROOT / "state.db").resolve())
     python_proof = {
         "schema": "datasage-python-runtime-provenance/v1",
         "entry_kind": "runner",
@@ -563,22 +674,27 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
     for run_index in range(1, 4):
         run_dir = evidence_dir / "private" / subject["profile_git_commit"] / f"run-{run_index}"
         run_dir.mkdir(parents=True)
-        session_id, export, candidate, external_reviews = candidate_and_export(run_index)
+        session_id, export_bytes, adapter_bindings, candidate, external_reviews = (
+            candidate_and_export(run_index)
+        )
         export_path = run_dir / "session.jsonl"
-        export_path.write_text(json.dumps(export, ensure_ascii=False) + "\n", encoding="utf-8")
+        export_path.write_bytes(export_bytes)
         candidate_path = run_dir / "candidate.json"
         candidate_path.write_text(json.dumps(candidate, ensure_ascii=False), encoding="utf-8")
         reviews_path = run_dir / "reviews.json"
         reviews_path.write_text(json.dumps({"schema": "datasage-live-review-set/v1", "run_index": run_index, "reviews": external_reviews}), encoding="utf-8")
         review_paths.append(reviews_path)
         bindings_path = run_dir / "bindings.json"
-        bindings_path.write_text("{}", encoding="utf-8")
+        bindings_path.write_text(
+            json.dumps(adapter_bindings, ensure_ascii=False), encoding="utf-8"
+        )
         scorer = builder._load_e2e_module(f"_test_live_scorer_{run_index}", builder.ROOT / builder.GOLDEN_SCORER_PATH)
         score = scorer.score(scorer.select_suite(suite, case_ids), candidate)
         score_path = run_dir / "score.json"
         score_path.write_text(json.dumps(score, ensure_ascii=False), encoding="utf-8")
         export_ref = artifact(export_path)
         candidate_ref = artifact(candidate_path)
+        bindings_ref = artifact(bindings_path)
         reviews_ref = artifact(reviews_path)
         score_ref = artifact(score_path)
         session_sha = sha_bytes(session_id.encode("utf-8"))
@@ -614,7 +730,7 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
             "artifact_set_sha256": sha(capture_artifacts),
         })
         finalize_bindings = {
-            "adapter": {"python": python, "adapter": str(builder.ROOT / builder.TRANSCRIPT_ADAPTER_PATH), "state_db": state_db, "bindings": str(bindings_path), "candidate": str(candidate_path)},
+            "adapter": {"python": python, "adapter": str(builder.ROOT / builder.TRANSCRIPT_ADAPTER_PATH), "session_export": str(export_path), "bindings": str(bindings_path), "candidate": str(candidate_path)},
             "scorer": {"python": python, "scorer": str(builder.ROOT / builder.GOLDEN_SCORER_PATH), "golden_suite": str(builder.ROOT / builder.GOLDEN_SUITE_PATH), "case_1": case_ids[0], "case_2": case_ids[1], "candidate": str(candidate_path), "score_report": str(score_path)},
         }
         runs.append(
@@ -627,6 +743,7 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
                     )
                     for offset, name in enumerate(("adapter", "scorer"), start=4)
                 },
+                "bindings": bindings_ref,
                 "candidate": candidate_ref,
                 "score_report": score_ref,
                 "reviews": reviews_ref,
@@ -654,7 +771,7 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
         reviews_path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
         run["reviews"] = artifact(reviews_path)
     return {
-        "schema": "datasage-live-release-evidence/v2",
+        "schema": "datasage-live-release-evidence/v3",
         "captured_at": "2026-08-29T00:00:00+00:00",
         "subject_commit_timestamp": "2026-08-28T00:00:00+00:00",
         "subject": subject,
@@ -681,7 +798,7 @@ class ReleaseEligibilityTests(unittest.TestCase):
     def test_builder_binds_tool_names_before_entitlement_and_rejects_push(self):
         builder = _builder()
         prompts = ["first", "second"]
-        script = _live_contract()["clarify_reply_script"]
+        policy = _live_contract()["turn_completion_policy"]
 
         def transcript(function_name, tool_name, content):
             return [
@@ -703,68 +820,74 @@ class ReleaseEligibilityTests(unittest.TestCase):
             "question": "Pick a governed definition",
             "choices": ["A", "B"],
         })
-        clarify[2]["content"] = json.dumps({
-            "question": "Pick a governed definition",
-            "choices_offered": ["A", "B"],
-            "user_response": script[0]["fixed_response"],
-        }, ensure_ascii=False)
-        self.assertEqual(2, len(builder._live_endpoints(clarify, prompts, script)))
+        with self.assertRaisesRegex(
+            ValueError, "blocking clarify tool calls are forbidden"
+        ):
+            builder._live_endpoints(clarify, prompts, policy)
         with self.assertRaisesRegex(ValueError, "datasage_push is forbidden"):
             builder._live_endpoints(
-                transcript("datasage_push", "datasage_push", "{}"), prompts, script
+                transcript("datasage_push", "datasage_push", "{}"), prompts, policy
             )
 
         denial = json.dumps({"error": {"code": "DATA_ENTITLEMENT_DENIED"}})
         for tool_name in ("datasage_catalog", ""):
             with self.subTest(tool_name=tool_name), self.assertRaisesRegex(ValueError, "name does not match"):
                 builder._live_endpoints(
-                    transcript("datasage_query", tool_name, denial), prompts, script
+                    transcript("datasage_query", tool_name, denial), prompts, policy
                 )
         correctly_bound = transcript("datasage_query", "datasage_query", denial)
-        builder._live_endpoints(correctly_bound, prompts, script)
+        builder._live_endpoints(correctly_bound, prompts, policy)
         with self.assertRaisesRegex(ValueError, "DATA_ENTITLEMENT_DENIED"):
             builder._reject_entitlement_denial(correctly_bound)
 
-    def test_builder_clarify_reply_contract_rejects_order_and_transcript_tampering(self):
+    def test_builder_nonblocking_completion_contract_rejects_transcript_tampering(self):
         builder = _builder()
         contract = _live_contract()
-        script = contract["clarify_reply_script"]
+        policy = contract["turn_completion_policy"]
         prompts = ["first", "second"]
+        self.assertEqual(contract, builder._validate_live_contract(contract))
 
-        def pair(call_id, question, choices, response):
-            return [
-                {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [{
-                        "id": call_id,
-                        "function": {
-                            "name": "clarify",
-                            "arguments": json.dumps({"question": question, "choices": choices}),
-                        },
-                    }],
-                },
-                {
-                    "role": "tool",
-                    "tool_call_id": call_id,
-                    "tool_name": "clarify",
-                    "content": json.dumps({
-                        "question": question,
-                        "choices_offered": choices,
-                        "user_response": response,
-                    }, ensure_ascii=False),
-                },
-            ]
+        ordinary = [
+            {"id": 1, "role": "user", "content": "first"},
+            {"id": 2, "role": "assistant", "content": "final one", "tool_calls": None},
+            {"id": 3, "role": "user", "content": "second"},
+            {
+                "id": 4,
+                "role": "assistant",
+                "content": "Candidate A or B; confirm before I query.",
+                "tool_calls": None,
+            },
+        ]
+        self.assertEqual(2, len(builder._live_endpoints(ordinary, prompts, policy)))
 
         valid = [
             {"id": 1, "role": "user", "content": "first"},
-            *pair("c1", "Pick one", ["A", "B"], script[0]["fixed_response"]),
+            {
+                "id": 2,
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{
+                    "id": "catalog-1",
+                    "function": {"name": "datasage_catalog", "arguments": "{}"},
+                }],
+            },
+            {
+                "id": 3,
+                "role": "tool",
+                "tool_call_id": "catalog-1",
+                "tool_name": "datasage_catalog",
+                "content": "{}",
+            },
             {"id": 4, "role": "assistant", "content": "final one", "tool_calls": None},
             {"id": 5, "role": "user", "content": "second"},
-            *pair("c2", "Which entity?", None, script[1]["fixed_response"]),
-            {"id": 8, "role": "assistant", "content": "final two", "tool_calls": None},
+            {
+                "id": 6,
+                "role": "assistant",
+                "content": "Candidate A or B; confirm before I query.",
+                "tool_calls": None,
+            },
         ]
-        self.assertEqual(2, len(builder._live_endpoints(valid, prompts, script)))
+        self.assertEqual(2, len(builder._live_endpoints(valid, prompts, policy)))
 
         with_metadata = [
             valid[0],
@@ -786,119 +909,121 @@ class ReleaseEligibilityTests(unittest.TestCase):
             {"id": 21, "role": "session_meta", "content": None, "platform": "wecom"},
             valid[4],
             valid[5],
-            valid[6],
-            valid[7],
             {"id": 22, "role": "session_meta", "content": None, "tools": []},
         ]
         retained = copy.deepcopy(with_metadata)
-        self.assertEqual(2, len(builder._live_endpoints(with_metadata, prompts, script)))
+        self.assertEqual(
+            2, len(builder._live_endpoints(with_metadata, prompts, policy))
+        )
         self.assertEqual(retained, with_metadata)
 
         adversarial_carriers = (
-            ("nonempty-content", {"content": "hidden conversational text"}),
+            (
+                "nonempty-content",
+                {"content": "hidden conversational text"},
+                "session_meta contains conversational or tool-flow payload",
+            ),
             ("push-tool-calls", {"tool_calls": [{
                 "id": "push-1",
                 "function": {"name": "datasage_push", "arguments": "{}"},
-            }]}),
-            ("fake-tool-result", {"tool_call_id": "push-1", "tool_name": "datasage_push"}),
-            ("legacy-function-call", {"function_call": {"name": "datasage_push", "arguments": "{}"}}),
+            }]}, "session_meta contains conversational or tool-flow payload"),
+            (
+                "fake-tool-result",
+                {"tool_call_id": "push-1", "tool_name": "datasage_push"},
+                "session_meta contains conversational or tool-flow payload",
+            ),
+            (
+                "legacy-function-call",
+                {"function_call": {"name": "datasage_push", "arguments": "{}"}},
+                "legacy function_call is forbidden",
+            ),
         )
         session_meta_index = next(
-            index for index, item in enumerate(with_metadata) if item.get("role") == "session_meta"
+            index
+            for index, item in enumerate(with_metadata)
+            if item.get("role") == "session_meta"
         )
-        for label, carriers in adversarial_carriers:
+        for label, carriers, pattern in adversarial_carriers:
             adversarial = copy.deepcopy(with_metadata)
             adversarial[session_meta_index].update(carriers)
             unchanged = copy.deepcopy(adversarial)
             with self.subTest(carrier=label), self.assertRaisesRegex(
-                ValueError, "session_meta contains conversational or tool-flow payload"
+                ValueError, pattern
             ):
-                builder._live_endpoints(adversarial, prompts, script)
+                builder._live_endpoints(adversarial, prompts, policy)
             self.assertEqual(unchanged, adversarial)
 
         unsupported = copy.deepcopy(with_metadata)
         unsupported.insert(-1, {"id": 23, "role": "audit_meta", "content": None})
         with self.assertRaisesRegex(ValueError, "unsupported conversational role"):
-            builder._live_endpoints(unsupported, prompts, script)
+            builder._live_endpoints(unsupported, prompts, policy)
 
-        mutations = []
+        blocking_clarify = copy.deepcopy(valid)
+        blocking_clarify[1]["tool_calls"][0]["id"] = "clarify-1"
+        blocking_clarify[1]["tool_calls"][0]["function"] = {
+            "name": "clarify",
+            "arguments": json.dumps({"question": "Which entity?"}),
+        }
+        blocking_clarify[2]["tool_call_id"] = "clarify-1"
+        blocking_clarify[2]["tool_name"] = "clarify"
+        with self.assertRaisesRegex(
+            ValueError, "blocking clarify tool calls are forbidden"
+        ):
+            builder._live_endpoints(blocking_clarify, prompts, policy)
 
-        def mutation(label, callback, pattern):
-            value = copy.deepcopy(valid)
-            callback(value)
-            mutations.append((label, value, pattern))
+        orphan = copy.deepcopy(valid)
+        orphan[2]["tool_call_id"] = "orphan"
+        with self.assertRaisesRegex(ValueError, "not bound"):
+            builder._live_endpoints(orphan, prompts, policy)
 
-        mutation("orphan", lambda value: value[2].__setitem__("tool_call_id", "orphan"), "next non-system")
-        mutation("wrong-name", lambda value: value[2].__setitem__("tool_name", "datasage_query"), "name does not match")
-        mutation("interposed", lambda value: value.insert(2, {"role": "assistant", "content": "interposed", "tool_calls": None}), "next non-system")
-        mutation("question", lambda value: value[2].__setitem__("content", json.dumps({"question": "forged", "choices_offered": ["A", "B"], "user_response": script[0]["fixed_response"]}, ensure_ascii=False)), "does not bind")
-        mutation("choices", lambda value: value[2].__setitem__("content", json.dumps({"question": "Pick one", "choices_offered": ["B", "A"], "user_response": script[0]["fixed_response"]}, ensure_ascii=False)), "does not bind")
-        mutation("response", lambda value: value[2].__setitem__("content", json.dumps({"question": "Pick one", "choices_offered": ["A", "B"], "user_response": "forged"})), "fixed Golden response")
-        mutation("extra-result-key", lambda value: value[2].__setitem__("content", json.dumps({"question": "Pick one", "choices_offered": ["A", "B"], "user_response": script[0]["fixed_response"], "extra": True}, ensure_ascii=False)), "official shape")
-        mutation("non-json", lambda value: value[2].__setitem__("content", "not-json"), "invalid JSON")
-        mutation("duplicate-result-key", lambda value: value[2].__setitem__("content", '{"question":"Pick one","question":"forged","choices_offered":["A","B"],"user_response":"x"}'), "invalid JSON")
-        mutation("batch", lambda value: value[1]["tool_calls"][0]["function"].__setitem__("arguments", json.dumps({"question": "batch", "questions": [{"question": "one"}]})), "single-question shape")
-        mutation("multi-select", lambda value: value[1]["tool_calls"][0]["function"].__setitem__("arguments", json.dumps({"question": "Pick one", "choices": ["A", "B"], "multi_select": True})), "scalar single-question")
-        mutation("duplicate-argument-key", lambda value: value[1]["tool_calls"][0]["function"].__setitem__("arguments", '{"question":"one","question":"two","choices":["A"]}'), "invalid JSON")
-        mutation("extra-argument-key", lambda value: value[1]["tool_calls"][0]["function"].__setitem__("arguments", json.dumps({"question": "Pick one", "choices": ["A"], "extra": True})), "single-question shape")
-        mutation("ordinary-user-reply", lambda value: value.insert(2, {"id": 99, "role": "user", "content": script[0]["fixed_response"]}), "exactly the two ordered")
-        for label, value, pattern in mutations:
-            with self.subTest(mutation=label), self.assertRaisesRegex(ValueError, pattern):
-                builder._live_endpoints(value, prompts, script)
+        wrong_name = copy.deepcopy(valid)
+        wrong_name[2]["tool_name"] = "datasage_query"
+        with self.assertRaisesRegex(ValueError, "name does not match"):
+            builder._live_endpoints(wrong_name, prompts, policy)
 
         missing = [*valid[:2], *valid[3:]]
-        with self.assertRaisesRegex(ValueError, "next non-system|unclosed"):
-            builder._live_endpoints(missing, prompts, script)
+        with self.assertRaisesRegex(
+            ValueError, "pending tool calls must be closed by the next non-system"
+        ):
+            builder._live_endpoints(missing, prompts, policy)
 
         result_before = [valid[0], valid[2], valid[1], *valid[3:]]
         with self.assertRaisesRegex(ValueError, "not bound"):
-            builder._live_endpoints(result_before, prompts, script)
+            builder._live_endpoints(result_before, prompts, policy)
 
-        parallel = copy.deepcopy(valid)
-        parallel[1]["tool_calls"].append({
-            "id": "parallel",
-            "function": {"name": "datasage_catalog", "arguments": "{}"},
-        })
-        with self.assertRaisesRegex(ValueError, "only tool call"):
-            builder._live_endpoints(parallel, prompts, script)
-
-        prior_pending = copy.deepcopy(valid)
-        prior_pending.insert(1, {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [{
-                "id": "ordinary-pending",
-                "function": {"name": "datasage_catalog", "arguments": "{}"},
-            }],
-        })
-        prior_pending.insert(4, {
-            "role": "tool",
-            "tool_call_id": "ordinary-pending",
-            "tool_name": "datasage_catalog",
-            "content": "{}",
-        })
-        with self.assertRaisesRegex(ValueError, "prior tool calls"):
-            builder._live_endpoints(prior_pending, prompts, script)
-
-        missing_recommended_choices = copy.deepcopy(valid)
-        missing_recommended_choices[1]["tool_calls"][0]["function"]["arguments"] = json.dumps({
-            "question": "Pick one",
-        })
-        payload = json.loads(missing_recommended_choices[2]["content"])
-        payload["choices_offered"] = None
-        missing_recommended_choices[2]["content"] = json.dumps(payload, ensure_ascii=False)
-        with self.assertRaisesRegex(ValueError, "did not offer a recommended choice"):
-            builder._live_endpoints(missing_recommended_choices, prompts, script)
-
-        extra = copy.deepcopy(valid)
-        extra[3:3] = pair("extra", "Again?", ["A"], script[0]["fixed_response"])
-        with self.assertRaisesRegex(ValueError, "extra clarify call"):
-            builder._live_endpoints(extra, prompts, script)
+        ordinary_user_reply = copy.deepcopy(valid)
+        ordinary_user_reply.insert(
+            2, {"id": 99, "role": "user", "content": "unexpected reply"}
+        )
+        with self.assertRaisesRegex(ValueError, "exactly the two ordered"):
+            builder._live_endpoints(ordinary_user_reply, prompts, policy)
 
         for label, callback in (
-            ("case-order", lambda value: value["clarify_reply_script"].reverse()),
-            ("turn-order", lambda value: value["clarify_reply_script"][0].__setitem__("turn", 2)),
-            ("projection-policy", lambda value: value["inbound"].__setitem__("endpoint_projection_policy", "drop_all_metadata")),
+            ("case-order", lambda value: value["turn_completion_policy"].reverse()),
+            (
+                "turn-order",
+                lambda value: value["turn_completion_policy"][0].__setitem__(
+                    "turn", 2
+                ),
+            ),
+            (
+                "clarify-count",
+                lambda value: value["turn_completion_policy"][0].__setitem__(
+                    "maximum_blocking_clarify_calls", 1
+                ),
+            ),
+            (
+                "blocking-completion",
+                lambda value: value["turn_completion_policy"][1].__setitem__(
+                    "assistant_completion", "blocking_tool"
+                ),
+            ),
+            (
+                "projection-policy",
+                lambda value: value["inbound"].__setitem__(
+                    "endpoint_projection_policy", "drop_all_metadata"
+                ),
+            ),
         ):
             forged_contract = copy.deepcopy(contract)
             callback(forged_contract)
@@ -1124,6 +1249,60 @@ class ReleaseEligibilityTests(unittest.TestCase):
             },
             codes,
         )
+
+    def test_live_evidence_rejects_missing_old_or_unknown_golden_binding_schema(self):
+        builder = _builder()
+        subject = _subject()
+        contract = _live_contract()
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence_dir = Path(temporary) / "evidence"
+            report = _live_report(builder, evidence_dir, subject, contract)
+            expected_python = report["python_provenance"]["before"]
+            manifests = []
+            missing = _live_manifest(contract)
+            missing["trusted_replay_gate"].pop("binding_schema")
+            manifests.append(("missing", missing))
+            for label, schema in (
+                ("old", "datasage-canary-bindings/v2-live-fixture"),
+                ("unknown", "datasage-canary-bindings/v99-live-fixture"),
+            ):
+                manifest = _live_manifest(contract)
+                manifest["trusted_replay_gate"]["binding_schema"] = schema
+                manifests.append((label, manifest))
+            with (
+                mock.patch.object(builder, "EVIDENCE_DIR", evidence_dir),
+                mock.patch.object(builder, "_validate_hashed_source", return_value=Path("checked")),
+                mock.patch.object(
+                    builder, "_subject_commit_timestamp",
+                    return_value=builder._live_timestamp(
+                        "2026-08-28T00:00:00+00:00", "test"
+                    ),
+                ),
+                mock.patch.object(
+                    builder, "_validate_wecom_session_origin",
+                    side_effect=lambda exported, *_args, **_kwargs: exported["id"],
+                ),
+                mock.patch.object(builder, "_is_read_only", return_value=True),
+                mock.patch.object(
+                    builder, "_current_python_provenance",
+                    return_value=expected_python,
+                ),
+            ):
+                for label, manifest in manifests:
+                    with self.subTest(label=label):
+                        result = builder.evaluate_release_gates(
+                            manifest, _host_fixture(), version=subject["version"],
+                            subject=subject, profile_git_commit=TEST_PROFILE_COMMIT,
+                            hermes_git_commit=TEST_HERMES_COMMIT,
+                            live_evidence=report, live_contract=contract,
+                        )
+                        self.assertEqual(
+                            "invalid", result["live_model_replay"]["status"]
+                        )
+                        self.assertIn(
+                            "LIVE_RELEASE_EVIDENCE_INVALID",
+                            {item["code"] for item in result["blockers"]},
+                        )
 
     def test_review_excerpt_binding_and_internal_label_laundering_are_rejected(self):
         builder = _builder()
@@ -1380,6 +1559,19 @@ class ReleaseEligibilityTests(unittest.TestCase):
         def candidate_unknown_field(evidence, root):
             mutate_json_ref(evidence, root, evidence["runs"][0]["candidate"], lambda value: value.__setitem__("eligible", True))
 
+        def forged_bindings_hash(evidence, _root):
+            evidence["runs"][0]["bindings"]["sha256"] = "9" * 64
+
+        def rebound_bindings_content(evidence, root):
+            mutate_json_ref(
+                evidence,
+                root,
+                evidence["runs"][0]["bindings"],
+                lambda value: value.__setitem__(
+                    "captured_at", "2026-08-29T00:00:01+00:00"
+                ),
+            )
+
         def duplicate_export_key(evidence, root):
             capture_path = root / evidence["capture"]["path"]
             capture = json.loads(capture_path.read_text(encoding="utf-8"))
@@ -1458,21 +1650,54 @@ class ReleaseEligibilityTests(unittest.TestCase):
         def replaced_python_proof(evidence, _root):
             evidence["python_provenance"]["before"]["executable"]["sha256"] = "9" * 64
 
-        def rescored_candidate_failure(evidence, root):
+        def synchronized_candidate_projection_forgery(evidence, root):
             ref = evidence["runs"][0]["candidate"]
             path = root / ref["path"]
             candidate = json.loads(path.read_text(encoding="utf-8"))
-            candidate["cases"][0]["conclusions"].append("invent_result")
             turn = candidate["canary_receipt"]["turns"][0]
-            turn["candidate_case_sha256"] = builder._sha256_bytes(
-                builder._canonical_json_bytes(candidate["cases"][0])
+            turn["session_export_message_ids"] = [
+                turn["user_message_id"], turn["final_message_id"]
+            ]
+            capture = json.loads(
+                (root / evidence["capture"]["path"]).read_text(encoding="utf-8")
+            )
+            export_ref = capture["runs"][0]["session"]["export"]
+            exported = json.loads((root / export_ref["path"]).read_text(encoding="utf-8"))
+            message_by_id = {message["id"]: message for message in exported["messages"]}
+            projection = [
+                {
+                    key: message_by_id[message_id].get(key)
+                    for key in (
+                        "id", "role", "tool_name", "tool_call_id", "tool_calls", "content"
+                    )
+                }
+                for message_id in turn["session_export_message_ids"]
+            ]
+            turn["transcript_sha256"] = builder._sha256_bytes(
+                builder._canonical_json_bytes(projection)
             )
             receipt = candidate["canary_receipt"]
-            receipt["candidate_cases_sha256"] = builder._sha256_bytes(
-                builder._canonical_json_bytes(candidate["cases"])
-            )
             receipt_body = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
             receipt["receipt_sha256"] = builder._sha256_bytes(builder._canonical_json_bytes(receipt_body))
+            adapter = builder._load_e2e_module(
+                "_test_projection_forgery_adapter",
+                builder.ROOT / builder.TRANSCRIPT_ADAPTER_PATH,
+            )
+            self.assertTrue(adapter.verify_receipt(candidate))
+            scorer = builder._load_e2e_module(
+                "_test_projection_forgery_scorer",
+                builder.ROOT / builder.GOLDEN_SCORER_PATH,
+            )
+            suite = json.loads(builder.GOLDEN_SUITE.read_text(encoding="utf-8"))
+            forged_score = scorer.score(
+                scorer.select_suite(suite, contract["case_plan"]["case_ids"]),
+                candidate,
+            )
+            score_ref = evidence["runs"][0]["score_report"]
+            retained_score = json.loads(
+                (root / score_ref["path"]).read_text(encoding="utf-8")
+            )
+            self.assertEqual(forged_score, retained_score)
             path.write_text(json.dumps(candidate, ensure_ascii=False), encoding="utf-8")
             payload = path.read_bytes()
             digest = hashlib.sha256(payload).hexdigest()
@@ -1480,7 +1705,8 @@ class ReleaseEligibilityTests(unittest.TestCase):
 
         mutations = (
             bool_exit, duplicate_run, stale_commit, forged_pass_summary,
-            forged_argv, forged_export_hash, rescored_candidate_failure,
+            forged_argv, forged_export_hash, synchronized_candidate_projection_forgery,
+            forged_bindings_hash, rebound_bindings_content,
             review_wrong_session, review_wrong_answer, review_wrong_run,
             review_plan_trace, duplicate_review, review_disagrees, review_excerpt_hash_forged, static_case_review,
             candidate_bool_message_id, candidate_unknown_field, duplicate_export_key, extra_old_user_history,
@@ -1780,26 +2006,6 @@ class ReleaseEligibilityTests(unittest.TestCase):
             nonfinite.write_text('{"duration":NaN}', encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "non-finite JSON number"):
                 builder._read_strict_json(nonfinite)
-
-    def test_evidence_schema_is_closed_and_has_no_self_attested_gate_fields(self):
-        schema = json.loads(
-            (PROFILE_ROOT / "tests" / "contracts" / "release_evidence.schema.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        self.assertEqual("https://json-schema.org/draft/2020-12/schema", schema["$schema"])
-        rendered = json.dumps(schema, sort_keys=True)
-        for forbidden in (
-            '"status"',
-            '"passed"',
-            '"eligible"',
-            '"p50_ms"',
-            '"p90_ms"',
-            '"cost_status"',
-        ):
-            self.assertNotIn(forbidden, rendered)
-        self.assertTrue(schema["$defs"]["hostCompaction"]["unevaluatedProperties"] is False)
-        self.assertTrue(schema["$defs"]["performance"]["unevaluatedProperties"] is False)
 
     def test_identity_and_live_gate_blockers_are_reported_separately(self):
         builder = _builder()

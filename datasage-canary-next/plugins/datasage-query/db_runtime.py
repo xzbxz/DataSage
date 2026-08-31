@@ -7,14 +7,16 @@ entity resolution can reuse the governed executor without importing it.
 
 from __future__ import annotations
 
-import importlib
+import _imp
+import hashlib
+import importlib.util
 import logging
-import os
 import ssl
 import sys
-import threading
 from pathlib import Path
 from typing import Any, Callable, Sequence
+
+from agent.secret_scope import get_secret
 
 from . import settings
 from .db_security import (
@@ -27,7 +29,7 @@ from .db_security import (
 
 
 logger = logging.getLogger(__name__)
-_PYMYSQL_IMPORT_LOCK = threading.RLock()
+_PYMYSQL_ALIAS_PREFIX = "_datasage_pymysql_"
 _QUERY_EXECUTOR: Callable[..., tuple[list[dict[str, Any]], bool]] | None = None
 
 
@@ -64,18 +66,43 @@ def execute(
     return executor(sql, params, limit, deadline_at=deadline_at)
 
 
-def _validate_pymysql_module(module: Any, vendor_root: Path):
+def _pymysql_alias(vendor_root: Path) -> str:
+    identity = vendor_root.resolve().as_posix().encode("utf-8")
+    return f"{_PYMYSQL_ALIAS_PREFIX}{hashlib.sha256(identity).hexdigest()}"
+
+
+def _pymysql_modules(alias: str) -> dict[str, Any]:
+    prefix = f"{alias}."
+    return {
+        name: module
+        for name, module in tuple(sys.modules.items())
+        if name == alias or name.startswith(prefix)
+    }
+
+
+def _clear_pymysql_modules(alias: str) -> None:
+    for name in _pymysql_modules(alias):
+        sys.modules.pop(name, None)
+
+
+def _validate_pymysql_family(module: Any, package_root: Path, alias: str):
     origin_text = str(getattr(module, "__file__", "") or "")
     if not origin_text:
         raise DatabaseRuntimeError(
             "DEPENDENCY_UNTRUSTED", "PyMySQL module provenance is unavailable"
         )
     origin = Path(origin_text).resolve()
+    try:
+        package_paths = tuple(Path(path).resolve() for path in module.__path__)
+    except (AttributeError, TypeError, OSError):
+        package_paths = ()
     version = tuple(getattr(module, "VERSION", ())[:3])
     connect_callable = getattr(module, "connect", None)
     cursors = getattr(module, "cursors", None)
     if (
-        not origin.is_relative_to(vendor_root)
+        getattr(module, "__name__", None) != alias
+        or origin != (package_root / "__init__.py").resolve()
+        or package_paths != (package_root,)
         or version != (1, 2, 0)
         or not callable(connect_callable)
         or cursors is None
@@ -85,37 +112,93 @@ def _validate_pymysql_module(module: Any, vendor_root: Path):
             "DEPENDENCY_UNTRUSTED",
             "PyMySQL provenance, version, or module integrity is invalid",
         )
+    modules = _pymysql_modules(alias)
+    if modules.get(alias) is not module:
+        raise DatabaseRuntimeError(
+            "DEPENDENCY_UNTRUSTED", "PyMySQL package registration is invalid"
+        )
+    for name, member in modules.items():
+        origin_text = str(getattr(member, "__file__", "") or "")
+        try:
+            origin = Path(origin_text).resolve()
+        except (OSError, RuntimeError, ValueError):
+            origin = None
+        if origin is None or not origin.is_relative_to(package_root):
+            raise DatabaseRuntimeError(
+                "DEPENDENCY_UNTRUSTED",
+                f"PyMySQL module provenance is invalid: {name}",
+            )
+        if getattr(member, "__name__", None) != name:
+            raise DatabaseRuntimeError(
+                "DEPENDENCY_UNTRUSTED",
+                f"PyMySQL module registration is invalid: {name}",
+            )
+        package_paths = getattr(member, "__path__", None)
+        if package_paths is not None:
+            if name == alias:
+                expected_path = package_root
+            else:
+                relative_name = name.removeprefix(f"{alias}.")
+                expected_path = package_root.joinpath(*relative_name.split(".")).resolve()
+            try:
+                resolved_paths = tuple(Path(path).resolve() for path in package_paths)
+            except (TypeError, OSError, RuntimeError, ValueError):
+                resolved_paths = ()
+            if resolved_paths != (expected_path,):
+                raise DatabaseRuntimeError(
+                    "DEPENDENCY_UNTRUSTED",
+                    f"PyMySQL package path is invalid: {name}",
+                )
     return module
 
 
 def load_pymysql():
     vendor_root = (Path(__file__).resolve().parent / "vendor").resolve()
-    package_root = vendor_root / "pymysql"
+    package_root = (vendor_root / "pymysql").resolve()
     if not package_root.is_dir():
         raise DatabaseRuntimeError(
             "DEPENDENCY_UNAVAILABLE", "vendored PyMySQL is unavailable"
         )
-    with _PYMYSQL_IMPORT_LOCK:
-        loaded = sys.modules.get("pymysql")
+    alias = _pymysql_alias(vendor_root)
+    _imp.acquire_lock()
+    try:
+        loaded = sys.modules.get(alias)
         if loaded is not None:
-            return _validate_pymysql_module(loaded, vendor_root)
-        sys.path.insert(0, str(vendor_root))
+            return _validate_pymysql_family(loaded, package_root, alias)
+        if _pymysql_modules(alias):
+            raise DatabaseRuntimeError(
+                "DEPENDENCY_UNTRUSTED",
+                "orphaned profile-specific PyMySQL submodules are registered",
+            )
         try:
-            pymysql = importlib.import_module("pymysql")
+            spec = importlib.util.spec_from_file_location(
+                alias,
+                package_root / "__init__.py",
+                submodule_search_locations=[str(package_root)],
+            )
+            if spec is None or spec.loader is None:
+                raise DatabaseRuntimeError(
+                    "DEPENDENCY_UNAVAILABLE",
+                    "vendored PyMySQL import specification is unavailable",
+                )
+            pymysql = importlib.util.module_from_spec(spec)
+            sys.modules[alias] = pymysql
+            spec.loader.exec_module(pymysql)
+            return _validate_pymysql_family(pymysql, package_root, alias)
         except ImportError as exc:
+            _clear_pymysql_modules(alias)
             raise DatabaseRuntimeError(
                 "DEPENDENCY_UNAVAILABLE", "vendored PyMySQL could not be loaded"
             ) from exc
-        finally:
-            try:
-                sys.path.remove(str(vendor_root))
-            except ValueError:
-                pass
-        return _validate_pymysql_module(pymysql, vendor_root)
+        except BaseException:
+            _clear_pymysql_modules(alias)
+            raise
+    finally:
+        _imp.release_lock()
 
 
 def connection_port() -> int:
-    raw = os.environ.get("DATA_QUERY_MYSQL_PORT", "").strip()
+    raw = (get_secret("DATA_QUERY_MYSQL_PORT", "") or "").strip()
     if not raw:
         return 3306
     try:
@@ -135,10 +218,10 @@ def connect(
 ):
     pymysql = load_pymysql()
     required = {
-        "host": os.environ.get("DATA_QUERY_MYSQL_HOST", "").strip(),
-        "database": os.environ.get("DATA_QUERY_MYSQL_DATABASE", "").strip(),
-        "user": os.environ.get("DATA_QUERY_MYSQL_USER", "").strip(),
-        "password": os.environ.get("DATA_QUERY_MYSQL_PASSWORD", ""),
+        "host": (get_secret("DATA_QUERY_MYSQL_HOST", "") or "").strip(),
+        "database": (get_secret("DATA_QUERY_MYSQL_DATABASE", "") or "").strip(),
+        "user": (get_secret("DATA_QUERY_MYSQL_USER", "") or "").strip(),
+        "password": get_secret("DATA_QUERY_MYSQL_PASSWORD", "") or "",
     }
     if not all(required.values()):
         raise DatabaseRuntimeError(

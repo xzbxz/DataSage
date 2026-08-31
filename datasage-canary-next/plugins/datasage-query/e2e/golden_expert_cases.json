@@ -50,7 +50,7 @@
     ],
     "memory_observation": {"message_id": 4002, "status": "staged_pending", "pending_id_prefix": "a96d4677", "authorizes_business_conclusions": false, "counts_as_live_replay_pass": false},
     "trusted_replay_gate": {
-      "binding_schema": "datasage-canary-bindings/v2-live-fixture",
+      "binding_schema": "datasage-canary-bindings/v3-live-fixture",
       "adapter": "plugins/datasage-query/e2e/canary_transcript_adapter.py",
       "scorer": "plugins/datasage-query/e2e/golden_expert_scorer.py",
       "case_ids": ["ambiguity_10_rc5_vietnam_scorecard", "multiturn_08_rc5_thailand_followup"],

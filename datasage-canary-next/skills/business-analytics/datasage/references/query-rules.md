@@ -64,7 +64,9 @@ Rule ID: `datasage.query-rules/v1`
   conversation state may be required.
 - Before calling `datasage_entity_resolve` for entity ambiguity, load
   [`datasage.entity-guidance/v1`](entity-guidance.md), which owns when to resolve
-  and when another resolution attempt is justified.
+  and when another resolution attempt is justified, plus confirmation and
+  turn-boundary behavior. Empty-result interpretation follows
+  [`datasage.answer-boundary/v1`](answer-boundary.md).
 
 ## Interpretation hand-off
 

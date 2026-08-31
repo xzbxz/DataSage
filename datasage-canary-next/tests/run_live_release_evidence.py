@@ -28,12 +28,6 @@ SCORER_PATH = ROOT / "plugins" / "datasage-query" / "e2e" / "golden_expert_score
 BUILDER_PATH = ROOT / "build_release_receipt.py"
 EVIDENCE_DIR = ROOT / "pending" / "evidence"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-SESSION_META_CONVERSATIONAL_FIELDS = (
-    "content", "api_content", "tool_calls", "tool_call_id", "tool_name",
-    "function_call", "name", "effect_disposition", "finish_reason",
-    "reasoning", "reasoning_content", "reasoning_details",
-    "codex_reasoning_items", "codex_message_items",
-)
 
 
 def _reject_constant(value: str) -> None:
@@ -72,6 +66,12 @@ def _load_module(name: str, path: Path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+_BUILDER = _load_module("datasage_live_builder", BUILDER_PATH)
+_export = _BUILDER._export_session
+_turn_completion_policies = _BUILDER._live_turn_completion_policies
+_endpoints = _BUILDER._live_endpoints
 
 
 def _git(root: Path, *args: str, binary: bool = False) -> bytes | str:
@@ -133,11 +133,8 @@ def _require_capture_caller_readiness(contract: dict[str, object]) -> None:
     raise RuntimeError("live capture has no trusted caller-readiness attestation")
 
 
-def _runtime(*, hermes_root: Path, hermes_python: Path, state_db: Path, contract: dict[str, object]) -> tuple[Path, Path, Path, str, str]:
+def _runtime(*, hermes_root: Path, hermes_python: Path, contract: dict[str, object]) -> tuple[Path, Path, str, str]:
     hermes_root = hermes_root.resolve(strict=True)
-    state_db = state_db.resolve(strict=True)
-    if state_db != (ROOT / "state.db").resolve(strict=True):
-        raise RuntimeError("--state-db must be this Profile's canonical state.db")
     expected_python = (hermes_root / "venv" / "Scripts" / "python.exe").resolve(strict=True)
     if hermes_python.resolve(strict=True) != expected_python:
         raise RuntimeError("--hermes-python must be the pinned Hermes checkout venv interpreter")
@@ -149,7 +146,7 @@ def _runtime(*, hermes_root: Path, hermes_python: Path, state_db: Path, contract
         raise RuntimeError("Hermes HEAD differs from the tracked live contract")
     for path in ("build_release_receipt.py", "tests/fixtures/live_release_contract.json", *contract["source_paths"].values()):
         _source(profile_commit, path)
-    return hermes_root, expected_python, state_db, profile_commit, hermes_commit
+    return hermes_root, expected_python, profile_commit, hermes_commit
 
 
 def _environment(hermes_root: Path) -> dict[str, str]:
@@ -222,16 +219,6 @@ def _set_read_only(paths: list[Path]) -> None:
         path.chmod(stat.S_IREAD)
 
 
-def _export(payload: str) -> tuple[dict[str, object], list[dict[str, object]]]:
-    rows = [json.loads(line, object_pairs_hook=_strict_object, parse_constant=_reject_constant) for line in payload.splitlines() if line.strip()]
-    if len(rows) != 1 or not isinstance(rows[0], dict) or not isinstance(rows[0].get("messages"), list):
-        raise RuntimeError("official export did not contain exactly one session")
-    messages = rows[0]["messages"]
-    if any(not isinstance(item, dict) for item in messages):
-        raise RuntimeError("official export contains an invalid message")
-    return rows[0], messages
-
-
 def _fail_on_nonretryable_tool_result(messages: list[dict[str, object]]) -> None:
     public_tools = {
         "datasage_catalog",
@@ -272,204 +259,6 @@ def _fail_on_nonretryable_tool_result(messages: list[dict[str, object]]) -> None
             raise RuntimeError(
                 "nonretryable DATA_ENTITLEMENT_DENIED in persisted tool result"
             )
-
-
-def _clarify_turn_policies(reply_script: object, prompt_count: int) -> list[dict[str, object]]:
-    if not isinstance(reply_script, list) or len(reply_script) != prompt_count:
-        raise RuntimeError("clarify reply script must declare every Golden turn exactly once")
-    policies: list[dict[str, object]] = []
-    keys = {"case_id", "turn", "maximum_calls", "strategy", "fixed_response"}
-    for index, value in enumerate(reply_script, 1):
-        if not isinstance(value, dict) or set(value) != keys:
-            raise RuntimeError("clarify reply script entry has an invalid shape")
-        if not isinstance(value["case_id"], str) or not value["case_id"] or value["turn"] != index:
-            raise RuntimeError("clarify reply script is missing or out of Golden turn order")
-        if type(value["maximum_calls"]) is not int or value["maximum_calls"] != 1:
-            raise RuntimeError("clarify reply script must allow at most one call per Golden turn")
-        strategy, fixed = value["strategy"], value["fixed_response"]
-        if index == 1:
-            if (
-                strategy != "fixed_text"
-                or fixed != "仅用于本次测试：采用你列出的第 1 个推荐口径继续，并在答案中明确该口径。"
-            ):
-                raise RuntimeError("first Golden turn clarify reply policy is unsupported")
-        elif strategy != "fixed_text" or fixed != "暂不确认，请列出候选供我选择。":
-            raise RuntimeError("second Golden turn clarify reply policy is unsupported")
-        policies.append(value)
-    return policies
-
-
-def _clarify_call_spec(function: dict[str, object]) -> dict[str, object]:
-    arguments = function.get("arguments")
-    if not isinstance(arguments, str) or not arguments:
-        raise RuntimeError("clarify tool call arguments are not strict JSON text")
-    try:
-        payload = json.loads(
-            arguments,
-            object_pairs_hook=_strict_object,
-            parse_constant=_reject_constant,
-        )
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError("clarify tool call arguments are invalid JSON") from exc
-    allowed = {"question", "choices", "multi_select"}
-    if not isinstance(payload, dict) or not set(payload).issubset(allowed):
-        raise RuntimeError("clarify tool call is not the supported single-question shape")
-    question = payload.get("question")
-    if not isinstance(question, str) or not question.strip():
-        raise RuntimeError("clarify tool call has no nonempty question")
-    choices = payload.get("choices")
-    if choices is not None:
-        if (
-            not isinstance(choices, list)
-            or not 1 <= len(choices) <= 4
-            or not all(isinstance(item, str) and item.strip() for item in choices)
-        ):
-            raise RuntimeError("clarify tool call choices are invalid")
-        choices = [item.strip() for item in choices]
-    multi_select = payload.get("multi_select", False)
-    if type(multi_select) is not bool or multi_select:
-        raise RuntimeError("clarify reply script supports only scalar single-question replies")
-    return {"question": question.strip(), "choices_offered": choices}
-
-
-def _validate_clarify_result(content: object, call: dict[str, object], policy: dict[str, object]) -> None:
-    if not isinstance(content, str) or not content:
-        raise RuntimeError("clarify tool result is not strict JSON text")
-    try:
-        result = json.loads(
-            content,
-            object_pairs_hook=_strict_object,
-            parse_constant=_reject_constant,
-        )
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError("clarify tool result is invalid JSON") from exc
-    if not isinstance(result, dict) or set(result) != {"question", "choices_offered", "user_response"}:
-        raise RuntimeError("clarify tool result has an invalid official shape")
-    if result["question"] != call["question"] or result["choices_offered"] != call["choices_offered"]:
-        raise RuntimeError("clarify tool result does not bind its call")
-    response = result["user_response"]
-    if policy["turn"] == 1:
-        choices = call["choices_offered"]
-        if not isinstance(choices, list) or not choices:
-            raise RuntimeError("first Golden clarify did not offer a recommended choice")
-    if response != policy["fixed_response"]:
-        raise RuntimeError("clarify reply does not match the fixed Golden response")
-
-
-def _endpoints(
-    messages: list[dict[str, object]],
-    prompts: list[str],
-    clarify_reply_script: object,
-) -> list[tuple[int, int, str]]:
-    policies = _clarify_turn_policies(clarify_reply_script, len(prompts))
-    conversation_messages = []
-    for item in messages:
-        role = item.get("role")
-        if role == "session_meta":
-            if any(item.get(field) not in (None, "", [], {}) for field in SESSION_META_CONVERSATIONAL_FIELDS):
-                raise RuntimeError("session_meta contains conversational or tool-flow payload")
-            continue
-        if role not in {"system", "user", "assistant", "tool"}:
-            raise RuntimeError("official export contains an unsupported conversational role")
-        conversation_messages.append(item)
-    messages = conversation_messages
-    if [item.get("content") for item in messages if item.get("role") == "user"] != prompts:
-        raise RuntimeError("official export user turns are not exactly the two ordered Golden prompts")
-    first_user = next(index for index, item in enumerate(messages) if item.get("role") == "user")
-    if any(item.get("role") != "system" for item in messages[:first_user]):
-        raise RuntimeError("captured transcript has a non-system message before the first Golden prompt")
-    result = []
-    start = 0
-    for turn_index, prompt in enumerate(prompts):
-        policy = policies[turn_index]
-        users = [index for index in range(start, len(messages)) if messages[index].get("role") == "user" and messages[index].get("content") == prompt]
-        if len(users) != 1:
-            raise RuntimeError("captured prompt is not unique in the official export")
-        user_index = users[0]
-        next_user = next((index for index in range(user_index + 1, len(messages)) if messages[index].get("role") == "user"), len(messages))
-        segment = messages[user_index + 1:next_user]
-        visible = [item for item in segment if item.get("role") != "system"]
-        if not visible:
-            raise RuntimeError("captured turn has no terminal assistant answer")
-        final = visible[-1]
-        if (
-            final.get("role") != "assistant"
-            or not isinstance(final.get("content"), str)
-            or not final["content"]
-            or final.get("tool_calls") not in (None, [])
-        ):
-            raise RuntimeError("captured turn does not end in a terminal assistant answer")
-        pending: dict[str, tuple[int, str, dict[str, object] | None]] = {}
-        completed: set[str] = set()
-        clarify_calls = 0
-        for relative_index, message in enumerate(segment):
-            pending_clarify = [
-                call_id for call_id, (_, name, _) in pending.items() if name == "clarify"
-            ]
-            if pending_clarify and message.get("role") != "system":
-                if (
-                    len(pending_clarify) != 1
-                    or message.get("role") != "tool"
-                    or message.get("tool_call_id") != pending_clarify[0]
-                ):
-                    raise RuntimeError(
-                        "clarify tool result is not the next non-system message"
-                    )
-            tool_calls = message.get("tool_calls")
-            if tool_calls not in (None, []):
-                if message.get("role") != "assistant" or not isinstance(tool_calls, list):
-                    raise RuntimeError("captured tool flow has an invalid tool-call carrier")
-                for call in tool_calls:
-                    call_id = call.get("id") if isinstance(call, dict) else None
-                    function = call.get("function") if isinstance(call, dict) else None
-                    function_name = function.get("name") if isinstance(function, dict) else None
-                    if not isinstance(call_id, str) or not call_id or call_id in pending or call_id in completed:
-                        raise RuntimeError("captured tool flow has an invalid or duplicate tool-call ID")
-                    if not isinstance(function_name, str) or not function_name:
-                        raise RuntimeError("captured tool call has no valid function name")
-                    if function_name == "datasage_push":
-                        raise RuntimeError("datasage_push is forbidden in inbound live evidence")
-                    clarify_call = None
-                    if function_name == "clarify":
-                        if len(tool_calls) != 1:
-                            raise RuntimeError(
-                                "clarify must be the assistant message's only tool call"
-                            )
-                        if pending:
-                            raise RuntimeError(
-                                "clarify requires all prior tool calls to be closed"
-                            )
-                        clarify_calls += 1
-                        if clarify_calls > policy["maximum_calls"]:
-                            raise RuntimeError("captured turn has an extra clarify call")
-                        clarify_call = _clarify_call_spec(function)
-                    pending[call_id] = (relative_index, function_name, clarify_call)
-            if message.get("role") == "tool":
-                call_id = message.get("tool_call_id")
-                tool_name = message.get("tool_name")
-                if tool_name == "datasage_push":
-                    raise RuntimeError("datasage_push is forbidden in inbound live evidence")
-                if not isinstance(call_id, str) or call_id not in pending:
-                    raise RuntimeError("captured tool result is not bound to a prior tool call")
-                call_index, function_name, clarify_call = pending.pop(call_id)
-                if not isinstance(tool_name, str) or not tool_name or tool_name != function_name:
-                    raise RuntimeError("captured tool result name does not match its tool call")
-                if call_index >= relative_index:
-                    raise RuntimeError("captured tool result precedes its tool call")
-                if function_name == "clarify":
-                    if clarify_call is None:
-                        raise RuntimeError("clarify tool result has no declared call")
-                    _validate_clarify_result(message.get("content"), clarify_call, policy)
-                completed.add(call_id)
-        if pending:
-            raise RuntimeError("captured turn has an unclosed tool flow")
-        user_id = messages[user_index].get("id")
-        final_id = final.get("id")
-        if type(user_id) is not int or type(final_id) is not int or user_id >= final_id:
-            raise RuntimeError("captured turn endpoints are invalid")
-        result.append((user_id, final_id, _sha(final["content"])))
-        start = next_user
-    return result
 
 
 def _aware_datetime(value: object, label: str) -> datetime:
@@ -554,12 +343,12 @@ def _cleanup_capture_stage(stage: Path, commit: str) -> None:
     shutil.rmtree(resolved)
 
 
-def _review_assertion(review: dict[str, object], *, adapter: Any, profile: dict[str, str], case_id: str, session_id: str, user_id: int, prompt_sha: str, database_identity: str, watermark: str, final_sha: str, fixture_sha: str, database_ref_sha: str) -> dict[str, object]:
+def _review_assertion(review: dict[str, object], *, adapter: Any, profile: dict[str, str], case_id: str, session_id: str, user_id: int, prompt_sha: str, session_export_sha256: str, watermark: str, final_sha: str, fixture_sha: str, database_ref_sha: str) -> dict[str, object]:
     return {
         "schema": adapter.REVIEW_SCHEMA, "status": "reviewed", "test_id": case_id,
         "artifact_id": profile["artifact_id"], "payload_sha256": profile["payload_sha256"],
         "session_id": session_id, "user_message_id": user_id, "canonical_prompt_sha256": prompt_sha,
-        "database_identity_sha256": database_identity, "watermark_sha256": watermark,
+        "session_export_sha256": session_export_sha256, "watermark_sha256": watermark,
         "final_answer_sha256": final_sha, "reviewer_id": review["reviewer_id"], "labels": review["labels"],
         "fixture_attestation_sha256": fixture_sha, "business_database_ref_sha256": database_ref_sha,
     }
@@ -575,7 +364,7 @@ def _capture(args: argparse.Namespace, contract: dict[str, object], golden: dict
         or any(not isinstance(value, str) or not value or len(value) > 256 or any(character.isspace() for character in value) for value in session_ids)
     ):
         raise RuntimeError("capture requires exactly three unique ordered complete session IDs")
-    hermes_root, hermes_python, state_db, commit, hermes_commit = _runtime(hermes_root=args.hermes_root, hermes_python=args.hermes_python, state_db=args.state_db, contract=contract)
+    hermes_root, hermes_python, commit, hermes_commit = _runtime(hermes_root=args.hermes_root, hermes_python=args.hermes_python, contract=contract)
     python_before = _python_provenance(builder, hermes_root, hermes_python, contract)
     receipt = builder.build_receipt()
     case_ids = contract["case_plan"]["case_ids"]
@@ -631,7 +420,7 @@ def _capture(args: argparse.Namespace, contract: dict[str, object], golden: dict
             endpoints = _endpoints(
                 messages,
                 [case["prompt"] for case in cases],
-                contract["clarify_reply_script"],
+                contract["turn_completion_policy"],
             )
             _fail_on_nonretryable_tool_result(messages)
             export_ref = _artifact(export_path, logical_path=logical_run_dir / export_path.name)
@@ -651,7 +440,7 @@ def _capture(args: argparse.Namespace, contract: dict[str, object], golden: dict
                 },
                 "artifact_set_sha256": _sha(artifact_refs),
             })
-        _runtime(hermes_root=hermes_root, hermes_python=hermes_python, state_db=state_db, contract=contract)
+        _runtime(hermes_root=hermes_root, hermes_python=hermes_python, contract=contract)
         python_after = _python_provenance(builder, hermes_root, hermes_python, contract)
         capture = {
             "schema": "datasage-live-capture/v2",
@@ -678,7 +467,7 @@ def _capture(args: argparse.Namespace, contract: dict[str, object], golden: dict
 
 
 def _finalize(args: argparse.Namespace, contract: dict[str, object], golden: dict[str, object], builder: Any) -> int:
-    hermes_root, hermes_python, state_db, commit, hermes_commit = _runtime(hermes_root=args.hermes_root, hermes_python=args.hermes_python, state_db=args.state_db, contract=contract)
+    hermes_root, hermes_python, commit, hermes_commit = _runtime(hermes_root=args.hermes_root, hermes_python=args.hermes_python, contract=contract)
     python_before = _python_provenance(builder, hermes_root, hermes_python, contract)
     receipt = builder.build_receipt()
     root = EVIDENCE_DIR / "private" / commit
@@ -756,7 +545,7 @@ def _finalize(args: argparse.Namespace, contract: dict[str, object], golden: dic
         endpoints = _endpoints(
             messages,
             [case["prompt"] for case in cases],
-            contract["clarify_reply_script"],
+            contract["turn_completion_policy"],
         )
         _fail_on_nonretryable_tool_result(messages)
         session_record = captured["session"]
@@ -806,11 +595,11 @@ def _finalize(args: argparse.Namespace, contract: dict[str, object], golden: dic
         raise RuntimeError("external reviews do not exactly cover two independent trusted reviewers per run/case")
     adapter = _load_module("datasage_live_adapter", ADAPTER_PATH)
     profile = {"profile_id": receipt["name"], "artifact_id": commit, "payload_sha256": receipt["content_sha256"]}
-    database_identity = adapter._database_identity(state_db)
     env, timeout = _environment(hermes_root), contract["execution"]["timeout_seconds"]
     finalized = []
     for captured, run_dir, export_path, session_id, endpoints, messages in captured_contexts:
         run_index = captured["run_index"]
+        session_export_sha256 = captured["session"]["export"]["sha256"]
         generated = [run_dir / name for name in (
             "reviews.json", "bindings.json", "candidate.json", "score.json",
             "adapter.stdout", "adapter.stderr", "scorer.stdout", "scorer.stderr",
@@ -844,28 +633,29 @@ def _finalize(args: argparse.Namespace, contract: dict[str, object], golden: dic
         turns = []
         for case, review, (user_id, final_id, final_sha) in zip(cases, consensus_reviews, endpoints):
             prompt_sha = _sha(case["prompt"])
-            watermark = adapter._watermark(test_id=case["id"], conversation_id=case["conversation_id"], turn=case["turn"], canonical_prompt_sha256=prompt_sha, user_message_id=user_id, database_identity_sha256=database_identity, profile=profile, fixture_attestation_sha256=fixture_sha, business_database_ref_sha256=database_ref_sha)
+            watermark = adapter._watermark(test_id=case["id"], conversation_id=case["conversation_id"], turn=case["turn"], canonical_prompt_sha256=prompt_sha, user_message_id=user_id, session_export_sha256=session_export_sha256, profile=profile, fixture_attestation_sha256=fixture_sha, business_database_ref_sha256=database_ref_sha)
             turns.append({
                 "test_id": case["id"], "conversation_id": case["conversation_id"], "turn": case["turn"], "session_id": session_id,
                 "user_message_id": user_id, "final_message_id": final_id, "canonical_prompt_sha256": prompt_sha, "watermark_sha256": watermark,
                 "fixture_attestation_sha256": fixture_sha, "business_database_ref_sha256": database_ref_sha,
-                "review": _review_assertion(review, adapter=adapter, profile=profile, case_id=case["id"], session_id=session_id, user_id=user_id, prompt_sha=prompt_sha, database_identity=database_identity, watermark=watermark, final_sha=final_sha, fixture_sha=fixture_sha, database_ref_sha=database_ref_sha),
+                "review": _review_assertion(review, adapter=adapter, profile=profile, case_id=case["id"], session_id=session_id, user_id=user_id, prompt_sha=prompt_sha, session_export_sha256=session_export_sha256, watermark=watermark, final_sha=final_sha, fixture_sha=fixture_sha, database_ref_sha=database_ref_sha),
             })
-        bindings = {"schema": adapter.LIVE_BINDING_SCHEMA, "captured_at": capture["captured_at"], "transcript_source": "wecom", "profile_artifact": profile, "state_db_identity_sha256": database_identity, "turns": turns}
+        bindings = {"schema": adapter.LIVE_BINDING_SCHEMA, "captured_at": capture["captured_at"], "transcript_source": "wecom", "profile_artifact": profile, "session_export_sha256": session_export_sha256, "turns": turns}
         bindings_path, candidate_path, score_path = run_dir / "bindings.json", run_dir / "candidate.json", run_dir / "score.json"
         _write_json(bindings_path, bindings)
-        common = {"python": str(hermes_python), "adapter": str(ADAPTER_PATH), "scorer": str(SCORER_PATH), "state_db": str(state_db), "bindings": str(bindings_path), "candidate": str(candidate_path), "golden_suite": str(GOLDEN_PATH), "case_1": case_ids[0], "case_2": case_ids[1], "score_report": str(score_path)}
+        common = {"python": str(hermes_python), "adapter": str(ADAPTER_PATH), "scorer": str(SCORER_PATH), "session_export": str(export_path), "bindings": str(bindings_path), "candidate": str(candidate_path), "golden_suite": str(GOLDEN_PATH), "case_1": case_ids[0], "case_2": case_ids[1], "score_report": str(score_path)}
         _, adapter_record = _run(_expand(shapes["adapter"], common), shapes["adapter"], cwd=ROOT, env=env, timeout=timeout, stream_dir=run_dir, stream_prefix="adapter")
         _, scorer_record = _run(_expand(shapes["scorer"], common), shapes["scorer"], cwd=ROOT, env=env, timeout=timeout, stream_dir=run_dir, stream_prefix="scorer")
         finalized.append({
             "run_index": run_index, "case_ids": case_ids, "processes": {"adapter": adapter_record, "scorer": scorer_record},
-            "candidate": _artifact(candidate_path), "score_report": _artifact(score_path), "reviews": _artifact(reviews_path),
+            "bindings": _artifact(bindings_path), "candidate": _artifact(candidate_path),
+            "score_report": _artifact(score_path), "reviews": _artifact(reviews_path),
         })
-    _runtime(hermes_root=hermes_root, hermes_python=hermes_python, state_db=state_db, contract=contract)
+    _runtime(hermes_root=hermes_root, hermes_python=hermes_python, contract=contract)
     python_after = _python_provenance(builder, hermes_root, hermes_python, contract)
     sources = contract["source_paths"]
     evidence = {
-        "schema": "datasage-live-release-evidence/v2",
+        "schema": "datasage-live-release-evidence/v3",
         "captured_at": capture["captured_at"],
         "subject_commit_timestamp": capture["subject_commit_timestamp"],
         "subject": {"name": receipt["name"], "version": receipt["version"], "content_sha256": receipt["content_sha256"], "profile_git_commit": commit},
@@ -887,14 +677,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("phase", choices=("capture", "finalize"))
     parser.add_argument("--hermes-python", type=Path, required=True)
     parser.add_argument("--hermes-root", type=Path, required=True)
-    parser.add_argument("--state-db", type=Path, required=True)
     parser.add_argument("--session-id", dest="session_ids", action="append", default=[])
     parser.add_argument("--reviews", type=Path)
     parser.add_argument("--fixture-attestation-sha256")
     parser.add_argument("--business-database-ref-sha256")
     args = parser.parse_args(argv)
     contract, golden = _read_json(CONTRACT_PATH), _read_json(GOLDEN_PATH)
-    builder = _load_module("datasage_live_builder", BUILDER_PATH)
+    builder = _BUILDER
     builder._validate_live_contract(contract)
     if args.phase == "capture":
         if args.reviews or args.fixture_attestation_sha256 or args.business_database_ref_sha256:

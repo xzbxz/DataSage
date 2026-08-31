@@ -21,13 +21,22 @@ from typing import Any
 
 HERE = Path(__file__).resolve().parent
 SCHEMA = "datasage-golden-expert-cases/v3"
-CANDIDATE_SCHEMA = "datasage-golden-expert-candidate/v1"
+CANDIDATE_SCHEMA = "datasage-golden-expert-candidate/v2"
 REPORT_SCHEMA = "datasage-golden-expert-report/v1"
 PLAN_LIST_FIELDS = ("domains", "metrics", "dimensions", "operations")
-RECEIPT_SCHEMA = "datasage-canary-receipt/v1"
-WATERMARK_SCHEMA = "datasage-replay-watermark/v1"
-LIVE_WATERMARK_SCHEMA = "datasage-replay-watermark/v2-live-fixture"
+RECEIPT_SCHEMA = "datasage-canary-receipt/v2"
+WATERMARK_SCHEMA = "datasage-replay-watermark/v2"
+LIVE_WATERMARK_SCHEMA = "datasage-replay-watermark/v3-live-fixture"
+OFFICIAL_EXPORT_FORMAT = "hermes_sessions_export_jsonl"
 CONTEXT_FINGERPRINT_SCHEMA = "datasage-context-binding-fingerprint/v1"
+
+
+def _is_lower_sha256(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(char in "0123456789abcdef" for char in value)
+    )
 
 
 def _is_typed_context_fingerprint(value: Any) -> bool:
@@ -35,9 +44,7 @@ def _is_typed_context_fingerprint(value: Any) -> bool:
         isinstance(value, dict)
         and set(value) == {"schema", "sha256"}
         and value.get("schema") == CONTEXT_FINGERPRINT_SCHEMA
-        and isinstance(value.get("sha256"), str)
-        and len(value["sha256"]) == 64
-        and all(char in "0123456789abcdef" for char in value["sha256"])
+        and _is_lower_sha256(value.get("sha256"))
     )
 
 
@@ -85,15 +92,17 @@ def _validate_candidate_receipt(candidate: dict[str, Any]) -> None:
         raise ValueError("candidate has no valid canary receipt")
     if receipt.get("profile_artifact") != profile:
         raise ValueError("candidate/receipt Profile artifact binding differs")
-    database_identity = candidate.get("state_db_identity_sha256")
+    export_identity = candidate.get("session_export_sha256")
+    source = receipt.get("source")
     if (
-        not isinstance(database_identity, str)
-        or len(database_identity) != 64
-        or receipt.get("state_db_identity_sha256") != database_identity
-        or not isinstance(receipt.get("source"), dict)
-        or receipt["source"].get("state_db_identity_sha256") != database_identity
+        not _is_lower_sha256(export_identity)
+        or receipt.get("session_export_sha256") != export_identity
+        or not isinstance(source, dict)
+        or set(source) != {"platform", "format", "session_export_sha256"}
+        or source.get("format") != OFFICIAL_EXPORT_FORMAT
+        or source.get("session_export_sha256") != export_identity
     ):
-        raise ValueError("candidate/receipt state database identity binding differs")
+        raise ValueError("candidate/receipt session export identity binding differs")
     if receipt.get("candidate_cases_sha256") != _sha256(cases):
         raise ValueError("candidate cases do not match canary receipt")
     expected = receipt.get("receipt_sha256")
@@ -111,8 +120,7 @@ def _validate_candidate_receipt(candidate: dict[str, Any]) -> None:
         if (
             not isinstance(review, dict)
             or review.get("status") != "reviewed"
-            or not isinstance(review.get("assertion_sha256"), str)
-            or len(review["assertion_sha256"]) != 64
+            or not _is_lower_sha256(review.get("assertion_sha256"))
         ):
             raise ValueError(f"candidate case {case.get('id')!r} is unreviewed")
         turn = turn_by_id.get(case.get("id"))
@@ -124,7 +132,7 @@ def _validate_candidate_receipt(candidate: dict[str, Any]) -> None:
             field in turn for field in live_fields
         )
         if live_fixture and not all(
-            isinstance(turn.get(field), str) and len(turn[field]) == 64
+            _is_lower_sha256(turn.get(field))
             for field in live_fields
         ):
             raise ValueError(
@@ -138,7 +146,7 @@ def _validate_candidate_receipt(candidate: dict[str, Any]) -> None:
                 "session_id": turn.get("session_id"),
                 "user_message_id": turn.get("user_message_id"),
                 "canonical_prompt_sha256": turn.get("canonical_prompt_sha256"),
-                "database_identity_sha256": turn.get("database_identity_sha256"),
+                "session_export_sha256": turn.get("session_export_sha256"),
                 "watermark_sha256": turn.get("watermark_sha256"),
                 "final_answer_sha256": turn.get("final_answer_sha256"),
                 **(
@@ -161,7 +169,7 @@ def _validate_candidate_receipt(candidate: dict[str, Any]) -> None:
                     "turn": turn.get("turn"),
                     "canonical_prompt_sha256": turn.get("canonical_prompt_sha256"),
                     "user_message_id": turn.get("user_message_id"),
-                    "database_identity_sha256": database_identity,
+                    "session_export_sha256": export_identity,
                     "artifact_id": profile.get("artifact_id"),
                     "payload_sha256": profile.get("payload_sha256"),
                     **(
@@ -178,10 +186,10 @@ def _validate_candidate_receipt(candidate: dict[str, Any]) -> None:
             not isinstance(turn, dict)
             or turn.get("candidate_case_sha256") != _sha256(case)
             or turn.get("conclusion_review") != review
-            or turn.get("database_identity_sha256") != database_identity
+            or turn.get("session_export_sha256") != export_identity
             or not isinstance(turn.get("user_message_id"), int)
             or not all(
-                isinstance(turn.get(field), str) and len(turn[field]) == 64
+                _is_lower_sha256(turn.get(field))
                 for field in (
                     "canonical_prompt_sha256", "watermark_sha256",
                     "final_answer_sha256",

@@ -301,7 +301,7 @@ def authorized(
 
     if tool_name not in TOOL_NAMES:
         return False
-    policy = settings.profile_settings().get("data_entitlements")
+    policy = settings.get("data_entitlements")
     if not isinstance(policy, Mapping):
         return False
     rule = _principal_rule(policy)

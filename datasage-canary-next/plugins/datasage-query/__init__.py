@@ -5,12 +5,14 @@ from . import (
     entitlements,
     entities,
     schemas,
+    settings,
     tools,
     wire,
 )
 
 
 def register(ctx) -> None:
+    settings.bind_config_reader(ctx.get_config)
     ctx.register_tool(
         name="datasage_catalog",
         toolset="datasage-query",

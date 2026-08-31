@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
 from typing import Any
 import uuid
+
+from agent.secret_scope import get_secret
 
 from . import settings
 
@@ -41,13 +42,17 @@ _DATABASE_SECURITY_BOOL_SETTINGS = (
 
 
 def _database_security_policy() -> dict[str, bool]:
-    """Load the complete Git-tracked database security policy or fail closed."""
+    """Load the complete Hermes-provided database policy or fail closed."""
 
-    configured = settings.profile_settings()
-    if not isinstance(configured, dict):
-        configured = {}
+    missing_value = object()
+    configured = {
+        name: settings.get(name, missing_value)
+        for name in _DATABASE_SECURITY_BOOL_SETTINGS
+    }
     missing = [
-        name for name in _DATABASE_SECURITY_BOOL_SETTINGS if name not in configured
+        name
+        for name in _DATABASE_SECURITY_BOOL_SETTINGS
+        if configured[name] is missing_value
     ]
     if missing:
         raise DatabaseSecurityError(
@@ -99,7 +104,7 @@ def mysql_tls_policy(
         "production_mode": production_mode,
         "tls_required": tls_required,
         "tls_configured": bool(
-            os.environ.get("DATA_QUERY_MYSQL_SSL_CA", "").strip()
+            (get_secret("DATA_QUERY_MYSQL_SSL_CA", "") or "").strip()
         ),
     }
 
@@ -107,7 +112,7 @@ def mysql_tls_policy(
 def mysql_tls_kwargs() -> dict[str, Any]:
     """Return public PyMySQL arguments for certificate and identity checks."""
     policy = mysql_tls_policy()
-    ca_value = os.environ.get("DATA_QUERY_MYSQL_SSL_CA", "").strip()
+    ca_value = (get_secret("DATA_QUERY_MYSQL_SSL_CA", "") or "").strip()
     if not ca_value:
         if policy["tls_required"]:
             raise DatabaseSecurityError(
