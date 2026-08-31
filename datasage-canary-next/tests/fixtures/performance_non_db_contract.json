@@ -1,5 +1,5 @@
 {
-  "schema": "datasage-performance-non-db-contract/v1",
+  "schema": "datasage-performance-non-db-contract/v2",
   "scope": "test-only host/plugin/model non-database denial path",
   "subject": {
     "name": "datasage-canary-next",
@@ -51,7 +51,7 @@
         "retryable": false
       }
     },
-    "required_final_response": "DATA_ENTITLEMENT_DENIED",
+    "required_final_response_code": "DATA_ENTITLEMENT_DENIED",
     "database_runtime_entered": false,
     "required_api_calls_per_run": 2,
     "max_duration_ns": 120000000000,

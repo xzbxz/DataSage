@@ -11,6 +11,7 @@ import importlib.util
 import inspect
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -30,7 +31,7 @@ PRODUCER_PATH = PROFILE_ROOT / "tests" / "run_performance_evidence.py"
 TEST_PATH = PROFILE_ROOT / "tests" / "test_performance_evidence.py"
 SOUL_PATH = PROFILE_ROOT / "SOUL.md"
 REPORT_SCHEMA = "datasage-performance-evidence/v1"
-CONTRACT_SCHEMA = "datasage-performance-non-db-contract/v1"
+CONTRACT_SCHEMA = "datasage-performance-non-db-contract/v2"
 PINNED_HERMES_VERSION = "0.20.5"
 PINNED_HERMES_COMMIT = "fcbd1076a93841fa88855acce810e342a5b78101"
 DENIED_CODE = "DATA_ENTITLEMENT_DENIED"
@@ -42,6 +43,7 @@ DENIED_RESULT = {
         "retryable": False,
     },
 }
+_IDENTIFIER_TOKEN_CHARS = "A-Za-z0-9_"
 EXPECTED_TOOLS = ("datasage_catalog", "datasage_entity_resolve", "datasage_query")
 USAGE_FIELDS = (
     "input_tokens", "cache_read_tokens", "cache_write_tokens", "output_tokens",
@@ -83,6 +85,13 @@ def _canonical_json_bytes(payload: object) -> bytes:
     return json.dumps(
         payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
     ).encode("utf-8")
+
+
+def _contains_required_code_token(value: Any, code: str) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return False
+    pattern = rf"(?<![{_IDENTIFIER_TOKEN_CHARS}]){re.escape(code)}(?![{_IDENTIFIER_TOKEN_CHARS}])"
+    return re.search(pattern, value) is not None
 
 
 def _sha256_bytes(payload: bytes) -> str:
@@ -158,7 +167,7 @@ def _validate_contract(contract: Mapping[str, Any]) -> None:
             "raw samples hash algorithm",
         ),
         (acceptance.get("expected_tool_call_rule"), "exactly_one_and_equal", "tool call rule"),
-        (acceptance.get("required_final_response"), DENIED_CODE, "final response"),
+        (acceptance.get("required_final_response_code"), DENIED_CODE, "final response code"),
         (acceptance.get("database_runtime_entered"), False, "database runtime result"),
         (acceptance.get("required_api_calls_per_run"), 2, "api calls"),
         (acceptance.get("max_duration_ns"), 120_000_000_000, "duration"),
@@ -794,8 +803,10 @@ def _validate_observation(
         contract["acceptance"]["required_tool_result"]
     ):
         raise EvidenceError(f"{case['id']} did not return the contracted entitlement denial")
-    if sample["final_response"].strip() != DENIED_CODE:
-        raise EvidenceError(f"{case['id']} final response was not the exact denial code")
+    if not _contains_required_code_token(
+        sample["final_response"], contract["acceptance"]["required_final_response_code"]
+    ):
+        raise EvidenceError(f"{case['id']} final response lacks the standalone denial code")
     if sample["database_runtime_entered"] is not False:
         raise EvidenceError(f"{case['id']} reached the database runtime")
     if sample["usage"]["api_calls"] != contract["acceptance"]["required_api_calls_per_run"]:

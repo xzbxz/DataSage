@@ -40,7 +40,7 @@ EVIDENCE_DIR = ROOT / "pending" / "evidence"
 HOST_EVIDENCE_SCHEMA = "datasage-host-compaction-evidence/v1"
 PERFORMANCE_EVIDENCE_SCHEMA = "datasage-performance-evidence/v1"
 LIVE_EVIDENCE_SCHEMA = "datasage-live-release-evidence/v3"
-PERFORMANCE_CONTRACT_SCHEMA = "datasage-performance-non-db-contract/v1"
+PERFORMANCE_CONTRACT_SCHEMA = "datasage-performance-non-db-contract/v2"
 LIVE_CONTRACT_SCHEMA = "datasage-live-release-contract/v6"
 HOST_PRODUCER_PATH = "tests/test_host_compaction_e2e.py"
 PERFORMANCE_PRODUCER_PATH = "tests/run_performance_evidence.py"
@@ -232,6 +232,13 @@ def _require_string(value: object, label: str, *, nonempty: bool = True) -> str:
     if not isinstance(value, str) or (nonempty and not value):
         raise ValueError(f"{label} must be a non-empty string")
     return value
+
+
+def _contains_required_code_token(value: object, code: str) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return False
+    pattern = rf"(?<![A-Za-z0-9_]){re.escape(code)}(?![A-Za-z0-9_])"
+    return re.search(pattern, value) is not None
 
 
 def _require_int(value: object, label: str, *, minimum: int = 0) -> int:
@@ -901,7 +908,7 @@ def _validate_performance_contract(contract: dict[str, object]) -> dict[str, obj
     }
     if contract["accounting"] != expected_accounting:
         raise ValueError("performance contract.accounting uses unsupported semantics")
-    acceptance_keys = {"expected_tool_call_rule", "required_tool_result", "required_final_response", "database_runtime_entered", "required_api_calls_per_run", "max_duration_ns", "threshold_basis", "expected_tool_schema_sha256"}
+    acceptance_keys = {"expected_tool_call_rule", "required_tool_result", "required_final_response_code", "database_runtime_entered", "required_api_calls_per_run", "max_duration_ns", "threshold_basis", "expected_tool_schema_sha256"}
     acceptance = _require_exact_keys(contract["acceptance"], acceptance_keys, "contract.acceptance")
     if acceptance["expected_tool_call_rule"] != "exactly_one_and_equal":
         raise ValueError("unsupported expected_tool_call_rule")
@@ -915,7 +922,12 @@ def _validate_performance_contract(contract: dict[str, object]) -> dict[str, obj
     }
     if _canonical_json_bytes(acceptance["required_tool_result"]) != _canonical_json_bytes(required_result):
         raise ValueError("acceptance.required_tool_result must be the exact fail-closed object")
-    _require_string(acceptance["required_final_response"], "acceptance.required_final_response")
+    required_final_response_code = _require_string(
+        acceptance["required_final_response_code"],
+        "acceptance.required_final_response_code",
+    )
+    if required_final_response_code != required_result["error"]["code"]:
+        raise ValueError("acceptance.required_final_response_code must match the fail-closed code")
     _require_sha256(acceptance["expected_tool_schema_sha256"], "acceptance.expected_tool_schema_sha256")
     _require_bool(acceptance["database_runtime_entered"], "acceptance.database_runtime_entered")
     _require_int(acceptance["required_api_calls_per_run"], "acceptance.required_api_calls_per_run", minimum=1)
@@ -1040,8 +1052,10 @@ def _evaluate_performance_evidence(
             if _require_bool(sample["database_runtime_entered"], "database_runtime_entered") is not acceptance["database_runtime_entered"]:
                 raise ValueError("database_runtime_entered does not match the tracked acceptance rule")
             final_response = _require_string(sample["final_response"], f"{label}.final_response")
-            if final_response.strip() != acceptance["required_final_response"]:
-                raise ValueError("final response does not exactly report the fail-closed code")
+            if not _contains_required_code_token(
+                final_response, acceptance["required_final_response_code"]
+            ):
+                raise ValueError("final response lacks the standalone fail-closed code")
             duration = _require_int(sample["duration_ns"], f"{label}.duration_ns")
             if duration > timeout_ns:
                 raise ValueError("performance sample exceeds the tracked per-run timeout")

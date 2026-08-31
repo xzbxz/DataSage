@@ -77,7 +77,7 @@ def _fake_result(
     tool_result: dict[str, Any] | None = None,
     input_tokens: int = 100,
     total_tokens: int | None = None,
-    final_response: str = " DATA_ENTITLEMENT_DENIED\n",
+    final_response: str = "Error: DATA_ENTITLEMENT_DENIED",
 ) -> dict[str, Any]:
     tool_call = types.SimpleNamespace(
         function=types.SimpleNamespace(
@@ -200,7 +200,7 @@ class PerformanceEvidenceTests(unittest.TestCase):
             self.assertIsInstance(sample["observed_tool_calls"][0]["arguments"], dict)
             self.assertEqual(sample["tool_result"]["error"]["code"], "DATA_ENTITLEMENT_DENIED")
             self.assertIs(sample["database_runtime_entered"], False)
-            self.assertEqual(sample["final_response"], " DATA_ENTITLEMENT_DENIED\n")
+            self.assertEqual(sample["final_response"], "Error: DATA_ENTITLEMENT_DENIED")
             self.assertEqual(set(sample["usage"]), set(runner.USAGE_FIELDS))
         encoded = json.dumps(report, ensure_ascii=False)
         for forbidden in ('"passed"', '"eligible"', '"p50"', '"p90"', '"cost_usd"'):
@@ -282,9 +282,28 @@ class PerformanceEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(runner.EvidenceError, "exact entitlement denial object"):
             runner._validate_contract(contract)
 
-    def test_final_response_must_be_exact_denial_after_strip(self) -> None:
-        with self.assertRaisesRegex(runner.EvidenceError, "exact denial code"):
-            _collect(boundary_factory=_fake_factory(final_response="查询失败"))
+    def test_final_response_requires_standalone_denial_code(self) -> None:
+        report = _collect(
+            boundary_factory=_fake_factory(
+                final_response="Error: DATA_ENTITLEMENT_DENIED"
+            )
+        )
+        self.assertEqual(
+            "Error: DATA_ENTITLEMENT_DENIED",
+            report["samples"][0]["final_response"],
+        )
+        for final_response in (
+            "",
+            "查询失败",
+            "XDATA_ENTITLEMENT_DENIED",
+            "xDATA_ENTITLEMENT_DENIED",
+            "DATA_ENTITLEMENT_DENIED_DETAIL",
+            "DATA_ENTITLEMENT_DENIEDdetail",
+        ):
+            with self.subTest(final_response=final_response), self.assertRaisesRegex(
+                runner.EvidenceError, "standalone denial code"
+            ):
+                _collect(boundary_factory=_fake_factory(final_response=final_response))
 
     def test_official_token_total_mismatch_is_rejected(self) -> None:
         with self.assertRaisesRegex(runner.EvidenceError, "canonical token equation"):
@@ -482,7 +501,9 @@ with (
             "sha256(canonical_json({warmup,samples}))",
         )
         self.assertEqual(contract["acceptance"]["required_tool_result"], runner.DENIED_RESULT)
-        self.assertEqual(contract["acceptance"]["required_final_response"], runner.DENIED_CODE)
+        self.assertEqual(
+            contract["acceptance"]["required_final_response_code"], runner.DENIED_CODE
+        )
         self.assertEqual(contract["safety_budget"]["max_total_peak_estimated_cost_usd"], "2.30")
         self.assertTrue(all(isinstance(case["expected_arguments"], dict) for case in contract["cases"]))
 

@@ -108,7 +108,7 @@ def _host_report(subject=None):
 
 def _performance_contract(version="0.15.0-test"):
     return {
-        "schema": "datasage-performance-non-db-contract/v1",
+        "schema": "datasage-performance-non-db-contract/v2",
         "scope": "non_db_fail_closed",
         "subject": {"name": "datasage-canary-next", "version": version},
         "host": {
@@ -169,7 +169,7 @@ def _performance_contract(version="0.15.0-test"):
                     "retryable": False,
                 },
             },
-            "required_final_response": "DATA_ENTITLEMENT_DENIED",
+            "required_final_response_code": "DATA_ENTITLEMENT_DENIED",
             "database_runtime_entered": False,
             "required_api_calls_per_run": 2,
             "max_duration_ns": 120000000000,
@@ -207,7 +207,7 @@ def _performance_report(builder, subject=None, contract=None):
             ],
             "tool_result": copy.deepcopy(contract["acceptance"]["required_tool_result"]),
             "database_runtime_entered": False,
-            "final_response": "DATA_ENTITLEMENT_DENIED",
+            "final_response": "Error: DATA_ENTITLEMENT_DENIED",
             "usage": {
                 "input_tokens": 100,
                 "cache_read_tokens": 10,
@@ -1897,6 +1897,14 @@ class ReleaseEligibilityTests(unittest.TestCase):
         false_final = _performance_report(builder, subject, contract)
         false_final["samples"][0]["final_response"] = "query succeeded"
         self.assertEqual("invalid", status(false_final)["status"])
+
+        embedded_final = _performance_report(builder, subject, contract)
+        embedded_final["samples"][0]["final_response"] = "DATA_ENTITLEMENT_DENIED_DETAIL"
+        self.assertEqual("invalid", status(embedded_final)["status"])
+
+        lowercase_embedded_final = _performance_report(builder, subject, contract)
+        lowercase_embedded_final["samples"][0]["final_response"] = "DATA_ENTITLEMENT_DENIEDdetail"
+        self.assertEqual("invalid", status(lowercase_embedded_final)["status"])
 
         missing_warmup = _performance_report(builder, subject, contract)
         del missing_warmup["warmup"]
