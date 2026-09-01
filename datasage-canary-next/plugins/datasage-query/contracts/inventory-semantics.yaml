@@ -233,7 +233,10 @@ metrics:
     answer_note: *answer_note_current_warehouse_age_days
 
   month_end_inventory_quantity:
-    disclosures: []
+    disclosures:
+      - id: inventory.month-end-quantity.snapshot-and-unit
+        mode: required_always
+        text: "月末库存数量来自指定或最近有效月末核算快照；必须按单位分组或限定单一单位，不同单位不得直接相加。"
     label: 月末库存数量
     business_definition: 指定或最近月末核算快照的业务数量，须按单位分组或筛选。
     unit_policy:
@@ -294,7 +297,10 @@ metrics:
       dimensions: [warehouse, product]
     answer_note: *answer_note_month_end_inventory_cost_rmb
   month_end_inventory_cost_original:
-    disclosures: []
+    disclosures:
+      - id: inventory.month-end-cost-original.currency
+        mode: required_always
+        text: "月末库存原币核算成本必须按币种分组或限定单一币种，不同币种不得直接相加。"
     label: 月末库存原币核算成本
     business_definition: 指定或最近月末核算快照的原币正式核算成本；必须按币种筛选或分组，不得跨币种相加。
     unit: 原币金额（按币种分别计量）
@@ -309,7 +315,10 @@ metrics:
     required_filters: {}
     allowed_dimensions: *month_end_dimensions
   month_end_inventory_ddp_rmb:
-    disclosures: []
+    disclosures:
+      - id: inventory.month-end-ddp-rmb.valuation-basis
+        mode: required_always
+        text: "月末库存人民币 DDP 为核算快照估值口径，不等同于人民币正式核算成本。"
     label: 月末库存人民币 DDP 估值
     business_definition: 指定或最近月末核算快照的人民币 DDP 估值。
     unit: 人民币元
@@ -323,7 +332,10 @@ metrics:
     required_filters: {}
     allowed_dimensions: *month_end_dimensions
   month_end_inventory_ddp_original:
-    disclosures: []
+    disclosures:
+      - id: inventory.month-end-ddp-original.currency
+        mode: required_always
+        text: "月末库存原币 DDP 估值必须按币种分组或限定单一币种，不同币种不得直接相加。"
     label: 月末库存原币 DDP 估值
     business_definition: 指定或最近月末核算快照的原币 DDP 估值；必须按币种筛选或分组，不得跨币种相加。
     unit: 原币金额（按币种分别计量）

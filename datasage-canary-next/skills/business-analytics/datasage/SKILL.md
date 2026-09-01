@@ -1,7 +1,7 @@
 ---
 name: datasage
 description: Governed DataSage company facts; not public/user-provided.
-version: 0.15.0-rc8
+version: 0.15.0-rc9
 author: datasage
 platforms: [windows]
 metadata:
@@ -9,6 +9,18 @@ metadata:
     tags: [data, analytics, business, internal]
     requires_toolsets: [datasage-query]
     requires_tools: [datasage_catalog, datasage_entity_resolve, datasage_query]
+    supported_domains:
+      - delivery
+      - receipt
+      - receivable
+      - target
+      - customer_risk
+      - inventory
+    non_activation_examples:
+      - ordinary conversation or writing
+      - public research
+      - user-provided tables or files
+      - internal policy, HR, or document questions without governed metrics
 ---
 
 # DataSage Skill
@@ -22,8 +34,11 @@ route adaptively; this is not a mandatory call sequence.
 
 - Use it for business questions that require new governed DataSage company
   facts, metrics, comparisons, rankings, or operating-performance evidence.
+- The supported operating domains are delivery, receipt, receivable, target,
+  customer_risk, and inventory.
 - Do not use it for ordinary conversation, public research, user-provided data,
-  or writing that does not require new internal facts.
+  writing, or internal policy/HR/document questions that do not require new
+  governed operating facts.
 
 ## Prerequisites
 

@@ -19,6 +19,7 @@ from .scorecard import performance_scorecard_manifest
 
 _MODEL_PROJECTION_VERSION = "datasage-model-semantic-projection/v5"
 _CATALOG_VERSION = "datasage-metric-catalog/v1"
+_DATASETS_CONTRACT_PATH = "plugins/datasage-query/contracts/datasets.yaml"
 _MANUAL_CATALOG_KEYS = {
     "catalog_status",
     "metric_catalog",
@@ -118,6 +119,61 @@ def _read_yaml(relative_path: str) -> dict[str, Any]:
                 "CONTRACT_UNAVAILABLE", "语义合同格式无效。"
             ) from exc
         raise ContractFailure("CONTRACT_UNAVAILABLE", "暂时无法读取语义合同。") from exc
+
+
+def _contract_source_version(
+    relative_path: str,
+    contract: Mapping[str, Any],
+    *,
+    source_name: str,
+) -> dict[str, str]:
+    """Return a public version plus the exact content identity of a contract."""
+
+    version = contract.get("version")
+    if not isinstance(version, str) or not version.strip():
+        raise ContractFailure(
+            "CONTRACT_UNAVAILABLE",
+            f"{source_name} contract version is invalid",
+        )
+    try:
+        _path, digest = contract_store.content_signature(relative_path)
+    except contract_store.ContractStoreError as exc:
+        raise ContractFailure(
+            "CONTRACT_UNAVAILABLE",
+            f"{source_name} contract content identity is unavailable",
+        ) from exc
+    return {
+        "version": version,
+        "content_sha256": digest,
+    }
+
+
+def _execution_source_versions(
+    datasets: Mapping[str, Any],
+) -> dict[str, dict[str, str]]:
+    """Bind detail projections to the common execution contracts."""
+
+    try:
+        query_policy = contract_store.read_query_policy()
+    except (
+        contract_store.ContractStoreError,
+        capability_contract.CapabilityContractError,
+    ) as exc:
+        raise ContractFailure(
+            "CONTRACT_UNAVAILABLE", "common query policy is invalid"
+        ) from exc
+    return {
+        "datasets": _contract_source_version(
+            _DATASETS_CONTRACT_PATH,
+            datasets,
+            source_name="datasets",
+        ),
+        "query_policy": _contract_source_version(
+            capability_contract.QUERY_POLICY_PATH,
+            query_policy.as_mapping(),
+            source_name="query policy",
+        ),
+    }
 
 
 def execution_contracts(domain: str) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -369,6 +425,88 @@ def _metric_dimension_contract(
     return sorted(dimensions), by_attribution
 
 
+def _related_metric_refs_projection(
+    domain: str,
+    semantics: Mapping[str, Any],
+) -> list[dict[str, str]]:
+    """Validate and project explicit cross-domain metric references.
+
+    These references are capability metadata only.  They do not select a plan,
+    execute a query, or create a new lens engine.
+    """
+
+    if domain == "customer_risk" and "evidence_axes" in semantics:
+        raise ContractFailure(
+            "CONTRACT_UNAVAILABLE",
+            "customer_risk legacy evidence_axes are not executable metadata",
+        )
+    raw_refs = semantics.get("related_metric_refs")
+    if raw_refs is None:
+        if domain == "customer_risk":
+            raise ContractFailure(
+                "CONTRACT_UNAVAILABLE",
+                "customer_risk related_metric_refs are missing",
+            )
+        return []
+    if not isinstance(raw_refs, list) or not raw_refs:
+        raise ContractFailure(
+            "CONTRACT_UNAVAILABLE",
+            f"domain {domain} related_metric_refs are invalid",
+        )
+
+    projected: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for raw_ref in raw_refs:
+        if not isinstance(raw_ref, Mapping) or set(raw_ref) != {"domain", "metric"}:
+            raise ContractFailure(
+                "CONTRACT_UNAVAILABLE",
+                f"domain {domain} related_metric_refs must contain domain and metric",
+            )
+        ref_domain = raw_ref.get("domain")
+        ref_metric = raw_ref.get("metric")
+        if (
+            not isinstance(ref_domain, str)
+            or ref_domain not in DOMAIN_SOURCES
+            or ref_domain != ref_domain.strip()
+            or not isinstance(ref_metric, str)
+            or not ref_metric
+            or ref_metric != ref_metric.strip()
+        ):
+            raise ContractFailure(
+                "CONTRACT_UNAVAILABLE",
+                f"domain {domain} related_metric_refs contain an invalid metric reference",
+            )
+        identity = (ref_domain, ref_metric)
+        if identity in seen:
+            raise ContractFailure(
+                "CONTRACT_UNAVAILABLE",
+                f"domain {domain} related_metric_refs contain a duplicate",
+            )
+        seen.add(identity)
+
+        referenced_semantics = _read_yaml(
+            str(DOMAIN_SOURCES[ref_domain]["semantics"])
+        )
+        referenced_metrics = referenced_semantics.get("metrics")
+        referenced_definition = (
+            referenced_metrics.get(ref_metric)
+            if isinstance(referenced_metrics, Mapping)
+            else None
+        )
+        if not isinstance(referenced_definition, Mapping):
+            raise ContractFailure(
+                "CONTRACT_UNAVAILABLE",
+                f"related metric {ref_domain}.{ref_metric} does not exist",
+            )
+        if _is_unavailable(referenced_definition):
+            raise ContractFailure(
+                "CONTRACT_UNAVAILABLE",
+                f"related metric {ref_domain}.{ref_metric} is unavailable",
+            )
+        projected.append({"domain": ref_domain, "metric": ref_metric})
+    return projected
+
+
 def _metric_group_dimension_limit(
     definition: Mapping[str, Any], allowed_dimensions: list[str]
 ) -> int:
@@ -393,21 +531,11 @@ def _metric_group_dimension_limit(
 
 
 def _is_unavailable(definition: Mapping[str, Any]) -> bool:
-    availability = definition.get("availability")
-    if availability is None:
-        return False
-    if not isinstance(availability, Mapping):
-        raise ContractFailure(
-            "CONTRACT_UNAVAILABLE", "metric availability contract is invalid"
-        )
-    status = str(availability.get("status") or "available")
-    if status == "available":
-        return False
-    if status not in {"blocked", "pending_validation"}:
-        raise ContractFailure(
-            "CONTRACT_UNAVAILABLE", f"unknown metric availability status: {status}"
-        )
-    return True
+    try:
+        status = capability_contract.validate_availability(definition)
+    except capability_contract.AvailabilityContractError as exc:
+        raise ContractFailure(exc.code, exc.message) from exc
+    return status != "available"
 
 
 def _currency_policy_projection(value: Any) -> Any:
@@ -502,6 +630,8 @@ def _target_gap_decomposition_projection(
 def _model_semantic_projection(
     domain: str,
     semantics: Mapping[str, Any],
+    *,
+    source_versions: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if semantics.get("domain") != domain:
         raise ContractFailure("CONTRACT_UNAVAILABLE", "domain semantic contract mismatch")
@@ -514,6 +644,7 @@ def _model_semantic_projection(
     target_gap_decomposition = _target_gap_decomposition_projection(
         domain, semantics
     )
+    related_metric_refs = _related_metric_refs_projection(domain, semantics)
     projected_metrics: list[dict[str, Any]] = []
     known_dimensions = {str(code) for code in dimensions}
     for raw_code in sorted(metrics, key=str):
@@ -741,21 +872,25 @@ def _model_semantic_projection(
     compressed_metrics, allowed_dimension_sets = (
         _compress_metric_dimension_sets(projected_metrics)
     )
-    source_versions = {
+    projected_source_versions: dict[str, Any] = {
         "semantics": semantics.get("version"),
     }
     if target_gap_decomposition is not None:
-        source_versions["target_gap_decomposition"] = (
+        projected_source_versions["target_gap_decomposition"] = (
             target_gap_decomposition["version"]
         )
+    if source_versions is not None:
+        projected_source_versions.update(_copy_guidance(source_versions))
     projection = {
         "version": _MODEL_PROJECTION_VERSION,
         "domain": domain,
-        "source_versions": source_versions,
+        "source_versions": projected_source_versions,
         "metrics": compressed_metrics,
         "allowed_dimension_sets": allowed_dimension_sets,
         "dimensions": projected_dimensions,
     }
+    if related_metric_refs:
+        projection["related_metric_refs"] = related_metric_refs
     _assert_business_safe_tree(
         projection,
         context=f"domain {domain} semantic projection",
@@ -774,11 +909,12 @@ def _domain_contract(domain: str, view: str) -> dict[str, Any]:
             "DETAIL_CONTRACT_UNAVAILABLE",
             "当前发布版本尚未开放语义明细合同，请使用已登记指标和维度。",
         )
-    semantics = _read_yaml(DOMAIN_SOURCES[domain]["semantics"])
+    datasets, semantics = execution_contracts(domain)
     return {
         "planner": _model_semantic_projection(
             domain,
             semantics,
+            source_versions=_execution_source_versions(datasets),
         )
     }
 
@@ -895,7 +1031,7 @@ def _catalog_summary(domain: str, planner: Mapping[str, Any]) -> dict[str, Any]:
             raw.get("change_decomposition_dimensions")
         )
         metrics.append(item)
-    return {
+    result: dict[str, Any] = {
         "domain": domain,
         "level": "summary",
         "source_versions": _copy_guidance(planner.get("source_versions")),
@@ -903,6 +1039,10 @@ def _catalog_summary(domain: str, planner: Mapping[str, Any]) -> dict[str, Any]:
         "metric_count": len(metrics),
         "metrics": metrics,
     }
+    related_metric_refs = planner.get("related_metric_refs")
+    if isinstance(related_metric_refs, list):
+        result["related_metric_refs"] = _copy_guidance(related_metric_refs)
+    return result
 
 
 def _catalog_expert_index(domain: str, planner: Mapping[str, Any]) -> dict[str, Any]:
@@ -963,13 +1103,17 @@ def _catalog_expert_index(domain: str, planner: Mapping[str, Any]) -> dict[str, 
             raw.get("exact_default_lookup_supported") is not True
         )
         metrics.append(item)
-    return {
+    result: dict[str, Any] = {
         "domain": domain,
         "level": "expert_index",
         "source_versions": _copy_guidance(planner.get("source_versions")),
         "metric_count": len(metrics),
         "metrics": metrics,
     }
+    related_metric_refs = planner.get("related_metric_refs")
+    if isinstance(related_metric_refs, list):
+        result["related_metric_refs"] = _copy_guidance(related_metric_refs)
+    return result
 
 
 def _catalog_metric_detail(
@@ -1021,7 +1165,7 @@ def _catalog_metric_detail(
         metric["change_decomposition_policy"] = (
             "structural_contribution_after_reconciled_full_rows_or_same_statement_full_partition_aggregate_proof_with_bounded_claims"
         )
-    return {
+    result: dict[str, Any] = {
         "domain": domain,
         "level": "metric",
         "source_versions": _copy_guidance(planner.get("source_versions")),
@@ -1037,6 +1181,10 @@ def _catalog_metric_detail(
             if code in definitions
         ],
     }
+    related_metric_refs = planner.get("related_metric_refs")
+    if isinstance(related_metric_refs, list):
+        result["related_metric_refs"] = _copy_guidance(related_metric_refs)
+    return result
 
 
 def _catalog_metric_detail_receipt(detail: Mapping[str, Any]) -> str:

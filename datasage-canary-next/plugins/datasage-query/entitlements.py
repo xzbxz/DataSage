@@ -7,12 +7,17 @@ policy in ``plugins.entries.datasage-query.settings.data_entitlements``.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from . import settings
 from .scorecard import SCORECARD_METRICS
+
+
+logger = logging.getLogger(__name__)
 
 
 TOOL_NAMES = frozenset(
@@ -28,6 +33,7 @@ _SCALAR_TYPES = (str, int, float, bool)
 _REPLAY_PLATFORM = "replay"
 _REPLAY_SOURCE = "datasage-trusted-replay"
 _MISSING_SESSION_VALUE = object()
+_AUDIT_DOMAIN = b"datasage-entitlement-audit/v1\x00"
 
 
 def _session_value(name: str) -> str:
@@ -86,6 +92,91 @@ def denied_response() -> str:
     """Return the stable public denial without exposing policy internals."""
 
     return _deny()
+
+
+def _audit_hash(value: str) -> str:
+    return hashlib.sha256(_AUDIT_DOMAIN + value.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def _audit_scope(args: Any) -> dict[str, list[str]]:
+    """Project only one-way scope fingerprints for authorization telemetry."""
+
+    domains: list[str] = []
+    metrics: list[str] = []
+    request_ids: list[str] = []
+    if isinstance(args, Mapping):
+        direct_domain = args.get("domain")
+        direct_metric = args.get("metric")
+        if isinstance(direct_domain, str):
+            domains.append(_audit_hash(direct_domain))
+        if isinstance(direct_metric, str):
+            metrics.append(_audit_hash(direct_metric))
+        requests = args.get("requests")
+        if isinstance(requests, Sequence) and not isinstance(requests, (str, bytes)):
+            for request in requests[:64]:
+                if not isinstance(request, Mapping):
+                    continue
+                domain = request.get("domain")
+                metric = request.get("metric")
+                request_id = request.get("request_id")
+                if isinstance(domain, str):
+                    domains.append(_audit_hash(domain))
+                if isinstance(metric, str):
+                    metrics.append(_audit_hash(metric))
+                if isinstance(request_id, str):
+                    request_ids.append(_audit_hash(request_id))
+    return {
+        "domain_hashes": sorted(set(domains)),
+        "metric_hashes": sorted(set(metrics)),
+        "request_id_hashes": sorted(set(request_ids)),
+    }
+
+
+def _audit_decision(
+    tool_name: Any,
+    args: Any,
+    *,
+    allowed: bool,
+    reason: str,
+    stage: str,
+) -> None:
+    """Emit a structured, non-reversible authorization decision record."""
+
+    try:
+        principal = "\x00".join(
+            _session_value(name)
+            for name in (
+                "HERMES_SESSION_PLATFORM",
+                "HERMES_SESSION_SOURCE",
+                "HERMES_SESSION_USER_ID",
+                "HERMES_SESSION_CHAT_ID",
+                "HERMES_SESSION_CHAT_TYPE",
+            )
+        )
+        principal_hash = _audit_hash(principal)
+        event = {
+            "event": "datasage_entitlement_decision",
+            "stage": stage,
+            "allowed": bool(allowed),
+            "decision": "allow" if allowed else "deny",
+            "tool": (
+                tool_name
+                if isinstance(tool_name, str) and tool_name in TOOL_NAMES
+                else "<invalid>"
+            ),
+            "reason": reason,
+            "principal_sha256": principal_hash,
+            "principal_hash": principal_hash,
+            **_audit_scope(args),
+        }
+        logger.info(json.dumps(event, ensure_ascii=True, sort_keys=True, separators=(",", ":")))
+    except Exception:
+        # Authorization must remain fail-closed independently of a logging
+        # backend failure, and the exception must not expose request values.
+        try:
+            logger.debug("datasage entitlement audit emission failed", exc_info=True)
+        except Exception:
+            pass
 
 
 def _string_set(value: Any, *, allow_wildcard: bool = True) -> set[str] | None:
@@ -291,6 +382,114 @@ def _query_allowed(
     return True
 
 
+def _coarse_catalog_allowed(rule: Mapping[str, Any], args: Any) -> bool:
+    requests = args.get("requests") if isinstance(args, Mapping) else None
+    if (
+        not isinstance(requests, Sequence)
+        or isinstance(requests, (str, bytes))
+        or not requests
+    ):
+        return False
+    for request in requests:
+        if not isinstance(request, Mapping):
+            return False
+        if request.get("view") == "performance_scorecard":
+            if rule.get("allow_catalog_discovery") is not True:
+                return False
+            continue
+        domain = request.get("domain")
+        if not isinstance(domain, str) or not _domain_allowed(rule, domain):
+            return False
+        metric = request.get("metric")
+        if metric is None:
+            if rule.get("allow_catalog_discovery") is not True:
+                return False
+        elif not isinstance(metric, str) or not _metric_allowed(rule, domain, metric):
+            return False
+    return True
+
+
+def _coarse_entity_allowed(rule: Mapping[str, Any], args: Any) -> bool:
+    if not isinstance(args, Mapping):
+        return False
+    domain = args.get("domain")
+    metric = args.get("metric")
+    if domain is None:
+        if rule.get("allow_unscoped_entity_resolution") is not True:
+            return False
+    elif not isinstance(domain, str) or not _domain_allowed(rule, domain):
+        return False
+    if metric is not None:
+        if (
+            not isinstance(metric, str)
+            or domain is None
+            or not _metric_allowed(rule, domain, metric)
+        ):
+            return False
+    return True
+
+
+def _coarse_query_allowed(rule: Mapping[str, Any], args: Any) -> bool:
+    requests = args.get("requests") if isinstance(args, Mapping) else None
+    if (
+        not isinstance(requests, Sequence)
+        or isinstance(requests, (str, bytes))
+        or not requests
+    ):
+        return False
+    for request in requests:
+        if not isinstance(request, Mapping):
+            return False
+        domain = request.get("domain")
+        metric = request.get("metric")
+        if (
+            not isinstance(domain, str)
+            or not isinstance(metric, str)
+            or not _domain_allowed(rule, domain)
+            or not _metric_allowed(rule, domain, metric)
+        ):
+            return False
+    return True
+
+
+def coarse_authorized(tool_name: str, args: Any) -> bool:
+    """Apply identity/tool/domain/metric gating before contract evaluation.
+
+    This intentionally does not load business contracts or validate row
+    filters.  It is a cheap envelope gate for the composition layer; callers
+    must still invoke :func:`authorized` with the fully validated request.
+    Unknown or malformed envelopes fail closed.
+    """
+
+    allowed = False
+    reason = "invalid_tool"
+    if not isinstance(tool_name, str) or tool_name not in TOOL_NAMES:
+        _audit_decision(tool_name, args, allowed=False, reason=reason, stage="coarse")
+        return False
+    policy = settings.get("data_entitlements")
+    if not isinstance(policy, Mapping):
+        reason = "policy_unavailable"
+    else:
+        rule = _principal_rule(policy)
+        if rule is None:
+            reason = "principal_unmatched"
+        elif not _contains(
+            _string_set(rule.get("tools"), allow_wildcard=False), tool_name
+        ):
+            reason = "tool_not_entitled"
+        elif tool_name == "datasage_catalog":
+            allowed = _coarse_catalog_allowed(rule, args)
+            reason = "coarse_scope_allowed" if allowed else "catalog_scope_denied"
+        elif tool_name == "datasage_entity_resolve":
+            allowed = _coarse_entity_allowed(rule, args)
+            reason = "coarse_scope_allowed" if allowed else "entity_scope_denied"
+        elif tool_name == "datasage_query":
+            allowed = _coarse_query_allowed(rule, args)
+            reason = "coarse_scope_allowed" if allowed else "query_scope_denied"
+    _audit_decision(tool_name, args, allowed=allowed, reason=reason, stage="coarse")
+    return allowed
+
+
 def authorized(
     tool_name: str,
     args: Any,
@@ -299,25 +498,37 @@ def authorized(
 ) -> bool:
     """Return whether trusted caller identity covers the requested scope."""
 
-    if tool_name not in TOOL_NAMES:
-        return False
-    policy = settings.get("data_entitlements")
-    if not isinstance(policy, Mapping):
-        return False
-    rule = _principal_rule(policy)
-    if rule is None or not _contains(_string_set(rule.get("tools"), allow_wildcard=False), tool_name):
-        return False
-    if tool_name == "datasage_catalog":
-        return _catalog_allowed(rule, args)
-    if tool_name == "datasage_entity_resolve":
-        return _entity_allowed(rule, args)
-    if tool_name == "datasage_query":
-        return _query_allowed(
-            rule,
-            args,
-            validated_requests=validated_requests,
-        )
-    return False
+    allowed = False
+    reason = "invalid_tool"
+    if not isinstance(tool_name, str) or tool_name not in TOOL_NAMES:
+        reason = "invalid_tool"
+    else:
+        policy = settings.get("data_entitlements")
+        if not isinstance(policy, Mapping):
+            reason = "policy_unavailable"
+        else:
+            rule = _principal_rule(policy)
+            if rule is None:
+                reason = "principal_unmatched"
+            elif not _contains(
+                _string_set(rule.get("tools"), allow_wildcard=False), tool_name
+            ):
+                reason = "tool_not_entitled"
+            elif tool_name == "datasage_catalog":
+                allowed = _catalog_allowed(rule, args)
+                reason = "full_scope_allowed" if allowed else "catalog_scope_denied"
+            elif tool_name == "datasage_entity_resolve":
+                allowed = _entity_allowed(rule, args)
+                reason = "full_scope_allowed" if allowed else "entity_scope_denied"
+            elif tool_name == "datasage_query":
+                allowed = _query_allowed(
+                    rule,
+                    args,
+                    validated_requests=validated_requests,
+                )
+                reason = "full_scope_allowed" if allowed else "query_scope_denied"
+    _audit_decision(tool_name, args, allowed=allowed, reason=reason, stage="full")
+    return allowed
 
 
 def guard(tool_name: str, handler: Callable[..., str]) -> Callable[..., str]:

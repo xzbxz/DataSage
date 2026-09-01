@@ -7,14 +7,31 @@
 `.env`、认证信息、状态库、会话、日志、Memory 及其他运行数据属于用户态，
 不得提交，也不得由发行更新覆盖。企微和数据库权限不属于发行流程的修改范围。
 
-当前候选版本：`0.15.0-rc8`。
+当前候选版本：`0.15.0-rc9`。
+
+## 定位与使用边界
+
+DataSage 面向公司经营负责人及出库、销售、应收、财务、库存和目标负责人，
+覆盖 delivery、receipt/collections、receivable、target、inventory 和
+customer_risk 六个经营域。它提供受治理证据的事实、诊断和分级建议，不是
+公共研究、普通写作、用户文件分析器，也不批准或执行业务决策。
+
+WeCom 入口仅声明 `skills`、`clarify` 和 `datasage-query` 三个 toolset，但会话
+访问按业务授权向所有已认证企微成员开放私聊和群聊；DataSage 查询和实体解析
+不施加 Profile 行级过滤。数据库执行仍保持只读和证据治理边界。`skills` 按
+Hermes 原生定义仍包含 `skill_view` 和 `skill_manage`，Skill 写入继续受
+`skills.write_approval` 保护。
+
+建议分为三档：描述性监测、诊断性解释、高影响建议。高影响建议必须带有
+假设、负责审批的人、重大风险和复核点；证据歧义、不可用、过期或不完整时，
+升级给相应指标/域负责人或人工审批人。
 
 ## Hermes 原生专家能力
 
 本 Profile 不再使用 `.no-bundled-skills` 退出 Hermes 内建 Skill 同步。针对精确
 锁定的 Hermes `0.20.5`，`config.yaml` 用完整 `skills.disabled` denylist 只保留
-经过审查的文档、表格、PDF、演示文稿、OCR、引用、会议/文档行动项和周度计划
-能力。内建 Skill 由 Hermes 在下一次 `hermes update` 时同步；需要立即同步时运行
+经过审查的文档、表格、PDF、演示文稿和 OCR 能力。内建 Skill 由 Hermes 在下一次
+`hermes update` 时同步；需要立即同步时运行
 `hermes -p datasage-canary-next skills opt-in --sync`。本仓库不复制或修改这些宿主资产。
 
 升级 Hermes 前必须先运行离线测试。测试会比较新宿主的完整 bundled Skill
@@ -38,7 +55,7 @@ Profile 内的内建 Skill 副本。
 全部实现合并后，在源码根目录为当前载荷生成一个新的、不可覆盖的候选 receipt：
 
 ```powershell
-$candidate = "pending/datasage-v015-rc8-candidate-receipt-$(Get-Date -Format yyyyMMddTHHmmss).json"
+$candidate = "pending/datasage-v015-rc9-candidate-receipt-$(Get-Date -Format yyyyMMddTHHmmss).json"
 python -B build_release_receipt.py --output $candidate
 python -B build_release_receipt.py --verify-candidate
 ```

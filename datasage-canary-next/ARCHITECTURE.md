@@ -1,6 +1,6 @@
 # DataSage Expert 0.15 架构
 
-版本：`0.15.0-rc8`
+版本：`0.15.0-rc9`
 运行基线：Hermes `0.20.5`
 
 ## 唯一目标
@@ -12,6 +12,25 @@
 迁移全部指标到新 DSL。历史冻结标准与实现计划仅供审计，见
 `docs/history/REFACTOR_CHARTER.md` 和 `docs/history/REFACTOR_DESIGN.md`；
 它们不随运行 Profile 发行，也不是当前操作指令。
+
+## 定位、用户与升级线
+
+本 Profile 面向公司经营负责人及出库、销售、应收、财务、库存和目标
+负责人，支持六个受治理经营域：delivery、receipt/collections、receivable、
+target、inventory 和 customer_risk。它提供事实、诊断和证据约束的建议，
+不是通用制度/HR问答、公共研究、用户文件分析器，也不是业务执行系统。
+
+建议按风险分三档：描述性监测（事实与趋势）、诊断性解释（比较、核对和
+明确标注的假设）、高影响建议（授信、客户损失、资源配置或目标承诺）。
+高影响建议必须给出假设、负责审批的人、重大风险和复核点；证据不完整、
+过期、不可用或歧义无法消除时，升级到相应的指标/域负责人或人工审批人，
+不得自动批准、承诺或执行。
+
+WeCom 的 Profile toolset 仅声明 `skills`、`clarify` 和 `datasage-query`；
+所有已认证企微成员均可私聊和群聊，并共享不施加 Profile 行级过滤的受治理
+DataSage 查询面。数据库执行仍由只读 SQL、合同和证据边界约束。Hermes 原生
+`skills` toolset 仍会暴露 `skill_view` 与 `skill_manage`，后者只能依靠现有
+`skills.write_approval` 门禁；这是未修改宿主时保留的残余风险。
 
 ## 四层职责
 

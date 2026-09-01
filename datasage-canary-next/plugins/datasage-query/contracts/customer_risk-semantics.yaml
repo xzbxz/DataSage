@@ -296,10 +296,19 @@ metrics:
           - {column: org_name, alias: org_name}
     answer_note: *answer_note_delivery_receipt_comparison
 
-evidence_axes:
-  exposure: [positive_debt_amount, current_debt_amount]
-  aging_and_overdue: [aging_over_90_amount, overdue_receivable_amount, overdue_days, debt_days]
-  credit_position: [credit_amount_original, credit_days, excess_credit_amount, uncredited_positive_debt_amount]
-  settlement_behavior: [average_settlement_days, maximum_settlement_days, settlement_days_distribution]
-  delivery_and_receipt: [delivery_receipt_comparison]
-  turnover_efficiency: [formal_receivable_turnover_days]
+related_metric_refs:
+  - {domain: receivable, metric: positive_debt_amount}
+  - {domain: receivable, metric: current_debt_amount}
+  - {domain: receivable, metric: aging_over_90_amount}
+  - {domain: receivable, metric: overdue_receivable_amount}
+  - {domain: receivable, metric: overdue_days}
+  - {domain: receivable, metric: debt_days}
+  - {domain: receivable, metric: credit_amount_original}
+  - {domain: receivable, metric: credit_days}
+  - {domain: receivable, metric: excess_credit_amount}
+  - {domain: receivable, metric: uncredited_positive_debt_amount}
+  - {domain: customer_risk, metric: average_settlement_days}
+  - {domain: customer_risk, metric: maximum_settlement_days}
+  - {domain: customer_risk, metric: settlement_days_distribution}
+  - {domain: customer_risk, metric: delivery_receipt_comparison}
+  - {domain: customer_risk, metric: formal_receivable_turnover_days}

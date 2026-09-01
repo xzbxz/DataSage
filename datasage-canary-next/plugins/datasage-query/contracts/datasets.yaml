@@ -125,7 +125,7 @@ datasets:
       - Delivery warehouse flow may join only the barcode fact by whse_id or the return fact by in_whse_id.
 
   vk_dwd.sale_bill_goods_detail_dwd:
-    domains: [delivery, order, target, customer_risk]
+    domains: [delivery, target, customer_risk]
     kind: fact
     grain: one_sales_or_delivery_document_product_color_detail
     primary_key: [goods_detail_id]

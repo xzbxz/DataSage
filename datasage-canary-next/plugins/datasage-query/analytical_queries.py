@@ -8,7 +8,7 @@ aggregated facts compared at a governed dimension.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Mapping
 
 from . import capability_contract, request_contract, sql_identifiers
@@ -80,6 +80,10 @@ def _dataset(table: Any, datasets_contract: Mapping[str, Any]) -> Mapping[str, A
 def _approved(column: Any, dataset: Mapping[str, Any]) -> str:
     if not isinstance(column, str) or column not in set(dataset.get("allowed_columns") or []):
         raise AnalysisQueryError("COLUMN_NOT_ALLOWED", "分析指标引用了未批准字段。")
+    if column.lower() in {
+        str(item).lower() for item in dataset.get("forbidden_columns") or []
+    }:
+        raise AnalysisQueryError("COLUMN_NOT_ALLOWED", "分析指标引用了敏感字段。")
     return column
 
 
@@ -120,6 +124,28 @@ def _time_window(
     return start_date.isoformat(), end_date.isoformat(), {
         "start": start_date.isoformat(), "end": end_date.isoformat(), "source": policy
     }
+
+
+def _require_completed_month_window(
+    start: str,
+    end: str,
+    observed_on: date | None,
+) -> None:
+    """Reject analytical windows that include the current or a future month."""
+
+    try:
+        start_date = date.fromisoformat(start)
+        end_date = date.fromisoformat(end)
+    except ValueError as exc:
+        raise AnalysisQueryError(
+            "INVALID_PLAN", "完整月份分析期间必须使用有效的日期边界。"
+        ) from exc
+    completed_boundary = (observed_on or _business_today()).replace(day=1)
+    if start_date >= end_date or end_date > completed_boundary:
+        raise AnalysisQueryError(
+            "INVALID_PLAN",
+            "该分析指标只接受截至当前业务月之前的完整自然月。",
+        )
 
 
 def _filter_clause(alias: str, column: str, spec: Mapping[str, Any], params: list[Any]) -> str:
@@ -227,13 +253,21 @@ def _order_clause(
 
 
 def _inventory_turnover_period(
-    request: Mapping[str, Any], default_months: int
+    request: Mapping[str, Any],
+    default_months: int,
+    *,
+    valid_measure: str = "cost_amount_rmb",
+    observed_on: date | None = None,
 ) -> tuple[str, list[Any], dict[str, Any]]:
     supplied = request.get("time_range")
     if supplied is None:
+        observed_month = (observed_on or _business_today()).replace(day=1)
+        cutoff_month = observed_month.strftime("%Y-%m")
         bounds_sql = (
             "latest_complete AS ("
-            "SELECT MAX(CASE WHEN `cost_amount_rmb` IS NOT NULL AND `cost_amount_rmb` <> 0 "
+            f"SELECT MAX(CASE WHEN {_quote_column(valid_measure)} IS NOT NULL "
+            f"AND {_quote_column(valid_measure)} <> 0 "
+            f"AND {_quote_column('bill_date')} < %s "
             "THEN `bill_date` END) AS `operating_end_month` FROM {table}), "
             "bounds AS (SELECT "
             f"DATE_FORMAT(DATE_SUB(STR_TO_DATE(CONCAT(`operating_end_month`, '-01'), '%%Y-%%m-%%d'), "
@@ -243,7 +277,7 @@ def _inventory_turnover_period(
             f"INTERVAL {default_months} MONTH), '{_MYSQL_MONTH_FORMAT}') AS `opening_month` "
             "FROM latest_complete)"
         )
-        return bounds_sql, [], {
+        return bounds_sql, [cutoff_month], {
             "source": "latest_complete_accounting_months",
             "months": default_months,
         }
@@ -257,6 +291,9 @@ def _inventory_turnover_period(
         raise AnalysisQueryError("INVALID_PLAN", "库存周转期间必须使用自然月首日边界。") from exc
     if start_date.day != 1 or end_date.day != 1 or start_date >= end_date:
         raise AnalysisQueryError("INVALID_PLAN", "库存周转期间必须使用有效的自然月首日边界。")
+    _require_completed_month_window(
+        start_date.isoformat(), end_date.isoformat(), observed_on
+    )
     operating_end = _add_months(end_date, -1)
     opening = _add_months(start_date, -1)
     bounds_sql = (
@@ -276,6 +313,8 @@ def _inventory_turnover_query(
     datasets_contract: Mapping[str, Any],
     semantics: Mapping[str, Any],
     limit: int,
+    *,
+    observed_on: date | None = None,
 ) -> tuple[str, list[Any], dict[str, Any]]:
     table = metric.get("table")
     dataset = _dataset(table, datasets_contract)
@@ -349,7 +388,16 @@ def _inventory_turnover_query(
     default_months = metric.get("default_complete_months", 12)
     if not isinstance(default_months, int) or not 1 <= default_months <= 120:
         raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "库存周转默认月份定义无效。")
-    bounds_sql, bounds_params, applied_time = _inventory_turnover_period(request, default_months)
+    cost_measure = _approved(metric.get("cost_measure"), dataset)
+    ddp_measure = _approved(metric.get("ddp_measure"), dataset)
+    net_measure = _approved(metric.get("net_delivery_measure"), dataset)
+    period_measure = _approved(metric.get("time_field"), dataset)
+    bounds_sql, bounds_params, applied_time = _inventory_turnover_period(
+        request,
+        default_months,
+        valid_measure=cost_measure,
+        observed_on=observed_on,
+    )
     quoted_table = _quote_table(table)
     bounds_sql = bounds_sql.format(table=quoted_table)
 
@@ -378,10 +426,6 @@ def _inventory_turnover_query(
     final_dimensions = ", ".join(_quote_column(name) for name in output_names)
     final_prefix = (final_dimensions + ", ") if final_dimensions else ""
 
-    cost_measure = _approved(metric.get("cost_measure"), dataset)
-    ddp_measure = _approved(metric.get("ddp_measure"), dataset)
-    net_measure = _approved(metric.get("net_delivery_measure"), dataset)
-    period_measure = _approved(metric.get("time_field"), dataset)
     day_format = "%%Y-%%m-%%d"
     sql = f"""WITH RECURSIVE {bounds_sql},
 expected_months AS (
@@ -395,6 +439,8 @@ global_months AS (
   SELECT DISTINCT s.{_quote_column(period_measure)} AS `snapshot_month`
   FROM {quoted_table} AS s CROSS JOIN bounds AS b
   WHERE s.{_quote_column(period_measure)} BETWEEN b.`opening_month` AND b.`operating_end_month`
+    AND s.{_quote_column(cost_measure)} IS NOT NULL
+    AND s.{_quote_column(cost_measure)} <> 0
 ),
 monthly_data AS (
   SELECT {dimension_prefix}s.{_quote_column(period_measure)} AS `snapshot_month`,
@@ -771,6 +817,7 @@ def _aggregate_components(
     value_alias: str,
     time_bucket: str | None = None,
     bindings: Mapping[str, Any] | None = None,
+    include_null_count: bool = False,
 ) -> tuple[str, list[Any], list[tuple[str, str]], list[tuple[str, str]], list[str]]:
     """Aggregate several signed facts at an identical governed grain.
 
@@ -857,6 +904,11 @@ def _aggregate_components(
             f"{measure_sql} AS {_quote_column('_component_value')}",
             f"COUNT(*) AS {_quote_column('_component_count')}",
         ]
+        if include_null_count:
+            select.append(
+                f"SUM(CASE WHEN {_qualified(alias, measure)} IS NULL THEN 1 ELSE 0 END) "
+                f"AS {_quote_column('_component_null_count')}"
+            )
         group = key_expressions
         sql = (
             f"SELECT {', '.join(select)} FROM {_quote_table(table)} AS {_quote_column(alias)}"
@@ -877,6 +929,11 @@ def _aggregate_components(
         f"SUM({_quote_column('_component_value')}) AS {_quote_column(value_alias)}",
         f"SUM({_quote_column('_component_count')}) AS {_quote_column('__matched_row_count')}",
     ]
+    if include_null_count:
+        outer_select.append(
+            f"SUM({_quote_column('_component_null_count')}) AS "
+            f"{_quote_column('__actual_null_count')}"
+        )
     union_sql = " UNION ALL ".join(component_sql)
     sql = f"SELECT {', '.join(outer_select)} FROM ({union_sql}) AS {_quote_column('components')}"
     if key_aliases:
@@ -918,6 +975,7 @@ def _formal_dso_query(
     period_months = (end_date.year - start_date.year) * 12 + end_date.month - start_date.month
     if period_months < 1:
         raise AnalysisQueryError("INVALID_PLAN", "正式周转天数期间不足一个月。")
+    _require_completed_month_window(start, end, observed_on)
     opening_month = _add_months(start_date, -1).strftime("%Y-%m")
     ending_month = _add_months(end_date, -1).strftime("%Y-%m")
     debt_end = end_date.strftime("%Y-%m")
@@ -1215,6 +1273,7 @@ def _allocated_amount_query(
     path = paths.get(source_path) if isinstance(paths, dict) else None
     if not isinstance(path, dict) or path.get("ledger") != "salesperson_allocation":
         raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "分摊净额缺少业务员分摊来源。")
+    _ensure_available(path)
 
     allowed = set(path.get("allowed_dimensions") or [])
     requested_codes = [*selected, *request_filters.keys()]
@@ -1323,6 +1382,11 @@ def _target_completion_query(
             raise AnalysisQueryError("INVALID_PLAN", "月粒度目标必须使用自然月首日边界。")
         target_start, target_end = start_date.strftime("%Y-%m"), end_date.strftime("%Y-%m")
 
+    actual_start = start
+    actual_end = min(
+        date.fromisoformat(end), query_observed_on + timedelta(days=1)
+    ).isoformat()
+
     target_keys, target_outputs = _mapping_parts(selected, mappings, "target", target_dataset)
     if time_bucket == "month":
         target_keys = [(_PERIOD_KEY, "period"), *target_keys]
@@ -1354,6 +1418,7 @@ def _target_completion_query(
         time_field: str,
         monthly_source: bool = False,
         target_measure_with_null_state: bool = False,
+        actual_measure_with_null_state: bool = False,
     ) -> str:
         period_expression = (
             _qualified(alias, time_field)
@@ -1378,6 +1443,11 @@ def _target_completion_query(
                 f"SUM(CASE WHEN {_qualified(alias, measure)} IS NULL THEN 1 ELSE 0 END) "
                 f"AS {_quote_column('__target_null_count')}"
             )
+        if actual_measure_with_null_state:
+            select.append(
+                f"SUM(CASE WHEN {_qualified(alias, measure)} IS NULL THEN 1 ELSE 0 END) "
+                f"AS {_quote_column('__actual_null_count')}"
+            )
         group = key_expressions
         return (
             f"SELECT {', '.join(select)} FROM {_quote_table(table)} AS {_quote_column(alias)} "
@@ -1401,12 +1471,13 @@ def _target_completion_query(
             actual,
             selected,
             request_filters,
-            start,
-            end,
+            actual_start,
+            actual_end,
             datasets_contract,
             "actual_amount_rmb",
             time_bucket,
             bindings,
+            include_null_count=True,
         )
     else:
         actual_table = actual.get("table")
@@ -1433,7 +1504,7 @@ def _target_completion_query(
             f"{_qualified('a', actual_time)} >= %s",
             f"{_qualified('a', actual_time)} < %s",
         ]
-        actual_params += [start, end]
+        actual_params += [actual_start, actual_end]
         actual_sql = aggregate(
             "a",
             str(actual_table),
@@ -1443,6 +1514,7 @@ def _target_completion_query(
             actual_where,
             "actual_amount_rmb",
             time_field=actual_time,
+            actual_measure_with_null_state=True,
         )
         actual_tables = [str(actual_table)]
     if [alias for _, alias in target_keys] != [alias for _, alias in actual_keys] or [
@@ -1488,6 +1560,7 @@ def _target_completion_query(
     target_rows = "COALESCE(t.__matched_row_count, 0)"
     actual_rows = "COALESCE(a.__matched_row_count, 0)"
     target_nulls = "COALESCE(t.__target_null_count, 0)"
+    actual_nulls = "COALESCE(a.__actual_null_count, 0)"
     if time_bucket == "month":
         current_period = query_observed_on.strftime("%Y-%m")
         period_state = (
@@ -1519,18 +1592,22 @@ def _target_completion_query(
     )
     actual_state = (
         f"CASE WHEN {period_state} IN ('not_started', 'includes_future') THEN 'not_started' "
-        f"WHEN {actual_rows} = 0 THEN 'missing' ELSE 'reported' END"
+        f"WHEN {actual_rows} = 0 THEN 'missing' "
+        f"WHEN {actual_nulls} > 0 THEN 'incomplete' ELSE 'reported' END"
     )
     actual_output = (
-        f"CASE WHEN {period_state} IN ('not_started', 'includes_future') THEN NULL ELSE {actual_value} END"
+        f"CASE WHEN {period_state} IN ('not_started', 'includes_future') "
+        f"OR {actual_nulls} > 0 THEN NULL ELSE {actual_value} END"
     )
     completion = (
         f"CASE WHEN {period_state} IN ('not_started', 'includes_future') "
-        f"OR {target_rows} = 0 OR {target_nulls} > 0 OR {target_value} = 0 THEN NULL "
+        f"OR {target_rows} = 0 OR {target_nulls} > 0 OR {actual_nulls} > 0 "
+        f"OR {target_value} = 0 THEN NULL "
         f"ELSE {actual_value} / {target_value} END"
     )
     gap = (
-        f"CASE WHEN {period_state} IN ('not_started', 'includes_future') OR {target_nulls} > 0 "
+        f"CASE WHEN {period_state} IN ('not_started', 'includes_future') "
+        f"OR {target_nulls} > 0 OR {actual_nulls} > 0 "
         f"THEN NULL ELSE {target_value} - {actual_value} END"
     )
     select = [
@@ -1599,6 +1676,7 @@ def build_analytical_metric_query(
 ) -> tuple[str, list[Any], dict[str, Any]]:
     query_observed_on = observed_on or _business_today()
     kind = metric.get("query_kind")
+    _ensure_available(metric)
     if kind == "settlement_days":
         return _settlement_query(
             request,
@@ -1642,5 +1720,12 @@ def build_analytical_metric_query(
             observed_on=query_observed_on,
         )
     if kind == "inventory_turnover_days":
-        return _inventory_turnover_query(request, metric, datasets_contract, semantics, limit)
+        return _inventory_turnover_query(
+            request,
+            metric,
+            datasets_contract,
+            semantics,
+            limit,
+            observed_on=query_observed_on,
+        )
     raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "分析指标类型不受支持。")

@@ -34,6 +34,16 @@ OFFICIAL_EXPORT_FORMAT = "hermes_sessions_export_jsonl"
 CONTEXT_FINGERPRINT_SCHEMA = "datasage-context-binding-fingerprint/v1"
 MODEL_SOURCE_REFERENCE_SCHEMA = "datasage-query-model-source-reference/v1"
 LEGACY_SOURCE_EVIDENCE_SCHEMA = "datasage-query-source-evidence/v1"
+DECISION_QUALITY_DIMENSIONS = (
+    "conclusion_clarity",
+    "decision_relevance",
+    "actionability",
+    "evidence_basis",
+    "assumptions",
+    "material_risks",
+    "validation_steps",
+)
+DECISION_QUALITY_SCORE_MAX = 2
 LEGACY_SOURCE_EVIDENCE_FIELDS = {
     "schema",
     "identity_sha256",
@@ -237,17 +247,29 @@ def _watermark(
 
 def _json_value(raw: Any, label: str) -> Any:
     if isinstance(raw, (dict, list)):
+        # Tool calls/results may arrive as already-decoded values from an
+        # in-process Hermes result.  Re-serializing through the canonical
+        # encoder keeps non-finite values from entering the normalized plan.
+        _canonical(raw)
         return raw
     if not isinstance(raw, str) or not raw or len(raw) > MAX_JSON_CHARS:
         raise ValueError(f"{label} is missing or exceeds the JSON size limit")
     try:
-        return json.loads(raw)
-    except json.JSONDecodeError as exc:
+        return json.loads(
+            raw,
+            object_pairs_hook=_strict_object,
+            parse_constant=_reject_json_constant,
+        )
+    except (json.JSONDecodeError, ValueError) as exc:
         match = _HOST_TOOL_GUARDRAIL_SUFFIX.search(raw)
         if match is not None:
             try:
-                return json.loads(raw[: match.start()])
-            except json.JSONDecodeError:
+                return json.loads(
+                    raw[: match.start()],
+                    object_pairs_hook=_strict_object,
+                    parse_constant=_reject_json_constant,
+                )
+            except (json.JSONDecodeError, ValueError):
                 pass
         raise ValueError(f"{label} is not valid JSON") from exc
 
@@ -255,6 +277,14 @@ def _json_value(raw: Any, label: str) -> Any:
 def _ordered_add(target: list[str], value: Any) -> None:
     if isinstance(value, str) and value and value not in target:
         target.append(value)
+
+
+def _ordered_pair_add(target: list[dict[str, str]], domain: Any, metric: Any) -> None:
+    if not isinstance(domain, str) or not domain or not isinstance(metric, str) or not metric:
+        return
+    pair = {"domain": domain, "metric": metric}
+    if pair not in target:
+        target.append(pair)
 
 
 def _scalars(value: Any) -> list[Any]:
@@ -512,8 +542,7 @@ def _applied_time_matches_live_request(
             for candidate in candidates
             if candidate.get("start") == requested.get("start")
             and candidate.get("end") == requested.get("end")
-            and isinstance(candidate.get("source"), str)
-            and bool(candidate["source"])
+            and candidate.get("source") == "explicit"
         ]
         if not matching:
             return False
@@ -576,12 +605,63 @@ def _has_finite_business_fact(facts: dict[str, Any]) -> bool:
     return False
 
 
+def _sealed_claims_match_rows(
+    result: dict[str, Any],
+    rows: list[Any],
+    *,
+    request: dict[str, Any],
+    expected_metric_ref: str,
+) -> bool:
+    """Require the model-visible rows to retain their sealed claim bindings."""
+
+    if not isinstance(rows, list):
+        return False
+    claims = result.get("claim_ledger")
+    if not isinstance(claims, list) or len(claims) != len(rows):
+        return False
+    claim_by_id: dict[str, dict[str, Any]] = {}
+    for claim in claims:
+        if not isinstance(claim, dict):
+            return False
+        claim_id = claim.get("claim_id")
+        claim_seal = claim.get("claim_seal")
+        if (
+            not isinstance(claim_id, str)
+            or re.fullmatch(r"claim_[0-9a-f]{20}", claim_id) is None
+            or claim_id in claim_by_id
+            or not isinstance(claim_seal, str)
+            or re.fullmatch(r"sha256_[0-9a-f]{64}", claim_seal) is None
+            or claim.get("request_id") != request.get("request_id")
+            or claim.get("metric_ref") != expected_metric_ref
+            or not isinstance(claim.get("scope_fingerprint"), str)
+            or not claim["scope_fingerprint"]
+            or not isinstance(claim.get("projection_fingerprint"), str)
+            or not claim["projection_fingerprint"]
+            or not isinstance(claim.get("period"), dict)
+            or type(claim.get("source_truncated")) is not bool
+            or claim.get("source_truncated") is not result.get("truncated")
+        ):
+            return False
+        claim_by_id[claim_id] = claim
+    for row in rows:
+        if not isinstance(row, dict):
+            return False
+        claim = claim_by_id.get(row.get("claim_id"))
+        if claim is None:
+            return False
+        for key in ("dimensions", "facts", "states", "allowed_relations", "unit", "currency"):
+            if claim.get(key) != row.get(key):
+                return False
+    return True
+
+
 def _has_substantive_live_query_evidence(
     result: dict[str, Any],
     *,
     request: dict[str, Any] | None,
     expected_observed_on: date | None,
     wire_version: Any,
+    require_sealed_claims: bool = False,
 ) -> bool:
     if result.get("status") != "success":
         return False
@@ -603,8 +683,7 @@ def _has_substantive_live_query_evidence(
         or result.get("business_metric_ref") != expected_metric_ref
         or not isinstance(result.get("business_metric_label"), str)
         or not result["business_metric_label"]
-        or result.get("data_state")
-        not in {"complete", "rows", "zero", "truncated", "incomplete"}
+        or result.get("data_state") not in {"complete", "rows", "zero"}
         or type(result.get("truncated")) is not bool
         or not _applied_time_matches_live_request(
             result.get("applied_time_range"), request, expected_observed_on
@@ -622,6 +701,13 @@ def _has_substantive_live_query_evidence(
         "unit",
         "currency",
     }
+    if require_sealed_claims and not _sealed_claims_match_rows(
+        result,
+        rows,
+        request=request,
+        expected_metric_ref=expected_metric_ref,
+    ):
+        return False
     return (
         isinstance(rows, list)
         and len(rows) == row_count
@@ -871,9 +957,12 @@ def _normalize(
     expected_business_database_ref_sha256: str | None = None,
     typed_context_bindings: bool = False,
     expected_observed_on: date | None = None,
+    require_sealed_claims: bool = False,
+    require_result_status_consistency: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     domains: list[str] = []
     metrics: list[str] = []
+    domain_metric_pairs: list[dict[str, str]] = []
     dimensions: list[str] = []
     operations: list[str] = []
     time_tokens: list[str] = []
@@ -941,6 +1030,11 @@ def _normalize(
                 if isinstance(request, dict):
                     _ordered_add(domains, request.get("domain"))
                     _ordered_add(metrics, request.get("metric"))
+                    _ordered_pair_add(
+                        domain_metric_pairs,
+                        request.get("domain"),
+                        request.get("metric"),
+                    )
         elif name == "datasage_entity_resolve":
             if (
                 isinstance(args.get("token"), str)
@@ -952,6 +1046,11 @@ def _normalize(
                 _ordered_add(receipts, "entity_resolution")
             _ordered_add(domains, args.get("domain"))
             _ordered_add(metrics, args.get("metric"))
+            _ordered_pair_add(
+                domain_metric_pairs,
+                args.get("domain"),
+                args.get("metric"),
+            )
             for entity_type in args.get("entity_types") or []:
                 _ordered_add(dimensions, entity_type)
             for candidate in payload.get("candidates") or []:
@@ -975,6 +1074,11 @@ def _normalize(
                         "live fixture business database source binding changed"
                     )
             query_attempted = True
+            # A successful child result cannot repair a failed top-level
+            # envelope.  Keeping such a payload eligible would let a partial
+            # or malformed response masquerade as a complete query.
+            if require_result_status_consistency and payload.get("status") != "success":
+                request_result_integrity = False
             requests = args.get("requests") or []
             if len(requests) > 1:
                 _ordered_add(operations, "parallel_evidence")
@@ -983,6 +1087,11 @@ def _normalize(
                     continue
                 _ordered_add(domains, request.get("domain"))
                 _ordered_add(metrics, request.get("metric"))
+                _ordered_pair_add(
+                    domain_metric_pairs,
+                    request.get("domain"),
+                    request.get("metric"),
+                )
                 for dimension in request.get("dimensions") or []:
                     _ordered_add(dimensions, dimension)
                 for key, digest in _filter_fingerprints(
@@ -1096,6 +1205,7 @@ def _normalize(
                                 request=request_by_id.get(request_id),
                                 expected_observed_on=expected_observed_on,
                                 wire_version=payload.get("model_wire_version"),
+                                require_sealed_claims=require_sealed_claims,
                             )
                         ):
                             substantive_successful_ids.add(request_id)
@@ -1162,6 +1272,10 @@ def _normalize(
     ):
         request_result_integrity = False
         _ordered_add(error_codes, "TRANSCRIPT_REQUEST_RESULT_MISMATCH")
+    if not request_result_integrity:
+        # A malformed top-level envelope cannot lend substantive evidence even
+        # when one nested result happens to look successful.
+        substantive_successful_ids.clear()
     if request_result_integrity:
         for request_id in requested_ids:
             if request_id in substantive_successful_ids and request_id in coverage_ids:
@@ -1225,6 +1339,7 @@ def _normalize(
         {
             "domains": domains,
             "metrics": metrics,
+            "domain_metric_pairs": domain_metric_pairs,
             "dimensions": dimensions,
             "operations": operations,
             "time_semantics": time_semantics,
@@ -1261,7 +1376,8 @@ def _plan_trace(value: Any) -> dict[str, Any] | None:
         "schema", "domains", "metrics", "dimensions", "operations",
         "time_semantics", "context_action", "context_bindings",
     }
-    if not isinstance(value, dict) or set(value) != required:
+    optional = {"domain_metric_pairs"}
+    if not isinstance(value, dict) or set(value).difference(required | optional) or not required.issubset(value):
         raise ValueError("plan_trace has invalid keys")
     if value.get("schema") != PLAN_TRACE_SCHEMA:
         raise ValueError(f"plan_trace schema must be {PLAN_TRACE_SCHEMA}")
@@ -1320,7 +1436,26 @@ def _plan_trace(value: Any) -> dict[str, Any] | None:
         for key, item in bindings.items()
     ):
         raise ValueError("plan_trace.context_bindings is invalid")
-    return {key: value[key] for key in required if key != "schema"}
+    if "domain_metric_pairs" in value:
+        pairs = value["domain_metric_pairs"]
+        if (
+            not isinstance(pairs, list)
+            or any(
+                not isinstance(pair, dict)
+                or set(pair) != {"domain", "metric"}
+                or not isinstance(pair["domain"], str)
+                or not pair["domain"]
+                or not isinstance(pair["metric"], str)
+                or not pair["metric"]
+                for pair in pairs
+            )
+            or len({(pair["domain"], pair["metric"]) for pair in pairs}) != len(pairs)
+        ):
+            raise ValueError("plan_trace.domain_metric_pairs is invalid")
+    result = {key: value[key] for key in required if key != "schema"}
+    if "domain_metric_pairs" in value:
+        result["domain_metric_pairs"] = value["domain_metric_pairs"]
+    return result
 
 
 def _validate_performance_scorecard_trace(
@@ -1366,6 +1501,25 @@ def _validate_profile_binding(value: Any) -> dict[str, str]:
     return dict(value)
 
 
+def _validate_decision_quality(value: Any) -> dict[str, int]:
+    """Validate the reviewer-owned expert-value rubric without scoring it."""
+
+    if not isinstance(value, dict) or set(value) != set(DECISION_QUALITY_DIMENSIONS):
+        raise ValueError(
+            "decision_quality must contain exactly the seven governed dimensions"
+        )
+    result: dict[str, int] = {}
+    for dimension in DECISION_QUALITY_DIMENSIONS:
+        score = value.get(dimension)
+        if type(score) is not int or score < 0 or score > DECISION_QUALITY_SCORE_MAX:
+            raise ValueError(
+                f"decision_quality.{dimension} must be an integer in "
+                f"0..{DECISION_QUALITY_SCORE_MAX}"
+            )
+        result[dimension] = score
+    return result
+
+
 def _review(
     value: Any,
     *,
@@ -1385,7 +1539,7 @@ def _review(
     }
     if (
         not isinstance(value, dict)
-        or set(value) - (required | live_fields | {"plan_trace"})
+        or set(value) - (required | live_fields | {"plan_trace", "decision_quality"})
         or not required.issubset(value)
         or any(field in expected and field not in value for field in live_fields)
     ):
@@ -1412,17 +1566,18 @@ def _review(
             raise ValueError(f"review assertion {field} does not match transcript binding")
     trace = _plan_trace(value.get("plan_trace"))
     binding = {field: value[field] for field in expected}
-    return (
-        list(labels),
-        {
+    reviewed = {
             "status": "reviewed",
             "reviewer_id_sha256": _sha256(value["reviewer_id"]),
             "assertion_sha256": _sha256(value),
             "binding_sha256": _sha256(binding),
             "plan_trace_sha256": _sha256(value["plan_trace"]) if trace else None,
-        },
-        trace,
-    )
+        }
+    if "decision_quality" in value:
+        reviewed["decision_quality"] = _validate_decision_quality(
+            value["decision_quality"]
+        )
+    return (list(labels), reviewed, trace)
 
 
 def _turn_messages(
@@ -1500,10 +1655,14 @@ def adapt(
     live_fixture = bindings.get("schema") == LIVE_BINDING_SCHEMA
     allowed_binding_keys = {
         "schema", "captured_at", "transcript_source", "profile_artifact",
-        "session_export_sha256", "turns",
+        "session_export_sha256", "turns", "integrity_policy",
     }
     if set(bindings) - allowed_binding_keys:
         raise ValueError("bindings contain unknown keys")
+    integrity_policy = bindings.get("integrity_policy")
+    if integrity_policy is not None and integrity_policy != "datasage-live-integrity/v1":
+        raise ValueError("bindings integrity_policy is unsupported")
+    strict_live_integrity = live_fixture and integrity_policy == "datasage-live-integrity/v1"
     profile = _validate_profile_binding(bindings.get("profile_artifact"))
     transcript_source = bindings.get("transcript_source", "wecom")
     allowed_transcript_sources = {"cli", "wecom", "datasage-trusted-replay"}
@@ -1619,6 +1778,8 @@ def adapt(
             ),
             typed_context_bindings=live_fixture,
             expected_observed_on=captured_observed_on,
+            require_sealed_claims=strict_live_integrity,
+            require_result_status_consistency=strict_live_integrity,
         )
         signature = _sha256({key: value for key, value in plan.items() if key != "context_action"})
         prior = previous.get(conversation)
@@ -1672,7 +1833,15 @@ def adapt(
                     raise ValueError(
                         f"review plan_trace.{field} contradicts persisted tool plan"
                     )
+            persisted_pairs = plan.get("domain_metric_pairs", [])
+            reviewed_pairs = trace.get("domain_metric_pairs")
+            if reviewed_pairs is not None and reviewed_pairs != persisted_pairs:
+                raise ValueError(
+                    "review plan_trace.domain_metric_pairs contradicts persisted tool plan"
+                )
             plan = dict(trace)
+            if reviewed_pairs is None and persisted_pairs:
+                plan["domain_metric_pairs"] = persisted_pairs
             if live_fixture:
                 _validate_live_context_bindings(plan.get("context_bindings"))
             action = plan["context_action"]
@@ -1736,6 +1905,8 @@ def adapt(
             "conclusion_review": review,
             "evidence": evidence,
         }
+        if "decision_quality" in review:
+            candidate_row["decision_quality"] = review["decision_quality"]
         candidate_rows.append(candidate_row)
         receipt_turns.append(
             {
@@ -1904,7 +2075,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bindings", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
-    bindings = json.loads(args.bindings.read_text(encoding="utf-8"))
+    bindings = json.loads(
+        args.bindings.read_text(encoding="utf-8"),
+        object_pairs_hook=_strict_object,
+        parse_constant=_reject_json_constant,
+    )
     candidate = adapt(args.session_export.read_bytes(), bindings)
     if not verify_receipt(candidate):
         raise RuntimeError("generated canary receipt failed self-verification")

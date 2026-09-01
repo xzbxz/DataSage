@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from pathlib import Path
 import re
+import stat
+from types import MappingProxyType
 from typing import Any
 import uuid
 
 from agent.secret_scope import get_secret
 
-from . import settings
+from . import contract_store, settings
 
 
 class DatabaseSecurityError(Exception):
@@ -39,6 +42,140 @@ _DATABASE_SECURITY_BOOL_SETTINGS = (
     "require_tls",
     "canary_accept_existing_account",
 )
+
+
+def _is_reparse(path: Path) -> bool:
+    try:
+        metadata = path.lstat()
+    except (OSError, ValueError) as exc:
+        raise DatabaseSecurityError(
+            "DATABASE_PATH_UNAVAILABLE",
+            "受保护路径不可用。",
+        ) from exc
+    if stat.S_ISLNK(metadata.st_mode):
+        return True
+    return bool(
+        getattr(metadata, "st_file_attributes", 0)
+        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    )
+
+
+def _approved_path_roots(profile_root: Path | None = None) -> tuple[Path, ...]:
+    """Return operator-approved roots for profile-owned security material."""
+
+    roots: list[Path] = []
+    configured = settings.get_list("mysql_approved_path_roots")
+    for raw in configured:
+        candidate = Path(raw).expanduser()
+        if not candidate.is_absolute():
+            raise DatabaseSecurityError(
+                "DATABASE_PATH_ROOT_INVALID",
+                "数据库安全路径根必须是绝对路径。",
+            )
+        roots.append(candidate)
+    active = (
+        Path(profile_root).expanduser()
+        if profile_root is not None
+        else contract_store.profile_root()
+    )
+    if not active.is_absolute():
+        raise DatabaseSecurityError(
+            "DATABASE_PATH_ROOT_INVALID",
+            "当前 Profile 路径必须是绝对路径。",
+        )
+    roots.insert(0, active)
+    return tuple(roots)
+
+
+def _safe_path_in_approved_root(
+    value: str | Path,
+    *,
+    profile_root: Path | None = None,
+    require_file: bool = True,
+) -> Path:
+    """Resolve a path only after checking every lexical component."""
+
+    raw_path = Path(value).expanduser()
+    if not raw_path.is_absolute():
+        raise DatabaseSecurityError(
+            "DATABASE_PATH_OUTSIDE_APPROVED_ROOT",
+            "数据库安全路径必须是绝对路径。",
+        )
+    lexical = raw_path.absolute()
+    for raw_root in _approved_path_roots(profile_root):
+        root = raw_root.absolute()
+        try:
+            relative = lexical.relative_to(root)
+        except ValueError:
+            continue
+        current = root
+        try:
+            if _is_reparse(current):
+                raise DatabaseSecurityError(
+                    "DATABASE_PATH_REPARSE_FORBIDDEN",
+                    "数据库安全路径根不能是符号链接或 reparse point。",
+                )
+            for part in relative.parts:
+                current = current / part
+                if _is_reparse(current):
+                    raise DatabaseSecurityError(
+                        "DATABASE_PATH_REPARSE_FORBIDDEN",
+                        "数据库安全路径不能穿过符号链接或 reparse point。",
+                    )
+            resolved_root = root.resolve(strict=True)
+            resolved = lexical.resolve(strict=True)
+        except DatabaseSecurityError:
+            raise
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise DatabaseSecurityError(
+                "DATABASE_PATH_UNAVAILABLE",
+                "数据库安全路径不可用。",
+            ) from exc
+        try:
+            resolved.relative_to(resolved_root)
+        except ValueError as exc:
+            raise DatabaseSecurityError(
+                "DATABASE_PATH_OUTSIDE_APPROVED_ROOT",
+                "数据库安全路径超出批准根目录。",
+            ) from exc
+        if require_file and not resolved.is_file():
+            raise DatabaseSecurityError(
+                "DATABASE_PATH_UNAVAILABLE",
+                "数据库安全文件不存在或不可读。",
+            )
+        return resolved
+    raise DatabaseSecurityError(
+        "DATABASE_PATH_OUTSIDE_APPROVED_ROOT",
+        "数据库安全路径超出批准根目录。",
+    )
+
+
+def _server_uuid_allowlist() -> tuple[set[str], bool]:
+    """Return a validated optional UUID allowlist and whether it was set."""
+
+    configured = settings.get_list("mysql_allowed_server_uuids")
+    if not configured:
+        # Accept the descriptive alias during migration, while the manifest's
+        # canonical key remains mysql_allowed_server_uuids.
+        configured = settings.get_list("mysql_server_uuid_allowlist")
+    if not configured:
+        return set(), False
+    result: set[str] = set()
+    for raw in configured:
+        try:
+            parsed = uuid.UUID(raw.strip())
+        except (AttributeError, ValueError) as exc:
+            raise DatabaseSecurityError(
+                "DATABASE_SERVER_UUID_ALLOWLIST_INVALID",
+                "数据库 server UUID allowlist 无效。",
+            ) from exc
+        if not _mysql_server_uuid_has_sufficient_entropy(parsed):
+            raise DatabaseSecurityError(
+                "DATABASE_SERVER_UUID_ALLOWLIST_INVALID",
+                "数据库 server UUID allowlist 无效。",
+            )
+        result.add(str(parsed).casefold())
+    return result, True
 
 
 def _database_security_policy() -> dict[str, bool]:
@@ -109,9 +246,24 @@ def mysql_tls_policy(
     }
 
 
-def mysql_tls_kwargs() -> dict[str, Any]:
+def mysql_tls_kwargs(
+    *,
+    policy: Mapping[str, Any] | None = None,
+    profile_root: Path | None = None,
+) -> dict[str, Any]:
     """Return public PyMySQL arguments for certificate and identity checks."""
-    policy = mysql_tls_policy()
+    if policy is None:
+        policy = mysql_tls_policy(profile_root=profile_root)
+    if (
+        not isinstance(policy, Mapping)
+        or not isinstance(policy.get("tls_required"), bool)
+        or not isinstance(policy.get("tls_configured"), bool)
+    ):
+        raise DatabaseSecurityError(
+            "DATABASE_TRANSPORT_POLICY_INVALID",
+            "数据库 TLS policy snapshot 无效。",
+        )
+    policy = MappingProxyType(dict(policy))
     ca_value = (get_secret("DATA_QUERY_MYSQL_SSL_CA", "") or "").strip()
     if not ca_value:
         if policy["tls_required"]:
@@ -119,13 +271,34 @@ def mysql_tls_kwargs() -> dict[str, Any]:
                 "DATABASE_TLS_CONFIGURATION_MISSING",
                 "当前模式要求数据库 TLS，必须配置 DATA_QUERY_MYSQL_SSL_CA。",
             )
+        if policy["tls_configured"]:
+            raise DatabaseSecurityError(
+                "DATABASE_TRANSPORT_POLICY_CHANGED",
+                "数据库 TLS policy snapshot 与当前配置不一致。",
+            )
         return {"ssl_disabled": True}
-    ca_path = Path(ca_value).expanduser().resolve()
-    if not ca_path.is_file():
+    if not policy["tls_configured"]:
         raise DatabaseSecurityError(
-            "DATABASE_TLS_CA_UNAVAILABLE",
-            "数据库 TLS CA 文件不存在或不可读。",
+            "DATABASE_TRANSPORT_POLICY_CHANGED",
+            "数据库 TLS policy snapshot 与当前配置不一致。",
         )
+    try:
+        ca_path = _safe_path_in_approved_root(
+            ca_value,
+            profile_root=profile_root,
+            require_file=True,
+        )
+    except DatabaseSecurityError as exc:
+        if exc.code in {
+            "DATABASE_PATH_UNAVAILABLE",
+            "DATABASE_PATH_OUTSIDE_APPROVED_ROOT",
+            "DATABASE_PATH_REPARSE_FORBIDDEN",
+        }:
+            raise DatabaseSecurityError(
+                "DATABASE_TLS_CA_UNAVAILABLE",
+                "数据库 TLS CA 文件不存在、不可读或不在批准根目录。",
+            ) from exc
+        raise
     return {
         "ssl_ca": str(ca_path),
         "ssl_verify_cert": True,
@@ -266,11 +439,61 @@ def verify_mysql_source_identity(
             "DATABASE_SOURCE_IDENTITY_INVALID",
             "Database source identity is invalid.",
         )
+    allowed_server_uuids, allowlist_configured = _server_uuid_allowlist()
+    security_policy = _database_security_policy()
+    observed_uuid = str(parsed_uuid).casefold()
+    if security_policy["production_mode"] and not allowlist_configured:
+        raise DatabaseSecurityError(
+            "DATABASE_SERVER_UUID_ALLOWLIST_REQUIRED",
+            "生产模式必须配置数据库 server UUID allowlist。",
+        )
+    if allowed_server_uuids and observed_uuid not in allowed_server_uuids:
+        raise DatabaseSecurityError(
+            "DATABASE_SERVER_UUID_NOT_ALLOWED",
+            "数据库 server identity 不在批准 allowlist 中。",
+        )
     configured_fields = ("host", "port", "database", "user")
     if any(not str(configured_identity.get(field) or "").strip() for field in configured_fields):
         raise DatabaseSecurityError(
             "DATABASE_SOURCE_IDENTITY_INVALID",
             "Configured database identity is incomplete.",
+        )
+    try:
+        configured_port = int(str(configured_identity["port"]).strip())
+        observed_port = int(str(row["server_port"]).strip())
+    except (TypeError, ValueError) as exc:
+        raise DatabaseSecurityError(
+            "DATABASE_SOURCE_IDENTITY_INVALID",
+            "Database source port identity is invalid.",
+        ) from exc
+    if not 1 <= configured_port <= 65535 or observed_port != configured_port:
+        raise DatabaseSecurityError(
+            "DATABASE_SOURCE_IDENTITY_MISMATCH",
+            "数据库 server port 与配置不一致。",
+        )
+
+    def _mysql_account_name(value: Any) -> str:
+        text = str(value or "").strip()
+        # CURRENT_USER() is normally returned as user@host.  Only the account
+        # name is compared with the configured login; the host part is a
+        # server-issued authentication detail and is retained in the digest.
+        if "@" in text:
+            text = text.split("@", 1)[0]
+        return text.strip("`'\" ").casefold()
+
+    configured_database = str(configured_identity["database"]).strip().casefold()
+    observed_database = str(row["database_name"]).strip().casefold()
+    configured_user = str(configured_identity["user"]).strip().casefold()
+    observed_user = _mysql_account_name(row["authenticated_user"])
+    if observed_database != configured_database:
+        raise DatabaseSecurityError(
+            "DATABASE_SOURCE_IDENTITY_MISMATCH",
+            "数据库 schema 与配置不一致。",
+        )
+    if observed_user != configured_user:
+        raise DatabaseSecurityError(
+            "DATABASE_SOURCE_IDENTITY_MISMATCH",
+            "数据库认证用户与配置不一致。",
         )
     transport_mode = tls_evidence.get("transport_mode")
     transport_verified = bool(
@@ -278,6 +501,7 @@ def verify_mysql_source_identity(
         and tls_evidence.get("tls_verified") is True
         and tls_evidence.get("transport_encrypted") is True
         or transport_mode == "plaintext"
+        and tls_evidence.get("tls_required") is not True
         and tls_evidence.get("tls_configured") is False
         and tls_evidence.get("insecure_transport_allowed") is True
     )
@@ -347,9 +571,24 @@ def confirm_mysql_read_only_transaction(connection: Any) -> dict[str, Any]:
     return validate_mysql_source_evidence(evidence, require_read_only=True)
 
 
-def verify_mysql_tls(connection: Any) -> dict[str, Any]:
-    """Prove configured TLS, or explicitly report permitted plaintext use."""
-    policy = mysql_tls_policy()
+def verify_mysql_tls(
+    connection: Any,
+    *,
+    policy: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Prove TLS using one immutable policy snapshot."""
+    if policy is None:
+        policy = mysql_tls_policy()
+    if (
+        not isinstance(policy, Mapping)
+        or not isinstance(policy.get("tls_required"), bool)
+        or not isinstance(policy.get("tls_configured"), bool)
+    ):
+        raise DatabaseSecurityError(
+            "DATABASE_TRANSPORT_POLICY_INVALID",
+            "数据库 TLS policy snapshot 无效。",
+        )
+    policy = MappingProxyType(dict(policy))
     with connection.cursor() as cursor:
         cursor.execute("SHOW STATUS LIKE 'Ssl_cipher'")
         cipher = _complete_status_value(cursor)
@@ -360,6 +599,11 @@ def verify_mysql_tls(connection: Any) -> dict[str, Any]:
             raise DatabaseSecurityError(
                 "DATABASE_TRANSPORT_POLICY_MISMATCH",
                 "连接传输状态与显式明文策略不一致。",
+            )
+        if policy["tls_required"]:
+            raise DatabaseSecurityError(
+                "DATABASE_TLS_CONFIGURATION_MISSING",
+                "当前模式要求数据库 TLS，拒绝明文数据库连接。",
             )
         return {
             "tls_required": policy["tls_required"],
@@ -424,8 +668,14 @@ def verify_mysql_read_only_grants(
         )
     if canary_existing_account_accepted(profile_root=profile_root):
         observed_privileges: set[str] = set()
+        observed_read_only: set[str] = set()
         observed_scopes: set[str] = set()
         for grant in grants:
+            if re.search(r"\bWITH\s+GRANT\s+OPTION\b", grant, re.IGNORECASE):
+                raise DatabaseSecurityError(
+                    "DATABASE_GRANT_OPTION_FORBIDDEN",
+                    "数据库账号具有转授权能力，已拒绝查询。",
+                )
             match = re.match(
                 r"^GRANT\s+(.+?)\s+ON\s+"
                 r"((?:`[^`]+`|[^.\s]+)\.(?:`[^`]+`|[^\s]+))\s+TO\s+",
@@ -437,17 +687,41 @@ def verify_mysql_read_only_grants(
                     "DATABASE_GRANT_FORMAT_INVALID",
                     "The database grant format could not be audited.",
                 )
-            observed_privileges.update(
+            privileges = {
                 item.strip().upper()
                 for item in match.group(1).split(",")
                 if item.strip()
-            )
-            observed_scopes.add(
-                match.group(2).replace("`", "").casefold()
+            }
+            if (
+                "ALL" in privileges
+                or "ALL PRIVILEGES" in privileges
+                or "FILE" in privileges
+                or not privileges <= _READ_ONLY_PRIVILEGES
+            ):
+                raise DatabaseSecurityError(
+                    "DATABASE_WRITE_PRIVILEGE_FORBIDDEN",
+                    "数据库账号包含非只读权限，已拒绝查询。",
+                )
+            scope = match.group(2).replace("`", "").casefold()
+            # Canary may relax the configured object allowlist (for example,
+            # permit a reviewed schema.* scope), but a global *.* grant is
+            # still outside the approved object boundary.
+            if scope == "*.*" and privileges != {"USAGE"}:
+                raise DatabaseSecurityError(
+                    "DATABASE_GRANT_SCOPE_TOO_BROAD",
+                    "数据库只读账号不能使用 global scope。",
+                )
+            observed_privileges.update(privileges)
+            observed_read_only.update(privileges)
+            observed_scopes.add(scope)
+        if "SELECT" not in observed_read_only:
+            raise DatabaseSecurityError(
+                "DATABASE_SELECT_PRIVILEGE_MISSING",
+                "数据库账号缺少可验证的 SELECT 权限。",
             )
         return {
             "grants_verified": True,
-            "read_only_privileges": [],
+            "read_only_privileges": sorted(observed_read_only),
             "observed_privileges": sorted(observed_privileges),
             "grant_scopes": sorted(observed_scopes),
             "grant_policy": "user_accepted_canary_existing_account",

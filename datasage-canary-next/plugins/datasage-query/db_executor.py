@@ -17,6 +17,115 @@ from typing import Any, Callable, Literal, Mapping, NamedTuple, Protocol, Sequen
 
 logger = logging.getLogger(__name__)
 
+MAX_EXECUTOR_ROWS = 10_000
+_FORBIDDEN_SQL_WORDS = frozenset(
+    {
+        "ALTER",
+        "ANALYZE",
+        "CALL",
+        "CREATE",
+        "DELETE",
+        "DO",
+        "DROP",
+        "GRANT",
+        "HANDLER",
+        "INSERT",
+        "LOAD",
+        "LOCK",
+        "OPTIMIZE",
+        "PURGE",
+        "RENAME",
+        "REPLACE",
+        "REVOKE",
+        "SET",
+        "TRUNCATE",
+        "UNINSTALL",
+        "UPDATE",
+        "XA",
+    }
+)
+_FORBIDDEN_SQL_FUNCTIONS = frozenset(
+    {"BENCHMARK", "GET_LOCK", "LOAD_FILE", "RELEASE_LOCK", "SLEEP"}
+)
+
+
+def _sql_words(sql: str) -> list[str]:
+    """Tokenize enough SQL to reject comments, multiple statements and verbs."""
+
+    words: list[str] = []
+    index = 0
+    length = len(sql)
+    while index < length:
+        character = sql[index]
+        if character.isspace():
+            index += 1
+            continue
+        if character == ";" or character == "@":
+            raise ValueError("SQL must be one SELECT statement without session variables")
+        if character == "#" or sql.startswith("--", index) or sql.startswith("/*", index):
+            raise ValueError("SQL comments are not allowed")
+        if character in {"'", '"', "`"}:
+            quote = character
+            index += 1
+            closed = False
+            while index < length:
+                current = sql[index]
+                if current == "\\" and quote != "`":
+                    index += 2
+                    continue
+                if current == quote:
+                    if index + 1 < length and sql[index + 1] == quote:
+                        index += 2
+                        continue
+                    index += 1
+                    closed = True
+                    break
+                index += 1
+            if not closed:
+                raise ValueError("SQL contains an unterminated quoted value")
+            continue
+        if character.isalpha() or character == "_":
+            end = index + 1
+            while end < length and (sql[end].isalnum() or sql[end] in {"_", "$"}):
+                end += 1
+            words.append(sql[index:end].upper())
+            index = end
+            continue
+        if character == ":" and index + 1 < length and sql[index + 1] == "=":
+            raise ValueError("SQL user-variable assignment is not allowed")
+        index += 1
+    return words
+
+
+def _validate_read_only_statement(sql: Any, limit: Any) -> None:
+    if not isinstance(sql, str) or not sql.strip():
+        raise ValueError("sql must be a non-empty string")
+    if (
+        not isinstance(limit, int)
+        or isinstance(limit, bool)
+        or not 1 <= limit <= MAX_EXECUTOR_ROWS
+    ):
+        raise ValueError(
+            f"limit must be an integer between 1 and {MAX_EXECUTOR_ROWS}"
+        )
+    words = _sql_words(sql)
+    if not words or words[0] not in {"SELECT", "WITH"}:
+        raise ValueError("only one SELECT or WITH query is allowed")
+    if words[0] == "WITH" and "SELECT" not in words:
+        raise ValueError("WITH query must contain a SELECT statement")
+    if _FORBIDDEN_SQL_WORDS.intersection(words):
+        raise ValueError("SQL contains a non-read-only statement")
+    if _FORBIDDEN_SQL_FUNCTIONS.intersection(words):
+        raise ValueError("SQL contains a side-effect or delay function")
+    if "INTO" in words or "OUTFILE" in words or "DUMPFILE" in words:
+        raise ValueError("SQL result redirection is not allowed")
+    if "PROCEDURE" in words:
+        raise ValueError("SQL contains an unsupported execution directive")
+    if "FOR" in words and "UPDATE" in words:
+        raise ValueError("locking SELECT statements are not allowed")
+    if "LOCK" in words:
+        raise ValueError("locking statements are not allowed")
+
 ExecutionMode = Literal["single_statement", "consistent_snapshot"]
 
 
@@ -157,6 +266,9 @@ class ReadOnlyDbExecutor:
         *,
         deadline_at: float | None = None,
     ) -> StatementResult:
+        # Validate before opening a connection so an invalid statement or
+        # unbounded fetch cannot cause any database I/O.
+        _validate_read_only_statement(sql, limit)
         effective_deadline = (
             deadline_at if deadline_at is not None else self.deadline_at
         )
@@ -200,6 +312,7 @@ class ReadOnlyDbExecutor:
         deadline_at: float | None,
         set_statement_timeout: bool,
     ) -> StatementResult:
+        _validate_read_only_statement(sql, limit)
         remaining = self._remaining(deadline_at)
         if remaining is not None and remaining <= 0:
             raise DeadlineExceeded("database execution deadline exceeded before statement")

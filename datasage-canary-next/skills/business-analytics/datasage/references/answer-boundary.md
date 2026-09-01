@@ -51,6 +51,12 @@ impact, material risk, and how to verify it. Never imply that advice has been
 approved or executed, and do not let advice or a forecast exceed its supporting
 evidence.
 
+Collections (including net collections or receipt amounts) is not cash flow,
+cash balance, or liquidity. A returned collections value must keep its business
+label; it must never be relabeled as cash or used as a proxy for a complete
+cash-flow, balance, or liquidity judgment. If the requested cash capability is
+not governed and returned, state that it is unavailable.
+
 Every factual or explanatory statement is authorized only by the returned
 metric, scope, and relationship available at that point. A request name,
 purpose, or desired scope does not constitute evidence; when the returned

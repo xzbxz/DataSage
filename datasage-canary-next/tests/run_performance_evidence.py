@@ -32,6 +32,7 @@ TEST_PATH = PROFILE_ROOT / "tests" / "test_performance_evidence.py"
 SOUL_PATH = PROFILE_ROOT / "SOUL.md"
 REPORT_SCHEMA = "datasage-performance-evidence/v1"
 CONTRACT_SCHEMA = "datasage-performance-non-db-contract/v2"
+INTEGRITY_POLICY = "datasage-performance-integrity/v1"
 PINNED_HERMES_VERSION = "0.20.5"
 PINNED_HERMES_COMMIT = "fcbd1076a93841fa88855acce810e342a5b78101"
 DENIED_CODE = "DATA_ENTITLEMENT_DENIED"
@@ -112,7 +113,7 @@ def _is_hex_digest(value: Any, length: int) -> bool:
 def _validate_contract(contract: Mapping[str, Any]) -> None:
     if contract.get("schema") != CONTRACT_SCHEMA:
         raise EvidenceError("unsupported performance contract schema")
-    if contract.get("subject") != {"name": "datasage-canary-next", "version": "0.15.0-rc8"}:
+    if contract.get("subject") != {"name": "datasage-canary-next", "version": "0.15.0-rc9"}:
         raise EvidenceError("contract subject drifted from the reviewed profile")
     if contract.get("host") != {
         "hermes_version": PINNED_HERMES_VERSION,
@@ -121,6 +122,8 @@ def _validate_contract(contract: Mapping[str, Any]) -> None:
         raise EvidenceError("contract host pin drifted from Hermes 0.20.5 source")
     if contract.get("provider") != "deepseek" or contract.get("model") != "deepseek-v4-flash":
         raise EvidenceError("contract provider/model drifted from the reviewed target")
+    if contract.get("integrity_policy") != INTEGRITY_POLICY:
+        raise EvidenceError("contract integrity policy drifted from the reviewed target")
     names = (
         "sample_plan", "execution", "safety_budget", "measurement",
         "accounting", "acceptance", "pricing_snapshot",
@@ -703,7 +706,7 @@ def _field(value: Any, name: str, default: Any = None) -> Any:
     return value.get(name, default) if isinstance(value, Mapping) else getattr(value, name, default)
 
 
-def _observed_tool_calls(messages: Any) -> list[dict[str, Any]]:
+def _observed_tool_call_bindings(messages: Any) -> list[dict[str, Any]]:
     calls: list[dict[str, Any]] = []
     if not isinstance(messages, list):
         raise EvidenceError("Hermes result messages must be a list")
@@ -727,8 +730,20 @@ def _observed_tool_calls(messages: Any) -> list[dict[str, Any]]:
                     raise EvidenceError(f"tool arguments are not strict JSON: {exc}") from exc
             if not isinstance(name, str) or not name or not isinstance(arguments, dict):
                 raise EvidenceError("tool call must contain a name and parsed object arguments")
-            calls.append({"name": name, "arguments": arguments})
+            call_id = _field(call, "id") or _field(call, "call_id")
+            if call_id is not None and (not isinstance(call_id, str) or not call_id):
+                raise EvidenceError("tool call ID must be a non-empty string")
+            calls.append({"name": name, "arguments": arguments, "call_id": call_id})
     return calls
+
+
+def _observed_tool_calls(messages: Any) -> list[dict[str, Any]]:
+    """Return the public shape while retaining IDs for local binding checks."""
+
+    return [
+        {"name": call["name"], "arguments": call["arguments"]}
+        for call in _observed_tool_call_bindings(messages)
+    ]
 
 
 def _content_text(content: Any) -> str:
@@ -742,8 +757,13 @@ def _content_text(content: Any) -> str:
     return ""
 
 
-def _tool_result(messages: Any) -> dict[str, Any]:
-    results: list[dict[str, Any]] = []
+def _tool_result(
+    messages: Any,
+    expected_calls: list[dict[str, Any]] | None = None,
+    *,
+    strict_binding: bool = False,
+) -> dict[str, Any]:
+    results: list[tuple[dict[str, Any], Any, Any]] = []
     if not isinstance(messages, list):
         raise EvidenceError("Hermes result messages must be a list")
     for message in messages:
@@ -758,10 +778,32 @@ def _tool_result(messages: Any) -> dict[str, Any]:
             raise EvidenceError(f"tool result is not strict JSON: {exc}") from exc
         if not isinstance(payload, dict):
             raise EvidenceError("tool result must be a JSON object")
-        results.append(payload)
+        results.append((payload, _field(message, "tool_call_id"), _field(message, "tool_name")))
     if len(results) != 1:
         raise EvidenceError(f"expected exactly one parsed tool result, observed {len(results)}")
-    return results[0]
+    payload, result_id, result_name = results[0]
+    if expected_calls is not None:
+        if len(expected_calls) != 1:
+            raise EvidenceError("performance observation must contain exactly one tool call")
+        expected = expected_calls[0]
+        expected_id = expected.get("call_id")
+        # A real Hermes call has both identifiers.  The legacy in-process
+        # fixture has neither; preserve that fixture-only compatibility while
+        # rejecting any partially or incorrectly bound real result.
+        if strict_binding:
+            if (
+                not isinstance(expected_id, str)
+                or not expected_id
+                or result_id != expected_id
+                or result_name != expected["name"]
+            ):
+                raise EvidenceError("tool result is not bound to its declared call")
+        elif expected_id is not None:
+            if result_id != expected_id or result_name != expected["name"]:
+                raise EvidenceError("tool result is not bound to its declared call")
+        elif result_id not in (None, "") or result_name not in (None, "", expected["name"]):
+            raise EvidenceError("tool result has an unexpected call binding")
+    return payload
 
 
 def _official_usage(result: Mapping[str, Any]) -> dict[str, int]:
@@ -819,9 +861,13 @@ def _observe_run(
     case: Mapping[str, Any], contract: Mapping[str, Any],
     run_boundary: Callable[[Mapping[str, Any]], tuple[dict[str, Any], bool, str]],
     clock_ns: Callable[[], int], run_index: int,
+    *,
+    strict_call_binding: bool = True,
 ) -> tuple[dict[str, Any], Decimal, str]:
     started = clock_ns()
     result, database_entered, schema_hash = run_boundary(case)
+    if strict_call_binding and result.get("completed") is not True:
+        raise EvidenceError("Hermes result did not complete the contracted run")
     duration_ns = clock_ns() - started
     if type(duration_ns) is not int or duration_ns < 0:
         raise EvidenceError("monotonic clock returned an invalid duration")
@@ -830,11 +876,19 @@ def _observe_run(
     final_response = result.get("final_response")
     if not isinstance(final_response, str):
         raise EvidenceError("Hermes result final_response must be a string")
+    observed_bindings = _observed_tool_call_bindings(result.get("messages"))
     sample = {
         "case_id": str(case["id"]), "run_index": run_index, "duration_ns": duration_ns,
         "expected_tool": str(case["expected_tool"]),
-        "observed_tool_calls": _observed_tool_calls(result.get("messages")),
-        "tool_result": _tool_result(result.get("messages")),
+        "observed_tool_calls": [
+            {"name": call["name"], "arguments": call["arguments"]}
+            for call in observed_bindings
+        ],
+        "tool_result": _tool_result(
+            result.get("messages"),
+            observed_bindings,
+            strict_binding=strict_call_binding,
+        ),
         "database_runtime_entered": bool(database_entered),
         "final_response": final_response, "usage": _official_usage(result),
     }
@@ -852,6 +906,7 @@ def collect_evidence(
         [Mapping[str, Any], str], Callable[[Mapping[str, Any]], tuple[dict[str, Any], bool, str]],
     ] = _build_official_boundary,
     clock_ns: Callable[[], int] = time.perf_counter_ns,
+    strict_call_binding: bool | None = None,
 ) -> dict[str, Any]:
     """Collect only fully conforming raw observations; never emit a verdict."""
     environment_binder()
@@ -869,6 +924,8 @@ def collect_evidence(
     if system_prompt.get("path") != "SOUL.md" or not _is_hex_digest(system_prompt.get("sha256"), 64):
         raise EvidenceError("source loader returned invalid SOUL identity")
     run_boundary = boundary_factory(contract, system_prompt["content"])
+    if strict_call_binding is None:
+        strict_call_binding = boundary_factory is _build_official_boundary
     max_calls = int(contract["safety_budget"]["max_successful_llm_calls"])
     max_cost = Decimal(str(contract["safety_budget"]["max_total_peak_estimated_cost_usd"]))
     cumulative_calls, cumulative_cost = 0, Decimal("0")
@@ -893,6 +950,7 @@ def collect_evidence(
     warmup_case = next(case for case in contract["cases"] if case["id"] == warmup_id)
     warmup, warmup_cost, warmup_schema = _observe_run(
         warmup_case, contract, run_boundary, clock_ns, 0,
+        strict_call_binding=strict_call_binding,
     )
     account(warmup, warmup_cost, warmup_schema)
     samples: list[dict[str, Any]] = []
@@ -901,6 +959,7 @@ def collect_evidence(
         for run_index in range(1, measured_runs + 1):
             sample, sample_cost, observed_schema = _observe_run(
                 case, contract, run_boundary, clock_ns, run_index,
+                strict_call_binding=strict_call_binding,
             )
             account(sample, sample_cost, observed_schema)
             samples.append(sample)

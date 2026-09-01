@@ -66,7 +66,10 @@ metrics:
     allowed_dimensions: [salesperson, department, organization]
     required_attribution_mode: salesperson_allocation
   delivery_target_amount:
-    disclosures: []
+    disclosures:
+      - id: target.delivery-target.scope
+        mode: required_always
+        text: "出库目标按交易事实账口径统计，排除内部客户；目标金额按所选期间的完整自然月目标解释。"
     label: 交易事实账口径出库目标金额
     business_definition: 所选期间按普通交易归属统计的出库目标人民币金额，适用于总体、客户、部门和组织目标。
     unit: 人民币元
@@ -80,7 +83,10 @@ metrics:
     allowed_dimensions: [customer, department, organization]
     required_attribution_mode: transaction_detail
   receipt_target_amount:
-    disclosures: []
+    disclosures:
+      - id: target.receipt-target.scope
+        mode: required_always
+        text: "收款目标按交易事实账口径统计，包含内部客户；目标金额按所选期间的完整自然月目标解释。"
     label: 交易事实账口径收款目标金额
     business_definition: 所选期间按普通交易归属统计的收款目标人民币金额，适用于总体、客户、部门和组织目标。
     unit: 人民币元
@@ -89,6 +95,7 @@ metrics:
     measure: plan_receive_rmb
     time_field: plan_receive_time
     time_policy: current_month
+    time_granularity: month
     required_filters: {}
     allowed_dimensions: [customer, department, organization]
     required_attribution_mode: transaction_detail
@@ -128,10 +135,10 @@ metrics:
     disclosures:
       - id: target.delivery-completion.period-scope
         mode: required_always
-        text: "目标和实际均排除内部客户；本月使用完整月目标与截至当前实际。"
+        text: "目标和实际均排除内部客户；目标按所选期间使用完整月目标，未结束月份实际按查询时点累计。"
       - id: target.delivery_target_completion.legacy-note
         mode: contract_only
-        text: &answer_note_delivery_target_completion "实际值为净出库。salesperson_allocation 使用拆分毛出库并按退货事实业务员直接扣减；transaction_detail 使用非拆分出库与退货事实。目标和实际均排除内部客户；本月使用完整月目标与截至当前实际；目标为零、无目标、目标不完整和未来期间均由结构化状态区分。"
+        text: &answer_note_delivery_target_completion "实际值为净出库。salesperson_allocation 使用拆分毛出库并按退货事实业务员直接扣减；transaction_detail 使用非拆分出库与退货事实。目标和实际均排除内部客户；目标按所选期间使用完整月目标，未结束月份实际按查询时点累计；目标为零、无目标、目标不完整和未来期间均由结构化状态区分。"
     label: 出库目标完成情况
     business_definition: 对照所选期间同一归属口径下的出库目标与净出库实际，返回目标、实际、缺口、完成率及目标和期间状态；目标与实际均排除内部客户。
     unit_policy: 目标、实际与缺口为人民币元；完成率为比例（可为负，可超过1，不做截断）
@@ -202,10 +209,10 @@ metrics:
     disclosures:
       - id: target.receipt-completion.period-scope
         mode: required_always
-        text: "目标和实际均包含内部客户；本月使用完整月目标与截至当前实际。"
+        text: "目标和实际均包含内部客户；目标按所选期间使用完整月目标，未结束月份实际按查询时点累计。"
       - id: target.receipt_target_completion.legacy-note
         mode: contract_only
-        text: &answer_note_receipt_target_completion "实际值为净收款，即收款人民币减退款人民币。salesperson_allocation 使用收款拆分事实减退款拆分事实；transaction_detail 使用收款明细事实减退款明细事实。目标和实际均包含内部客户，部门统一按 customer_dept；本月使用完整月目标与截至当前实际；目标为零、无目标、目标不完整和未来期间均由结构化状态区分。"
+        text: &answer_note_receipt_target_completion "实际值为净收款，即收款人民币减退款人民币。salesperson_allocation 使用收款拆分事实减退款拆分事实；transaction_detail 使用收款明细事实减退款明细事实。目标和实际均包含内部客户，部门统一按 customer_dept；目标按所选期间使用完整月目标，未结束月份实际按查询时点累计；目标为零、无目标、目标不完整和未来期间均由结构化状态区分。"
     label: 收款目标完成情况
     business_definition: 对照所选期间同一归属口径下的收款目标与净收款实际，返回目标、实际、缺口、完成率及目标和期间状态；目标与实际均包含内部客户。
     unit_policy: 目标、实际与缺口为人民币元；完成率为比例（可为负，可超过1，不做截断）

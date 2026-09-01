@@ -48,7 +48,7 @@ def _profile_root() -> Path:
 def _is_reparse(path: Path) -> bool:
     try:
         details = path.lstat()
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         raise _ProfileRootFailure("DATASAGE_PROFILE_ROOT_UNAVAILABLE") from exc
     if stat.S_ISLNK(details.st_mode):
         return True
@@ -59,8 +59,57 @@ def _is_reparse(path: Path) -> bool:
     )
 
 
+def _approved_profile_roots(active_root: Path) -> tuple[Path, ...]:
+    configured = settings.get_list("approved_profile_roots")
+    roots: list[Path] = []
+    for raw in configured:
+        candidate = Path(raw).expanduser()
+        if not candidate.is_absolute():
+            raise _ProfileRootFailure("DATASAGE_APPROVED_ROOT_INVALID")
+        roots.append(candidate)
+    # The active Hermes profile is always the primary approval root. Optional
+    # operator roots support an explicitly managed profile layout without
+    # falling back to an arbitrary HERMES_HOME path.
+    roots.insert(0, active_root)
+    return tuple(roots)
+
+
+def _validate_profile_path(candidate: Path, active_root: Path) -> Path:
+    """Resolve a profile path after checking every lexical component."""
+
+    lexical_candidate = candidate.expanduser().absolute()
+    for raw_root in _approved_profile_roots(active_root):
+        lexical_root = raw_root.expanduser().absolute()
+        try:
+            relative = lexical_candidate.relative_to(lexical_root)
+        except ValueError:
+            continue
+        current = lexical_root
+        try:
+            if _is_reparse(current):
+                raise _ProfileRootFailure("DATASAGE_PROFILE_ROOT_UNSAFE")
+            for part in relative.parts:
+                current = current / part
+                if _is_reparse(current):
+                    raise _ProfileRootFailure("DATASAGE_PROFILE_ROOT_UNSAFE")
+            resolved_root = lexical_root.resolve(strict=True)
+            resolved = lexical_candidate.resolve(strict=True)
+        except _ProfileRootFailure:
+            raise
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise _ProfileRootFailure("DATASAGE_PROFILE_ROOT_UNAVAILABLE") from exc
+        try:
+            resolved.relative_to(resolved_root)
+        except ValueError as exc:
+            raise _ProfileRootFailure("DATASAGE_PROFILE_ROOT_UNSAFE") from exc
+        if not resolved.is_dir():
+            raise _ProfileRootFailure("DATASAGE_PROFILE_ROOT_UNSAFE")
+        return resolved
+    raise _ProfileRootFailure("DATASAGE_PROFILE_ROOT_OUTSIDE_APPROVED_ROOT")
+
+
 def runtime_identity_status(*, profile_root: Path | None = None) -> dict[str, Any]:
-    """Verify only that the DataSage profile root path is safe.
+    """Verify the profile path and the process-lifetime contract identity.
 
     Hermes owns active-profile and runtime selection. Historical release
     manifests, imported-Hermes paths, and private launcher layouts are not
@@ -86,12 +135,12 @@ def runtime_identity_status(*, profile_root: Path | None = None) -> dict[str, An
         "verification_command": "python -B build_release_receipt.py --verify-candidate",
         "reason_code": "RELEASE_PRESTART_VERIFICATION_REQUIRED",
     }
+    contract_snapshot = contract_store.contract_snapshot_status()
 
-    candidate = _profile_root() if profile_root is None else Path(profile_root)
+    active_root = _profile_root()
+    candidate = active_root if profile_root is None else Path(profile_root)
     try:
-        root = candidate.resolve(strict=True)
-        if not root.is_dir() or _is_reparse(candidate):
-            raise _ProfileRootFailure("DATASAGE_PROFILE_ROOT_UNSAFE")
+        _validate_profile_path(candidate, active_root)
     except (OSError, _ProfileRootFailure) as exc:
         reason = (
             exc.code
@@ -103,6 +152,45 @@ def runtime_identity_status(*, profile_root: Path | None = None) -> dict[str, An
             "state": "profile_path_integrity",
             "reason_code": reason,
             "path_integrity_verified": False,
+            "contract_snapshot": contract_snapshot,
+            "contract_snapshot_fixed": contract_snapshot.get("fixed") is True,
+            "contract_snapshot_enforced_per_read": (
+                contract_snapshot.get("enforced_per_read") is True
+            ),
+            "contract_manifest_digest": contract_snapshot.get("manifest_digest"),
+            "contract_snapshot_drift_reason": contract_snapshot.get(
+                "drift_reason"
+            ),
+            "git_binding": git_binding,
+            "release_binding": release_binding,
+            "identity_override": False,
+            "runtime": "hermes_managed",
+        }
+
+    snapshot_ready = bool(
+        contract_snapshot.get("fixed") is True
+        and contract_snapshot.get("drifted") is not True
+    )
+    if not snapshot_ready:
+        reason_code = (
+            "CONTRACT_SNAPSHOT_DRIFT"
+            if contract_snapshot.get("drifted") is True
+            else "CONTRACT_SNAPSHOT_UNAVAILABLE"
+        )
+        return {
+            "ready": False,
+            "state": "contract_snapshot_integrity",
+            "reason_code": reason_code,
+            "path_integrity_verified": True,
+            "contract_snapshot": contract_snapshot,
+            "contract_snapshot_fixed": contract_snapshot.get("fixed") is True,
+            "contract_snapshot_enforced_per_read": (
+                contract_snapshot.get("enforced_per_read") is True
+            ),
+            "contract_manifest_digest": contract_snapshot.get("manifest_digest"),
+            "contract_snapshot_drift_reason": contract_snapshot.get(
+                "drift_reason"
+            ),
             "git_binding": git_binding,
             "release_binding": release_binding,
             "identity_override": False,
@@ -114,6 +202,13 @@ def runtime_identity_status(*, profile_root: Path | None = None) -> dict[str, An
         "state": "profile_path_integrity",
         "reason_code": None,
         "path_integrity_verified": True,
+        "contract_snapshot": contract_snapshot,
+        "contract_snapshot_fixed": True,
+        "contract_snapshot_enforced_per_read": True,
+        "contract_manifest_digest": contract_snapshot.get("manifest_digest"),
+        "contract_snapshot_drift_reason": contract_snapshot.get(
+            "drift_reason"
+        ),
         "git_binding": git_binding,
         "release_binding": release_binding,
         "identity_override": False,
@@ -149,6 +244,18 @@ def _live_cache_key() -> str:
                 "require_tls": settings.get("require_tls"),
                 "mysql_allowed_grant_scopes": settings.get_list(
                     "mysql_allowed_grant_scopes"
+                ),
+                "mysql_allowed_server_uuids": settings.get_list(
+                    "mysql_allowed_server_uuids"
+                ),
+                "mysql_server_uuid_allowlist": settings.get_list(
+                    "mysql_server_uuid_allowlist"
+                ),
+                "mysql_approved_path_roots": settings.get_list(
+                    "mysql_approved_path_roots"
+                ),
+                "approved_profile_roots": settings.get_list(
+                    "approved_profile_roots"
                 ),
                 "mysql_health_connect_timeout_seconds": settings.get_int(
                     "mysql_health_connect_timeout_seconds",
@@ -193,8 +300,12 @@ def database_configuration_status() -> dict[str, Any]:
             "missing_names": missing,
         }
     try:
-        tls = mysql_tls_kwargs()
-        tls_policy = mysql_tls_policy()
+        active_profile_root = contract_store.profile_root()
+        tls_policy = mysql_tls_policy(profile_root=active_profile_root)
+        tls = mysql_tls_kwargs(
+            policy=tls_policy,
+            profile_root=active_profile_root,
+        )
     except DatabaseSecurityError as exc:
         return {
             "ready": False,

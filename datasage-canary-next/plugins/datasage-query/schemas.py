@@ -53,6 +53,24 @@ REQUEST = {
                 "the current catalog contract and the requested governed capabilities before any database access."
             ),
         },
+        "resolution_receipts": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 50,
+            "uniqueItems": True,
+            "items": {
+                "type": "string",
+                "minLength": 64,
+                "maxLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+            },
+            "description": (
+                "Opaque receipts copied unchanged from the selected candidates returned by the immediately "
+                "preceding datasage_entity_resolve call. When metric_filters contains governed entity filters, "
+                "provide receipts that cover every entity filter exactly; receipts bind selection identity and "
+                "current contracts but never prove user confirmation. Never construct, edit, or persist a receipt."
+            ),
+        },
         "attribution_mode": {
             "type": "string",
             "enum": list(ATTRIBUTION_MODES),
@@ -494,9 +512,12 @@ DATASAGE_QUERY = {
         "The runtime rejects a missing, stale, tampered, wrong-metric, or capability-incompatible receipt before any "
         "database access. The model-facing surface accepts no SQL, physical "
         "tables, columns, joins, or formulas. Registered entity tokens may be provided as metric filters and are "
-        "resolved deterministically inside the query. Send only already unique or user-confirmed entity filters; a "
-        "query result does not prove user confirmation. Never put datasage_entity_resolve and datasage_query in the "
-        "same assistant tool-call batch. The response returns "
+        "resolved deterministically inside the query, but every governed entity filter, whether already unique or user-confirmed, "
+        "must also carry the exact "
+        "opaque resolution_receipt returned by a prior datasage_entity_resolve result for the same session, domain, "
+        "metric, role, and selected entity. The receipt is copied into the later query request. A "
+        "receipt binds selection identity and current contracts; it carries no evidence of a user-confirmation event. Never put "
+        "datasage_entity_resolve and datasage_query in the same assistant tool-call batch. The response returns "
         "structured values, applied scope, data state, and evidence metadata for Hermes to analyze and summarize. "
         "A non-empty answer_scope_line is a required final-answer scope statement: present it verbatim or faithfully "
         "without changing the actual range. Every sealed disclosure_ledger item with applies: true is validated "
@@ -684,7 +705,11 @@ DATASAGE_ENTITY_RESOLVE = {
         "candidate scope and the result could change the next action. "
         "A unique exact match may be used only with one returned filter role. A metric-incompatible entity fails "
         "closed; multiple exact matches, multiple possible roles, or any prefix/contains matches require user "
-        "clarification and must not trigger a business query. Entity-only questions stop after this result."
+        "clarification and must not trigger a business query. Every returned candidate carries an opaque "
+        "resolution_receipt for later selection binding; copy it unchanged and never construct or persist it. "
+        "The receipt records resolution selection only and carries no evidence of a user-confirmation event. A session_unbound "
+        "receipt is informational and cannot authorize a query; resolve again inside a trusted session. Entity-only questions stop "
+        "after this result."
     ),
     "parameters": {
         "type": "object",

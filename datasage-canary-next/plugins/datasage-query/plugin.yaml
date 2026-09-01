@@ -1,5 +1,5 @@
 name: datasage-query
-version: "0.15.0-rc8"
+version: "0.15.0-rc9"
 manifest_version: 2
 api_version: 1
 # Python dependency ownership is deliberately single-source: PyMySQL 1.2.0 is
@@ -36,6 +36,9 @@ config_schema:
   canary_accept_existing_account: {type: bool, default: false, description: "Allow a validated existing read-only account in canary mode."}
   require_tls: {type: bool, default: true, description: "Require verified TLS for database access."}
   mysql_allowed_grant_scopes: {type: list, default: [], description: "Allowed read-only database grant scopes."}
+  mysql_allowed_server_uuids: {type: list, default: [], description: "Optional approved MySQL server UUIDs; required in production mode."}
+  mysql_approved_path_roots: {type: list, default: [], description: "Absolute operator-approved roots for database security material."}
+  approved_profile_roots: {type: list, default: [], description: "Absolute operator-approved roots for active profile paths."}
   mysql_connect_timeout_seconds: {type: int, default: 8, description: "Connection timeout."}
   mysql_health_connect_timeout_seconds: {type: int, default: 5, description: "Health-check connection timeout."}
   mysql_grant_audit_timeout_seconds: {type: int, default: 10, description: "Grant audit timeout."}

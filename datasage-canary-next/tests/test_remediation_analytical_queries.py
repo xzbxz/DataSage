@@ -1,0 +1,207 @@
+from __future__ import annotations
+
+import copy
+from datetime import date
+import importlib
+import os
+from pathlib import Path
+import sys
+import types
+import unittest
+
+
+PROFILE_ROOT = Path(__file__).resolve().parents[1]
+PLUGIN_ROOT = PROFILE_ROOT / "plugins" / "datasage-query"
+os.environ["HERMES_HOME"] = str(PROFILE_ROOT)
+
+TEST_PACKAGE = "datasage_query_remediation_tests"
+package = types.ModuleType(TEST_PACKAGE)
+package.__path__ = [str(PLUGIN_ROOT)]
+sys.modules[TEST_PACKAGE] = package
+
+analytical_queries = importlib.import_module(f"{TEST_PACKAGE}.analytical_queries")
+contracts = importlib.import_module(f"{TEST_PACKAGE}.contracts")
+
+
+class AnalyticalQueryRemediationTests(unittest.TestCase):
+    @staticmethod
+    def _metric(domain: str, code: str) -> tuple[dict, dict]:
+        datasets, semantics = contracts.execution_contracts(domain)
+        return datasets, semantics["metrics"][code]
+
+    def test_inventory_turnover_rejects_current_or_future_explicit_month(self) -> None:
+        request = {
+            "time_range": {"start": "2026-08-01", "end": "2026-09-01"}
+        }
+        with self.assertRaises(analytical_queries.AnalysisQueryError) as caught:
+            analytical_queries._inventory_turnover_period(
+                request,
+                12,
+                observed_on=date(2026, 8, 18),
+            )
+        self.assertEqual("INVALID_PLAN", caught.exception.code)
+
+        datasets, semantics = contracts.execution_contracts("inventory")
+        metric = semantics["metrics"]["inventory_turnover_days"]
+        with self.assertRaises(analytical_queries.AnalysisQueryError) as dispatched:
+            analytical_queries.build_analytical_metric_query(
+                {**request, "metric": "inventory_turnover_days"},
+                metric,
+                datasets,
+                semantics,
+                10,
+                observed_on=date(2026, 8, 18),
+            )
+        self.assertEqual("INVALID_PLAN", dispatched.exception.code)
+
+    def test_formal_dso_rejects_window_ending_in_current_month(self) -> None:
+        datasets, metric = self._metric(
+            "customer_risk", "formal_receivable_turnover_days"
+        )
+        request = {
+            "metric": "formal_receivable_turnover_days",
+            "dimensions": [],
+            "metric_filters": {},
+            "time_range": {"start": "2025-09-01", "end": "2026-09-01"},
+        }
+        with self.assertRaises(analytical_queries.AnalysisQueryError) as caught:
+            analytical_queries._formal_dso_query(
+                request,
+                metric,
+                datasets,
+                10,
+                observed_on=date(2026, 8, 18),
+            )
+        self.assertEqual("INVALID_PLAN", caught.exception.code)
+
+    def test_inventory_global_months_requires_valid_cost_snapshot(self) -> None:
+        datasets, semantics = contracts.execution_contracts("inventory")
+        metric = semantics["metrics"]["inventory_turnover_days"]
+        request = {"dimensions": [], "metric_filters": {}}
+        sql, params, _scope = analytical_queries._inventory_turnover_query(
+            request,
+            metric,
+            datasets,
+            semantics,
+            10,
+            observed_on=date(2026, 8, 18),
+        )
+        global_start = sql.index("global_months AS")
+        global_end = sql.index("monthly_data AS", global_start)
+        global_sql = sql[global_start:global_end]
+        self.assertIn("`cost_amount_rmb` IS NOT NULL", global_sql)
+        self.assertIn("`cost_amount_rmb` <> 0", global_sql)
+        latest_start = sql.index("latest_complete AS")
+        latest_end = sql.index("bounds AS", latest_start)
+        latest_sql = sql[latest_start:latest_end]
+        self.assertIn("`bill_date` < %s", latest_sql)
+        self.assertEqual("2026-08", params[0])
+
+    def test_target_completion_caps_actual_at_observation_day(self) -> None:
+        datasets, semantics = contracts.execution_contracts("target")
+        metric = semantics["metrics"]["delivery_target_completion"]
+        request = {
+            "metric": "delivery_target_completion",
+            "attribution_mode": "transaction_detail",
+            "dimensions": [],
+            "metric_filters": {},
+            "time_range": {"start": "2026-08-01", "end": "2026-09-01"},
+        }
+        sql, params, _scope = analytical_queries._target_completion_query(
+            request,
+            metric,
+            datasets,
+            10,
+            observed_on=date(2026, 8, 18),
+        )
+        self.assertIn("__actual_null_count", sql)
+        self.assertEqual(2, params.count("2026-08-19"))
+        self.assertNotIn("2026-09-01", params)
+        self.assertIn("OR COALESCE(a.__actual_null_count, 0) > 0", sql)
+
+    def test_target_actual_null_is_incomplete_not_reported_zero(self) -> None:
+        datasets, semantics = contracts.execution_contracts("target")
+        metric = semantics["metrics"]["delivery_target_completion"]
+        request = {
+            "metric": "delivery_target_completion",
+            "attribution_mode": "transaction_detail",
+            "dimensions": [],
+            "metric_filters": {},
+            "calendar_month": "2026-08",
+        }
+        sql, _params, _scope = analytical_queries._target_completion_query(
+            request,
+            metric,
+            datasets,
+            10,
+            observed_on=date(2026, 8, 18),
+        )
+        self.assertIn("WHEN COALESCE(a.__actual_null_count, 0) > 0 THEN 'incomplete'", sql)
+        self.assertIn(
+            "OR COALESCE(a.__actual_null_count, 0) > 0 THEN NULL ELSE COALESCE(a.actual_amount_rmb, 0)",
+            sql,
+        )
+
+    def test_analytical_approved_rejects_forbidden_allowed_column(self) -> None:
+        with self.assertRaises(analytical_queries.AnalysisQueryError) as caught:
+            analytical_queries._approved(
+                "secret",
+                {"allowed_columns": ["secret"], "forbidden_columns": ["secret"]},
+            )
+        self.assertEqual("COLUMN_NOT_ALLOWED", caught.exception.code)
+
+    def test_analytical_dispatch_rejects_blocked_metric(self) -> None:
+        datasets, semantics = contracts.execution_contracts("target")
+        metric = copy.deepcopy(semantics["metrics"]["allocated_net_delivery_amount"])
+        request = {
+            "metric": "allocated_net_delivery_amount",
+            "attribution_mode": "salesperson_allocation",
+            "dimensions": [],
+            "metric_filters": {},
+        }
+        with self.assertRaises(analytical_queries.AnalysisQueryError) as caught:
+            analytical_queries.build_analytical_metric_query(
+                request,
+                metric,
+                datasets,
+                semantics,
+                10,
+                observed_on=date(2026, 8, 18),
+            )
+        self.assertEqual("DATA_RECONCILIATION_REQUIRED", caught.exception.code)
+
+    def test_allocated_path_availability_is_checked_independently(self) -> None:
+        datasets, semantics = contracts.execution_contracts("target")
+        mutated_semantics = copy.deepcopy(semantics)
+        path = mutated_semantics["metrics"]["delivery_target_completion"]["paths"][
+            "salesperson_allocation"
+        ]
+        path["availability"] = {
+            "status": "blocked",
+            "error_code": "SYNTHETIC_PATH_BLOCKED",
+            "message": "synthetic path gate",
+        }
+        metric = copy.deepcopy(
+            mutated_semantics["metrics"]["allocated_net_delivery_amount"]
+        )
+        metric.pop("availability", None)
+        request = {
+            "metric": "allocated_net_delivery_amount",
+            "attribution_mode": "salesperson_allocation",
+            "dimensions": [],
+            "metric_filters": {},
+        }
+        with self.assertRaises(analytical_queries.AnalysisQueryError) as caught:
+            analytical_queries._allocated_amount_query(
+                request,
+                metric,
+                datasets,
+                mutated_semantics,
+                10,
+                observed_on=date(2026, 8, 18),
+            )
+        self.assertEqual("SYNTHETIC_PATH_BLOCKED", caught.exception.code)
+
+
+if __name__ == "__main__":
+    unittest.main()

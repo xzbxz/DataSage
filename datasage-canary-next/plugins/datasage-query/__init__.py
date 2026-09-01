@@ -1,6 +1,7 @@
 """Register DataSage as a read-only capability plugin for Hermes."""
 
 from . import (
+    contract_store,
     contracts,
     entitlements,
     entities,
@@ -12,6 +13,7 @@ from . import (
 
 
 def register(ctx) -> None:
+    contract_store.pin_contract_snapshot()
     settings.bind_config_reader(ctx.get_config)
     ctx.register_tool(
         name="datasage_catalog",

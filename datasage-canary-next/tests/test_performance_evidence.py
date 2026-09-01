@@ -47,7 +47,7 @@ def _fake_identity(_contract_payload: dict[str, Any]) -> dict[str, dict[str, str
     return {
         "subject": {
             "name": "datasage-canary-next",
-            "version": "0.15.0-rc8",
+            "version": "0.15.0-rc9",
             "content_sha256": "a" * 64,
             "profile_git_commit": "b" * 40,
         },

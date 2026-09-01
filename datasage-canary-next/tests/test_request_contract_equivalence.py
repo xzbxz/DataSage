@@ -526,6 +526,11 @@ class RequestContractEquivalenceTests(unittest.TestCase):
                 return_value=True,
             ),
             mock.patch.object(
+                entitlements,
+                "coarse_authorized",
+                return_value=True,
+            ),
+            mock.patch.object(
                 tools,
                 "_datasage_query_with_slot",
                 return_value=json.dumps({"status": "success"}),
@@ -584,7 +589,7 @@ class RequestContractEquivalenceTests(unittest.TestCase):
             tools._failure_result("q1", failure, 1),
         )
 
-    def test_nested_calculations_fail_before_entitlement_readiness_or_database(self):
+    def test_unauthorized_nested_calculations_are_denied_before_validation(self):
         args = {
             "requests": [
                 _request(
@@ -600,6 +605,11 @@ class RequestContractEquivalenceTests(unittest.TestCase):
             ]
         }
         with (
+            mock.patch.object(
+                entitlements,
+                "coarse_authorized",
+                return_value=False,
+            ),
             mock.patch.object(entitlements, "authorized") as authorized,
             mock.patch.object(runtime_health, "query_readiness_status") as readiness,
             mock.patch.object(db_runtime, "connect") as connect,
@@ -608,25 +618,27 @@ class RequestContractEquivalenceTests(unittest.TestCase):
             payload = json.loads(tools.entitlement_guarded_datasage_query(args))
 
         self.assertEqual("failed", payload["status"])
-        self.assertEqual("INVALID_INPUT", payload["error"]["code"])
-        self.assertEqual("requests[0].calculations", payload["error"]["path"])
-        self.assertIn("top level", payload["error"]["hint"])
+        self.assertEqual("DATA_ENTITLEMENT_DENIED", payload["error"]["code"])
         authorized.assert_not_called()
         readiness.assert_not_called()
         connect.assert_not_called()
         execute.assert_not_called()
 
-    def test_business_semantics_fail_before_entitlement_or_readiness(self):
+    def test_unauthorized_business_semantics_are_not_a_capability_oracle(self):
         args = {"requests": [_request(metric="not_a_registered_metric")]}
         with (
+            mock.patch.object(
+                entitlements,
+                "coarse_authorized",
+                return_value=False,
+            ),
             mock.patch.object(entitlements, "authorized") as authorized,
             mock.patch.object(runtime_health, "query_readiness_status") as readiness,
         ):
             payload = json.loads(tools.entitlement_guarded_datasage_query(args))
 
         self.assertEqual("failed", payload["status"])
-        self.assertNotEqual("DATA_ENTITLEMENT_DENIED", payload["error"]["code"])
-        self.assertEqual("requests[0].metric", payload["error"]["path"])
+        self.assertEqual("DATA_ENTITLEMENT_DENIED", payload["error"]["code"])
         authorized.assert_not_called()
         readiness.assert_not_called()
 

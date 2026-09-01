@@ -1,7 +1,8 @@
 name: datasage-canary-next
-version: 0.15.0-rc8
-description: Hermes-native digital expert with adaptive analysis and governed evidence
-  contracts.
+version: 0.15.0-rc9
+description: Hermes-native governed operating-data expert for delivery, collections,
+  receivables, targets, inventory, and customer-risk analysis with evidence-bounded
+  recommendations.
 hermes_requires: ==0.20.5
 author: datasage
 license: Proprietary

@@ -29,6 +29,7 @@ _SEMANTIC_FINGERPRINT_PRESENTATION_KEYS = {
 }
 
 _LIMITED_STATES = {"empty", "undefined", "incomplete"}
+_COMPLETE_STATES = {"rows", "complete", "zero"}
 
 
 def _canonical_semantic_value(value: Any, path: tuple[str, ...] = ()) -> Any:
@@ -135,6 +136,84 @@ def _string_set(value: Any) -> set[str]:
     return {item for item in value if isinstance(item, str) and item}
 
 
+def _finite_decimal(value: Any) -> Decimal | None:
+    """Parse a finite business number without accepting booleans or NaN."""
+
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    return parsed if parsed.is_finite() else None
+
+
+def _decimal_close(left: Decimal, right: Decimal) -> bool:
+    """Compare generated decimal strings while allowing bounded rounding."""
+
+    scale = max(abs(left), abs(right), Decimal("1"))
+    return abs(left - right) <= scale * Decimal("0.000000001")
+
+
+def _target_claim_amounts(
+    claim: Mapping[str, Any],
+    result: Mapping[str, Any],
+) -> tuple[Decimal, Decimal, Decimal, Decimal | None] | None:
+    """Validate one target-status claim and return its governed amounts."""
+
+    relations = claim.get("allowed_relations")
+    facts = claim.get("facts")
+    states = claim.get("states")
+    target_state = states.get("target_data_state") if isinstance(states, Mapping) else None
+    zero_target_with_undefined_metric = (
+        target_state == "zero"
+        and result.get("data_state") == "undefined"
+        and isinstance(facts, Mapping)
+        and "metric_value" in facts
+        and facts.get("metric_value") is None
+        and "completion_rate" in facts
+        and facts.get("completion_rate") is None
+    )
+    if (
+        not isinstance(relations, list)
+        or "target_status" not in relations
+        or not isinstance(facts, Mapping)
+        or not isinstance(states, Mapping)
+        or result.get("status") != "success"
+        or result.get("truncated") is not False
+        or (
+            result.get("data_state") not in _COMPLETE_STATES
+            and not zero_target_with_undefined_metric
+        )
+        or states.get("target_data_state") not in {"set", "zero"}
+        or states.get("period_state") in {"not_started", "includes_future", "future"}
+    ):
+        return None
+
+    target = _finite_decimal(facts.get("target_amount_rmb"))
+    actual = _finite_decimal(facts.get("actual_amount_rmb"))
+    gap = _finite_decimal(facts.get("gap_amount_rmb"))
+    completion = _finite_decimal(facts.get("completion_rate"))
+    metric_value = _finite_decimal(facts.get("metric_value"))
+    if target is None or actual is None or gap is None:
+        return None
+    if not _decimal_close(gap, target - actual):
+        return None
+    if target_state == "zero":
+        if target != 0 or completion is not None or metric_value is not None:
+            return None
+        return target, actual, gap, None
+    if target <= 0 or completion is None:
+        return None
+    if not _decimal_close(completion, actual / target):
+        return None
+    if facts.get("metric_value") is not None and metric_value is None:
+        return None
+    if metric_value is not None and not _decimal_close(metric_value, completion):
+        return None
+    return target, actual, gap, completion
+
+
 def _claim_relations(result: Mapping[str, Any]) -> set[str]:
     claims = result.get("claim_ledger")
     if not isinstance(claims, list):
@@ -158,13 +237,29 @@ def _reconciliation_status(result: Mapping[str, Any]) -> str:
     return "not_requested_or_unavailable"
 
 
-def _target_gap_reconciliation_is_valid(result: Mapping[str, Any]) -> bool:
+def _target_gap_reconciliation_is_valid(
+    result: Mapping[str, Any],
+    *,
+    request: Mapping[str, Any] | None = None,
+    overall_result: Mapping[str, Any] | None = None,
+) -> bool:
+    """Verify a target-gap receipt against both physical result branches.
+
+    A partition result cannot prove the overall claim by itself.  Callers must
+    therefore provide the hidden overall result and the exact partition request
+    context.  This intentionally fails closed when either context is absent;
+    callers that only have one public result must not manufacture a composition
+    capability from a self-contained receipt.
+    """
+
     reconciliation = result.get("target_gap_reconciliation")
     claims = result.get("claim_ledger")
     if (
         not isinstance(reconciliation, Mapping)
         or not isinstance(claims, list)
         or not claims
+        or not isinstance(request, Mapping)
+        or not isinstance(overall_result, Mapping)
     ):
         return False
     try:
@@ -174,8 +269,35 @@ def _target_gap_reconciliation_is_valid(result: Mapping[str, Any]) -> bool:
         capability_contract.CapabilityContractError,
     ):
         return False
+
+    request_id = result.get("request_id")
+    overall_request_id = overall_result.get("request_id")
+    business_metric_ref = result.get("business_metric_ref")
+    overall_business_metric_ref = overall_result.get("business_metric_ref")
+    business_metric_unit = result.get("business_metric_unit")
+    overall_business_metric_unit = overall_result.get("business_metric_unit")
+    applied_time_range = result.get("applied_time_range")
+    overall_applied_time_range = overall_result.get("applied_time_range")
+    partition_claim_ids = [
+        claim.get("claim_id") for claim in claims if isinstance(claim, Mapping)
+    ]
     if (
-        reconciliation.get("version") != contract.receipt_version
+        not isinstance(request_id, str)
+        or not request_id
+        or request.get("request_id") != request_id
+        or not isinstance(overall_request_id, str)
+        or not overall_request_id
+        or not isinstance(business_metric_ref, str)
+        or not business_metric_ref
+        or business_metric_ref != overall_business_metric_ref
+        or not isinstance(business_metric_unit, str)
+        or not business_metric_unit
+        or business_metric_unit != overall_business_metric_unit
+        or not isinstance(applied_time_range, Mapping)
+        or applied_time_range != overall_applied_time_range
+        or reconciliation.get("partition_request_id") != request_id
+        or reconciliation.get("overall_request_id") != overall_request_id
+        or reconciliation.get("version") != contract.receipt_version
         or reconciliation.get("status") != "reconciled"
         or reconciliation.get("operation") != contract.receipt_operation
         or reconciliation.get("reconciliation_id")
@@ -184,22 +306,110 @@ def _target_gap_reconciliation_is_valid(result: Mapping[str, Any]) -> bool:
         or reconciliation.get("causal_attribution_authorized") is not False
         or reconciliation.get("interpretation_boundary")
         != contract.receipt_interpretation_code
-        or any(
-            not isinstance(claim, Mapping)
-            or not _claim_is_validly_sealed(claim)
-            for claim in claims
-        )
-        or reconciliation.get("partition_claim_ids")
-        != [claim.get("claim_id") for claim in claims]
+        or reconciliation.get("snapshot_consistency")
+        != "same_connection_repeatable_read_consistent_snapshot"
+        or reconciliation.get("proof_mode") != "returned_full_partition"
+        or not isinstance(reconciliation.get("full_partition_row_count"), int)
+        or isinstance(reconciliation.get("full_partition_row_count"), bool)
+        or reconciliation.get("full_partition_row_count") != len(claims)
+        or reconciliation.get("completion_rate_basis")
+        != "overall_actual_amount_rmb / overall_target_amount_rmb"
+        or not isinstance(reconciliation.get("dimension"), str)
+        or request.get("dimensions") != [reconciliation.get("dimension")]
+        or reconciliation.get("dimension") not in contract.dimensions
+        or len(partition_claim_ids) != len(claims)
+        or len(set(partition_claim_ids)) != len(partition_claim_ids)
+        or reconciliation.get("partition_claim_ids") != partition_claim_ids
+        or reconciliation.get("population_fingerprint")
+        != result.get("scope_fingerprint")
+        or result.get("scope_fingerprint") != overall_result.get("scope_fingerprint")
+        or reconciliation.get("partition_projection_fingerprint")
+        != result.get("projection_fingerprint")
+        or reconciliation.get("overall_projection_fingerprint")
+        != overall_result.get("projection_fingerprint")
+        or not isinstance(result.get("scope_fingerprint"), str)
+        or not result.get("scope_fingerprint")
+        or not isinstance(result.get("projection_fingerprint"), str)
+        or not result.get("projection_fingerprint")
+        or not isinstance(overall_result.get("projection_fingerprint"), str)
+        or not overall_result.get("projection_fingerprint")
+        or result.get("_snapshot_group_marker")
+        != overall_result.get("_snapshot_group_marker")
+        or not isinstance(result.get("_snapshot_group_marker"), str)
+        or not result.get("_snapshot_group_marker")
     ):
         return False
-    for overall_key, partition_key in (
-        ("overall_target_amount_rmb", "partition_target_sum_rmb"),
-        ("overall_actual_amount_rmb", "partition_actual_sum_rmb"),
-        ("overall_gap_amount_rmb", "partition_gap_sum_rmb"),
+
+    overall_claims = overall_result.get("claim_ledger")
+    if (
+        overall_result.get("status") != "success"
+        or overall_result.get("truncated") is not False
+        or not isinstance(overall_claims, list)
+        or len(overall_claims) != 1
+        or not isinstance(overall_claims[0], Mapping)
+        or overall_claims[0].get("dimensions")
+        or not _claim_is_validly_sealed(overall_claims[0])
+        or not claim_is_valid_for_result(overall_claims[0], overall_result)
+        or reconciliation.get("overall_claim_id")
+        != overall_claims[0].get("claim_id")
     ):
-        if reconciliation.get(overall_key) != reconciliation.get(partition_key):
-            return False
+        return False
+
+    if any(
+        "unit" in claim and claim.get("unit") != business_metric_unit
+        for claim in [overall_claims[0], *claims]
+    ):
+        return False
+
+    if any(
+        not isinstance(claim, Mapping)
+        or not _claim_is_validly_sealed(claim)
+        or not claim_is_valid_for_result(claim, result)
+        or _target_claim_amounts(claim, result) is None
+        or not claim.get("dimensions")
+        for claim in claims
+    ):
+        return False
+    overall_amounts = _target_claim_amounts(overall_claims[0], overall_result)
+    if overall_amounts is None:
+        return False
+    partition_amounts = [
+        _target_claim_amounts(claim, result) for claim in claims
+    ]
+    if any(item is None for item in partition_amounts):
+        return False
+    complete = [item for item in partition_amounts if item is not None]
+    partition_sums = tuple(
+        sum((item[index] for item in complete), Decimal("0"))
+        for index in range(3)
+    )
+    if partition_sums != overall_amounts[:3]:
+        return False
+    if any(
+        _finite_decimal(reconciliation.get(overall_key))
+        != _finite_decimal(overall_value)
+        or _finite_decimal(reconciliation.get(partition_key))
+        != _finite_decimal(partition_value)
+        for (overall_key, partition_key), overall_value, partition_value in zip(
+            (
+                ("overall_target_amount_rmb", "partition_target_sum_rmb"),
+                ("overall_actual_amount_rmb", "partition_actual_sum_rmb"),
+                ("overall_gap_amount_rmb", "partition_gap_sum_rmb"),
+            ),
+            overall_amounts[:3],
+            partition_sums,
+        )
+    ):
+        return False
+    receipt_completion = _finite_decimal(reconciliation.get("overall_completion_rate"))
+    overall_completion = overall_amounts[3]
+    if (
+        (receipt_completion is None) != (overall_completion is None)
+        or receipt_completion is not None
+        and overall_completion is not None
+        and not _decimal_close(receipt_completion, overall_completion)
+    ):
+        return False
     return True
 
 
@@ -210,10 +420,17 @@ def _completeness(result: Mapping[str, Any]) -> str:
         return "truncated"
     if result.get("data_state") in _LIMITED_STATES:
         return "limited"
-    return "complete"
+    if result.get("data_state") in _COMPLETE_STATES:
+        return "complete"
+    return "limited"
 
 
-def _supports(result: Mapping[str, Any]) -> list[str]:
+def _supports(
+    result: Mapping[str, Any],
+    *,
+    request: Mapping[str, Any] | None = None,
+    overall_result: Mapping[str, Any] | None = None,
+) -> list[str]:
     if result.get("status") != "success":
         return []
     error = result.get("error")
@@ -230,7 +447,11 @@ def _supports(result: Mapping[str, Any]) -> list[str]:
     supported.discard("structural_contribution")
     if _reconciliation_status(result) == "reconciled":
         supported.add("structural_contribution")
-    if _target_gap_reconciliation_is_valid(result):
+    if _target_gap_reconciliation_is_valid(
+        result,
+        request=request,
+        overall_result=overall_result,
+    ):
         supported.add("target_gap_composition")
     if result.get("data_state") == "empty":
         supported.add("empty_result_state")
@@ -262,7 +483,10 @@ def _calendar_period_states(value: Any) -> list[str]:
 
 
 def _limitations(
-    request: Mapping[str, Any], result: Mapping[str, Any]
+    request: Mapping[str, Any],
+    result: Mapping[str, Any],
+    *,
+    overall_result: Mapping[str, Any] | None = None,
 ) -> list[str]:
     limitations: list[str] = []
     if result.get("status") != "success":
@@ -272,12 +496,24 @@ def _limitations(
     data_state = result.get("data_state")
     if data_state in _LIMITED_STATES:
         limitations.append(f"DATA_STATE_{str(data_state).upper()}")
+    if data_state not in _COMPLETE_STATES | _LIMITED_STATES:
+        limitations.append("DATA_STATE_UNRECOGNIZED")
     change_reconciliation = result.get("change_reconciliation")
     if (
         isinstance(change_reconciliation, Mapping)
         and _reconciliation_status(result) != "reconciled"
     ):
         limitations.append("STRUCTURAL_CONTRIBUTION_NOT_RECONCILED")
+    target_gap_reconciliation = result.get("target_gap_reconciliation")
+    if isinstance(target_gap_reconciliation, Mapping):
+        if target_gap_reconciliation.get("status") != "reconciled":
+            limitations.append("TARGET_GAP_NOT_RECONCILED")
+        elif not _target_gap_reconciliation_is_valid(
+            result,
+            request=request,
+            overall_result=overall_result,
+        ):
+            limitations.append("TARGET_GAP_NOT_RECONCILED")
     period = result.get("applied_time_range")
     if isinstance(period, Mapping):
         compatibility = period.get("comparison_compatibility")
@@ -528,6 +764,8 @@ def _reconciliation_is_valid(result: Mapping[str, Any]) -> bool:
     if (
         not isinstance(reconciliation, Mapping)
         or reconciliation.get("status") != "reconciled"
+        or reconciliation.get("operation") != "complete_change_decomposition"
+        or reconciliation.get("causal_attribution_authorized") is True
         or reconciliation.get("reconciliation_id")
         != _canonical_reconciliation_id(reconciliation)
         or not isinstance(claims, list)
@@ -535,11 +773,17 @@ def _reconciliation_is_valid(result: Mapping[str, Any]) -> bool:
         or any(
             not isinstance(claim, Mapping)
             or not _claim_is_validly_sealed(claim)
+            or not claim_is_valid_for_result(claim, result)
             for claim in claims
         )
     ):
         return False
     claim_ids = [claim.get("claim_id") for claim in claims]
+    if (
+        any(not isinstance(claim_id, str) or not claim_id for claim_id in claim_ids)
+        or len(set(claim_ids)) != len(claim_ids)
+    ):
+        return False
     structural_claims = [claim for claim in claims if _is_structural_claim(claim)]
     structural_ids = [claim.get("claim_id") for claim in structural_claims]
     if (
@@ -560,6 +804,22 @@ def _reconciliation_is_valid(result: Mapping[str, Any]) -> bool:
             or not isinstance(semantics, Mapping)
             or semantics.get("structural_contribution")
             != "structural_not_causal"
+        ):
+            return False
+        overall_delta = _finite_decimal(reconciliation.get("overall_delta"))
+        delta = _finite_decimal(facts.get("delta_value"))
+        contribution_rate = _finite_decimal(
+            facts.get("net_change_contribution_rate")
+        )
+        if (
+            overall_delta is None
+            or overall_delta == 0
+            or delta is None
+            or contribution_rate is None
+            or not _decimal_close(
+                contribution_rate,
+                delta / overall_delta,
+            )
         ):
             return False
     if not _structural_completeness_proof_is_valid(
@@ -656,11 +916,8 @@ def claim_is_valid_for_result(
         and isinstance(truncated, bool)
         and claim.get("source_truncated") is truncated
         and (
-            not _has_calendar_period_evidence(applied_time_range)
-            or (
-                isinstance(applied_time_range, Mapping)
-                and claim.get("period") == applied_time_range
-            )
+            not isinstance(applied_time_range, Mapping)
+            or claim.get("period") == applied_time_range
         )
     )
 
@@ -709,6 +966,20 @@ def _receipt_evidence_state(result: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _target_overall_result(
+    result: Mapping[str, Any],
+    result_by_id: Mapping[str, Mapping[str, Any]],
+) -> Mapping[str, Any] | None:
+    reconciliation = result.get("target_gap_reconciliation")
+    if not isinstance(reconciliation, Mapping):
+        return None
+    overall_request_id = reconciliation.get("overall_request_id")
+    if not isinstance(overall_request_id, str) or not overall_request_id:
+        return None
+    overall = result_by_id.get(overall_request_id)
+    return overall if isinstance(overall, Mapping) else None
+
+
 def _coverage_receipts(
     request_by_id: Mapping[str, Mapping[str, Any]],
     result_by_id: Mapping[str, Mapping[str, Any]],
@@ -747,7 +1018,11 @@ def _coverage_receipts(
             continue
         completeness = _completeness(result)
         reconciliation = _reconciliation_status(result)
-        supports = _supports(result)
+        supports = _supports(
+            result,
+            request=request,
+            overall_result=_target_overall_result(result, result_by_id),
+        )
         key = (
             fingerprint,
             completeness,
@@ -802,8 +1077,16 @@ def build_evidence_bundle(
             "data_state": result.get("data_state"),
             "completeness": _completeness(result),
             "reconciliation": _reconciliation_status(result),
-            "supports": _supports(result),
-            "limitations": _limitations(request, result),
+            "supports": _supports(
+                result,
+                request=request,
+                overall_result=_target_overall_result(result, result_by_id),
+            ),
+            "limitations": _limitations(
+                request,
+                result,
+                overall_result=_target_overall_result(result, result_by_id),
+            ),
         }
         error = result.get("error")
         if isinstance(error, Mapping) and isinstance(error.get("code"), str):

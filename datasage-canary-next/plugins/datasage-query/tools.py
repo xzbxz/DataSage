@@ -17,6 +17,7 @@ import math
 import re
 import threading
 import time
+import unicodedata
 import uuid
 import calendar
 from concurrent.futures import ThreadPoolExecutor
@@ -86,6 +87,7 @@ _COMMON_REQUEST_FIELDS = {
 _METRIC_REQUEST_FIELDS = _COMMON_REQUEST_FIELDS | {
     "metric",
     "detail_receipt",
+    "resolution_receipts",
     "dimensions",
     "metric_filters",
     "time_bucket",
@@ -172,6 +174,8 @@ class QueryFailure(Exception):
         source_evidence_ref: Mapping[str, Any] | None = None,
         path: str | None = None,
         hint: str | None = None,
+        recovery_action: str | None = None,
+        catalog_request: Mapping[str, Any] | None = None,
     ):
         super().__init__(message)
         self.code = code
@@ -181,6 +185,12 @@ class QueryFailure(Exception):
         self.retryable = retryable
         self.path = path
         self.hint = hint
+        self.recovery_action = recovery_action
+        self.catalog_request = (
+            dict(catalog_request)
+            if isinstance(catalog_request, Mapping)
+            else None
+        )
         self.source_evidence_ref = (
             dict(source_evidence_ref)
             if isinstance(source_evidence_ref, Mapping)
@@ -371,6 +381,9 @@ def _validate_metric_detail_gate(
     _ensure_metric_available(metric)
 
     supplied = request.get("detail_receipt")
+    catalog_request = {
+        "requests": [{"domain": request.get("domain"), "metric": metric_code}]
+    }
     exact_default = (
         metric.get("exact_default_lookup_supported") is True
         and not _has_explicit_detail_qualifier(request)
@@ -381,6 +394,8 @@ def _validate_metric_detail_gate(
                 "METRIC_DETAIL_REQUIRED",
                 "该查询必须先加载当前指标详情并携带其 detail_receipt。",
                 stage="input_validation",
+                recovery_action="reload_metric_detail",
+                catalog_request=catalog_request,
             )
     else:
         if not isinstance(supplied, str) or _DETAIL_RECEIPT.fullmatch(supplied) is None:
@@ -388,6 +403,8 @@ def _validate_metric_detail_gate(
                 "METRIC_DETAIL_RECEIPT_INVALID",
                 "detail_receipt 无效、已过期或与当前查询不匹配。",
                 stage="input_validation",
+                recovery_action="reload_metric_detail",
+                catalog_request=catalog_request,
             )
         domain = str(request.get("domain"))
         expected_receipt = _current_metric_detail_receipt(domain, metric_code)
@@ -396,6 +413,8 @@ def _validate_metric_detail_gate(
                 "METRIC_DETAIL_RECEIPT_INVALID",
                 "detail_receipt 无效、已过期或与当前查询不匹配。",
                 stage="input_validation",
+                recovery_action="reload_metric_detail",
+                catalog_request=catalog_request,
             )
     _validate_detail_request_capabilities(request, metric)
     normalized = dict(request)
@@ -2145,7 +2164,10 @@ def _metric_aggregation_sql(
             raise QueryFailure("CONTRACT_UNAVAILABLE", "多字段乘积求和指标定义无效。")
         approved = [_approved_column(column, allowed, blocked) for column in columns]
         multiplier = _approved_column(multiplier, allowed, blocked)
-        additive = " + ".join(_qualified_identifier(alias, column) for column in approved)
+        additive = " + ".join(
+            f"COALESCE({_qualified_identifier(alias, column)}, 0)"
+            for column in approved
+        )
         return f"COALESCE(SUM(({additive}) * {_qualified_identifier(alias, multiplier)}), 0)"
 
     measure = metric.get("measure")
@@ -2252,6 +2274,20 @@ def _build_metric_core(
         "currency" in requested_dimensions or "currency" in requested_filters
     ):
         raise QueryFailure("CURRENCY_SCOPE_REQUIRED", "原币指标必须按币种分组或限定单一币种。")
+    if (
+        requires_currency_scope
+        and "currency" not in requested_dimensions
+        and "currency" in requested_filters
+    ):
+        currency_values = requested_filters["currency"]
+        currency_values = (
+            currency_values if isinstance(currency_values, list) else [currency_values]
+        )
+        if len(currency_values) != 1:
+            raise QueryFailure(
+                "CURRENCY_SCOPE_REQUIRED",
+                "原币指标未按币种分组时只能限定一个币种。",
+            )
     unit_policy = metric.get("unit_policy")
     requires_unit_scope = unit_policy == "group_or_filter" or (
         isinstance(unit_policy, Mapping)
@@ -2261,6 +2297,18 @@ def _build_metric_core(
         "unit" in requested_dimensions or "unit" in requested_filters
     ):
         raise QueryFailure("UNIT_SCOPE_REQUIRED", "数量指标必须按单位分组或限定单一单位。")
+    if (
+        requires_unit_scope
+        and "unit" not in requested_dimensions
+        and "unit" in requested_filters
+    ):
+        unit_values = requested_filters["unit"]
+        unit_values = unit_values if isinstance(unit_values, list) else [unit_values]
+        if len(unit_values) != 1:
+            raise QueryFailure(
+                "UNIT_SCOPE_REQUIRED",
+                "数量指标未按单位分组时只能限定一个单位。",
+            )
 
     join_states: dict[tuple[Any, ...], dict[str, Any]] = {}
     metric_join_alias: str | None = None
@@ -2315,6 +2363,8 @@ def _build_metric_core(
     if time_bucket is not None:
         if time_bucket not in {"day", "month"} or not isinstance(time_field, str):
             raise QueryFailure("INVALID_PLAN", "该指标不支持请求的时间分组。")
+        if metric.get("time_granularity") == "month" and time_bucket != "month":
+            raise QueryFailure("INVALID_PLAN", "月粒度指标只能按月分组。")
         _approved_column(time_field, base_allowed, base_blocked)
         if "period" in output_names:
             raise QueryFailure("CONTRACT_UNAVAILABLE", "时间分组输出名称冲突。")
@@ -2438,6 +2488,30 @@ def _build_metric_core(
             "month" if metric.get("time_granularity") == "month" else "date",
             max_days=_max_metric_range_days(),
         )
+        if time_policy in {"latest_snapshot", "latest_non_null_snapshot"}:
+            try:
+                snapshot_start = date.fromisoformat(
+                    f"{start}-01" if metric.get("time_granularity") == "month" else start
+                )
+                snapshot_end = date.fromisoformat(
+                    f"{end}-01" if metric.get("time_granularity") == "month" else end
+                )
+            except ValueError as exc:
+                raise QueryFailure("INVALID_PLAN", "快照指标的显式期间无效。") from exc
+            month_span = (
+                (snapshot_end.year - snapshot_start.year) * 12
+                + snapshot_end.month
+                - snapshot_start.month
+            )
+            if (
+                snapshot_start.day != 1
+                or snapshot_end.day != 1
+                or month_span != 1
+            ):
+                raise QueryFailure(
+                    "INVALID_PLAN",
+                    "快照指标一次只能选择一个自然月；多月变化请使用受治理的趋势指标。",
+                )
         _approved_column(time_field, base_allowed, base_blocked)
         quoted_time = _qualified_identifier("f", time_field)
         where.extend([f"{quoted_time} >= %s", f"{quoted_time} < %s"])
@@ -3912,6 +3986,10 @@ def _public_error(failure: QueryFailure) -> dict[str, Any]:
         "message": failure.message,
         **_caller_retry_metadata(failure),
     }
+    if failure.recovery_action is not None:
+        error["recovery_action"] = failure.recovery_action
+    if failure.catalog_request is not None:
+        error["catalog_request"] = copy.deepcopy(failure.catalog_request)
     if failure.path is not None:
         error["path"] = failure.path
     if failure.hint is not None:
@@ -3969,6 +4047,10 @@ _PUBLIC_FACT_FIELDS = {
     "period_natural_days",
     "snapshot_month_count",
     "receipt_coverage",
+    "net_delivery_amount_rmb",
+    "net_receipt_amount_rmb",
+    "settlement_band",
+    "sample_bill_count",
     "average_net_debt_rmb",
     "effective_month_count",
     "excluded_negative_bill_count",
@@ -4022,7 +4104,10 @@ def _safe_display_value(value: Any) -> str | None:
         text = value
     else:
         return None
-    text = re.sub(r"[\x00-\x1f\x7f-\x9f]+", " ", text)
+    text = "".join(
+        " " if unicodedata.category(character) in {"Cc", "Cf"} else character
+        for character in text
+    )
     text = re.sub(r"\s+", " ", text).strip()
     if not text:
         return None
@@ -4360,7 +4445,10 @@ def _validated_embedded_partition_proof(
 
 
 def _comparison_is_complete(
-    facts: Mapping[str, Any], states: Mapping[str, str]
+    facts: Mapping[str, Any],
+    states: Mapping[str, str],
+    *,
+    require_state_evidence: bool = False,
 ) -> bool:
     values = [
         _finite_decimal(facts.get(field))
@@ -4386,6 +4474,22 @@ def _comparison_is_complete(
             "comparison_known_value_count",
         ),
     }
+    has_paired_states = {
+        "current_metric_data_state",
+        "comparison_metric_data_state",
+    } <= set(states)
+    has_legacy_comparison_state = "comparison_state" in states
+    has_complete_coverage_counts = all(
+        _exact_nonnegative_int(facts.get(field)) is not None
+        for fields in coverage_absence_fields.values()
+        for field in fields
+    )
+    if require_state_evidence and not (
+        has_paired_states
+        or has_legacy_comparison_state
+        or has_complete_coverage_counts
+    ):
+        return False
     return (
         values[2] == values[0] - values[1]
         and all(
@@ -4503,7 +4607,10 @@ def _claim_ledger(
                 if (
                     normalized_field in {"id", "no"}
                     or normalized_field.startswith("_")
-                    or normalized_field.endswith(("_id", "_no"))
+                    or (
+                        normalized_field.endswith(("_id", "_no"))
+                        and normalized_field != "currency_no"
+                    )
                 ):
                     continue
                 display_value = _safe_display_value(row.get(field))
@@ -5171,7 +5278,11 @@ def _claim_triplet(claim: Mapping[str, Any]) -> tuple[Decimal, Decimal, Decimal]
     states = claim.get("states")
     if not isinstance(facts, Mapping) or not isinstance(states, Mapping):
         return None
-    if not _comparison_is_complete(facts, states):
+    if not _comparison_is_complete(
+        facts,
+        states,
+        require_state_evidence=True,
+    ):
         return None
     current = _finite_decimal(facts.get("metric_value"))
     comparison = _finite_decimal(facts.get("comparison_value"))
@@ -5642,12 +5753,17 @@ def _complete_decomposition_failure_reason(
         return "OVERALL_TRUNCATED"
     if (
         overall.get("scope_fingerprint") != partition.get("scope_fingerprint")
+        or not isinstance(overall.get("business_metric_ref"), str)
+        or not overall.get("business_metric_ref")
         or overall.get("business_metric_ref")
         != partition.get("business_metric_ref")
-        or overall.get("applied_time_range")
-        != partition.get("applied_time_range")
+        or not isinstance(overall.get("business_metric_unit"), str)
+        or not overall.get("business_metric_unit")
         or overall.get("business_metric_unit")
         != partition.get("business_metric_unit")
+        or not isinstance(overall.get("applied_time_range"), Mapping)
+        or overall.get("applied_time_range")
+        != partition.get("applied_time_range")
     ):
         return "SCOPE_MISMATCH"
     overall_claims = overall.get("claim_ledger")
@@ -6573,6 +6689,10 @@ def _failure_result(
         "message": failure.message,
         **_caller_retry_metadata(failure),
     }
+    if failure.recovery_action is not None:
+        error["recovery_action"] = failure.recovery_action
+    if failure.catalog_request is not None:
+        error["catalog_request"] = copy.deepcopy(failure.catalog_request)
     result = {
         "request_id": request_id,
         "status": "timeout" if failure.timeout else "failed",
@@ -6801,6 +6921,10 @@ def _formal_dso_attested_components_are_valid(
     gross_delivery = _finite_decimal(
         component_values.get(_FORMAL_DSO_GROSS_DELIVERY_FACT)
     )
+    metric_value = _finite_decimal(component_values.get("metric_value"))
+    average_net_debt = _finite_decimal(
+        component_values.get("average_net_debt_rmb")
+    )
     effective_month_count = _finite_decimal(
         component_values.get("effective_month_count")
     )
@@ -6809,8 +6933,19 @@ def _formal_dso_attested_components_are_valid(
     complete_window, expected_period_days = _formal_dso_complete_window(
         applied_time_range
     )
+    formula_value = (
+        average_net_debt * Decimal(period_days) / gross_delivery
+        if average_net_debt is not None
+        and gross_delivery is not None
+        and gross_delivery > 0
+        and isinstance(period_days, int)
+        and not isinstance(period_days, bool)
+        else None
+    )
     return (
-        gross_delivery is not None
+        metric_value is not None
+        and average_net_debt is not None
+        and gross_delivery is not None
         and gross_delivery > 0
         and isinstance(period_days, int)
         and not isinstance(period_days, bool)
@@ -6821,6 +6956,8 @@ def _formal_dso_attested_components_are_valid(
         and not isinstance(snapshot_month_count, bool)
         and snapshot_month_count == 13
         and effective_month_count == Decimal(12)
+        and formula_value is not None
+        and _decimal_close(metric_value, formula_value)
     )
 
 
@@ -7220,6 +7357,32 @@ def _fail_closed_structural_model_wire(projected: dict[str, Any]) -> None:
         _mark_model_wire_evidence_integrity_failure(projected)
 
 
+def _fail_closed_target_gap_model_wire(
+    projected: dict[str, Any],
+    *,
+    validation_result: Mapping[str, Any] | None = None,
+    request: Mapping[str, Any] | None = None,
+    overall_result: Mapping[str, Any] | None = None,
+) -> None:
+    """Never expose a reconciled target-gap receipt that fails its full binding."""
+
+    reconciliation = projected.get("target_gap_reconciliation")
+    if not isinstance(reconciliation, Mapping):
+        return
+    if reconciliation.get("status") != "reconciled":
+        projected.pop("target_gap_reconciliation", None)
+        return
+    if evidence._target_gap_reconciliation_is_valid(
+        validation_result if isinstance(validation_result, Mapping) else projected,
+        request=request,
+        overall_result=overall_result,
+    ):
+        return
+    projected.pop("target_gap_reconciliation", None)
+    projected["claim_ledger"] = []
+    _mark_model_wire_evidence_integrity_failure(projected)
+
+
 def _fail_closed_period_comparison_model_wire(projected: dict[str, Any]) -> None:
     """Project raw period observations without an unauthorized derived comparison."""
 
@@ -7254,7 +7417,12 @@ def _fail_closed_period_comparison_model_wire(projected: dict[str, Any]) -> None
         evidence.seal_claim(claim)
 
 
-def _model_wire_result(result: Mapping[str, Any]) -> dict[str, Any]:
+def _model_wire_result(
+    result: Mapping[str, Any],
+    *,
+    request: Mapping[str, Any] | None = None,
+    overall_result: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Project private execution state to the minimal model-visible result."""
 
     projected = {
@@ -7265,6 +7433,12 @@ def _model_wire_result(result: Mapping[str, Any]) -> dict[str, Any]:
     _filter_model_wire_evidence(projected)
     _fail_closed_period_comparison_model_wire(projected)
     _fail_closed_formal_dso_model_wire(projected)
+    _fail_closed_target_gap_model_wire(
+        projected,
+        validation_result=result,
+        request=request,
+        overall_result=overall_result,
+    )
     _fail_closed_structural_model_wire(projected)
     if "change_reconciliation" in projected:
         projected["change_reconciliation"] = _model_wire_change_reconciliation(
@@ -8149,6 +8323,7 @@ def _validate_request_plan_without_entities(
     *,
     observed_on: date | None = None,
     request_path: str | None = None,
+    trusted_session_id: Any = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Validate one branch through the last database-free planning boundary."""
 
@@ -8172,6 +8347,19 @@ def _validate_request_plan_without_entities(
             semantics,
             observed_on=observed_on,
         )
+        try:
+            resolution_records = entities.validate_resolution_receipts(
+                request,
+                semantics,
+                session_id=trusted_session_id,
+            )
+        except entities.EntityFailure as exc:
+            raise QueryFailure(exc.code, exc.message, stage="input_validation") from exc
+        if resolution_records:
+            # Keep records only inside this preflight hand-off.  _prepare_one
+            # removes both this private value and the public opaque tokens
+            # before scope fingerprints or business SQL are built.
+            request["_resolution_receipt_records"] = resolution_records
     except QueryFailure as exc:
         raise _at_stage(exc, "input_validation")
     return request, datasets, semantics
@@ -8181,6 +8369,7 @@ def _validate_query_dispatch(
     args: Any,
     *,
     observed_on: date,
+    trusted_session_id: Any = None,
 ) -> request_contract.ValidatedQueryEnvelope:
     """Finish all database-free validation before authorization/readiness."""
 
@@ -8192,6 +8381,7 @@ def _validate_query_dispatch(
                 raw_request,
                 observed_on=observed_on,
                 request_path=request_path,
+                trusted_session_id=trusted_session_id,
             )
             change_operation = request.get("complete_change_decomposition")
             if isinstance(change_operation, Mapping):
@@ -8235,6 +8425,7 @@ def _prepare_one(
     max_unique_lookups: int,
     preflight_stats: dict[str, Any],
     period_observed_on: date | None = None,
+    trusted_session_id: Any = None,
 ) -> dict[str, Any]:
     if deadline_at is not None and time.monotonic() >= deadline_at:
         raise QueryFailure(
@@ -8246,7 +8437,10 @@ def _prepare_one(
     request, datasets, semantics = _validate_request_plan_without_entities(
         raw_request,
         observed_on=period_observed_on,
+        trusted_session_id=trusted_session_id,
     )
+    resolution_records = request.pop("_resolution_receipt_records", [])
+    request.pop("resolution_receipts", None)
     resolved_entities: list[dict[str, Any]] = []
     if request["mode"] == "metric":
         def exact_lookup(sql: str, params: Sequence[Any], limit: int):
@@ -8287,6 +8481,13 @@ def _prepare_one(
                 max_unique_lookups=max_unique_lookups,
             )
             request = _validate_metric_filter_value_contracts(request, semantics)
+            try:
+                entities.validate_resolution_receipt_bindings(
+                    request,
+                    resolution_records,
+                )
+            except entities.EntityFailure as exc:
+                raise QueryFailure(exc.code, exc.message, stage="entity_preflight") from exc
         except entities.EntityFailure as exc:
             stage = "contract_load" if exc.code == "CONTRACT_UNAVAILABLE" else "entity_preflight"
             raise QueryFailure(exc.code, exc.message, stage=stage) from exc
@@ -8663,6 +8864,7 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
     """Validate, execute, and return structured evidence for one to ten requests."""
     batch_started = time.monotonic()
     period_observed_on = _kwargs.pop("_period_observed_on", None)
+    trusted_session_id = _kwargs.get("session_id")
     if not isinstance(period_observed_on, date):
         period_observed_on = _business_today()
     query_slot_owned = bool(_kwargs.pop("_query_slot_owned", False))
@@ -8767,6 +8969,7 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
                     max_unique_lookups=max_unique_lookups,
                     preflight_stats=stats,
                     period_observed_on=period_observed_on,
+                    trusted_session_id=trusted_session_id,
                 )
             except QueryFailure as exc:
                 failure = exc
@@ -8831,6 +9034,7 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
                         max_unique_lookups=max_unique_lookups,
                         preflight_stats=stats,
                         period_observed_on=period_observed_on,
+                        trusted_session_id=trusted_session_id,
                     )
                     if request_id in complete_dimensions_by_overall:
                         _validate_complete_decomposition_capability(
@@ -9033,6 +9237,7 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
                         max_unique_lookups=max_unique_lookups,
                         preflight_stats=stats,
                         period_observed_on=period_observed_on,
+                        trusted_session_id=trusted_session_id,
                     )
                     if request_id in complete_dimensions_by_overall:
                         _validate_complete_decomposition_capability(
@@ -9125,7 +9330,34 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
             if successful
             else "failed"
         )
-        public_results = [_model_wire_result(result) for result in results]
+        request_by_id = {
+            str(request.get("request_id")): request
+            for request in requests
+            if isinstance(request, Mapping)
+            and isinstance(request.get("request_id"), str)
+        }
+        result_by_id = {
+            str(result.get("request_id")): result
+            for result in results
+            if isinstance(result, Mapping)
+            and isinstance(result.get("request_id"), str)
+        }
+
+        def project_result(result: Mapping[str, Any]) -> dict[str, Any]:
+            reconciliation = result.get("target_gap_reconciliation")
+            overall_result = (
+                result_by_id.get(str(reconciliation.get("overall_request_id")))
+                if isinstance(reconciliation, Mapping)
+                and isinstance(reconciliation.get("overall_request_id"), str)
+                else None
+            )
+            return _model_wire_result(
+                result,
+                request=request_by_id.get(str(result.get("request_id"))),
+                overall_result=overall_result,
+            )
+
+        public_results = [project_result(result) for result in results]
         public_calculation_results = _model_wire_calculations(
             calculation_results,
             public_results,
@@ -9236,13 +9468,22 @@ def entitlement_guarded_datasage_query(
     args: dict[str, Any],
     **kwargs: Any,
 ) -> str:
-    """Public composition root with validation ahead of authorization."""
+    """Public composition root with coarse authorization before business validation."""
+
+    # Keep unauthorized callers outside the governed capability/metric oracle.
+    # This check inspects only trusted principal plus raw tool/domain/metric
+    # scope; the normalized row/metric authorization is repeated below.
+    from . import entitlements
+
+    if not entitlements.coarse_authorized("datasage_query", args):
+        return entitlements.denied_response()
 
     observed_on = _business_today()
     try:
         validated_envelope = _validate_query_dispatch(
             args,
             observed_on=observed_on,
+            trusted_session_id=kwargs.get("session_id"),
         )
     except QueryFailure as failure:
         return json.dumps(
@@ -9256,10 +9497,6 @@ def entitlement_guarded_datasage_query(
             ensure_ascii=False,
             separators=(",", ":"),
         )
-
-    # Authorization policy remains owned by entitlements.  This local import
-    # keeps module loading acyclic while making the public ordering explicit.
-    from . import entitlements
 
     if not entitlements.authorized(
         "datasage_query",
@@ -9369,9 +9606,8 @@ def runtime_guarded_datasage_query(
                     branch_failure,
                     elapsed_ms,
                     business_metric_ref=(
-                        str(request.get("metric"))
+                        _business_metric_ref(request)
                         if isinstance(request, Mapping)
-                        and isinstance(request.get("metric"), str)
                         else None
                     ),
                     business_sql_attempted_count=0,

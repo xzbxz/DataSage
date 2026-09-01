@@ -66,7 +66,13 @@ Rule ID: `datasage.query-rules/v1`
   [`datasage.entity-guidance/v1`](entity-guidance.md), which owns when to resolve
   and when another resolution attempt is justified, plus confirmation and
   turn-boundary behavior. Empty-result interpretation follows
-  [`datasage.answer-boundary/v1`](answer-boundary.md).
+  [`datasage.answer-boundary/v1`](answer-boundary.md). Entity resolution
+  receipts are transient tool outputs: copy each selected candidate's opaque
+  `resolution_receipt` into that request's `resolution_receipts`; never invent,
+  edit, persist, or place them in Memory. If a detail receipt is missing or
+  stale after context compaction, follow the returned `reload_metric_detail`
+  recovery action and issue the minimal catalog request; do not guess or
+  reconstruct a receipt.
 
 ## Interpretation hand-off
 

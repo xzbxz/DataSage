@@ -304,6 +304,14 @@ def _live_manifest(contract=None):
 def _live_report(builder, evidence_dir, subject=None, contract=None):
     subject = copy.deepcopy(subject or _subject())
     contract = contract or _live_contract()
+    model_identity = {
+        "schema": builder.LIVE_RUN_IDENTITY_SCHEMA,
+        "provider": "deepseek",
+        "model": "deepseek-v4-flash",
+        "model_fingerprint_sha256": "b" * 64,
+        "system_prompt_sha256": "c" * 64,
+        "profile_content_sha256": subject["content_sha256"],
+    }
     case_ids = contract["case_plan"]["case_ids"]
     commands = contract["execution"]["command_shapes"]
     suite = json.loads(builder.GOLDEN_SUITE.read_text(encoding="utf-8"))
@@ -392,27 +400,47 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
                     "resolution_state": "resolved",
                 }
             )
+            metric_ref = "metric_" + sha(
+                f"{request['domain']}\0{request['metric']}"
+            )[:16]
+            claim_id = "claim_" + hashlib.sha256(
+                request["request_id"].encode("utf-8")
+            ).hexdigest()[:20]
+            row = {
+                "claim_id": claim_id,
+                "dimensions": [],
+                "facts": {"metric_value": "1"},
+                "states": {"metric_data_state": "complete"},
+                "allowed_relations": ["observation"],
+                "unit": "CNY",
+                "currency": "CNY",
+            }
+            claim = {
+                **row,
+                "claim_seal": "sha256_" + sha(f"claim-seal-{request['request_id']}"),
+                "request_id": request["request_id"],
+                "metric_ref": metric_ref,
+                "scope_fingerprint": f"scope-{request['request_id']}",
+                "projection_fingerprint": f"projection-{request['request_id']}",
+                "period": copy.deepcopy(applied),
+                "source_truncated": False,
+            }
             results.append({
                 "request_id": request["request_id"], "status": "success",
                 "data_state": "rows",
-                "business_metric_ref": "metric_" + sha(
-                    f"{request['domain']}\0{request['metric']}"
-                )[:16],
+                "business_metric_ref": metric_ref,
                 "business_metric_label": request["metric"], "row_count": 1,
-                "rows": [{
-                    "claim_id": "claim_" + hashlib.sha256(
-                        request["request_id"].encode("utf-8")
-                    ).hexdigest()[:20],
-                    "dimensions": [], "facts": {"metric_value": "1"},
-                    "states": {"metric_data_state": "complete"},
-                    "allowed_relations": ["observation"], "unit": "CNY",
-                    "currency": "CNY",
-                }],
+                "scope_fingerprint": claim["scope_fingerprint"],
+                "projection_fingerprint": claim["projection_fingerprint"],
+                "claim_ledger": [claim],
+                "rows": [row],
                 "truncated": False, "applied_time_range": applied, "error": None,
             })
         query_call = (
             {"requests": requests},
             {
+                "status": "success",
+                "request_count": len(requests),
                 "model_wire_version": "datasage-query-model-wire/v3",
                 "source_evidence_ref": {
                     "schema": adapter.MODEL_SOURCE_REFERENCE_SCHEMA,
@@ -523,6 +551,8 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
             "chat_id": "synthetic-test-identity",
             "title": f"datasage-live-{subject['profile_git_commit'][:12]}-run-{run_index}",
             "started_at": "2026-08-29T00:00:00+00:00",
+            "fresh_run_nonce": f"{run_index:032x}",
+            **{key: value for key, value in model_identity.items() if key != "schema"},
             "messages": messages,
         }
         export_bytes = (json.dumps(exported, ensure_ascii=False) + "\n").encode("utf-8")
@@ -560,6 +590,10 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
                 "business_database_ref_sha256": database_ref_sha,
             }
             external_reviews_for_case = []
+            decision_quality = {
+                dimension: 1
+                for dimension in builder.DECISION_QUALITY_DIMENSIONS
+            }
             for reviewer_index, reviewer_id in enumerate(("datasage-live-reviewer-a", "datasage-live-reviewer-b")):
                 evidence = []
                 for label in case["required_conclusions"]:
@@ -574,6 +608,7 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
                     "capture_sha256": "0" * 64,
                     "reviewer_id": reviewer_id,
                     "labels": copy.deepcopy(case["required_conclusions"]),
+                    "decision_quality": copy.deepcopy(decision_quality),
                     "evidence": evidence,
                     "reviewed_at": "2026-08-29T00:00:00+00:00",
                 })
@@ -592,6 +627,7 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
                 "final_answer_sha256": final_sha,
                 "reviewer_id": consensus_reviewer_id,
                 "labels": external_reviews_for_case[0]["labels"],
+                "decision_quality": copy.deepcopy(decision_quality),
                 "fixture_attestation_sha256": fixture_sha,
                 "business_database_ref_sha256": database_ref_sha,
             }
@@ -614,6 +650,7 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
             "captured_at": "2026-08-29T00:00:00+00:00",
             "transcript_source": "wecom", "profile_artifact": profile,
             "session_export_sha256": session_export_sha256,
+            "integrity_policy": builder.LIVE_INTEGRITY_POLICY,
             "turns": turns,
         }
         candidate = adapter.adapt(export_bytes, bindings)
@@ -708,14 +745,20 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
             )
             for offset, name in enumerate(("session_export",), 1)
         }
+        run_identity = {
+            **model_identity,
+            "fresh_run_nonce": f"{run_index:032x}",
+        }
         capture_artifacts = []
         for name in ("session_export",):
             capture_artifacts.extend((capture_processes[name]["stdout"], capture_processes[name]["stderr"]))
         capture_artifacts.append(export_ref)
+        capture_artifacts.append(run_identity)
         captures.append({
             "run_index": run_index,
             "case_ids": copy.deepcopy(case_ids),
             "processes": capture_processes,
+            "run_identity": copy.deepcopy(run_identity),
             "session": {
                 "source": "wecom", "chat_type": "dm",
                 "user_id_sha256": contract["inbound"]["expected_user_id_sha256"],
@@ -737,6 +780,7 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
             {
                 "run_index": run_index,
                 "case_ids": copy.deepcopy(case_ids),
+                "run_identity": copy.deepcopy(run_identity),
                 "processes": {
                     name: process(
                         commands[name], run_index * 10 + offset, run_dir, name, finalize_bindings[name],
@@ -753,12 +797,14 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
     capture_path = evidence_dir / "private" / subject["profile_git_commit"] / "capture.json"
     capture_path.write_text(json.dumps({
         "schema": "datasage-live-capture/v2",
+        "integrity_policy": builder.LIVE_INTEGRITY_POLICY,
         "captured_at": "2026-08-29T00:00:00+00:00",
         "subject_commit_timestamp": "2026-08-28T00:00:00+00:00",
         "subject": subject,
         "host": {"hermes_version": "0.20.5", "hermes_git_commit": TEST_HERMES_COMMIT},
         "contract": source("tests/fixtures/live_release_contract.json"),
         "python_provenance": {"before": python_proof, "after": python_proof},
+        "model_identity": model_identity,
         "runs": captures,
     }, ensure_ascii=False), encoding="utf-8")
     capture_ref = artifact(capture_path)
@@ -772,6 +818,7 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
         run["reviews"] = artifact(reviews_path)
     return {
         "schema": "datasage-live-release-evidence/v3",
+        "integrity_policy": builder.LIVE_INTEGRITY_POLICY,
         "captured_at": "2026-08-29T00:00:00+00:00",
         "subject_commit_timestamp": "2026-08-28T00:00:00+00:00",
         "subject": subject,
@@ -790,6 +837,7 @@ def _live_report(builder, evidence_dir, subject=None, contract=None):
         "capture": capture_ref,
         "capture_digest": artifact(capture_digest_path),
         "python_provenance": {"before": python_proof, "after": python_proof},
+        "model_identity": model_identity,
         "runs": runs,
     }
 
@@ -1228,7 +1276,7 @@ class ReleaseEligibilityTests(unittest.TestCase):
                     live_contract=contract,
                 )
         codes = {item["code"] for item in result["blockers"]}
-        self.assertEqual("passed", result["live_model_replay"]["status"])
+        self.assertEqual("passed", result["live_model_replay"]["status"], result)
         self.assertEqual(
             "trusted_human_orchestrated_not_cryptographically_authenticated",
             result["live_model_replay"]["review_assurance"],
@@ -1971,12 +2019,13 @@ class ReleaseEligibilityTests(unittest.TestCase):
         commit = builder._git_commit(builder.ROOT)
         # Use a stable tracked fixture so this policy test remains meaningful
         # while an unreleased manifest change is under review in the worktree.
-        source = builder.ROOT / "profile.yaml"
+        source_rel = "tests/fixtures/host_compaction_ordering.json"
+        source = builder.ROOT / source_rel
         digest = builder._sha256_path(source)
         checked = builder._validate_hashed_source(
-            {"path": "profile.yaml", "sha256": digest},
+            {"path": source_rel, "sha256": digest},
             label="source",
-            expected_path="profile.yaml",
+            expected_path=source_rel,
             subject_commit=commit,
         )
         self.assertEqual(source, checked)
@@ -1984,9 +2033,9 @@ class ReleaseEligibilityTests(unittest.TestCase):
         with mock.patch.object(builder, "_git_output", side_effect=ValueError("untracked")):
             with self.assertRaisesRegex(ValueError, "untracked"):
                 builder._validate_hashed_source(
-                    {"path": "profile.yaml", "sha256": digest},
+                    {"path": source_rel, "sha256": digest},
                     label="source",
-                    expected_path="profile.yaml",
+                    expected_path=source_rel,
                     subject_commit=commit,
                 )
 
@@ -1997,9 +2046,9 @@ class ReleaseEligibilityTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(ValueError, "worktree content differs"):
                 builder._validate_hashed_source(
-                    {"path": "profile.yaml", "sha256": builder._sha256_bytes(different)},
+                    {"path": source_rel, "sha256": builder._sha256_bytes(different)},
                     label="source",
-                    expected_path="profile.yaml",
+                    expected_path=source_rel,
                     subject_commit=commit,
                 )
 

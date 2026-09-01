@@ -1,6 +1,7 @@
 # Credentials and authentication
 .env
-.env.EXAMPLE
+.env.*
+!.env.EXAMPLE
 auth.json
 auth.lock
 
@@ -49,6 +50,10 @@ state-snapshots/
 workspace/
 local/
 backups/
+
+# Source tests used by the release review; keep runtime state ignored.
+!tests/
+!tests/test_remediation_*.py
 
 # Generated language/tool caches
 __pycache__/

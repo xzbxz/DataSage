@@ -255,50 +255,23 @@ class ModuleDependencyTests(unittest.TestCase):
             self._replace_canonical_pymysql_family(original_canonical)
             sys.path[:] = original_sys_path
 
-    def test_profile_roots_and_yaml_cache_follow_the_context_override(self) -> None:
-        relative_path = "plugins/datasage-query/contracts/query-policy.yaml"
-        content = b"value: synthetic\n"
-        digest = "a" * 64
-
-        def contract_bytes(path: str):
-            return contract_store.profile_root() / path, content, digest
-
+    def test_profile_roots_follow_the_loaded_plugin_not_context_override(self) -> None:
         homes = (
             PROFILE_ROOT / "synthetic-profile-a",
             PROFILE_ROOT / "synthetic-profile-b",
         )
         roots = []
-        signatures = []
-        parsed = []
-        contract_store.parse_yaml_cached.cache_clear()
-        try:
-            with mock.patch.object(
-                contract_store, "_contract_bytes", side_effect=contract_bytes
-            ):
-                for home in homes:
-                    token = set_hermes_home_override(home)
-                    try:
-                        roots.append(contract_store.profile_root())
-                        self.assertEqual(
-                            contract_store.profile_root(), runtime_health._profile_root()
-                        )
-                        signatures.append(contract_store.content_signature(relative_path))
-                        parsed.append(contract_store.read_yaml(relative_path))
-                    finally:
-                        reset_hermes_home_override(token)
-
-            self.assertEqual(
-                [home.resolve(strict=False) for home in homes],
-                roots,
-            )
-            self.assertNotEqual(signatures[0][0], signatures[1][0])
-            self.assertEqual([digest, digest], [item[1] for item in signatures])
-            self.assertEqual([{"value": "synthetic"}] * 2, parsed)
-            cache_info = contract_store.parse_yaml_cached.cache_info()
-            self.assertEqual(2, cache_info.misses)
-            self.assertEqual(2, cache_info.currsize)
-        finally:
-            contract_store.parse_yaml_cached.cache_clear()
+        for home in homes:
+            token = set_hermes_home_override(home)
+            try:
+                roots.append(contract_store.profile_root())
+                self.assertEqual(
+                    contract_store.profile_root(), runtime_health._profile_root()
+                )
+            finally:
+                reset_hermes_home_override(token)
+        expected = PROFILE_ROOT.resolve(strict=False)
+        self.assertEqual([expected, expected], roots)
 
     def test_db_and_tls_configuration_use_the_scoped_profile_secrets(self) -> None:
         process_values = {
@@ -377,7 +350,15 @@ class ModuleDependencyTests(unittest.TestCase):
                     "require_tls": True,
                     "canary_accept_existing_account": False,
                 },
-            ), mock.patch.object(Path, "is_file", return_value=True):
+            ), mock.patch.object(
+                db_security,
+                "_safe_path_in_approved_root",
+                side_effect=lambda value, **_kwargs: (
+                    Path(scoped_ca).resolve(strict=False)
+                    if value == scoped_ca
+                    else (_ for _ in ()).throw(AssertionError(value))
+                ),
+            ):
                 tls = db_security.mysql_tls_kwargs()
             self.assertEqual(
                 str(Path(scoped_ca).expanduser().resolve()),
@@ -456,7 +437,7 @@ class ModuleDependencyTests(unittest.TestCase):
             reset_secret_scope(secret_token)
             set_multiplex_active(previous_multiplex)
 
-        self.assertNotEqual(keys[0], keys[1])
+        self.assertEqual(keys[0], keys[1])
         self.assertNotEqual(same_profile_keys[0], same_profile_keys[1])
 
     def test_entity_registry_cache_uses_profile_bound_content_signatures(self) -> None:

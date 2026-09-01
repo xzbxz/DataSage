@@ -258,7 +258,7 @@ class StrictSessionIdentityTests(unittest.TestCase):
         ):
             self.assertNotIn(category.casefold(), message)
 
-    def test_official_plugin_entry_validates_business_before_entitlement_denial(
+    def test_official_plugin_entry_denies_before_business_validation(
         self,
     ):
         manager = PluginManager()
@@ -370,7 +370,7 @@ class StrictSessionIdentityTests(unittest.TestCase):
             },
             payload,
         )
-        business_validation.assert_called_once()
+        business_validation.assert_not_called()
         runtime_sentinel.assert_not_called()
         database_sentinel.assert_not_called()
 
@@ -415,6 +415,13 @@ class StrictSessionIdentityTests(unittest.TestCase):
         loaded = manager._plugins["datasage-query"]
         self.assertTrue(loaded.enabled)
         self.assertIsNone(loaded.error)
+        registration_probe = RegistrationProbe()
+        loaded.module.register(registration_probe)
+        catalog_handler = next(
+            tool["handler"]
+            for tool in registration_probe.tools
+            if tool["name"] == "datasage_catalog"
+        )
         specs = loaded.module.entitlements.SCORECARD_METRICS
         domains = sorted({str(spec["domain"]) for spec in specs})
         metrics = {
@@ -456,13 +463,13 @@ class StrictSessionIdentityTests(unittest.TestCase):
                 ),
             ):
                 return json.loads(
-                    isolated_registry.dispatch(
-                        "datasage_catalog",
-                        {"requests": [{"view": "performance_scorecard"}]},
+                    catalog_handler(
+                        {"requests": [{"view": "performance_scorecard"}]}
                     )
                 )
 
         allowed = invoke(full_rule)
+        self.assertIn("status", allowed, allowed)
         self.assertEqual("success", allowed["status"], allowed)
         self.assertEqual(
             "datasage-catalog-model-wire/v3", allowed["model_wire_version"]
@@ -1693,6 +1700,10 @@ class DistributionBoundaryTests(unittest.TestCase):
                 "session_id": session_id,
                 "plan": dict(case["plan_constraints"]),
                 "conclusions": list(conclusions or ["refuse_unauthorized"]),
+                "decision_quality": {
+                    dimension: 1
+                    for dimension in scorer.DECISION_QUALITY_DIMENSIONS
+                },
                 "conclusion_review": review,
                 "evidence": {
                     "receipts": ["entitlement"],
@@ -1795,7 +1806,7 @@ class DistributionBoundaryTests(unittest.TestCase):
             )
         )
         self.assertEqual([], scorer.validate_suite(full_suite))
-        self.assertEqual(36, full_suite["minimum_case_count"])
+        self.assertEqual(51, full_suite["minimum_case_count"])
         self.assertEqual(6, full_suite["required_category_minimums"]["ambiguity"])
         case = next(
             item
@@ -2511,12 +2522,12 @@ class DistributionBoundaryTests(unittest.TestCase):
         marker = PROFILE_ROOT / ".no-bundled-skills"
         self.assertFalse(marker.exists())
 
-    def test_wecom_restores_official_host_surface_and_adds_datasage(self):
+    def test_wecom_uses_minimal_skill_and_datasage_surface(self):
         config = (PROFILE_ROOT / "config.yaml").read_text(encoding="utf-8")
         parsed_config = yaml.safe_load(config)
         wecom_toolsets = parsed_config["platform_toolsets"]["wecom"]
         self.assertEqual(
-            ["hermes-wecom", "datasage-query"],
+            ["skills", "clarify", "datasage-query"],
             wecom_toolsets,
         )
         resolved = set(
@@ -2527,10 +2538,10 @@ class DistributionBoundaryTests(unittest.TestCase):
             )
         )
         self.assertIn("datasage-query", resolved)
+        self.assertIn("skills", resolved)
+        self.assertIn("clarify", resolved)
         self.assertTrue(
-            {"terminal", "file", "web", "memory", "skills"}.issubset(
-                resolved
-            )
+            {"terminal", "file", "web", "memory"}.isdisjoint(resolved)
         )
         self.assertIn("skills:\n", config)
         self.assertIn("write_approval: true", config)
@@ -2828,6 +2839,12 @@ class LiveReleaseEvidenceBoundaryTests(unittest.TestCase):
                 "chat_type": "dm",
                 "title": f"datasage-live-{commit[:12]}-run-{run_index}",
                 "started_at": commit_timestamp.isoformat(),
+                "fresh_run_nonce": f"{run_index:032x}",
+                "provider": "deepseek",
+                "model": "deepseek-v4-flash",
+                "model_fingerprint_sha256": "b" * 64,
+                "system_prompt_sha256": "c" * 64,
+                "profile_content_sha256": "d" * 64,
                 "messages": messages,
             }
             return (json.dumps(exported, ensure_ascii=False) + "\n").encode("utf-8")
@@ -3014,6 +3031,10 @@ class LiveReleaseEvidenceBoundaryTests(unittest.TestCase):
                                         "capture_sha256": capture_sha,
                                         "reviewer_id": reviewer_id,
                                         "labels": [],
+                                        "decision_quality": {
+                                            dimension: 1
+                                            for dimension in builder.DECISION_QUALITY_DIMENSIONS
+                                        },
                                         "evidence": [],
                                         "reviewed_at": commit_timestamp.isoformat(),
                                     }

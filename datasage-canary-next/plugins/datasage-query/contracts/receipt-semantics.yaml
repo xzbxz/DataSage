@@ -192,6 +192,11 @@ default_disclosures:
   - id: receipt.domain.scope
     mode: required_always
     text: "收款及退款域指标均包含内部客户并排除A状态。"
+  - id: receipt.domain.scope.explicit-internal-filter
+    mode: required_when
+    when:
+      any_request_dimension_or_filter_present: [internal_customer]
+    text: "如本次显式提供内部客户维度或筛选，结果范围以本次实际筛选为准；默认范围说明不覆盖该筛选。"
   - id: receipt.domain.usage-scope
     mode: required_when
     when:

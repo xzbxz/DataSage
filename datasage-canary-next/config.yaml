@@ -24,9 +24,12 @@ platform_toolsets:
   cli:
     - hermes-cli
     - datasage-query
-  # Preserve the standard Hermes host surface and add governed business tools.
+  # WeCom is intentionally restricted to clarification, reviewed Skill access,
+  # and governed business evidence. `skills` still includes skill_view and
+  # skill_manage; the existing skills.write_approval gate protects mutations.
   wecom:
-    - hermes-wecom
+    - skills
+    - clarify
     - datasage-query
 privacy:
   redact_pii: true
@@ -53,8 +56,9 @@ plugins:
         max_rows: 100
         max_cell_chars: 2000
         max_dimension_display_chars: 80
-        # Business owner approval recorded 2026-08-11: every authenticated
-        # WeCom member may use the complete governed DataSage data surface.
+        # Business owner approval recorded 2026-08-11 and reaffirmed 2026-09-01:
+        # every authenticated WeCom member may use the complete governed
+        # DataSage data surface without Profile-level row filtering.
         data_entitlements:
           enforcement: enforce
           default_effect: deny

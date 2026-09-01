@@ -28,10 +28,12 @@ receipt_cache = importlib.import_module(f"{PACKAGE}.receipt_cache")
 class MetricCapabilityReceiptCacheTests(unittest.TestCase):
     def setUp(self) -> None:
         receipt_cache.clear_metric_capability_receipt_cache()
+        receipt_cache.contract_store.reset_contract_snapshot_for_tests()
         self.temp_dir = tempfile.TemporaryDirectory()
         root = Path(self.temp_dir.name)
         relative_paths = {
             "plugins/datasage-query/contracts/datasets.yaml",
+            "plugins/datasage-query/contracts/entity-registry.yaml",
             capability_contract.QUERY_POLICY_PATH,
             capability_contract.TARGET_GAP_CONTRACT_PATH,
             *(
@@ -55,6 +57,7 @@ class MetricCapabilityReceiptCacheTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.trusted_path.stop()
         receipt_cache.clear_metric_capability_receipt_cache()
+        receipt_cache.contract_store.reset_contract_snapshot_for_tests()
         self.temp_dir.cleanup()
 
     def test_same_signature_builds_once_and_return_values_are_isolated(self) -> None:
@@ -77,7 +80,7 @@ class MetricCapabilityReceiptCacheTests(unittest.TestCase):
         self.assertEqual(["current"], second["facts"])
         self.assertIsNot(first, second)
 
-    def test_changed_domain_semantics_signature_rebuilds(self) -> None:
+    def test_changed_domain_semantics_latches_contract_drift(self) -> None:
         calls = 0
 
         def builder(_domain: str, _metric: str) -> str:
@@ -92,15 +95,14 @@ class MetricCapabilityReceiptCacheTests(unittest.TestCase):
             capability_contract.DOMAIN_SOURCES["delivery"]["semantics"]
         ]
         semantics.write_text("changed: true\n", encoding="utf-8")
-        second = receipt_cache.get_metric_capability_receipt(
-            "delivery", "gross_delivery", builder=builder
-        )
-
         self.assertEqual("receipt-1", first)
-        self.assertEqual("receipt-2", second)
-        self.assertEqual(2, calls)
+        with self.assertRaises(receipt_cache.contract_store.ContractStoreError):
+            receipt_cache.get_metric_capability_receipt(
+                "delivery", "gross_delivery", builder=builder
+            )
+        self.assertEqual(1, calls)
 
-    def test_same_size_same_mtime_content_change_rebuilds(self) -> None:
+    def test_same_size_same_mtime_content_change_is_rejected(self) -> None:
         calls = 0
 
         def builder(_domain: str, _metric: str) -> int:
@@ -126,15 +128,13 @@ class MetricCapabilityReceiptCacheTests(unittest.TestCase):
             ns=(before.st_atime_ns, before.st_mtime_ns),
         )
 
-        self.assertEqual(
-            2,
+        with self.assertRaises(receipt_cache.contract_store.ContractStoreError):
             receipt_cache.get_metric_capability_receipt(
                 "delivery", "gross_delivery", builder=builder
-            ),
-        )
-        self.assertEqual(2, calls)
+            )
+        self.assertEqual(1, calls)
 
-    def test_yaml_cache_uses_content_not_only_file_metadata(self) -> None:
+    def test_yaml_cache_cannot_hide_contract_drift(self) -> None:
         relative_path = capability_contract.QUERY_POLICY_PATH
         path = self.paths[relative_path]
         path.write_text("value: one\n", encoding="utf-8")
@@ -143,18 +143,18 @@ class MetricCapabilityReceiptCacheTests(unittest.TestCase):
         before = path.stat()
         path.write_text("value: two\n", encoding="utf-8")
         os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
-        second = receipt_cache.contract_store.read_yaml(relative_path)
-
         self.assertEqual({"value": "one"}, first)
-        self.assertEqual({"value": "two"}, second)
+        with self.assertRaises(receipt_cache.contract_store.ContractStoreError):
+            receipt_cache.contract_store.read_yaml(relative_path)
 
-    def test_each_common_contract_signature_invalidates_the_entry(self) -> None:
+    def test_each_common_contract_change_is_rejected(self) -> None:
         for changed_path in (
             "plugins/datasage-query/contracts/datasets.yaml",
             capability_contract.QUERY_POLICY_PATH,
         ):
             with self.subTest(changed_path=changed_path):
                 receipt_cache.clear_metric_capability_receipt_cache()
+                receipt_cache.contract_store.reset_contract_snapshot_for_tests()
                 calls = 0
 
                 def builder(_domain: str, _metric: str) -> int:
@@ -173,13 +173,13 @@ class MetricCapabilityReceiptCacheTests(unittest.TestCase):
                     path.read_text(encoding="utf-8") + "changed: true\n",
                     encoding="utf-8",
                 )
-                self.assertEqual(
-                    2,
+                with self.assertRaises(
+                    receipt_cache.contract_store.ContractStoreError
+                ):
                     receipt_cache.get_metric_capability_receipt(
                         "receivable", "balance", builder=builder
-                    ),
-                )
-                self.assertEqual(2, calls)
+                    )
+                self.assertEqual(1, calls)
 
     def test_builder_failure_is_not_cached(self) -> None:
         calls = 0
@@ -203,7 +203,7 @@ class MetricCapabilityReceiptCacheTests(unittest.TestCase):
         )
         self.assertEqual(2, calls)
 
-    def test_target_gap_signature_only_invalidates_target_domain(self) -> None:
+    def test_target_gap_change_latches_the_process_snapshot(self) -> None:
         calls: dict[str, int] = {"delivery": 0, "target": 0}
 
         def builder(domain: str, _metric: str) -> str:
@@ -217,16 +217,17 @@ class MetricCapabilityReceiptCacheTests(unittest.TestCase):
         self.paths[capability_contract.TARGET_GAP_CONTRACT_PATH].write_text(
             "changed: target-gap\n", encoding="utf-8"
         )
-        delivery = receipt_cache.get_metric_capability_receipt(
-            "delivery", "metric", builder=builder
-        )
-        target = receipt_cache.get_metric_capability_receipt(
-            "target", "metric", builder=builder
-        )
-
-        self.assertEqual("delivery-1", delivery)
-        self.assertEqual("target-2", target)
-        self.assertEqual({"delivery": 1, "target": 2}, calls)
+        # The changed target-only file is detected when the target path is
+        # read; that detection latches the process so unrelated reads then
+        # fail closed as well.
+        for domain in ("target", "delivery"):
+            with self.subTest(domain=domain), self.assertRaises(
+                receipt_cache.contract_store.ContractStoreError
+            ):
+                receipt_cache.get_metric_capability_receipt(
+                    domain, "metric", builder=builder
+                )
+        self.assertEqual({"delivery": 1, "target": 1}, calls)
 
     def test_clear_forces_rebuild(self) -> None:
         calls = 0

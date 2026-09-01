@@ -308,6 +308,7 @@ class BusinessContractTests(unittest.TestCase):
                         "projection_fingerprint": result[
                             "projection_fingerprint"
                         ],
+                        "period": dict(result["applied_time_range"]),
                     }
                 )
         tools._seal_claim_ids(results)
@@ -499,9 +500,9 @@ class BusinessContractTests(unittest.TestCase):
 
         original_projection = tools._model_wire_result
 
-        def capture_projection(result):
+        def capture_projection(result, **projection_kwargs):
             captured_raw.setdefault(str(result.get("request_id")), result)
-            return original_projection(result)
+            return original_projection(result, **projection_kwargs)
 
         request = {
             "request_id": "inventory_snapshot_partition",
@@ -605,6 +606,7 @@ class BusinessContractTests(unittest.TestCase):
                     ),
                     "scope_fingerprint": "target-gap-scope",
                     "projection_fingerprint": f"target-gap-projection-{index}",
+                    "period": dict(shared["applied_time_range"]),
                     "source_truncated": False,
                     "allowed_relations": ["target_status"],
                     "facts": {
@@ -2192,7 +2194,13 @@ class BusinessContractTests(unittest.TestCase):
         self.assertEqual(overall["applied_time_range"], partition["applied_time_range"])
         self.assertFalse(receipt["completion_rate_aggregated"])
         self.assertFalse(receipt["causal_attribution_authorized"])
-        self.assertTrue(tools.evidence._target_gap_reconciliation_is_valid(partition))
+        self.assertTrue(
+            tools.evidence._target_gap_reconciliation_is_valid(
+                partition,
+                request=contexts[1]["request"],
+                overall_result=overall,
+            )
+        )
         typed_contract = contract_store.read_target_gap_contract()
         with mock.patch.object(
             tools.evidence.contract_store,
@@ -2200,9 +2208,20 @@ class BusinessContractTests(unittest.TestCase):
             return_value=replace(typed_contract, receipt_version="different/v1"),
         ):
             self.assertFalse(
-                tools.evidence._target_gap_reconciliation_is_valid(partition)
+                tools.evidence._target_gap_reconciliation_is_valid(
+                    partition,
+                    request=contexts[1]["request"],
+                    overall_result=overall,
+                )
             )
-        self.assertIn("target_gap_composition", tools.evidence._supports(partition))
+        self.assertIn(
+            "target_gap_composition",
+            tools.evidence._supports(
+                partition,
+                request=contexts[1]["request"],
+                overall_result=overall,
+            ),
+        )
 
     def test_target_gap_truncation_returns_typed_not_reconciled(self) -> None:
         contexts, results, operations = self._synthetic_target_gap_inputs(
@@ -3303,6 +3322,27 @@ class BusinessContractTests(unittest.TestCase):
                     str(request["domain"]), str(request["metric"])
                 ),
             }
+            metric_filters = request.get("metric_filters")
+            if isinstance(metric_filters, dict) and "department" in metric_filters:
+                department = str(metric_filters["department"])
+                _datasets, semantics = tools._contracts(str(request["domain"]))
+                request["resolution_receipts"] = [
+                    entities._resolution_receipt_for_candidate(
+                        {
+                            "entity_type": "department",
+                            "canonical_id": department,
+                            "canonical_code": department,
+                            "display_name": department,
+                            "filter_role": "department",
+                            "filter_values": [department],
+                        },
+                        token=department,
+                        domain=str(request["domain"]),
+                        metric=str(request["metric"]),
+                        semantics=semantics,
+                        session_id="business-contract-session",
+                    )
+                ]
             calls: list[dict[str, object]] = []
 
             def execute_query(sql, params, limit, **_kwargs):
@@ -3314,7 +3354,12 @@ class BusinessContractTests(unittest.TestCase):
                 "_execute_with_source",
                 side_effect=execute_query,
             ):
-                payload = json.loads(tools.datasage_query({"requests": [request]}))
+                payload = json.loads(
+                    tools.datasage_query(
+                        {"requests": [request]},
+                        session_id="business-contract-session",
+                    )
+                )
             self.assertEqual("success", payload["status"])
             self.assertEqual(1, len(calls))
             return payload["results"][0], calls
@@ -3627,7 +3672,7 @@ class BusinessContractTests(unittest.TestCase):
 
         dso_rows = [
             {
-                "metric_value": "42.00",
+                "metric_value": "40.5555555556",
                 "average_net_debt_rmb": "100.00",
                 "delivery_amount_rmb": "900.00",
                 "period_natural_days": 365,
@@ -3649,9 +3694,9 @@ class BusinessContractTests(unittest.TestCase):
         captured_dso_raw: list[dict[str, object]] = []
         original_model_wire_result = tools._model_wire_result
 
-        def capture_dso_raw(result):
+        def capture_dso_raw(result, **projection_kwargs):
             before_projection = json.loads(json.dumps(result))
-            projected = original_model_wire_result(result)
+            projected = original_model_wire_result(result, **projection_kwargs)
             self.assertEqual(before_projection, result)
             captured_dso_raw.append(before_projection)
             return projected
@@ -3726,7 +3771,7 @@ class BusinessContractTests(unittest.TestCase):
             attestation["authorized_components"],
         )
         expected_component_values = {
-            "metric_value": "42.00",
+            "metric_value": "40.5555555556",
             "average_net_debt_rmb": "100.00",
             "same_period_gross_delivery_rmb": "900.00",
             "period_natural_days": 365,
@@ -4071,9 +4116,12 @@ class BusinessContractTests(unittest.TestCase):
         for case_name, row, reason in undefined_cases:
             captured_undefined_raw: list[dict[str, object]] = []
 
-            def capture_undefined_raw(raw_result):
+            def capture_undefined_raw(raw_result, **projection_kwargs):
                 before_projection = json.loads(json.dumps(raw_result))
-                projected = original_model_wire_result(raw_result)
+                projected = original_model_wire_result(
+                    raw_result,
+                    **projection_kwargs,
+                )
                 self.assertEqual(before_projection, raw_result)
                 captured_undefined_raw.append(before_projection)
                 return projected

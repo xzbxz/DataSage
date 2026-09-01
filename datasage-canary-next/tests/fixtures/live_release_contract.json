@@ -3,7 +3,7 @@
   "scope": "test_only_official_hermes_wecom_inbound_live_release",
   "subject": {
     "name": "datasage-canary-next",
-    "version": "0.15.0-rc8"
+    "version": "0.15.0-rc9"
   },
   "host": {
     "hermes_version": "0.20.5",
@@ -15,6 +15,11 @@
     "scorer": "plugins/datasage-query/e2e/golden_expert_scorer.py",
     "producer": "tests/run_live_release_evidence.py"
   },
+  "tool_allowlist": [
+    "datasage_catalog",
+    "datasage_entity_resolve",
+    "datasage_query"
+  ],
   "case_plan": {
     "conversation_id": "rc5_live_20260825_200011",
     "case_ids": [
@@ -206,5 +211,18 @@
     "wecom_configuration": "required_for_live_execution",
     "configuration_values_recorded": false,
     "trusted_caller_readiness": "official_wecom_inbound_session_origin_verified"
+  },
+  "run_identity_policy": {
+    "schema": "datasage-live-integrity/v1",
+    "required_fields": [
+      "fresh_run_nonce",
+      "provider",
+      "model",
+      "model_fingerprint_sha256",
+      "system_prompt_sha256",
+      "profile_content_sha256"
+    ],
+    "unique_nonce_per_run": true,
+    "profile_binding": "subject.content_sha256"
   }
 }

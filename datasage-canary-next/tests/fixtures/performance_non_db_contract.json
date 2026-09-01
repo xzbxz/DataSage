@@ -1,9 +1,10 @@
 {
   "schema": "datasage-performance-non-db-contract/v2",
+  "integrity_policy": "datasage-performance-integrity/v1",
   "scope": "test-only host/plugin/model non-database denial path",
   "subject": {
     "name": "datasage-canary-next",
-    "version": "0.15.0-rc8"
+    "version": "0.15.0-rc9"
   },
   "host": {
     "hermes_version": "0.20.5",
@@ -56,7 +57,7 @@
     "required_api_calls_per_run": 2,
     "max_duration_ns": 120000000000,
     "threshold_basis": "test_execution_safety_not_business_sla",
-    "expected_tool_schema_sha256": "41243d1518975dc7da0b9c930417b4a2283a0c97aa5de78cf5ed82f8356cfdf0"
+    "expected_tool_schema_sha256": "a4a493678f2292bed5bb976d8b47f0757023f3fa8d9a8fe54fc2c191d148215c"
   },
   "pricing_snapshot": {
     "schema": "deepseek-public-pricing/v1",

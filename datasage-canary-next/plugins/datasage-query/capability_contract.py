@@ -617,9 +617,28 @@ def business_today() -> date:
 def ensure_available(definition: Mapping[str, Any]) -> None:
     """Validate the cross-domain governed availability shape."""
 
+    status = validate_availability(definition)
+    if status == "available":
+        return
+    availability = definition["availability"]
+    raise AvailabilityContractError(
+        str(availability["error_code"]), "该指标当前不可用于回答。"
+    )
+
+
+def validate_availability(definition: Mapping[str, Any]) -> str:
+    """Validate availability metadata and return its normalized status.
+
+    Catalog compilation needs to validate unavailable metrics without treating a
+    well-formed pending/blocked metric as an execution request.  The existing
+    ``ensure_available`` function intentionally raises for those statuses, so
+    this helper owns the shape validation while leaving execution denial to the
+    caller.
+    """
+
     availability = definition.get("availability")
     if availability is None:
-        return
+        return "available"
     if not isinstance(availability, dict):
         raise AvailabilityContractError(
             "CONTRACT_UNAVAILABLE",
@@ -627,7 +646,7 @@ def ensure_available(definition: Mapping[str, Any]) -> None:
         )
     status = str(availability.get("status") or "available")
     if status == "available":
-        return
+        return status
     if status not in {"blocked", "pending_validation"}:
         raise AvailabilityContractError(
             "CONTRACT_UNAVAILABLE",
@@ -645,8 +664,7 @@ def ensure_available(definition: Mapping[str, Any]) -> None:
             "CONTRACT_UNAVAILABLE",
             "不可用指标缺少结构化错误定义。",
         )
-    # Operator-only reason text must not cross the model-visible boundary.
-    raise AvailabilityContractError(code, "该指标当前不可用于回答。")
+    return status
 
 
 def query_request_schema_conditions() -> list[dict]:

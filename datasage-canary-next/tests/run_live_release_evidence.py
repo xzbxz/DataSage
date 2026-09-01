@@ -19,6 +19,8 @@ import time
 from typing import Any
 import uuid
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT_PATH = ROOT / "tests" / "fixtures" / "live_release_contract.json"
@@ -28,6 +30,7 @@ SCORER_PATH = ROOT / "plugins" / "datasage-query" / "e2e" / "golden_expert_score
 BUILDER_PATH = ROOT / "build_release_receipt.py"
 EVIDENCE_DIR = ROOT / "pending" / "evidence"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+MODEL_FINGERPRINT_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
 def _reject_constant(value: str) -> None:
@@ -57,6 +60,97 @@ def _canonical(value: object) -> bytes:
 def _sha(value: object) -> str:
     payload = value if isinstance(value, bytes) else value.encode("utf-8") if isinstance(value, str) else _canonical(value)
     return hashlib.sha256(payload).hexdigest()
+
+
+def _require_model_fingerprint(value: object, label: str) -> str:
+    """Accept only a host-issued SHA-256 fingerprint and normalize its case."""
+
+    if not isinstance(value, str) or MODEL_FINGERPRINT_RE.fullmatch(value) is None:
+        raise RuntimeError(f"{label} must be a 64-character SHA-256 fingerprint")
+    return value.lower()
+
+
+def _configured_model() -> tuple[str, str]:
+    payload = yaml.safe_load((ROOT / "config.yaml").read_text(encoding="utf-8"))
+    model = payload.get("model") if isinstance(payload, dict) else None
+    if not isinstance(model, dict):
+        raise RuntimeError("config.model is unavailable")
+    provider = model.get("provider")
+    configured = model.get("default") or model.get("model")
+    if isinstance(configured, dict):
+        configured = configured.get("model")
+    if not isinstance(provider, str) or not provider or not isinstance(configured, str) or not configured:
+        raise RuntimeError("config.model provider/default is unavailable")
+    return provider, configured
+
+
+def _session_run_identity(
+    session: dict[str, object],
+    *,
+    profile_content_sha256: str,
+) -> dict[str, str]:
+    """Extract only host-persisted identity; never synthesize missing fields."""
+
+    nonce = session.get("fresh_run_nonce") or session.get("run_nonce")
+    provider = session.get("billing_provider") or session.get("provider")
+    model = session.get("model")
+    fingerprint = session.get("model_fingerprint_sha256") or session.get("model_fingerprint")
+    prompt_sha = session.get("system_prompt_sha256") or session.get("system_prompt_hash")
+    observed_profile_sha = session.get("profile_content_sha256") or session.get("profile_artifact_sha256")
+    if not isinstance(nonce, str) or re.fullmatch(r"[0-9a-f]{32,128}", nonce) is None:
+        raise RuntimeError("official export lacks a host fresh-run nonce")
+    if not isinstance(provider, str) or not provider or not isinstance(model, str) or not model:
+        raise RuntimeError("official export lacks provider/model identity")
+    fingerprint = _require_model_fingerprint(fingerprint, "official export model fingerprint")
+    if not isinstance(prompt_sha, str) or SHA256_RE.fullmatch(prompt_sha) is None:
+        raise RuntimeError("official export lacks system prompt hash")
+    if not isinstance(observed_profile_sha, str) or SHA256_RE.fullmatch(observed_profile_sha) is None:
+        raise RuntimeError("official export lacks profile content digest")
+    expected_provider, expected_model = _configured_model()
+    if (provider, model) != (expected_provider, expected_model):
+        raise RuntimeError("official export provider/model differs from config.yaml")
+    if observed_profile_sha != profile_content_sha256:
+        raise RuntimeError("official export profile content digest differs from the subject")
+    return {
+        "schema": "datasage-live-run-identity/v1",
+        "fresh_run_nonce": nonce,
+        "provider": provider,
+        "model": model,
+        "model_fingerprint_sha256": fingerprint,
+        "system_prompt_sha256": prompt_sha,
+        "profile_content_sha256": observed_profile_sha,
+    }
+
+
+def _validate_common_model_identity(
+    value: object,
+    *,
+    profile_content_sha256: str,
+) -> dict[str, str]:
+    if not isinstance(value, dict) or set(value) != {
+        "schema", "provider", "model", "model_fingerprint_sha256",
+        "system_prompt_sha256", "profile_content_sha256",
+    }:
+        raise RuntimeError("live capture has no complete model identity")
+    if value.get("schema") != "datasage-live-run-identity/v1":
+        raise RuntimeError("live capture model identity schema is unsupported")
+    provider = value.get("provider")
+    model = value.get("model")
+    if not isinstance(provider, str) or not provider or not isinstance(model, str) or not model:
+        raise RuntimeError("live capture model identity is incomplete")
+    fingerprint = _require_model_fingerprint(
+        value.get("model_fingerprint_sha256"),
+        "live capture model identity.model_fingerprint_sha256",
+    )
+    for key in ("system_prompt_sha256", "profile_content_sha256"):
+        if not isinstance(value.get(key), str) or SHA256_RE.fullmatch(value[key]) is None:
+            raise RuntimeError(f"live capture model identity {key} is invalid")
+    if value["profile_content_sha256"] != profile_content_sha256:
+        raise RuntimeError("live capture model identity is not bound to the subject")
+    expected_provider, expected_model = _configured_model()
+    if (provider, model) != (expected_provider, expected_model):
+        raise RuntimeError("live capture model identity differs from config.yaml")
+    return {**value, "model_fingerprint_sha256": fingerprint}
 
 
 def _load_module(name: str, path: Path):
@@ -344,7 +438,7 @@ def _cleanup_capture_stage(stage: Path, commit: str) -> None:
 
 
 def _review_assertion(review: dict[str, object], *, adapter: Any, profile: dict[str, str], case_id: str, session_id: str, user_id: int, prompt_sha: str, session_export_sha256: str, watermark: str, final_sha: str, fixture_sha: str, database_ref_sha: str) -> dict[str, object]:
-    return {
+    assertion = {
         "schema": adapter.REVIEW_SCHEMA, "status": "reviewed", "test_id": case_id,
         "artifact_id": profile["artifact_id"], "payload_sha256": profile["payload_sha256"],
         "session_id": session_id, "user_message_id": user_id, "canonical_prompt_sha256": prompt_sha,
@@ -352,6 +446,10 @@ def _review_assertion(review: dict[str, object], *, adapter: Any, profile: dict[
         "final_answer_sha256": final_sha, "reviewer_id": review["reviewer_id"], "labels": review["labels"],
         "fixture_attestation_sha256": fixture_sha, "business_database_ref_sha256": database_ref_sha,
     }
+    quality = review.get("decision_quality")
+    if isinstance(quality, dict):
+        assertion["decision_quality"] = dict(quality)
+    return assertion
 
 
 def _capture(args: argparse.Namespace, contract: dict[str, object], golden: dict[str, object], builder: Any) -> int:
@@ -370,7 +468,9 @@ def _capture(args: argparse.Namespace, contract: dict[str, object], golden: dict
     case_ids = contract["case_plan"]["case_ids"]
     by_id = {item["id"]: item for item in golden["cases"]}
     cases = [by_id[case_id] for case_id in case_ids]
-    if [case["turn"] for case in cases] != [1, 2] or {case["conversation_id"] for case in cases} != {contract["case_plan"]["conversation_id"]}:
+    if [case["turn"] for case in cases] != [1, 2] or {
+        case["conversation_id"] for case in cases
+    } != {contract["case_plan"]["conversation_id"]}:
         raise RuntimeError("contract cases are not the exact tracked two-turn conversation")
     root = EVIDENCE_DIR / "private" / commit
     if root.exists():
@@ -386,6 +486,7 @@ def _capture(args: argparse.Namespace, contract: dict[str, object], golden: dict
             raise RuntimeError("capture clock did not produce a timezone-aware timestamp")
         commit_timestamp = _commit_timestamp(commit)
         runs = []
+        observed_nonces: set[str] = set()
         for run_index, requested_session_id in enumerate(session_ids, 1):
             run_dir = stage / f"run-{run_index}"
             logical_run_dir = root / f"run-{run_index}"
@@ -417,6 +518,13 @@ def _capture(args: argparse.Namespace, contract: dict[str, object], golden: dict
             session_id = origin.pop("session_id")
             if session_id != requested_session_id:
                 raise RuntimeError("official export does not match the exact requested session")
+            run_identity = _session_run_identity(
+                session,
+                profile_content_sha256=str(receipt["content_sha256"]),
+            )
+            if run_identity["fresh_run_nonce"] in observed_nonces:
+                raise RuntimeError("official exports reuse a fresh-run nonce")
+            observed_nonces.add(run_identity["fresh_run_nonce"])
             endpoints = _endpoints(
                 messages,
                 [case["prompt"] for case in cases],
@@ -424,15 +532,19 @@ def _capture(args: argparse.Namespace, contract: dict[str, object], golden: dict
             )
             _fail_on_nonretryable_tool_result(messages)
             export_ref = _artifact(export_path, logical_path=logical_run_dir / export_path.name)
-            artifact_refs = [export_record["stdout"], export_record["stderr"], export_ref]
+            artifact_refs = [
+                export_record["stdout"], export_record["stderr"], export_ref,
+                run_identity,
+            ]
             runs.append({
                 "run_index": run_index,
                 "case_ids": case_ids,
                 "processes": {"session_export": export_record},
+                "run_identity": run_identity,
                 "session": {
                     **origin,
                     "export_format": "jsonl",
-                    "turns": 2,
+                    "turns": len(cases),
                     "lineage_sha256": _sha([session_id]),
                     "session_id_sha256": _sha(session_id),
                     "final_answer_sha256": [item[2] for item in endpoints],
@@ -442,14 +554,33 @@ def _capture(args: argparse.Namespace, contract: dict[str, object], golden: dict
             })
         _runtime(hermes_root=hermes_root, hermes_python=hermes_python, contract=contract)
         python_after = _python_provenance(builder, hermes_root, hermes_python, contract)
+        identities = [run["run_identity"] for run in runs]
+        common_identity = {
+            key: identities[0][key]
+            for key in (
+                "schema", "provider", "model", "model_fingerprint_sha256",
+                "system_prompt_sha256", "profile_content_sha256",
+            )
+        }
+        if any(
+            {
+                key: identity[key]
+                for key in common_identity
+            }
+            != common_identity
+            for identity in identities[1:]
+        ):
+            raise RuntimeError("live runs do not share one model/profile identity")
         capture = {
             "schema": "datasage-live-capture/v2",
+            "integrity_policy": "datasage-live-integrity/v1",
             "captured_at": captured_at.isoformat(),
             "subject_commit_timestamp": commit_timestamp.isoformat(),
             "subject": {"name": receipt["name"], "version": receipt["version"], "content_sha256": receipt["content_sha256"], "profile_git_commit": commit},
             "host": {"hermes_version": contract["host"]["hermes_version"], "hermes_git_commit": hermes_commit},
             "contract": _source(commit, "tests/fixtures/live_release_contract.json"),
             "python_provenance": {"before": python_before, "after": python_after},
+            "model_identity": common_identity,
             "runs": runs,
         }
         temporary = stage / ".capture.json.tmp"
@@ -479,8 +610,9 @@ def _finalize(args: argparse.Namespace, contract: dict[str, object], golden: dic
     expected_host = {"hermes_version": contract["host"]["hermes_version"], "hermes_git_commit": hermes_commit}
     expected_contract = _source(commit, "tests/fixtures/live_release_contract.json")
     if (
-        set(capture) != {"schema", "captured_at", "subject_commit_timestamp", "subject", "host", "contract", "python_provenance", "runs"}
+        set(capture) != {"schema", "integrity_policy", "captured_at", "subject_commit_timestamp", "subject", "host", "contract", "python_provenance", "model_identity", "runs"}
         or capture["schema"] != "datasage-live-capture/v2"
+        or capture["integrity_policy"] != "datasage-live-integrity/v1"
         or _canonical(capture["subject"]) != _canonical(expected_subject)
         or _canonical(capture["host"]) != _canonical(expected_host)
         or _canonical(capture["contract"]) != _canonical(expected_contract)
@@ -488,6 +620,10 @@ def _finalize(args: argparse.Namespace, contract: dict[str, object], golden: dic
         or len(capture["runs"]) != 3
     ):
         raise RuntimeError("no complete current-subject capture is available")
+    common_model_identity = _validate_common_model_identity(
+        capture["model_identity"],
+        profile_content_sha256=str(expected_subject["content_sha256"]),
+    )
     captured_at = _aware_datetime(capture["captured_at"], "capture.captured_at")
     subject_commit_timestamp = _aware_datetime(
         capture["subject_commit_timestamp"], "capture.subject_commit_timestamp"
@@ -508,7 +644,7 @@ def _finalize(args: argparse.Namespace, contract: dict[str, object], golden: dic
     for position, captured in enumerate(capture["runs"], 1):
         if (
             not isinstance(captured, dict)
-            or set(captured) != {"run_index", "case_ids", "processes", "session", "artifact_set_sha256"}
+            or set(captured) != {"run_index", "case_ids", "processes", "run_identity", "session", "artifact_set_sha256"}
             or type(captured["run_index"]) is not int
             or captured["run_index"] != position
             or captured["case_ids"] != case_ids
@@ -533,6 +669,17 @@ def _finalize(args: argparse.Namespace, contract: dict[str, object], golden: dic
         if session_id in captured_session_ids:
             raise RuntimeError("frozen capture reuses a session across runs")
         captured_session_ids.add(session_id)
+        run_identity = _session_run_identity(
+            session,
+            profile_content_sha256=str(expected_subject["content_sha256"]),
+        )
+        if captured["run_identity"] != run_identity:
+            raise RuntimeError("frozen run identity differs from the official export")
+        if {
+            key: run_identity[key]
+            for key in common_model_identity
+        } != common_model_identity:
+            raise RuntimeError("frozen run model identity differs from capture identity")
         origin = _session_origin(
             session,
             contract=contract,
@@ -553,7 +700,7 @@ def _finalize(args: argparse.Namespace, contract: dict[str, object], golden: dic
             any(session_record[key] != origin[key] for key in origin)
             or session_record["export_format"] != "jsonl"
             or type(session_record["turns"]) is not int
-            or session_record["turns"] != 2
+            or session_record["turns"] != len(cases)
             or session_record["lineage_sha256"] != _sha([session_id])
             or session_record["session_id_sha256"] != _sha(session_id)
             or session_record["final_answer_sha256"] != [item[2] for item in endpoints]
@@ -571,6 +718,7 @@ def _finalize(args: argparse.Namespace, contract: dict[str, object], golden: dic
             captured["processes"]["session_export"]["stderr"],
         ]
         artifact_refs.append(captured["session"]["export"])
+        artifact_refs.append(captured["run_identity"])
         if captured["artifact_set_sha256"] != _sha(artifact_refs):
             raise RuntimeError("frozen capture artifact-set digest is invalid")
         captured_contexts.append((captured, run_dir, export_path, session_id, endpoints, messages))
@@ -583,7 +731,10 @@ def _finalize(args: argparse.Namespace, contract: dict[str, object], golden: dic
     review_keys = {"run_index", "case_id", "session_id_sha256", "final_answer_sha256", "capture_sha256", "reviewer_id", "labels", "evidence", "reviewed_at"}
     review_map: dict[tuple[int, str], list[dict[str, object]]] = {}
     for review in external["reviews"]:
-        if not isinstance(review, dict) or set(review) != review_keys:
+        if not isinstance(review, dict) or set(review) not in (
+            review_keys,
+            review_keys | {"decision_quality"},
+        ):
             raise RuntimeError("external reviews have unknown/missing fields; plan_trace is forbidden")
         key = (review.get("run_index"), review.get("case_id"))
         if type(key[0]) is not int or not isinstance(key[1], str):
@@ -626,7 +777,21 @@ def _finalize(args: argparse.Namespace, contract: dict[str, object], golden: dic
                 builder._validate_review_evidence(review, final_answer, case["required_conclusions"])
             if pair[0]["labels"] != pair[1]["labels"]:
                 raise RuntimeError("trusted reviewers did not reach exact conclusion consensus")
-            consensus_reviews.append({"reviewer_id": builder._review_consensus_id(pair), "labels": pair[0]["labels"]})
+            first_quality = pair[0].get("decision_quality")
+            second_quality = pair[1].get("decision_quality")
+            if _canonical(first_quality) != _canonical(second_quality):
+                raise RuntimeError("trusted reviewers did not reach exact decision-quality consensus")
+            if "decision_quality_requirements" in case and not isinstance(
+                first_quality, dict
+            ):
+                raise RuntimeError("trusted reviewers omitted required decision quality")
+            consensus = {
+                "reviewer_id": builder._review_consensus_id(pair),
+                "labels": pair[0]["labels"],
+            }
+            if isinstance(first_quality, dict):
+                consensus["decision_quality"] = dict(first_quality)
+            consensus_reviews.append(consensus)
         reviews_path = run_dir / "reviews.json"
         _write_json(reviews_path, review_set)
         fixture_sha, database_ref_sha = args.fixture_attestation_sha256, args.business_database_ref_sha256
@@ -640,14 +805,14 @@ def _finalize(args: argparse.Namespace, contract: dict[str, object], golden: dic
                 "fixture_attestation_sha256": fixture_sha, "business_database_ref_sha256": database_ref_sha,
                 "review": _review_assertion(review, adapter=adapter, profile=profile, case_id=case["id"], session_id=session_id, user_id=user_id, prompt_sha=prompt_sha, session_export_sha256=session_export_sha256, watermark=watermark, final_sha=final_sha, fixture_sha=fixture_sha, database_ref_sha=database_ref_sha),
             })
-        bindings = {"schema": adapter.LIVE_BINDING_SCHEMA, "captured_at": capture["captured_at"], "transcript_source": "wecom", "profile_artifact": profile, "session_export_sha256": session_export_sha256, "turns": turns}
+        bindings = {"schema": adapter.LIVE_BINDING_SCHEMA, "captured_at": capture["captured_at"], "transcript_source": "wecom", "profile_artifact": profile, "session_export_sha256": session_export_sha256, "integrity_policy": "datasage-live-integrity/v1", "turns": turns}
         bindings_path, candidate_path, score_path = run_dir / "bindings.json", run_dir / "candidate.json", run_dir / "score.json"
         _write_json(bindings_path, bindings)
         common = {"python": str(hermes_python), "adapter": str(ADAPTER_PATH), "scorer": str(SCORER_PATH), "session_export": str(export_path), "bindings": str(bindings_path), "candidate": str(candidate_path), "golden_suite": str(GOLDEN_PATH), "case_1": case_ids[0], "case_2": case_ids[1], "score_report": str(score_path)}
         _, adapter_record = _run(_expand(shapes["adapter"], common), shapes["adapter"], cwd=ROOT, env=env, timeout=timeout, stream_dir=run_dir, stream_prefix="adapter")
         _, scorer_record = _run(_expand(shapes["scorer"], common), shapes["scorer"], cwd=ROOT, env=env, timeout=timeout, stream_dir=run_dir, stream_prefix="scorer")
         finalized.append({
-            "run_index": run_index, "case_ids": case_ids, "processes": {"adapter": adapter_record, "scorer": scorer_record},
+            "run_index": run_index, "case_ids": case_ids, "processes": {"adapter": adapter_record, "scorer": scorer_record}, "run_identity": captured["run_identity"],
             "bindings": _artifact(bindings_path), "candidate": _artifact(candidate_path),
             "score_report": _artifact(score_path), "reviews": _artifact(reviews_path),
         })
@@ -656,6 +821,7 @@ def _finalize(args: argparse.Namespace, contract: dict[str, object], golden: dic
     sources = contract["source_paths"]
     evidence = {
         "schema": "datasage-live-release-evidence/v3",
+        "integrity_policy": "datasage-live-integrity/v1",
         "captured_at": capture["captured_at"],
         "subject_commit_timestamp": capture["subject_commit_timestamp"],
         "subject": {"name": receipt["name"], "version": receipt["version"], "content_sha256": receipt["content_sha256"], "profile_git_commit": commit},
@@ -663,6 +829,7 @@ def _finalize(args: argparse.Namespace, contract: dict[str, object], golden: dic
         "contract": _source(commit, "tests/fixtures/live_release_contract.json"), "producer": _source(commit, sources["producer"]),
         "golden_suite": _source(commit, sources["golden_suite"]), "adapter": _source(commit, sources["adapter"]), "scorer": _source(commit, sources["scorer"]),
         "runtime_readiness_policy_sha256": _sha(contract["runtime_readiness_policy"]),
+        "model_identity": common_model_identity,
         "capture": capture_ref, "capture_digest": capture_digest_ref,
         "python_provenance": {"before": python_before, "after": python_after}, "runs": finalized,
     }
