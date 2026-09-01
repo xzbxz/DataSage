@@ -43,6 +43,7 @@ distribution_owned:
   - plugins/datasage-query/contracts/delivery-semantics.yaml
   - plugins/datasage-query/contracts/entity-registry.yaml
   - plugins/datasage-query/contracts/inventory-semantics.yaml
+  - plugins/datasage-query/contracts/metric-governance.yaml
   - plugins/datasage-query/contracts/query-policy.yaml
   - plugins/datasage-query/contracts/receipt-semantics.yaml
   - plugins/datasage-query/contracts/receivable-semantics.yaml
@@ -54,6 +55,7 @@ distribution_owned:
   - plugins/datasage-query/entities.py
   - plugins/datasage-query/entitlements.py
   - plugins/datasage-query/evidence.py
+  - plugins/datasage-query/metric_governance.py
   - plugins/datasage-query/plugin.yaml
   - plugins/datasage-query/receipt_cache.py
   - plugins/datasage-query/request_contract.py

@@ -572,8 +572,9 @@ DATASAGE_CATALOG = {
         "requires_metric_detail. Direct "
         "query is allowed only when exact_default_lookup_supported is true and no explicit business qualifier is "
         "present; empty dimensions: [] does not count as a qualifier. "
-        "Otherwise request detail only for the selected metric before query. The default model projection is compact; "
-        "full/audit are explicit compatibility views. The optional performance_scorecard view returns a governed "
+        "Otherwise request detail only for the selected metric before query. The default model projection is compact. "
+        "The full view is a business capability summary; audit is a separate governance view containing only safe "
+        "owner-role, lifecycle, review, execution, and release states. The optional performance_scorecard view returns a governed "
         "operating set of candidate lenses while declaring unavailable capabilities. It is not a prerequisite or "
         "default planner; use it only when the user explicitly asks for that view or Hermes judges it useful. Hermes selects and orders the material "
         "subset. Metric detail returns capability facts and max_group_dimensions; these facts do not prescribe a "
@@ -611,8 +612,9 @@ DATASAGE_CATALOG = {
                             "enum": ["expert_index", "full", "audit", "performance_scorecard"],
                             "description": (
                                 "Use expert_index for compact discovery. Omit view for the default compact "
-                                "model projection. Use full or audit only for explicit compatibility/audit "
-                                "inspection. Use performance_scorecard without domain or metric only for the "
+                                "model projection. Use full for an explicit business capability summary; use audit "
+                                "for metric owner/lifecycle/review/release inspection without physical internals. "
+                                "Use performance_scorecard without domain or metric only for the "
                                 "optional governed cross-domain candidate lenses."
                             ),
                         },
@@ -648,7 +650,7 @@ DATASAGE_CATALOG = {
                 "description": (
                     "One request per relevant domain, or one cross-domain view=performance_scorecard request. "
                     "Use expert_index for discovery, include one exact metric code for detail, and use explicit "
-                    "full/audit only when the legacy summary is genuinely required. The scorecard returns a "
+                    "full for a business capability summary or audit for governance inspection. The scorecard returns a "
                     "optional set of candidate lenses plus independently sealed metric-detail receipts; it is not "
                     "required before ordinary metric discovery or query planning."
                 ),

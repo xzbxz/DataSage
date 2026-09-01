@@ -112,7 +112,11 @@ def _compact_catalog_result(
     result: Mapping[str, Any],
     value_policies: dict[str, str],
 ) -> dict[str, Any]:
-    if result.get("projection_mode") == "audit_full":
+    if result.get("projection_mode") in {
+        "audit_full",
+        "business_full",
+        "governance_audit",
+    }:
         return dict(result)
     level = result.get("level")
     if level == "metric":

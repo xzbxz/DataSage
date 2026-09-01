@@ -53,6 +53,7 @@ from . import (
     db_runtime,
     entities,
     evidence,
+    metric_governance,
     receipt_cache,
     request_contract,
     settings,
@@ -369,7 +370,10 @@ def _current_metric_detail_receipt(domain: str, metric_code: str) -> str:
 
 
 def _validate_metric_detail_gate(
-    request: Mapping[str, Any], semantics: Mapping[str, Any]
+    request: Mapping[str, Any],
+    semantics: Mapping[str, Any],
+    *,
+    observed_on: date | datetime | None = None,
 ) -> dict[str, Any]:
     """Enforce a current metric-detail receipt before any database preflight."""
 
@@ -378,6 +382,42 @@ def _validate_metric_detail_gate(
     metric = metrics.get(metric_code) if isinstance(metrics, Mapping) else None
     if not isinstance(metric_code, str) or not isinstance(metric, Mapping):
         raise QueryFailure("UNSUPPORTED_METRIC", "该指标尚未进入受控指标定义。")
+    try:
+        governance_status = metric_governance.metric_status(
+            str(request.get("domain")), metric_code, observed_on
+        )
+    except (
+        metric_governance.MetricGovernanceError,
+        contract_store.ContractStoreError,
+    ) as exc:
+        raise QueryFailure(
+            "CONTRACT_UNAVAILABLE",
+            "指标治理合同不可用。",
+            stage="contract_load",
+        ) from exc
+    derived_governance = governance_status.get("derived_status")
+    if not isinstance(derived_governance, Mapping):
+        raise QueryFailure(
+            "CONTRACT_UNAVAILABLE",
+            "指标治理状态无效。",
+            stage="contract_load",
+        )
+    if governance_status.get("lifecycle") == "retired":
+        raise QueryFailure(
+            "METRIC_RETIRED",
+            "该指标已退役，不能继续查询。",
+            stage="input_validation",
+        )
+    governance_warnings = derived_governance.get("warnings")
+    if not isinstance(governance_warnings, list) or any(
+        not isinstance(item, str) or re.fullmatch(r"[A-Z0-9_]+", item) is None
+        for item in governance_warnings
+    ):
+        raise QueryFailure(
+            "CONTRACT_UNAVAILABLE",
+            "指标治理警告无效。",
+            stage="contract_load",
+        )
     _ensure_metric_available(metric)
 
     supplied = request.get("detail_receipt")
@@ -418,6 +458,8 @@ def _validate_metric_detail_gate(
             )
     _validate_detail_request_capabilities(request, metric)
     normalized = dict(request)
+    if governance_warnings:
+        normalized["_governance_warnings"] = list(governance_warnings)
     required_time_bucket = metric.get("required_time_bucket")
     if required_time_bucket is not None:
         if (
@@ -6679,6 +6721,7 @@ def _failure_result(
     business_sql_attempted_count: int = 0,
     business_sql_confirmed_count: int = 0,
     source_evidence_ref: Mapping[str, Any] | None = None,
+    governance_warnings: Sequence[str] = (),
 ) -> dict[str, Any]:
     private_availability_failure = failure.code in {
         "DATA_RECONCILIATION_REQUIRED",
@@ -6705,6 +6748,7 @@ def _failure_result(
         "business_metric_currency_policy": None,
         "business_metric_answer_note": None,
         "business_dimension_labels": [],
+        "governance_warnings": list(governance_warnings),
         "resolved_entities": [],
         "rows": None,
         "claim_ledger": [],
@@ -6797,6 +6841,7 @@ _MODEL_WIRE_RESULT_FIELDS = (
     "business_metric_ref",
     "business_metric_label",
     "business_dimension_labels",
+    "governance_warnings",
     "scope_fingerprint",
     "projection_fingerprint",
     "claim_ledger",
@@ -8340,7 +8385,11 @@ def _validate_request_plan_without_entities(
     except QueryFailure as exc:
         raise _at_stage(exc, "contract_load")
     try:
-        request = _validate_metric_detail_gate(request, semantics)
+        request = _validate_metric_detail_gate(
+            request,
+            semantics,
+            observed_on=observed_on,
+        )
         _validate_pre_entity_metric_plan(
             request,
             datasets,
@@ -8404,6 +8453,7 @@ def _validate_query_dispatch(
                         "METRIC_NOT_REGISTERED",
                         "UNSUPPORTED_METRIC",
                         "METRIC_NOT_AVAILABLE",
+                        "METRIC_RETIRED",
                         "METRIC_DETAIL_REQUIRED",
                     }
                     else request_path
@@ -8439,6 +8489,7 @@ def _prepare_one(
         observed_on=period_observed_on,
         trusted_session_id=trusted_session_id,
     )
+    governance_warnings = request.pop("_governance_warnings", [])
     resolution_records = request.pop("_resolution_receipt_records", [])
     request.pop("resolution_receipts", None)
     resolved_entities: list[dict[str, Any]] = []
@@ -8508,6 +8559,7 @@ def _prepare_one(
         "datasets": datasets,
         "semantics": semantics,
         "resolved_entities": resolved_entities,
+        "governance_warnings": list(governance_warnings),
         "entity_resolution_db_call_count": preflight_stats.get(
             "entity_resolution_db_call_count", 0
         ),
@@ -8737,6 +8789,9 @@ def _run_one(
             **metric_context,
             "business_dimension_labels": dimension_labels,
             "business_dimension_bindings": dimension_bindings,
+            "governance_warnings": list(
+                prepared.get("governance_warnings") or []
+            ),
             "scope_fingerprint": scope_fingerprint,
             "projection_fingerprint": projection_fingerprint,
             "resolved_entities": resolved_entities,
@@ -9593,11 +9648,20 @@ def runtime_guarded_datasage_query(
         results = []
         for request in guarded_requests:
             branch_failure = failure
+            governance_warnings: list[str] = []
             try:
-                _validate_request_plan_without_entities(
-                    request,
-                    observed_on=period_observed_on,
+                normalized_request, _datasets, _semantics = (
+                    _validate_request_plan_without_entities(
+                        request,
+                        observed_on=period_observed_on,
+                        trusted_session_id=kwargs.get("session_id"),
+                    )
                 )
+                raw_warnings = normalized_request.get("_governance_warnings")
+                if isinstance(raw_warnings, list):
+                    governance_warnings = [
+                        item for item in raw_warnings if isinstance(item, str)
+                    ]
             except QueryFailure as exc:
                 branch_failure = exc
             results.append(
@@ -9612,6 +9676,7 @@ def runtime_guarded_datasage_query(
                     ),
                     business_sql_attempted_count=0,
                     business_sql_confirmed_count=0,
+                    governance_warnings=governance_warnings,
                 )
             )
         _finalize_complete_decomposition_outcomes(

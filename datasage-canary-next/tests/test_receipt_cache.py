@@ -34,6 +34,7 @@ class MetricCapabilityReceiptCacheTests(unittest.TestCase):
         relative_paths = {
             "plugins/datasage-query/contracts/datasets.yaml",
             "plugins/datasage-query/contracts/entity-registry.yaml",
+            "plugins/datasage-query/contracts/metric-governance.yaml",
             capability_contract.QUERY_POLICY_PATH,
             capability_contract.TARGET_GAP_CONTRACT_PATH,
             *(

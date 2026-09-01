@@ -219,10 +219,17 @@ class CompactPayloadTests(unittest.TestCase):
         _raw_full, full = _catalog(
             {"requests": [{"domain": "delivery", "view": "full"}]}
         )
-        self.assertEqual("audit_full", full["results"][0]["projection_mode"])
+        self.assertEqual("business_full", full["results"][0]["projection_mode"])
         self.assertIn("capability_affordances", full["results"][0])
         self.assertNotIn("planning_guidance", full["results"][0])
         self.assertNotIn("analysis_affordances", full["results"][0])
+
+        _raw_audit, audit = _catalog(
+            {"requests": [{"domain": "delivery", "view": "audit"}]}
+        )
+        self.assertEqual("governance_audit", audit["results"][0]["projection_mode"])
+        self.assertEqual(35, audit["results"][0]["metric_count"])
+        self.assertIn("governance_summary", audit["results"][0])
 
     def test_metric_detail_compacts_without_losing_query_planning_fields(self):
         raw, compact = _catalog(

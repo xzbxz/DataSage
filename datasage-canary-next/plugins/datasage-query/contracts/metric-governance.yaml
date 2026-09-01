@@ -1,0 +1,763 @@
+schema: datasage-metric-governance/v1
+version: 1
+review_policy:
+  timezone: Asia/Shanghai
+  missing_review: release_blocker
+  overdue_review: release_blocker
+  missing_owner: release_blocker
+  missing_interval: release_blocker
+  runtime_review_failure: allow
+  deprecated_runtime: allow_with_warning
+  retired_runtime: deny
+metrics:
+  customer_risk:
+    average_settlement_days:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    maximum_settlement_days:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    settlement_days_distribution:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    formal_receivable_turnover_days:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    delivery_receipt_comparison:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+  delivery:
+    warehouse_gross_delivery_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    warehouse_gross_delivery_quantity:
+      owner_role: datasage.data_governance.delivery
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: &id001
+        state: blocked
+        required_evidence:
+        - executable_unit_filter_or_group_contract
+        - production_read_only_reconciliation
+        - mixed_unit_regression
+        activation_authority: owner_and_release_review
+    warehouse_gross_delivery_roll_count:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    warehouse_gross_delivery_amount_original:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    warehouse_return_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    warehouse_return_quantity:
+      owner_role: datasage.data_governance.delivery
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: *id001
+    warehouse_return_roll_count:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    warehouse_return_amount_original:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    warehouse_delivery_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    warehouse_delivery_quantity:
+      owner_role: datasage.data_governance.delivery
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: *id001
+    warehouse_delivery_roll_count:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    warehouse_delivery_amount_original:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    gross_delivery_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    gross_delivery_amount_original:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    gross_delivery_quantity:
+      owner_role: datasage.data_governance.delivery
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: *id001
+    gross_delivery_roll_count:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    return_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    return_amount_original:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    return_quantity:
+      owner_role: datasage.data_governance.delivery
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: *id001
+    return_roll_count:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    return_document_count:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    returned_delivery_order_count:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    delivery_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    delivery_amount_original:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    delivery_quantity:
+      owner_role: datasage.data_governance.delivery
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: *id001
+    delivery_roll_count:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    return_amount_rate:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    return_quantity_rate:
+      owner_role: datasage.data_governance.delivery
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: *id001
+    return_roll_rate:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    delivery_order_count:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    order_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    order_amount_original:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    order_quantity:
+      owner_role: datasage.data_governance.delivery
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: *id001
+    order_roll_count:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    placed_order_count:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+  inventory:
+    current_inventory_quantity:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    current_inventory_roll_count:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    current_inventory_amount_rmb:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    current_inventory_amount_original:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    current_warehouse_age_days:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    month_end_inventory_quantity:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    month_end_inventory_roll_count:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    month_end_inventory_cost_rmb:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    month_end_inventory_cost_original:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    month_end_inventory_ddp_rmb:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    month_end_inventory_ddp_original:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    oldest_inventory_days:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    turnover_net_delivery_rmb:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    inventory_turnover_days:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+  receipt:
+    receipt_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    actual_receipt_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    receipt_bill_count:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    receipt_amount_original:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    actual_receipt_amount_original:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    refund_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    actual_refund_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    refund_bill_count:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    actual_refund_amount_original:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    refund_amount_original:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    net_receipt_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    net_receipt_amount_original:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+  receivable:
+    receivable_occurrence_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    receivable_occurrence_amount_original:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    receivable_bill_count:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    receivable_customer_count:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    receivable_quantity:
+      owner_role: datasage.data_governance.receivable
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate:
+        state: blocked
+        required_evidence:
+        - executable_unit_filter_or_group_contract
+        - production_read_only_reconciliation
+        - mixed_unit_regression
+        activation_authority: owner_and_release_review
+    receivable_piece_count:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    open_receivable_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    open_receivable_amount_original:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    open_receivable_bill_count:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    open_receivable_customer_count:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    earliest_open_receivable_date:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    debt_days:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    current_debt_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    current_debt_amount_original:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    positive_debt_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    debt_customer_count:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    debt_balance_trend:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    aging_total_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    aging_total_amount_original:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    aging_0_30_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    aging_31_60_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    aging_61_90_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    aging_91_120_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    aging_121_150_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    aging_151_180_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    aging_181_240_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    aging_241_300_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    aging_301_360_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    aging_over_360_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    aging_over_30_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    aging_over_60_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    aging_over_90_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    aging_over_120_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    aging_over_150_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    aging_over_180_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    aging_over_240_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    aging_over_300_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    overdue_receivable_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    overdue_receivable_amount_original:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    overdue_customer_count:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    overdue_days:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    excess_credit_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    excess_credit_amount_original:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    uncredited_positive_debt_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    uncredited_debt_customer_count:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    credit_amount_original:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    credit_days:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+  target:
+    delivery_allocated_target_amount:
+      owner_role: datasage.data_governance.target_allocation
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: &id002
+        state: blocked
+        required_evidence:
+        - production_read_only_reconciliation
+        - attribution_completeness_validation
+        - trusted_live_replay
+        - semantic_inventory_regression
+        activation_authority: owner_and_release_review
+    receipt_allocated_target_amount:
+      owner_role: datasage.data_governance.target_allocation
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: *id002
+    delivery_target_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    receipt_target_amount:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    allocated_net_delivery_amount:
+      owner_role: datasage.data_governance.target_allocation
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: *id002
+    allocated_net_receipt_amount:
+      owner_role: datasage.data_governance.target_allocation
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: *id002
+    delivery_target_completion:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null
+    receipt_target_completion:
+      owner_role: null
+      lifecycle: active
+      reviewed_at: null
+      review_interval_days: null
+      validation_gate: null

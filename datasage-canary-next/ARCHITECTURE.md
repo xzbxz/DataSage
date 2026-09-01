@@ -34,6 +34,11 @@ DataSage 查询面。数据库执行仍由只读 SQL、合同和证据边界约�
 
 ## 四层职责
 
+指标治理由单一 `metric-governance.yaml` 合同负责，并由进程级合同快照固定。
+治理复核缺失或过期只阻断发布；`retired` 指标拒绝执行，`deprecated` 指标允许
+读取但必须返回警告。Catalog `full` 与 `audit` 分别承担业务能力和治理审计，
+不得把 owner、review blocker 或 validation evidence 混入普通业务目录。
+
 ### Hermes：经营判断
 
 Hermes 负责理解问题、选择指标和分析深度、安排工具调用、区分观察与假设、

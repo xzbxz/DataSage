@@ -42,6 +42,10 @@ Profile 内的内建 Skill 副本。
 ## 权威边界
 
 - Git commit/tag 是源码版本身份；`distribution.yaml` 是 Hermes 安装载荷与版本声明。
+- `plugins/datasage-query/contracts/metric-governance.yaml` 是指标负责人、生命周期和
+  复核状态的唯一治理来源。未知负责人或复核信息保持为空并阻断 release，不能用
+  假日期补齐；它们不会让 active 指标在运行中突然不可用。
+- Catalog `full` 是业务能力摘要，`audit` 是不含物理表、字段和公式的治理审计视图。
 - `hermes profile install/update/info` 仅用于未来独立发布的 Profile Distribution，
   不是当前 Git 同址工作区的维护或重启步骤。
 - `build_release_receipt.py` 只是源码仓库中的 DataSage 质量门禁：它把真实 replay、

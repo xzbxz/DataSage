@@ -56,6 +56,7 @@ PINNED_CONTRACT_PATHS = tuple(
                 for source in capability_contract.DOMAIN_SOURCES.values()
             ),
             "plugins/datasage-query/contracts/entity-registry.yaml",
+            "plugins/datasage-query/contracts/metric-governance.yaml",
             capability_contract.TARGET_GAP_CONTRACT_PATH,
         )
     )
@@ -293,6 +294,13 @@ def content_signature(relative_path: str) -> tuple[str, str]:
 
     path, _content, digest = _contract_bytes(relative_path)
     return str(path), digest
+
+
+def read_contract_bytes(relative_path: str) -> tuple[str, bytes, str]:
+    """Return snapshot-verified bytes for a specialized strict parser."""
+
+    path, content, digest = _contract_bytes(relative_path)
+    return str(path), bytes(content), digest
 
 
 def contract_snapshot_status() -> dict[str, Any]:
