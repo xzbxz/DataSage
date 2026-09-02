@@ -133,16 +133,6 @@ class RuntimeBoundaryTests(unittest.TestCase):
         self.assertTrue(status["ready"])
         self.assertEqual("profile_path_integrity", status["state"])
         self.assertTrue(status["path_integrity_verified"])
-        self.assertEqual(
-            {
-                "available": False,
-                "commit": None,
-                "tree": None,
-                "reason_code": "GIT_BINDING_UNAVAILABLE",
-            },
-            status["git_binding"],
-        )
-        self.assertEqual("hermes_managed", status["runtime"])
 
         ordinary_directory = PROFILE_ROOT / "plugins"
         ordinary_status = runtime_health.runtime_identity_status(
@@ -151,7 +141,6 @@ class RuntimeBoundaryTests(unittest.TestCase):
         self.assertTrue(ordinary_status["ready"])
         self.assertEqual("profile_path_integrity", ordinary_status["state"])
         self.assertNotEqual("git_managed_profile", ordinary_status["state"])
-        self.assertFalse(ordinary_status["git_binding"]["available"])
 
         missing = PROFILE_ROOT / "does-not-exist"
         missing_status = runtime_health.runtime_identity_status(
@@ -159,7 +148,6 @@ class RuntimeBoundaryTests(unittest.TestCase):
         )
         self.assertFalse(missing_status["ready"])
         self.assertFalse(missing_status["path_integrity_verified"])
-        self.assertFalse(missing_status["git_binding"]["available"])
 
     def test_plugin_registration_has_no_startup_health_io(self):
         _, registration = probe_registration(
@@ -297,34 +285,8 @@ class StrictSessionIdentityTests(unittest.TestCase):
         )
         gateway = types.ModuleType("gateway")
         gateway.session_context = session_context
-        policy = {
-            "data_entitlements": {
-                "enforcement": "enforce",
-                "default_effect": "deny",
-                "principals": [
-                    {
-                        "platform": "wecom",
-                        "user_id": "*",
-                        "tools": ["datasage_query"],
-                        "domains": ["delivery"],
-                        "metrics": {"delivery": ["delivery_amount"]},
-                        "allow_all_rows": True,
-                    }
-                ],
-            }
-        }
-        original_get = loaded.module.entitlements.settings.get
         with (
             mock.patch.dict(sys.modules, {"gateway": gateway}),
-            mock.patch.object(
-                loaded.module.entitlements.settings,
-                "get",
-                side_effect=lambda key, default=None: (
-                    policy["data_entitlements"]
-                    if key == "data_entitlements"
-                    else original_get(key, default)
-                ),
-            ),
             mock.patch.object(
                 loaded.module.tools,
                 "_contracts",
@@ -383,103 +345,6 @@ class StrictSessionIdentityTests(unittest.TestCase):
                 "",
                 entitlements._session_value("HERMES_SESSION_USER_ID"),
             )
-
-    def test_registered_scorecard_requires_entitlement_for_every_bundle_metric(self):
-        manager = PluginManager()
-        isolated_registry = ToolRegistry()
-        with tempfile.TemporaryDirectory() as raw_root:
-            empty_bundled = Path(raw_root) / "bundled-plugins"
-            empty_bundled.mkdir()
-            with (
-                mock.patch(
-                    "hermes_cli.plugins.get_bundled_plugins_dir",
-                    return_value=empty_bundled,
-                ),
-                mock.patch(
-                    "hermes_cli.plugins.get_hermes_home",
-                    return_value=PROFILE_ROOT,
-                ),
-                mock.patch.object(manager, "_scan_entry_points", return_value=[]),
-                mock.patch(
-                    "hermes_cli.plugins._get_enabled_plugins",
-                    return_value={"datasage-query"},
-                ),
-                mock.patch(
-                    "hermes_cli.plugins._get_disabled_plugins",
-                    return_value=set(),
-                ),
-                mock.patch("tools.registry.registry", isolated_registry),
-            ):
-                manager.discover_and_load()
-
-        loaded = manager._plugins["datasage-query"]
-        self.assertTrue(loaded.enabled)
-        self.assertIsNone(loaded.error)
-        registration_probe = RegistrationProbe()
-        loaded.module.register(registration_probe)
-        catalog_handler = next(
-            tool["handler"]
-            for tool in registration_probe.tools
-            if tool["name"] == "datasage_catalog"
-        )
-        specs = loaded.module.entitlements.SCORECARD_METRICS
-        domains = sorted({str(spec["domain"]) for spec in specs})
-        metrics = {
-            domain: sorted(
-                {
-                    str(spec["metric"])
-                    for spec in specs
-                    if spec["domain"] == domain
-                }
-            )
-            for domain in domains
-        }
-        full_rule = {
-            "tools": ["datasage_catalog"],
-            "domains": domains,
-            "metrics": metrics,
-            "allow_catalog_discovery": True,
-        }
-        original_get = loaded.module.entitlements.settings.get
-
-        def invoke(rule):
-            with (
-                mock.patch.dict(
-                    os.environ, {"HERMES_HOME": str(PROFILE_ROOT)}
-                ),
-                mock.patch.object(
-                    loaded.module.entitlements.settings,
-                    "get",
-                    side_effect=lambda key, default=None: (
-                        {}
-                        if key == "data_entitlements"
-                        else original_get(key, default)
-                    ),
-                ),
-                mock.patch.object(
-                    loaded.module.entitlements,
-                    "_principal_rule",
-                    return_value=rule,
-                ),
-            ):
-                return json.loads(
-                    catalog_handler(
-                        {"requests": [{"view": "performance_scorecard"}]}
-                    )
-                )
-
-        allowed = invoke(full_rule)
-        self.assertIn("status", allowed, allowed)
-        self.assertEqual("success", allowed["status"], allowed)
-        self.assertEqual(
-            "datasage-catalog-model-wire/v3", allowed["model_wire_version"]
-        )
-        denied_rule = copy.deepcopy(full_rule)
-        first_domain = str(specs[0]["domain"])
-        denied_rule["metrics"][first_domain].remove(str(specs[0]["metric"]))
-        denied = invoke(denied_rule)
-        self.assertEqual("DATA_ENTITLEMENT_DENIED", denied["error"]["code"])
-
 
 class GitGovernedSkillTests(unittest.TestCase):
     def test_plugin_exposes_skill_and_no_answer_mutation_hooks(self):
@@ -820,25 +685,6 @@ class ProductionSafetyTests(unittest.TestCase):
                     "DATABASE_SECURITY_SETTING_INVALID",
                     captured.exception.code,
                 )
-
-    def test_live_cache_key_preserves_invalid_security_value_types(self):
-        with mock.patch.object(
-            runtime_health.settings,
-            "get",
-            side_effect=dict(self.CANARY_POLICY).get,
-        ):
-            valid_key = runtime_health._live_cache_key()
-        with mock.patch.object(
-            runtime_health.settings,
-            "get",
-            side_effect={
-                **self.CANARY_POLICY,
-                "production_mode": "false",
-            }.get,
-        ):
-            invalid_key = runtime_health._live_cache_key()
-        self.assertNotEqual(valid_key, invalid_key)
-
 
 class DistributionBoundaryTests(unittest.TestCase):
     @staticmethod
@@ -2095,17 +1941,6 @@ class DistributionBoundaryTests(unittest.TestCase):
                 ]
                 _plan, compact_evidence = adapter._normalize(compact_calls)
                 self.assertIn("metric_detail", compact_evidence["receipts"])
-                compact_without_receipt = copy.deepcopy(compact_detail_payload)
-                compact_without_receipt["results"][0].pop("detail_receipt")
-                _plan, compact_invalid_evidence = adapter._normalize(
-                    [
-                        calls[0],
-                        catalog_call(detail_request, compact_without_receipt),
-                    ]
-                )
-                self.assertNotIn(
-                    "metric_detail", compact_invalid_evidence["receipts"]
-                )
 
                 _plan, index_only = adapter._normalize(calls[:1])
                 self.assertNotIn("metric_detail", index_only["receipts"])
@@ -2342,7 +2177,6 @@ class DistributionBoundaryTests(unittest.TestCase):
             "plugins/datasage-query/plugin.yaml",
             "plugins/datasage-query/__init__.py",
             "plugins/datasage-query/db_executor.py",
-            "plugins/datasage-query/receipt_cache.py",
             "plugins/datasage-query/tools.py",
             "plugins/datasage-query/vendor/pymysql/__init__.py",
             "plugins/datasage-query/vendor/pymysql-1.2.0.dist-info/METADATA",
@@ -2396,7 +2230,6 @@ class DistributionBoundaryTests(unittest.TestCase):
                 "profile.yaml",
                 "plugins/datasage-query/plugin.yaml",
                 "plugins/datasage-query/db_executor.py",
-                "plugins/datasage-query/receipt_cache.py",
                 "plugins/datasage-query/tools.py",
                 "plugins/datasage-query/vendor/pymysql/__init__.py",
                 "skills/business-analytics/datasage/SKILL.md",
@@ -2471,21 +2304,12 @@ class DistributionBoundaryTests(unittest.TestCase):
                         },
                         {item["name"] for item in registration.tools},
                     )
-                    for imported in (
-                        module.tools.db_executor,
-                        module.tools.receipt_cache,
-                    ):
+                    for imported in (module.tools.db_executor,):
                         self.assertTrue(
                             Path(imported.__file__).resolve().is_relative_to(
                                 installed.resolve()
                             )
                         )
-
-                    receipt = module.tools._current_metric_detail_receipt(
-                        "delivery",
-                        "delivery_amount",
-                    )
-                    self.assertRegex(receipt, r"^[0-9a-f]{64}$")
 
                     response = json.loads(
                         module.tools.entitlement_guarded_datasage_query(
@@ -2522,12 +2346,12 @@ class DistributionBoundaryTests(unittest.TestCase):
         marker = PROFILE_ROOT / ".no-bundled-skills"
         self.assertFalse(marker.exists())
 
-    def test_wecom_uses_minimal_skill_and_datasage_surface(self):
+    def test_wecom_uses_minimal_datasage_surface(self):
         config = (PROFILE_ROOT / "config.yaml").read_text(encoding="utf-8")
         parsed_config = yaml.safe_load(config)
         wecom_toolsets = parsed_config["platform_toolsets"]["wecom"]
         self.assertEqual(
-            ["skills", "clarify", "datasage-query"],
+            ["clarify", "datasage-query"],
             wecom_toolsets,
         )
         resolved = set(
@@ -2538,7 +2362,6 @@ class DistributionBoundaryTests(unittest.TestCase):
             )
         )
         self.assertIn("datasage-query", resolved)
-        self.assertIn("skills", resolved)
         self.assertIn("clarify", resolved)
         self.assertTrue(
             {"terminal", "file", "web", "memory"}.isdisjoint(resolved)

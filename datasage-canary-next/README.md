@@ -15,12 +15,12 @@ DataSage 面向公司经营负责人及出库、销售、应收、财务、库�
 覆盖 delivery、receipt/collections、receivable、target、inventory 和
 customer_risk 六个经营域。它提供受治理证据的事实、诊断和分级建议，不是
 公共研究、普通写作、用户文件分析器，也不批准或执行业务决策。
+当前候选目标成熟度为 L3 数据专家；本候选版本不声明 L4 主动管理或主动巡检能力。
 
-WeCom 入口仅声明 `skills`、`clarify` 和 `datasage-query` 三个 toolset，但会话
-访问按业务授权向所有已认证企微成员开放私聊和群聊；DataSage 查询和实体解析
-不施加 Profile 行级过滤。数据库执行仍保持只读和证据治理边界。`skills` 按
-Hermes 原生定义仍包含 `skill_view` 和 `skill_manage`，Skill 写入继续受
-`skills.write_approval` 保护。
+WeCom 入口仅声明 `clarify` 和 `datasage-query` 两个 toolset，所有已认证企微成员
+均可私聊和群聊，并共享六个经营域同一完整的 DataSage 查询面。Profile 不施加
+用户、群组、部门、实体、行或领域过滤；这不替代外部数据库授权。数据库执行仍为
+SELECT-only，并由治理查询合同、只读执行限制和 evidence 边界约束。
 
 建议分为三档：描述性监测、诊断性解释、高影响建议。高影响建议必须带有
 假设、负责审批的人、重大风险和复核点；证据歧义、不可用、过期或不完整时，
@@ -42,10 +42,6 @@ Profile 内的内建 Skill 副本。
 ## 权威边界
 
 - Git commit/tag 是源码版本身份；`distribution.yaml` 是 Hermes 安装载荷与版本声明。
-- `plugins/datasage-query/contracts/metric-governance.yaml` 是指标负责人、生命周期和
-  复核状态的唯一治理来源。未知负责人或复核信息保持为空并阻断 release，不能用
-  假日期补齐；它们不会让 active 指标在运行中突然不可用。
-- Catalog `full` 是业务能力摘要，`audit` 是不含物理表、字段和公式的治理审计视图。
 - `hermes profile install/update/info` 仅用于未来独立发布的 Profile Distribution，
   不是当前 Git 同址工作区的维护或重启步骤。
 - `build_release_receipt.py` 只是源码仓库中的 DataSage 质量门禁：它把真实 replay、
@@ -54,68 +50,24 @@ Profile 内的内建 Skill 副本。
 - `distribution_owned` 只列运行所需文件。测试、E2E scorer、构建脚本和历史重构
   文档留在源码仓库，不进入干净安装实例。
 
-## 候选质量门禁
+## 源码质量工具（不进入 runtime）
 
-全部实现合并后，在源码根目录为当前载荷生成一个新的、不可覆盖的候选 receipt：
+`build_release_receipt.py`、离线测试、Host compaction/performance evidence 与 candidate receipt
+仅用于源码审查，绑定当前 Git 载荷并阻断错配；它们不进入 `distribution_owned`。
+这些工具不改变 Profile 的查询、身份或结论边界，也不是安装器、版本系统、回滚器或 SLA。
+量化验收门槛唯一以 `ARCHITECTURE.md` 的“验收门槛（唯一量化真源）”为准，本文件不重复阈值。
+正式版本身份仍由 Git commit/tag 和 `distribution.yaml` 管理；运行时不读取 receipt。
+测试、E2E scorer、release/pending 产物与历史文档均留在源码仓库。
 
-```powershell
-$candidate = "pending/datasage-v015-rc9-candidate-receipt-$(Get-Date -Format yyyyMMddTHHmmss).json"
-python -B build_release_receipt.py --output $candidate
-python -B build_release_receipt.py --verify-candidate
-```
-
-不带 `--receipt` 的 `--verify-candidate` 只扫描 `pending/` 下的 candidate receipt，
-并按版本和当前 `content_sha256` 唯一发现。旧的同版本候选可以保留；它们不会被
-误选。如果当前内容没有唯一匹配项，命令必须失败，而不是猜测“最新”文件。
-
-需要锁定某份候选时可显式运行：
-
-```powershell
-python -B build_release_receipt.py --verify-candidate --receipt $candidate
-```
-
-Host compaction 与非数据库性能门禁只接受当前 Git HEAD 的原始证据。源码完成
-审查并提交、Profile 与 Hermes 两个工作区都干净后，按同一 HEAD 生成：
-
-```powershell
-$head = git rev-parse HEAD
-python -B tests/test_host_compaction_e2e.py --output "pending/evidence/host-compaction-$head.json"
-python -B tests/run_performance_evidence.py --output "pending/evidence/performance-$head.json"
-python -B build_release_receipt.py --verify-candidate --receipt $candidate
-```
-
-第一条复用 Hermes 官方 compaction 链且禁止网络；第二条会调用合同固定的模型，
-但三条工具路径都必须在数据库前返回 `DATA_ENTITLEMENT_DENIED`，总调用数和按官方
-峰值价格快照估算的测试费用受跟踪合同限制。两类报告只保存 raw trace/usage，
-通过状态、P50/P90 和总成本均由 release builder 重算。它们不验证数据库、企微、
-业务结果或生产并发，也不是业务 SLA。
-
-这些本地 JSON 绑定 HEAD、Git blob、Hermes commit 与当前工作区，但没有独立签名；
-它们用于防止过期、错配和手填派生状态，不能抵御同一机器上有文件写权限的恶意
-操作者。需要跨人员的防篡改证明时，应由受保护 CI/签名系统补充 attestation，
-不得在 Profile 运行时自建签名器或 planner。
-
-candidate 与 final receipt 使用严格分离的目录和文件名：
-
-- `--verify-candidate` 只接受 `pending/*-candidate-receipt*.json`；
-- `--check` 只接受 `release/*-release-receipt.json`；
-- `--output` 只创建新的 pending candidate，拒绝覆盖，也不能直接写入 `release/`。
-
-退出码 `2` 表示当前载荷没有匹配的 receipt 或身份不一致；退出码 `3` 表示载荷
-一致，但 DataSage live/host/performance 门禁仍阻断。离线测试通过不等于可发布。
-所有质量门禁均通过并完成审查后，才把完全相同的候选 receipt 作为新的
-`release/*-release-receipt.json` 提交；随后对最终提交打 tag。可用以下命令检查
-final receipt 与载荷的绑定：
-
-```powershell
-python -B build_release_receipt.py --check
-```
-
-历史 receipt 保持不可变。receipt 的内容哈希只是质量证据的受测对象，不取代
-Git commit/tag，也不证明 Hermes 安装来源。
+代码冻结、candidate receipt 和 Git tag 只表示 canary 载荷已固定并可审查，
+不等于 production-ready 或生产安全证明。生产声明还须满足 `ARCHITECTURE.md` 的生产边界
+和唯一量化验收门槛；owner 仅指 Profile 维护/发布责任角色，具体责任人和 SLA 由发布记录填写，
+不在 Profile 文档中虚构。
 
 ## 当前 Git 原地维护
 
+所有 CLI/维护命令必须显式使用 `-p datasage-canary-next`；不得依赖默认 Profile、
+当前目录或 `HERMES_HOME` 推断。
 所有源码变更留在当前活动分支。重启前必须确认 `git status --short` 只包含本次
 已审查改动，完整离线测试和候选门禁通过，再提交并记录可回滚的 commit/tag。
 Git 操作不得覆盖 `.env`、`state.db`、sessions、logs、Memory、企微或数据库配置。
@@ -124,5 +76,5 @@ Git 操作不得覆盖 `.env`、`state.db`、sessions、logs、Memory、企微�
 `distribution.yaml` 的独立发行源；不得复制第二份可编辑源码或自建安装器。
 
 DataSage 当前没有有 owner 的定时任务，因此不向 Hermes `cron` toolset 暴露
-`datasage-query`。未来新增主动巡检时，必须同时定义任务 owner、调度身份与权限、
+`datasage-query`，本候选版本不声明 L4 主动管理能力。未来新增主动巡检时，必须同时定义任务 owner、调度身份与权限、
 超时/重试和端到端测试，不能只恢复配置项。

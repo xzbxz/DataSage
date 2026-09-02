@@ -14,7 +14,7 @@ from .capability_contract import (
     SNAPSHOT_MONTHS_BEFORE_COMPARISON,
     assert_capability_boundary,
 )
-from . import capability_contract, contract_store, metric_governance
+from . import capability_contract, contract_store
 from .scorecard import performance_scorecard_manifest
 
 _MODEL_PROJECTION_VERSION = "datasage-model-semantic-projection/v5"
@@ -538,96 +538,6 @@ def _is_unavailable(definition: Mapping[str, Any]) -> bool:
     return status != "available"
 
 
-def _metric_governance_contract() -> Mapping[str, Any]:
-    """Load the validated metric-governance projection for catalog use.
-
-    The governance module is the single parser and semantic authority for
-    lifecycle/review state.  Catalog code only validates the shape needed for
-    its safe projections; it must never reinterpret the YAML itself.
-    """
-
-    try:
-        contract = metric_governance.load_contract()
-    except (
-        metric_governance.MetricGovernanceError,
-        contract_store.ContractStoreError,
-    ) as exc:
-        raise ContractFailure(
-            "CONTRACT_UNAVAILABLE", "metric governance contract is unavailable"
-        ) from exc
-    if not isinstance(contract, Mapping):
-        raise ContractFailure(
-            "CONTRACT_UNAVAILABLE", "metric governance contract is unavailable"
-        )
-    metrics = contract.get("metrics")
-    digest = contract.get("contract_sha256")
-    if (
-        not isinstance(metrics, Mapping)
-        or set(metrics) != set(DOMAIN_SOURCES)
-        or not isinstance(digest, str)
-        or re.fullmatch(r"[0-9a-f]{64}", digest) is None
-    ):
-        raise ContractFailure(
-            "CONTRACT_UNAVAILABLE", "metric governance contract is unavailable"
-        )
-    if any(not isinstance(metrics.get(domain), Mapping) for domain in DOMAIN_SOURCES):
-        raise ContractFailure(
-            "CONTRACT_UNAVAILABLE", "metric governance contract is unavailable"
-        )
-    return contract
-
-
-def _governance_status_from_contract(
-    contract: Mapping[str, Any],
-    domain: str,
-    metric: str,
-) -> Mapping[str, Any]:
-    """Read one already-loaded status for filtering without reparsing rules."""
-
-    metrics = contract.get("metrics")
-    domain_metrics = metrics.get(domain) if isinstance(metrics, Mapping) else None
-    status = domain_metrics.get(metric) if isinstance(domain_metrics, Mapping) else None
-    if not isinstance(status, Mapping):
-        raise ContractFailure(
-            "CONTRACT_UNAVAILABLE", "metric governance contract is unavailable"
-        )
-    derived = status.get("derived_status")
-    if (
-        not isinstance(derived, Mapping)
-        or not isinstance(status.get("lifecycle"), str)
-        or not isinstance(derived.get("availability"), str)
-    ):
-        raise ContractFailure(
-            "CONTRACT_UNAVAILABLE", "metric governance contract is unavailable"
-        )
-    return status
-
-
-def _hide_retired_metrics(
-    domain: str,
-    planner: Mapping[str, Any],
-    governance: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Keep retired metrics out of business-facing catalog views."""
-
-    raw_metrics = planner.get("metrics")
-    if not isinstance(raw_metrics, list):
-        raise ContractFailure("CONTRACT_UNAVAILABLE", "指标目录格式无效。")
-    visible: list[dict[str, Any]] = []
-    for raw in raw_metrics:
-        if not isinstance(raw, Mapping) or not isinstance(raw.get("code"), str):
-            raise ContractFailure("CONTRACT_UNAVAILABLE", "指标目录项格式无效。")
-        status = _governance_status_from_contract(
-            governance, domain, str(raw["code"])
-        )
-        if status.get("lifecycle") == "retired":
-            continue
-        visible.append(dict(raw))
-    result = dict(planner)
-    result["metrics"] = visible
-    return result
-
-
 def _currency_policy_projection(value: Any) -> Any:
     if not isinstance(value, Mapping):
         return value
@@ -1135,163 +1045,6 @@ def _catalog_summary(domain: str, planner: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _catalog_governance_metric(
-    domain: str,
-    code: str,
-    status: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Project only derived, non-physical governance facts for one metric."""
-
-    derived = status.get("derived_status")
-    if not isinstance(derived, Mapping):
-        raise ContractFailure(
-            "CONTRACT_UNAVAILABLE", "metric governance contract is unavailable"
-        )
-    availability = derived.get("availability")
-    lifecycle = status.get("lifecycle")
-    review = derived.get("review")
-    execution = derived.get("execution")
-    release = derived.get("release")
-    warnings = derived.get("warnings")
-    release_blockers = derived.get("release_blockers")
-    owner_role = status.get("owner_role")
-    if (
-        not isinstance(code, str)
-        or not isinstance(availability, str)
-        or availability not in {"available", "pending_validation", "blocked"}
-        or not isinstance(owner_role, str)
-        and owner_role is not None
-        or not isinstance(lifecycle, str)
-        or lifecycle not in {"active", "deprecated", "retired"}
-        or not isinstance(review, str)
-        or review not in {"missing", "invalid", "overdue", "current"}
-        or not isinstance(execution, str)
-        or execution not in {"allowed", "allowed_with_warning", "denied"}
-        or not isinstance(release, str)
-        or release not in {"pass", "block"}
-        or not isinstance(warnings, list)
-        or any(
-            not isinstance(item, str) or re.fullmatch(r"[A-Z0-9_]+", item) is None
-            for item in warnings
-        )
-        or not isinstance(release_blockers, list)
-        or any(
-            not isinstance(item, str)
-            or re.fullmatch(r"[A-Z0-9_]+", item) is None
-            for item in release_blockers
-        )
-    ):
-        raise ContractFailure(
-            "CONTRACT_UNAVAILABLE", "metric governance contract is unavailable"
-        )
-    return {
-        "code": code,
-        "availability": availability,
-        "owner_role": owner_role,
-        "lifecycle": lifecycle,
-        "review": review,
-        "execution": execution,
-        "release": release,
-        "warnings": list(warnings),
-        "release_blockers": list(release_blockers),
-    }
-
-
-def _catalog_governance_summary(
-    metrics: list[Mapping[str, Any]],
-) -> dict[str, Any]:
-    """Aggregate safe governance states for one domain only."""
-
-    availability: dict[str, int] = {}
-    lifecycle: dict[str, int] = {}
-    review: dict[str, int] = {}
-    execution: dict[str, int] = {}
-    release = {"pass": 0, "block": 0}
-    blocker_counts: dict[str, int] = {}
-    for metric in metrics:
-        for bucket, key in (
-            (availability, "availability"),
-            (lifecycle, "lifecycle"),
-            (review, "review"),
-            (execution, "execution"),
-        ):
-            value = metric.get(key)
-            if not isinstance(value, str):
-                raise ContractFailure(
-                    "CONTRACT_UNAVAILABLE", "metric governance contract is unavailable"
-                )
-            bucket[value] = bucket.get(value, 0) + 1
-        release_value = metric.get("release")
-        if not isinstance(release_value, str) or release_value not in release:
-            raise ContractFailure(
-                "CONTRACT_UNAVAILABLE", "metric governance contract is unavailable"
-            )
-        release[release_value] += 1
-        blockers = metric.get("release_blockers")
-        if not isinstance(blockers, list):
-            raise ContractFailure(
-                "CONTRACT_UNAVAILABLE", "metric governance contract is unavailable"
-            )
-        for blocker in blockers:
-            if not isinstance(blocker, str):
-                raise ContractFailure(
-                    "CONTRACT_UNAVAILABLE", "metric governance contract is unavailable"
-                )
-            blocker_counts[blocker] = blocker_counts.get(blocker, 0) + 1
-    return {
-        "metric_count": len(metrics),
-        "availability": dict(sorted(availability.items())),
-        "lifecycle": dict(sorted(lifecycle.items())),
-        "review": dict(sorted(review.items())),
-        "execution": dict(sorted(execution.items())),
-        "release": release,
-        "blocker_counts": dict(sorted(blocker_counts.items())),
-    }
-
-
-def _catalog_audit(
-    domain: str,
-    governance: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Return a complete, model-safe governance audit for one domain."""
-
-    all_metrics = governance.get("metrics")
-    domain_metrics = all_metrics.get(domain) if isinstance(all_metrics, Mapping) else None
-    if not isinstance(domain_metrics, Mapping):
-        raise ContractFailure(
-            "CONTRACT_UNAVAILABLE", "metric governance contract is unavailable"
-        )
-    projected: list[dict[str, Any]] = []
-    for raw_code in sorted(domain_metrics, key=str):
-        if not isinstance(raw_code, str):
-            raise ContractFailure(
-                "CONTRACT_UNAVAILABLE", "metric governance contract is unavailable"
-            )
-        status = _governance_status_from_contract(governance, domain, raw_code)
-        projected.append(
-            _catalog_governance_metric(domain, raw_code, status)
-        )
-    digest = governance.get("contract_sha256")
-    if not isinstance(digest, str):
-        raise ContractFailure(
-            "CONTRACT_UNAVAILABLE", "metric governance contract is unavailable"
-        )
-    result = {
-        "domain": domain,
-        "level": "audit",
-        "projection_mode": "governance_audit",
-        "contract_sha256": digest,
-        "governance_summary": _catalog_governance_summary(projected),
-        "metric_count": len(projected),
-        "metrics": projected,
-    }
-    _assert_business_safe_tree(
-        result,
-        context=f"domain {domain} metric governance audit",
-    )
-    return result
-
-
 def _catalog_expert_index(domain: str, planner: Mapping[str, Any]) -> dict[str, Any]:
     """Project the smallest safe metric-selection index for expert planning.
 
@@ -1367,7 +1120,6 @@ def _catalog_metric_detail(
     domain: str,
     metric_code: str,
     planner: Mapping[str, Any],
-    governance: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Project one metric and only the dimensions that it can execute."""
 
@@ -1392,15 +1144,6 @@ def _catalog_metric_detail(
         raise ContractFailure(
             "METRIC_UNAVAILABLE",
             f"业务域 {domain} 未发布指标 {metric_code}。",
-        )
-    governance = governance or _metric_governance_contract()
-    governance_status = _governance_status_from_contract(
-        governance, domain, metric_code
-    )
-    if governance_status.get("lifecycle") == "retired":
-        raise ContractFailure(
-            "METRIC_RETIRED",
-            f"业务域 {domain} 指标 {metric_code} 已退役。",
         )
     set_id = metric.pop("allowed_dimension_set", None)
     raw_allowed = metric.pop("allowed_dimensions", None)
@@ -1441,35 +1184,12 @@ def _catalog_metric_detail(
     related_metric_refs = planner.get("related_metric_refs")
     if isinstance(related_metric_refs, list):
         result["related_metric_refs"] = _copy_guidance(related_metric_refs)
-    if governance_status.get("lifecycle") == "deprecated":
-        result["governance_warnings"] = ["METRIC_DEPRECATED"]
     return result
 
 
-def _catalog_metric_detail_receipt(detail: Mapping[str, Any]) -> str:
-    """Seal one metric detail independently of its surrounding catalog batch."""
-
-    canonical = {
-        "schema": "datasage-metric-detail-receipt/v1",
-        "catalog_version": _CATALOG_VERSION,
-        "detail": detail,
-    }
-    return hashlib.sha256(
-        json.dumps(
-            canonical,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
-
-
-def _catalog_performance_scorecard(
-    governance: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
+def _catalog_performance_scorecard() -> dict[str, Any]:
     """Resolve candidate lenses through ordinary independent metric contracts."""
 
-    governance = governance or _metric_governance_contract()
     manifest = performance_scorecard_manifest()
     raw_lenses = manifest.get("candidate_lenses")
     if not isinstance(raw_lenses, (list, tuple)):
@@ -1507,15 +1227,12 @@ def _catalog_performance_scorecard(
                 )
             seen.add(identity)
             planner = _domain_contract(str(domain), "planner")["planner"]
-            detail = _catalog_metric_detail(
-                str(domain), metric, planner, governance
-            )
+            detail = _catalog_metric_detail(str(domain), metric, planner)
             candidates.append(
                 {
                     "domain": str(domain),
                     "metric": metric,
                     "detail": detail,
-                    "detail_receipt": _catalog_metric_detail_receipt(detail),
                 }
             )
         lens = {
@@ -1592,33 +1309,24 @@ def datasage_catalog(args: dict[str, Any], **_kwargs: Any) -> str:
             raise ContractFailure(
                 "INVALID_INPUT", "performance_scorecard 必须单独请求。"
             )
-        governance = _metric_governance_contract()
         results: list[dict[str, Any]] = []
         for domain, metric, view in normalized:
             if view == "performance_scorecard":
-                result = _catalog_performance_scorecard(governance)
+                result = _catalog_performance_scorecard()
                 results.append(result)
                 continue
             if domain is None:
                 raise ContractFailure("INVALID_INPUT", "目录请求缺少业务域。")
-            if view == "audit":
-                results.append(_catalog_audit(domain, governance))
-                continue
             planner = _domain_contract(domain, "planner")["planner"]
             if metric is not None:
-                result = _catalog_metric_detail(
-                    domain, metric, planner, governance
-                )
-                result["detail_receipt"] = _catalog_metric_detail_receipt(result)
+                result = _catalog_metric_detail(domain, metric, planner)
+            elif view == "expert_index":
+                result = _catalog_expert_index(domain, planner)
+            elif view in {"full", "audit"}:
+                result = _catalog_summary(domain, planner)
+                result["projection_mode"] = "audit_full"
             else:
-                planner = _hide_retired_metrics(domain, planner, governance)
-                if view == "expert_index":
-                    result = _catalog_expert_index(domain, planner)
-                elif view == "full":
-                    result = _catalog_summary(domain, planner)
-                    result["projection_mode"] = "business_full"
-                else:
-                    result = _catalog_summary(domain, planner)
+                result = _catalog_summary(domain, planner)
             results.append(result)
         payload: dict[str, Any] = {
             "status": "success",

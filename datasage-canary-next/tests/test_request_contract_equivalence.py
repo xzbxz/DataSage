@@ -642,22 +642,32 @@ class RequestContractEquivalenceTests(unittest.TestCase):
         authorized.assert_not_called()
         readiness.assert_not_called()
 
-    def test_validated_requests_preserve_existing_entitlement_decision(self):
-        args = {"requests": [_request(metric="delivery_amount")]}
-        envelope = request_contract.validate_query_envelope(args)
-        rule = {
-            "domains": ["delivery"],
-            "metrics": {"delivery": ["delivery_amount"]},
-            "allow_all_rows": True,
+    def test_bound_wecom_authorization_ignores_request_shape_and_validated_requests(self):
+        args = {
+            "requests": [
+                {
+                    "domain": "outside-the-catalog",
+                    "metric": "not-a-registered-metric",
+                    "metric_filters": {"customer": ["any-row"]},
+                }
+            ]
         }
-        self.assertEqual(
-            entitlements._query_allowed(rule, args),
-            entitlements._query_allowed(
-                rule,
-                args,
-                validated_requests=envelope.requests,
-            ),
-        )
+        with mock.patch.object(
+            entitlements,
+            "_session_value",
+            side_effect=lambda name: {
+                "HERMES_SESSION_PLATFORM": "wecom",
+                "HERMES_SESSION_USER_ID": "user-1",
+            }.get(name, ""),
+        ):
+            self.assertTrue(entitlements.coarse_authorized("datasage_query", args))
+            self.assertTrue(
+                entitlements.authorized(
+                    "datasage_query",
+                    args,
+                    validated_requests=[{"domain": "different", "metric": "different"}],
+                )
+            )
 
     def test_entity_schema_and_runtime_share_enums_limits_and_uniqueness(self):
         validator = jsonschema.Draft7Validator(

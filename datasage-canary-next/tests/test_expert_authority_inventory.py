@@ -31,19 +31,19 @@ DATASAGE_REFERENCE_OWNERS = {
 }
 DATASAGE_ARCHITECTURE_ROWS = {
     "datasage.query-rules/v1": (
-        "Skill 请求规则",
-        "Hermes 按需加载、库存测试",
-        "请求构造方法；live schema/catalog 拥有可用字段和值",
+        "Profile Skill",
+        "CLI/维护面（可选）",
+        "请求构造提示；可用字段以 live schema/catalog 为准",
     ),
     "datasage.entity-guidance/v1": (
-        "Skill 实体指导",
-        "Hermes 按需加载、库存测试",
-        "模型安全投影；不能创建或覆盖实体映射",
+        "Profile Skill",
+        "CLI/维护面（可选）",
+        "实体消歧提示；不能创建或覆盖实体映射",
     ),
     "datasage.answer-boundary/v1": (
-        "Skill 最终回答策略",
-        "Hermes 按需加载、库存测试",
-        "详细回答边界；插件不注册 prompt 副本",
+        "Profile Skill",
+        "CLI/维护面（可选）",
+        "解释提示；插件不注册 prompt 副本",
     ),
 }
 
@@ -148,7 +148,10 @@ class ExpertAuthorityInventoryTests(unittest.TestCase):
             .split()
         )
         answer_owner = governing.split("datasage.answer-boundary/v1", 1)[1]
-        self.assertIn("Load `references/answer-boundary.md` before", answer_owner)
+        self.assertIn(
+            "optionally load `references/answer-boundary.md` before",
+            answer_owner,
+        )
         for trigger in (
             "comparison",
             "ranking",

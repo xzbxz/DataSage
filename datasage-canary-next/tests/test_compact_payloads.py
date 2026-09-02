@@ -219,17 +219,10 @@ class CompactPayloadTests(unittest.TestCase):
         _raw_full, full = _catalog(
             {"requests": [{"domain": "delivery", "view": "full"}]}
         )
-        self.assertEqual("business_full", full["results"][0]["projection_mode"])
+        self.assertEqual("audit_full", full["results"][0]["projection_mode"])
         self.assertIn("capability_affordances", full["results"][0])
         self.assertNotIn("planning_guidance", full["results"][0])
         self.assertNotIn("analysis_affordances", full["results"][0])
-
-        _raw_audit, audit = _catalog(
-            {"requests": [{"domain": "delivery", "view": "audit"}]}
-        )
-        self.assertEqual("governance_audit", audit["results"][0]["projection_mode"])
-        self.assertEqual(35, audit["results"][0]["metric_count"])
-        self.assertIn("governance_summary", audit["results"][0])
 
     def test_metric_detail_compacts_without_losing_query_planning_fields(self):
         raw, compact = _catalog(
@@ -238,7 +231,7 @@ class CompactPayloadTests(unittest.TestCase):
         rendered = json.dumps(compact, ensure_ascii=False, separators=(",", ":"))
         self.assertLess(len(rendered), len(raw))
         detail = compact["results"][0]
-        self.assertRegex(detail["detail_receipt"], r"^[0-9a-f]{64}$")
+        self.assertNotIn("detail_receipt", detail)
         self.assertTrue(detail["dimensions"])
         self.assertIn("allowed_dimensions", detail["metric"])
         self.assertEqual(
@@ -249,7 +242,7 @@ class CompactPayloadTests(unittest.TestCase):
         self.assertTrue(compact["dimension_value_policies"])
         self.assertNotIn("reasoning_topics", rendered)
 
-    def test_scorecard_returns_candidate_lenses_with_independent_receipts(self):
+    def test_scorecard_returns_candidate_lenses_without_execution_receipts(self):
         raw, compact = _catalog({"requests": [{"view": "performance_scorecard"}]})
         rendered = json.dumps(compact, ensure_ascii=False, separators=(",", ":"))
         scorecard = compact["results"][0]
@@ -289,30 +282,21 @@ class CompactPayloadTests(unittest.TestCase):
             self.assertNotIn(forbidden, rendered)
             self.assertNotIn(forbidden, raw)
 
-        receipts = []
         query_requests = []
         for index, detail in enumerate(candidates, start=1):
             self.assertEqual("metric", detail["level"])
             self.assertNotIn("dimensions", detail)
-            receipt = detail["detail_receipt"]
-            receipts.append(receipt)
             domain = detail["domain"]
             metric = detail["metric"]["code"]
-            self.assertEqual(
-                receipt,
-                tools._current_metric_detail_receipt(domain, metric),
-            )
             request = {
                 "request_id": f"adaptive_candidate_{index}",
                 "domain": domain,
                 "metric": metric,
-                "detail_receipt": receipt,
                 "dimensions": [],
             }
             if domain == "target":
                 request["attribution_mode"] = "transaction_detail"
             query_requests.append(request)
-        self.assertEqual(len(receipts), len(set(receipts)))
         jsonschema.validate(
             {"requests": query_requests}, schemas.DATASAGE_QUERY["parameters"]
         )

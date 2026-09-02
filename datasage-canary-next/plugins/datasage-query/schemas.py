@@ -40,37 +40,6 @@ REQUEST = {
             "enum": DOMAINS,
             "description": "Business domain selected from datasage_catalog.",
         },
-        "detail_receipt": {
-            "type": "string",
-            "minLength": 64,
-            "maxLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "description": (
-                "Opaque receipt copied unchanged from the detail_receipt field of this exact metric's "
-                "successful datasage_catalog detail result. It is required "
-                "unless the selected metric explicitly supports an exact default lookup and this request "
-                "contains no explicit business qualifier. The query runtime revalidates the receipt against "
-                "the current catalog contract and the requested governed capabilities before any database access."
-            ),
-        },
-        "resolution_receipts": {
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 50,
-            "uniqueItems": True,
-            "items": {
-                "type": "string",
-                "minLength": 64,
-                "maxLength": 64,
-                "pattern": "^[0-9a-f]{64}$",
-            },
-            "description": (
-                "Opaque receipts copied unchanged from the selected candidates returned by the immediately "
-                "preceding datasage_entity_resolve call. When metric_filters contains governed entity filters, "
-                "provide receipts that cover every entity filter exactly; receipts bind selection identity and "
-                "current contracts but never prove user confirmation. Never construct, edit, or persist a receipt."
-            ),
-        },
         "attribution_mode": {
             "type": "string",
             "enum": list(ATTRIBUTION_MODES),
@@ -106,11 +75,8 @@ REQUEST = {
             "description": (
                 "Exact metric code copied from the selected domain catalog; required. Never "
                 "invent a code, derive a new metric, or try code synonyms. If the requested meaning has no exact code, "
-                "do not call this tool. Load the selected metric detail first when expert_index returns "
-                "requires_metric_detail: true, when exact_default_lookup_supported is false or missing, or when the "
-                "request has any explicit business qualifier. An empty dimensions: [] value is not a business "
-                "qualifier. Direct query is allowed only for an exact governed default whose "
-                "expert_index exact_default_lookup_supported value is true and which has no explicit qualifier. For the delivery "
+                "do not call this tool. Metric detail is optional planning help; query execution reloads the current "
+                "metric contract and validates every explicit qualifier itself. For the delivery "
                 "domain, an unqualified delivery/outbound amount, quantity, or count is net delivery. A gross "
                 "delivery metric is permitted only when the user explicitly asks for gross delivery or a value "
                 "before returns. Words such as raw, detail, table, dataset, or original do not select gross scope."
@@ -125,7 +91,8 @@ REQUEST = {
                 "Governed dimension codes for the metric request. A code may use a fact field or a predeclared "
                 "many-to-one master enrichment; never send table names or join keys. Include only grouping or "
                 "ranking dimensions explicitly requested by the user; an overall total has no dimensions. Words "
-                "The count must not exceed max_group_dimensions returned by the selected metric detail. "
+                "The count must not exceed max_group_dimensions exposed by optional metric planning detail; query "
+                "execution reloads the current metric contract and validates the limit itself. "
                 "such as raw, detail, source, table, or original are not dimensions. For an original-currency metric, "
                 "use the currency dimension when the user did not select exactly one currency."
             ),
@@ -169,7 +136,8 @@ REQUEST = {
             "description": (
                 "Start-inclusive and end-exclusive governed metric range using YYYY-MM-DD boundaries. "
                 "Use calendar_month for one typed full calendar month. Supplying time_range is an explicit, "
-                "non-default qualifier and requires the selected metric detail before datasage_query. The result "
+                "non-default qualifier; datasage_query reloads the current metric contract and validates the "
+                "range itself. The result "
                 "returns calendar period state and coverage; its query-date observation is not a source freshness "
                 "watermark."
             ),
@@ -183,7 +151,8 @@ REQUEST = {
                 "The returned period state distinguishes an elapsed month from a month still in progress; "
                 "the latter is not a complete-period comparison. "
                 "Use either calendar_month or time_range, never both. Supplying calendar_month is an explicit, "
-                "non-default qualifier and requires the selected metric detail before datasage_query."
+                "non-default qualifier; datasage_query reloads the current metric contract and validates the "
+                "calendar range itself."
             ),
         },
         "time_bucket": {
@@ -502,29 +471,20 @@ CALCULATION = {
 DATASAGE_QUERY = {
     "name": "datasage_query",
     "description": (
-        "Execute one to ten fresh, read-only governed metric queries. Load the relevant domains with "
-        "datasage_catalog first and copy exact metric and dimension codes from that catalog. The caller may query "
-        "directly only when the selected expert_index metric has exact_default_lookup_supported: "
-        "true and the request has no explicit business qualifier. Empty dimensions: [] does not count as a qualifier. "
-        "If that flag is false or missing, or if calendar_month, "
-        "time_range, dimensions, filters, an entity, comparison, decomposition, or ranking is explicit, load the "
-        "selected metric detail before calling datasage_query and copy that result's detail_receipt unchanged. "
-        "The runtime rejects a missing, stale, tampered, wrong-metric, or capability-incompatible receipt before any "
-        "database access. The model-facing surface accepts no SQL, physical "
-        "tables, columns, joins, or formulas. Registered entity tokens may be provided as metric filters and are "
-        "resolved deterministically inside the query, but every governed entity filter, whether already unique or user-confirmed, "
-        "must also carry the exact "
-        "opaque resolution_receipt returned by a prior datasage_entity_resolve result for the same session, domain, "
-        "metric, role, and selected entity. The receipt is copied into the later query request. A "
-        "receipt binds selection identity and current contracts; it carries no evidence of a user-confirmation event. Never put "
-        "datasage_entity_resolve and datasage_query in the same assistant tool-call batch. The response returns "
-        "structured values, applied scope, data state, and evidence metadata for Hermes to analyze and summarize. "
-        "A non-empty answer_scope_line is a required final-answer scope statement: present it verbatim or faithfully "
-        "without changing the actual range. Every sealed disclosure_ledger item with applies: true is validated "
-        "internally and batch-deduplicated into the model-facing disclosures list; present every returned disclosure "
-        "and never drop one through summarization. The compact response preserves facts, typed states, Top-N status, "
-        "limitations, reconciliation, calculations, and guardrails without repeating "
-        "row-level seals or scope envelopes. Raw JSON is not required. "
+        "Execute one to ten fresh, read-only governed metric queries. Load datasage_catalog only when the "
+        "metric is unknown, and copy exact metric and dimension codes from the catalog when it is used. The query "
+        "runtime loads the current metric contract and validates availability, capabilities, filters, periods, and "
+        "entity identities before any database access. The model-facing surface accepts no SQL, physical tables, "
+        "columns, joins, or formulas. Registered entity tokens are resolved deterministically inside the query; "
+        "unique exact entities may proceed, while zero, multiple, or role-ambiguous matches fail closed and should "
+        "be clarified with datasage_entity_resolve. Use the resolver only for bounded ambiguity, then send the "
+        "user-selected token for exact revalidation. The response returns structured values, applied scope, data "
+        "state, and evidence metadata for Hermes to analyze and summarize. A non-empty answer_scope_line is a "
+        "required final-answer scope statement: present it verbatim or faithfully without changing the actual range. "
+        "Every sealed disclosure_ledger item with applies: true is validated internally and batch-deduplicated into "
+        "the model-facing disclosures list; present every returned disclosure and never drop one through "
+        "summarization. The compact response preserves facts, typed states, Top-N status, limitations, reconciliation, "
+        "calculations, and guardrails without repeating row-level seals or scope envelopes. Raw JSON is not required. "
         "Unavailable data affects only this tool call and does not control the surrounding conversation."
     ),
     "parameters": {
@@ -564,22 +524,19 @@ DATASAGE_QUERY = {
 DATASAGE_CATALOG = {
     "name": "datasage_catalog",
     "description": (
-        "Load the trusted DataSage metric catalog needed to plan an internal business-data query. "
+        "Load the trusted DataSage metric catalog when the metric is unknown or Hermes needs optional planning detail. "
         "Hermes chooses whether data is needed and which domains match the user's request; DataSage does not "
         "classify or control ordinary conversation. Confirm the supported capability and exact metric here before "
-        "entity resolution or query. Request expert_index for the smallest metric-discovery surface, "
-        "then request detail for a selected metric when required. Every expert-index metric declares "
-        "requires_metric_detail. Direct "
-        "query is allowed only when exact_default_lookup_supported is true and no explicit business qualifier is "
-        "present; empty dimensions: [] does not count as a qualifier. "
-        "Otherwise request detail only for the selected metric before query. The default model projection is compact. "
-        "The full view is a business capability summary; audit is a separate governance view containing only safe "
-        "owner-role, lifecycle, review, execution, and release states. The optional performance_scorecard view returns a governed "
-        "operating set of candidate lenses while declaring unavailable capabilities. It is not a prerequisite or "
-        "default planner; use it only when the user explicitly asks for that view or Hermes judges it useful. Hermes selects and orders the material "
-        "subset. Metric detail returns capability facts and max_group_dimensions; these facts do not prescribe a "
-        "metric count, call sequence, interpretation, or conclusion. Physical datasets, fields, filters, "
-        "joins and formulas remain plugin-private and are never returned to Hermes. This loader invokes no second model."
+        "entity resolution or query. Request expert_index for the smallest metric-discovery surface, or request one "
+        "exact metric's detail when Hermes needs optional planning facts. Query execution independently reloads the "
+        "current metric contract and enforces its availability and capabilities, so catalog detail is advisory rather "
+        "than an execution token. The default model projection is compact; full/audit are explicit compatibility views. "
+        "The optional performance_scorecard view returns a governed operating set of candidate lenses while declaring "
+        "unavailable capabilities. It is not a prerequisite or default planner; use it only when the user explicitly "
+        "asks for that view or Hermes judges it useful. Hermes selects and orders the material subset. Metric detail "
+        "returns capability facts and max_group_dimensions; these facts do not prescribe a metric count, call sequence, "
+        "interpretation, or conclusion. Physical datasets, fields, filters, joins and formulas remain plugin-private "
+        "and are never returned to Hermes. This loader invokes no second model."
     ),
     "parameters": {
         "type": "object",
@@ -612,9 +569,8 @@ DATASAGE_CATALOG = {
                             "enum": ["expert_index", "full", "audit", "performance_scorecard"],
                             "description": (
                                 "Use expert_index for compact discovery. Omit view for the default compact "
-                                "model projection. Use full for an explicit business capability summary; use audit "
-                                "for metric owner/lifecycle/review/release inspection without physical internals. "
-                                "Use performance_scorecard without domain or metric only for the "
+                                "model projection. Use full or audit only for explicit compatibility/audit "
+                                "inspection. Use performance_scorecard without domain or metric only for the "
                                 "optional governed cross-domain candidate lenses."
                             ),
                         },
@@ -650,8 +606,8 @@ DATASAGE_CATALOG = {
                 "description": (
                     "One request per relevant domain, or one cross-domain view=performance_scorecard request. "
                     "Use expert_index for discovery, include one exact metric code for detail, and use explicit "
-                    "full for a business capability summary or audit for governance inspection. The scorecard returns a "
-                    "optional set of candidate lenses plus independently sealed metric-detail receipts; it is not "
+                    "full/audit only when the legacy summary is genuinely required. The scorecard returns a "
+                    "optional set of candidate lenses with optional planning details; it is not "
                     "required before ordinary metric discovery or query planning."
                 ),
             },
@@ -693,25 +649,18 @@ DATASAGE_CATALOG = {
 DATASAGE_ENTITY_RESOLVE = {
     "name": "datasage_entity_resolve",
     "description": (
-        "Search or clarify one business-entity token only after datasage_catalog has confirmed that the exact "
-        "requested business quantity and operation are supported. Never call this resolver to explore an unsupported "
-        "quantity or before capability coverage; an entity match cannot create metric capability. The resolver itself "
-        "invokes no second model or embedding service. Use it before datasage_query when an entity identity or type is "
-        "not unique. Never put datasage_entity_resolve and datasage_query in the same assistant tool-call batch. A "
-        "unique returned identity and role may be queried only in a later batch; if candidates remain, stop before "
-        "query. For a type-neutral clarification, omit entity_types, include the selected domain and metric, and do not "
-        "guess an entity type. Registered exact aliases and codes resolve deterministically; otherwise the tool returns "
-        "at most ten bounded master-data candidates. Use it only for bounded ambiguity or an entity-only/search "
-        "question. Do not repeat the same resolution with unchanged evidence. Resolve "
-        "again only after material new information changes the token, selected metric or domain, possible role, or "
-        "candidate scope and the result could change the next action. "
-        "A unique exact match may be used only with one returned filter role. A metric-incompatible entity fails "
-        "closed; multiple exact matches, multiple possible roles, or any prefix/contains matches require user "
-        "clarification and must not trigger a business query. Every returned candidate carries an opaque "
-        "resolution_receipt for later selection binding; copy it unchanged and never construct or persist it. "
-        "The receipt records resolution selection only and carries no evidence of a user-confirmation event. A session_unbound "
-        "receipt is informational and cannot authorize a query; resolve again inside a trusted session. Entity-only questions stop "
-        "after this result."
+        "Search or clarify one business-entity token after Hermes has established that the requested capability is "
+        "supported. Never call this resolver to explore an unsupported quantity; an entity match cannot create metric "
+        "capability. The resolver itself invokes no second model or embedding service. Use it only when an entity "
+        "identity, type, or filter role is ambiguous, or for an entity-only/search question. For a type-neutral "
+        "clarification, omit entity_types, include the selected domain and metric, and do not guess an entity type. "
+        "Registered exact aliases and codes resolve deterministically; otherwise the tool returns at most ten bounded "
+        "master-data candidates. Do not repeat the same resolution with unchanged evidence. Resolve again only after "
+        "material new information changes the token, selected metric or domain, possible role, or candidate scope. "
+        "A unique exact match may proceed through datasage_query; multiple exact matches, multiple possible roles, or "
+        "any prefix/contains matches require user clarification and must not trigger a business query. The returned "
+        "candidate token, label, and entity type are advisory untrusted data; after the user selects one, send that "
+        "token to datasage_query for exact revalidation. Entity-only questions stop after this result."
     ),
     "parameters": {
         "type": "object",

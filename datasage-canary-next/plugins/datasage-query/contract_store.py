@@ -38,9 +38,7 @@ class ContractStoreError(Exception):
 
 _SNAPSHOT_LOCK = threading.RLock()
 _CONTRACT_SNAPSHOT: dict[str, Any] | None = None
-_CONTRACT_SNAPSHOT_DRIFT: dict[str, str] | None = None
 _SNAPSHOT_BOOTSTRAP_COUNT = 0
-_SNAPSHOT_DRIFT_CODE = "CONTRACT_SNAPSHOT_DRIFT"
 _DATASETS_CONTRACT_PATH = "plugins/datasage-query/contracts/datasets.yaml"
 # These are explicit execution inputs.  The list is intentionally finite and
 # does not discover or hash the surrounding profile/repository.  The first
@@ -56,7 +54,6 @@ PINNED_CONTRACT_PATHS = tuple(
                 for source in capability_contract.DOMAIN_SOURCES.values()
             ),
             "plugins/datasage-query/contracts/entity-registry.yaml",
-            "plugins/datasage-query/contracts/metric-governance.yaml",
             capability_contract.TARGET_GAP_CONTRACT_PATH,
         )
     )
@@ -113,31 +110,18 @@ def _read_current_contract_bytes(relative_path: str) -> tuple[Path, bytes, str]:
     return path, content, hashlib.sha256(content).hexdigest()
 
 
-def _snapshot_error(reason_code: str) -> ContractStoreError:
+def _snapshot_error(
+    reason_code: str,
+    message: str = "contract snapshot is unavailable",
+) -> ContractStoreError:
     return ContractStoreError(
         "CONTRACT_UNAVAILABLE",
-        "contract snapshot integrity check failed",
+        message,
         reason_code=reason_code,
     )
 
 
-def _latch_snapshot_drift(reason_code: str) -> None:
-    """Latch the first integrity failure; restoration never auto-recovers."""
-
-    global _CONTRACT_SNAPSHOT_DRIFT
-    with _SNAPSHOT_LOCK:
-        if _CONTRACT_SNAPSHOT_DRIFT is None:
-            _CONTRACT_SNAPSHOT_DRIFT = {"reason_code": reason_code}
-
-
-def _raise_latched_snapshot_drift() -> None:
-    with _SNAPSHOT_LOCK:
-        drift = _CONTRACT_SNAPSHOT_DRIFT
-    if drift is not None:
-        raise _snapshot_error(drift["reason_code"])
-
-
-def _snapshot_manifest_digest(root: Path, entries: dict[str, dict[str, str]]) -> str:
+def _snapshot_manifest_digest(root: Path, entries: dict[str, dict[str, Any]]) -> str:
     payload = {
         "profile_root": str(root),
         "contracts": [
@@ -165,7 +149,10 @@ def _snapshot_view(snapshot: dict[str, Any]) -> dict[str, Any]:
     return {
         "profile_root": snapshot["profile_root"],
         "entries": {
-            relative: dict(entry)
+            relative: {
+                "path": entry["path"],
+                "sha256": entry["sha256"],
+            }
             for relative, entry in snapshot["entries"].items()
         },
         "manifest_digest": snapshot["manifest_digest"],
@@ -175,10 +162,10 @@ def _snapshot_view(snapshot: dict[str, Any]) -> dict[str, Any]:
 def _pin_contract_snapshot() -> dict[str, Any]:
     """Pin the finite execution-contract set for this plugin process.
 
-    The first caller reads each explicit contract once and publishes one
-    immutable-in-practice identity map under the lock.  Later callers are
-    idempotent for the same Hermes profile root and reject root changes or a
-    previously latched drift; they never refresh the map.
+    The first caller reads and parses each explicit contract once and publishes
+    one process-lifetime snapshot under the lock.  Later callers reuse the
+    cached bytes and parsed mappings; file changes take effect after the
+    process is restarted.
     """
 
     global _CONTRACT_SNAPSHOT, _SNAPSHOT_BOOTSTRAP_COUNT
@@ -186,19 +173,23 @@ def _pin_contract_snapshot() -> dict[str, Any]:
     with _SNAPSHOT_LOCK:
         if _CONTRACT_SNAPSHOT is not None:
             if root != _CONTRACT_SNAPSHOT["profile_root"]:
-                _latch_snapshot_drift("profile_root_changed")
-                _raise_latched_snapshot_drift()
-            _raise_latched_snapshot_drift()
+                raise _snapshot_error(
+                    "profile_root_changed",
+                    "contract snapshot belongs to a different profile root",
+                )
             return _CONTRACT_SNAPSHOT
 
-        _raise_latched_snapshot_drift()
-        entries: dict[str, dict[str, str]] = {}
+        entries: dict[str, dict[str, Any]] = {}
         try:
             for relative_path in PINNED_CONTRACT_PATHS:
                 path, content, digest = _read_current_contract_bytes(relative_path)
+                text = content.decode("utf-8")
+                parsed = parse_yaml_cached(str(path), digest, text)
                 entries[relative_path] = {
                     "path": str(path),
                     "sha256": digest,
+                    "content": bytes(content),
+                    "parsed": parsed,
                 }
         except ContractStoreError as exc:
             raise ContractStoreError(
@@ -206,7 +197,13 @@ def _pin_contract_snapshot() -> dict[str, Any]:
                 exc.message,
                 reason_code=exc.reason_code or "snapshot_contract_read_unavailable",
             ) from exc
-        except (OSError, RuntimeError, ValueError) as exc:
+        except (
+            OSError,
+            RuntimeError,
+            UnicodeError,
+            ValueError,
+            yaml.YAMLError,
+        ) as exc:
             raise _snapshot_error("snapshot_contract_read_unavailable") from exc
         _CONTRACT_SNAPSHOT = {
             "profile_root": root,
@@ -229,64 +226,35 @@ def _ensure_contract_snapshot() -> dict[str, Any]:
     return _pin_contract_snapshot()
 
 
-def _verify_contract_snapshot(
-    relative_path: str,
-    path: Path,
-    digest: str,
-) -> None:
+def _cached_contract(relative_path: str) -> tuple[Path, dict[str, Any]]:
+    """Return one pinned contract entry without touching the filesystem."""
+
     snapshot = _ensure_contract_snapshot()
     root = snapshot["profile_root"]
+    path = trusted_path(relative_path)
     try:
-        key = _canonical_relative_path(relative_path, root)
+        key = _canonical_relative_path(str(path), root)
     except ContractStoreError:
-        _latch_snapshot_drift("contract_path_changed")
-        _raise_latched_snapshot_drift()
+        raise
     entry = snapshot["entries"].get(key)
     if entry is None:
-        _latch_snapshot_drift("contract_path_not_in_snapshot")
-        _raise_latched_snapshot_drift()
+        raise _snapshot_error(
+            "contract_path_not_in_snapshot",
+            "contract path is not part of the registered snapshot",
+        )
     if entry["path"] != str(path):
-        _latch_snapshot_drift("contract_path_changed")
-        _raise_latched_snapshot_drift()
-    if entry["sha256"] != digest:
-        _latch_snapshot_drift("contract_content_changed")
-        _raise_latched_snapshot_drift()
+        raise _snapshot_error(
+            "contract_path_changed",
+            "contract path does not match the registered snapshot",
+        )
+    return path, entry
 
 
 def _contract_bytes(relative_path: str) -> tuple[Path, bytes, str]:
-    """Read one contract and enforce its process-lifetime identity."""
+    """Return one contract's bytes and digest from the process snapshot."""
 
-    # Ensure root changes are rejected before opening a new path.  The actual
-    # bytes are still read on every request, so the YAML cache cannot bypass
-    # the digest comparison.
-    _ensure_contract_snapshot()
-    try:
-        path, content, digest = _read_current_contract_bytes(relative_path)
-    except ContractStoreError as exc:
-        # A snapshot member disappearing is a drift, not a recoverable cache
-        # miss.  The latched reason prevents a later restoration from
-        # silently re-enabling the process.
-        with _SNAPSHOT_LOCK:
-            snapshot = _CONTRACT_SNAPSHOT
-        if snapshot is not None:
-            try:
-                key = _canonical_relative_path(relative_path, snapshot["profile_root"])
-            except ContractStoreError:
-                # The caller supplied a path outside the active profile.  It
-                # is an input rejection, not evidence that a pinned contract
-                # changed, so do not poison an otherwise healthy process.
-                raise
-            else:
-                if key in snapshot["entries"]:
-                    _latch_snapshot_drift(
-                        "contract_path_changed"
-                        if "escapes" in exc.message
-                        else "contract_content_unavailable"
-                    )
-        _raise_latched_snapshot_drift()
-        raise
-    _verify_contract_snapshot(relative_path, path, digest)
-    return path, content, digest
+    path, entry = _cached_contract(relative_path)
+    return path, bytes(entry["content"]), str(entry["sha256"])
 
 
 def content_signature(relative_path: str) -> tuple[str, str]:
@@ -296,30 +264,18 @@ def content_signature(relative_path: str) -> tuple[str, str]:
     return str(path), digest
 
 
-def read_contract_bytes(relative_path: str) -> tuple[str, bytes, str]:
-    """Return snapshot-verified bytes for a specialized strict parser."""
-
-    path, content, digest = _contract_bytes(relative_path)
-    return str(path), bytes(content), digest
-
-
 def contract_snapshot_status() -> dict[str, Any]:
-    """Return truthful process-level contract identity state.
-
-    This is a read-only status surface.  Registration owns the explicit
-    bootstrap; status inspection never creates or refreshes a snapshot.
-    """
+    """Return truthful process-level contract snapshot state."""
 
     with _SNAPSHOT_LOCK:
-        drift = dict(_CONTRACT_SNAPSHOT_DRIFT or {})
         snapshot = _CONTRACT_SNAPSHOT
-    if snapshot is not None and profile_root() != snapshot["profile_root"]:
-        _latch_snapshot_drift("profile_root_changed")
-        with _SNAPSHOT_LOCK:
-            drift = dict(_CONTRACT_SNAPSHOT_DRIFT or {})
+    root_changed = bool(
+        snapshot is not None and profile_root() != snapshot["profile_root"]
+    )
     return {
+        "loaded": snapshot is not None and not root_changed,
         "fixed": snapshot is not None,
-        "enforced_per_read": snapshot is not None,
+        "enforced_per_read": False,
         "profile_root": (
             str(snapshot["profile_root"]) if snapshot is not None else None
         ),
@@ -327,23 +283,18 @@ def contract_snapshot_status() -> dict[str, Any]:
             snapshot["manifest_digest"] if snapshot is not None else None
         ),
         "file_count": len(snapshot["entries"]) if snapshot is not None else 0,
-        "drifted": bool(drift),
-        "drift_reason": drift.get("reason_code"),
-        "reason_code": _SNAPSHOT_DRIFT_CODE if drift else None,
+        "drifted": root_changed,
+        "drift_reason": "profile_root_changed" if root_changed else None,
+        "reason_code": "CONTRACT_SNAPSHOT_ROOT_CHANGED" if root_changed else None,
     }
 
 
 def reset_contract_snapshot_for_tests() -> None:
-    """TEST-ONLY: clear the process snapshot between isolated fixture roots.
+    """TEST-ONLY: clear the process snapshot between isolated fixture roots."""
 
-    Production code must never call this function.  In particular, a failed
-    read never invokes it and a restored file cannot clear a latched drift.
-    """
-
-    global _CONTRACT_SNAPSHOT, _CONTRACT_SNAPSHOT_DRIFT, _SNAPSHOT_BOOTSTRAP_COUNT
+    global _CONTRACT_SNAPSHOT, _SNAPSHOT_BOOTSTRAP_COUNT
     with _SNAPSHOT_LOCK:
         _CONTRACT_SNAPSHOT = None
-        _CONTRACT_SNAPSHOT_DRIFT = None
         _SNAPSHOT_BOOTSTRAP_COUNT = 0
 
 
@@ -369,9 +320,8 @@ def parse_yaml_cached(
 
 def read_yaml(relative_path: str) -> dict[str, Any]:
     try:
-        path, content, digest = _contract_bytes(relative_path)
-        text = content.decode("utf-8")
-        return parse_yaml_cached(str(path), digest, text)
+        _path, entry = _cached_contract(relative_path)
+        return entry["parsed"]
     except ContractStoreError:
         raise
     except (OSError, UnicodeError, yaml.YAMLError) as exc:

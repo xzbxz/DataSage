@@ -14,22 +14,19 @@ Rule ID: `datasage.query-rules/v1`
 - Ordinary conversation does not call DataSage.
 - There is no keyword whitelist, mandatory per-turn scope call, unknown-to-data
   fallback, or default delivery route.
-- For a data request, inspect the smallest relevant `datasage_catalog` surface.
-  A compact domain request discovers candidate metrics; an exact metric request
-  exposes the supported dimensions, filters, entity roles, time behavior, and
-  comparisons needed to build a query.
+- For a data request whose metric is unknown, inspect the smallest relevant
+  `datasage_catalog` surface. A compact domain request discovers candidate
+  metrics. An exact metric detail request is optional planning help; query
+  execution reloads the current contract and validates its capabilities itself.
 - Select an exact registered metric from business meaning. Never invent or
   substitute a metric, dimension, entity, period, unit, or currency, including
   a related amount, count, quantity, rate, average, extreme, or total.
 - The catalog describes the governed interface. It never exposes or accepts a
   physical dataset, table, field, join, SQL fragment, or model-authored formula.
-- Reuse the selected domain, metric, and valid detail receipt from the current
-  session; a new turn alone is not a reason to reload them. Use the likely
-  domain's `expert_index` only when the metric is unknown, and inspect a small
-  candidate set before asking the user.
-- For explicit qualifiers or analysis, load the exact metric detail and copy
-  that result's `detail_receipt` into `datasage_query`. Never reuse it for
-  another metric.
+- Reuse the selected domain and metric from the current conversation; a new turn
+  alone is not a reason to reload the catalog. Use the likely domain's
+  `expert_index` only when the metric is unknown, and inspect a small candidate
+  set before asking the user.
 
 ## Time
 
@@ -66,13 +63,9 @@ Rule ID: `datasage.query-rules/v1`
   [`datasage.entity-guidance/v1`](entity-guidance.md), which owns when to resolve
   and when another resolution attempt is justified, plus confirmation and
   turn-boundary behavior. Empty-result interpretation follows
-  [`datasage.answer-boundary/v1`](answer-boundary.md). Entity resolution
-  receipts are transient tool outputs: copy each selected candidate's opaque
-  `resolution_receipt` into that request's `resolution_receipts`; never invent,
-  edit, persist, or place them in Memory. If a detail receipt is missing or
-  stale after context compaction, follow the returned `reload_metric_detail`
-  recovery action and issue the minimal catalog request; do not guess or
-  reconstruct a receipt.
+  [`datasage.answer-boundary/v1`](answer-boundary.md). After the user selects a
+  candidate, send the selected token in the complete query request; the query
+  service performs exact identity and role validation again.
 
 ## Interpretation hand-off
 

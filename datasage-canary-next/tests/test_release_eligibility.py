@@ -2149,23 +2149,5 @@ class SingleOwnershipTests(unittest.TestCase):
         config = yaml.safe_load((PROFILE_ROOT / "config.yaml").read_text(encoding="utf-8"))
         self.assertNotIn("cron", config["platform_toolsets"])
 
-    def test_runtime_identity_declares_prestart_not_per_query_verification(self):
-        module, _ = probe_registration(
-            PLUGIN_ROOT,
-            package_name="datasage_release_identity_registration",
-        )
-        runtime_health = importlib.import_module(f"{module.__name__}.runtime_health")
-        status = runtime_health.runtime_identity_status(
-            profile_root=PROFILE_ROOT
-        )
-        release_binding = status["release_binding"]
-        self.assertEqual("prestart_release_gate", release_binding["verification_scope"])
-        self.assertFalse(release_binding["enforced_per_query"])
-        self.assertIn(
-            "build_release_receipt.py --verify-candidate",
-            release_binding["verification_command"],
-        )
-
-
 if __name__ == "__main__":
     unittest.main()

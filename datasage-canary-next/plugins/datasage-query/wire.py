@@ -71,7 +71,6 @@ def _metric_operation_summary(metric: Mapping[str, Any]) -> list[str]:
 def _compact_metric_detail(
     detail: Mapping[str, Any],
     *,
-    detail_receipt: Any = None,
     value_policies: dict[str, str],
 ) -> dict[str, Any]:
     metric = detail.get("metric")
@@ -103,8 +102,6 @@ def _compact_metric_detail(
     }
     if limitations:
         compact["limitations"] = limitations
-    if isinstance(detail_receipt, str) and detail_receipt:
-        compact["detail_receipt"] = detail_receipt
     return compact
 
 
@@ -112,17 +109,12 @@ def _compact_catalog_result(
     result: Mapping[str, Any],
     value_policies: dict[str, str],
 ) -> dict[str, Any]:
-    if result.get("projection_mode") in {
-        "audit_full",
-        "business_full",
-        "governance_audit",
-    }:
+    if result.get("projection_mode") == "audit_full":
         return dict(result)
     level = result.get("level")
     if level == "metric":
         return _compact_metric_detail(
             result,
-            detail_receipt=result.get("detail_receipt"),
             value_policies=value_policies,
         )
     if level == "performance_scorecard":
@@ -139,7 +131,6 @@ def _compact_catalog_result(
                     continue
                 candidate = _compact_metric_detail(
                     raw_candidate["detail"],
-                    detail_receipt=raw_candidate.get("detail_receipt"),
                     value_policies=value_policies,
                 )
                 # The metric already publishes allowed dimension codes. Keep

@@ -40,8 +40,6 @@ config_schema:
   mysql_approved_path_roots: {type: list, default: [], description: "Absolute operator-approved roots for database security material."}
   approved_profile_roots: {type: list, default: [], description: "Absolute operator-approved roots for active profile paths."}
   mysql_connect_timeout_seconds: {type: int, default: 8, description: "Connection timeout."}
-  mysql_health_connect_timeout_seconds: {type: int, default: 5, description: "Health-check connection timeout."}
-  mysql_grant_audit_timeout_seconds: {type: int, default: 10, description: "Grant audit timeout."}
   mysql_query_timeout_seconds: {type: int, default: 30, description: "Per-query timeout."}
   call_timeout_seconds: {type: int, default: 60, description: "Batch call deadline."}
   max_concurrent_queries: {type: int, default: 4, description: "Maximum independent concurrent queries."}
@@ -49,4 +47,3 @@ config_schema:
   max_rows: {type: int, default: 100, description: "Maximum rows returned per request."}
   max_cell_chars: {type: int, default: 2000, description: "Maximum public cell text length."}
   max_dimension_display_chars: {type: int, default: 80, description: "Maximum dimension display length."}
-  data_entitlements: {type: dict, default: {}, description: "Governed per-principal data entitlements."}

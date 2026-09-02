@@ -63,17 +63,6 @@ def _query_rules() -> str:
 
 class BusinessContractTests(unittest.TestCase):
     @staticmethod
-    def _metric_detail_receipt(domain: str, metric: str) -> str:
-        payload = json.loads(
-            contracts.datasage_catalog(
-                {"requests": [{"domain": domain, "metric": metric}]}
-            )
-        )
-        if payload.get("status") != "success":
-            raise AssertionError(payload)
-        return str(payload["results"][0]["detail_receipt"])
-
-    @staticmethod
     def _read_only_source_evidence() -> dict[str, object]:
         evidence: dict[str, object] = {
             "schema": "datasage-query-source-evidence/v1",
@@ -510,9 +499,6 @@ class BusinessContractTests(unittest.TestCase):
             "mode": "metric",
             "purpose": "offline snapshot decomposition proof",
             "metric": "month_end_inventory_cost_rmb",
-            "detail_receipt": cls._metric_detail_receipt(
-                "inventory", "month_end_inventory_cost_rmb"
-            ),
             "comparison": {"kind": "snapshot_months_before", "months": 1},
             "complete_change_decomposition": {"dimension": "warehouse"},
         }
@@ -547,9 +533,6 @@ class BusinessContractTests(unittest.TestCase):
             "metric": "delivery_target_completion",
             "attribution_mode": "transaction_detail",
             "time_range": {"start": "2026-08-01", "end": "2026-09-01"},
-            "detail_receipt": cls._metric_detail_receipt(
-                "target", "delivery_target_completion"
-            ),
             "complete_target_gap_decomposition": {"dimension": "department"},
         }
         expanded, operation_partitions = (
@@ -733,7 +716,6 @@ class BusinessContractTests(unittest.TestCase):
             )
         )
         self.assertEqual("success", detail["status"])
-        self.assertIn("detail_receipt", detail["results"][0])
 
     def test_model_visible_contribution_rate_wire_contract_is_direct_use_only(
         self,
@@ -893,15 +875,11 @@ class BusinessContractTests(unittest.TestCase):
             "metric": "current_inventory_amount_rmb",
             "dimensions": [],
             "inventory_scope": "total",
-            "detail_receipt": self._metric_detail_receipt(
-                "inventory", "current_inventory_amount_rmb"
-            ),
             "time_range": {"start": "2026-06-01", "end": "2026-07-01"},
             "comparison": {"kind": "previous_period"},
         }
         normalized = tools._validate_request(unsupported)
         datasets, semantics = tools._contracts("inventory")
-        normalized = tools._validate_metric_detail_gate(normalized, semantics)
         with self.assertRaises(tools.QueryFailure) as failure:
             tools._validate_pre_entity_metric_plan(
                 normalized, datasets, semantics
@@ -922,9 +900,6 @@ class BusinessContractTests(unittest.TestCase):
                 "kind": "year_over_year",
                 "coverage": "matched_elapsed",
             },
-            "detail_receipt": self._metric_detail_receipt(
-                "delivery", "delivery_amount"
-            ),
         }
         jsonschema.validate(
             {"requests": [request]},
@@ -932,7 +907,6 @@ class BusinessContractTests(unittest.TestCase):
         )
         normalized = tools._validate_request(request)
         datasets, semantics = tools._contracts("delivery")
-        normalized = tools._validate_metric_detail_gate(normalized, semantics)
         _sql, params, scope = tools._build_metric_query(
             normalized,
             datasets,
@@ -1023,9 +997,6 @@ class BusinessContractTests(unittest.TestCase):
                 "kind": "year_over_year",
                 "coverage": "matched_elapsed",
             },
-            "detail_receipt": self._metric_detail_receipt(
-                "delivery", "delivery_amount"
-            ),
         }
         request, datasets, semantics = tools._validate_request_plan_without_entities(
             raw_request,
@@ -1208,9 +1179,6 @@ class BusinessContractTests(unittest.TestCase):
                 "coverage": "matched_elapsed",
             },
             "complete_change_decomposition": {"dimension": "customer"},
-            "detail_receipt": self._metric_detail_receipt(
-                "delivery", "delivery_amount"
-            ),
         }
         jsonschema.validate(
             {"requests": [request]},
@@ -1228,9 +1196,6 @@ class BusinessContractTests(unittest.TestCase):
         scopes = []
         for branch in expanded:
             normalized = tools._validate_request(branch)
-            normalized = tools._validate_metric_detail_gate(
-                normalized, semantics
-            )
             _sql, params, scope = tools._build_metric_query(
                 normalized,
                 datasets,
@@ -1337,15 +1302,11 @@ class BusinessContractTests(unittest.TestCase):
             "purpose": "offline ratio null compilation proof",
             "metric": "return_amount_rate",
             "dimensions": [],
-            "detail_receipt": self._metric_detail_receipt(
-                "delivery", "return_amount_rate"
-            ),
             "calendar_month": "2026-07",
             "comparison": {"kind": "previous_period"},
         }
         normalized = tools._validate_request(request)
         datasets, semantics = tools._contracts("delivery")
-        normalized = tools._validate_metric_detail_gate(normalized, semantics)
         tools._validate_pre_entity_metric_plan(normalized, datasets, semantics)
         sql, _params, _scope = tools._build_metric_query(
             normalized,
@@ -1375,14 +1336,10 @@ class BusinessContractTests(unittest.TestCase):
             "metric": "delivery_target_completion",
             "dimensions": [],
             "attribution_mode": "transaction_detail",
-            "detail_receipt": self._metric_detail_receipt(
-                "target", "delivery_target_completion"
-            ),
             "calendar_month": "2099-01",
         }
         normalized = tools._validate_request(request)
         datasets, semantics = tools._contracts("target")
-        normalized = tools._validate_metric_detail_gate(normalized, semantics)
         tools._validate_pre_entity_metric_plan(normalized, datasets, semantics)
         sql, _params, _scope = tools._build_metric_query(
             normalized,
@@ -1431,7 +1388,6 @@ class BusinessContractTests(unittest.TestCase):
             "mode": "metric",
             "purpose": "offline snapshot compile proof",
             "metric": metric,
-            "detail_receipt": self._metric_detail_receipt(domain, metric),
             "comparison": {"kind": "snapshot_months_before", "months": 1},
             "complete_change_decomposition": {"dimension": dimensions[0]},
         }
@@ -1444,7 +1400,6 @@ class BusinessContractTests(unittest.TestCase):
         for expanded_request in expanded:
             normalized = tools._validate_request(expanded_request)
             datasets, semantics = tools._contracts(domain)
-            normalized = tools._validate_metric_detail_gate(normalized, semantics)
             tools._validate_pre_entity_metric_plan(
                 normalized, datasets, semantics
             )
@@ -1638,9 +1593,6 @@ class BusinessContractTests(unittest.TestCase):
             "mode": "metric",
             "purpose": "invalid snapshot operation must fail before database access",
             "metric": "net_receipt_amount",
-            "detail_receipt": self._metric_detail_receipt(
-                "receipt", "net_receipt_amount"
-            ),
             "comparison": {"kind": "snapshot_months_before", "months": 1},
             "complete_change_decomposition": {"dimension": "customer"},
         }
@@ -1671,9 +1623,6 @@ class BusinessContractTests(unittest.TestCase):
             "mode": "metric",
             "purpose": "offline post-SQL source evidence regression",
             "metric": "delivery_amount",
-            "detail_receipt": self._metric_detail_receipt(
-                "delivery", "delivery_amount"
-            ),
             "calendar_month": "2026-08",
             "dimensions": ["customer"],
             "limit": 100,
@@ -1683,7 +1632,6 @@ class BusinessContractTests(unittest.TestCase):
             tools._validate_request(raw_request)
         )
         datasets, semantics = tools._contracts("delivery")
-        request = tools._validate_metric_detail_gate(request, semantics)
         tools._validate_pre_entity_metric_plan(request, datasets, semantics)
         prepared = {
             "request": request,
@@ -2306,7 +2254,7 @@ class BusinessContractTests(unittest.TestCase):
         self.assertNotIn("planner_", skill_surface)
         self.assertFalse((PLUGIN_ROOT / "references.py").exists())
 
-    def test_receipt_detail_gate_and_required_answer_scope_survive_model_wire(
+    def test_metric_capabilities_and_required_answer_scope_survive_model_wire(
         self,
     ) -> None:
         payload = json.loads(
@@ -2374,9 +2322,6 @@ class BusinessContractTests(unittest.TestCase):
                                 "mode": "metric",
                                 "purpose": "synthetic contract test",
                                 "metric": "net_receipt_amount",
-                                "detail_receipt": self._metric_detail_receipt(
-                                    "receipt", "net_receipt_amount"
-                                ),
                                 "dimensions": [],
                                 "calendar_month": "2026-07",
                             }
@@ -2391,10 +2336,7 @@ class BusinessContractTests(unittest.TestCase):
         ]["items"]
         self.assertEqual(1, len(coverage_receipts))
         self.assertEqual(["receipt_month"], coverage_receipts[0]["request_ids"])
-        self.assertNotIn(
-            self._metric_detail_receipt("receipt", "net_receipt_amount"),
-            json.dumps(query_payload, ensure_ascii=False),
-        )
+        self.assertNotIn("detail_receipt", json.dumps(query_payload, ensure_ascii=False))
         self.assertIn("2026-07-01", captured["params"])
         self.assertIn("2026-08-01", captured["params"])
         result = query_payload["results"][0]
@@ -2503,12 +2445,6 @@ class BusinessContractTests(unittest.TestCase):
         def run_receipt_case(
             request: dict[str, object],
         ) -> dict[str, dict[str, object]]:
-            request = {
-                **request,
-                "detail_receipt": self._metric_detail_receipt(
-                    str(request["domain"]), str(request["metric"])
-                ),
-            }
             with mock.patch.object(
                 tools,
                 "_execute_with_source",
@@ -2653,10 +2589,8 @@ class BusinessContractTests(unittest.TestCase):
         )
 
         query_description = schemas.DATASAGE_QUERY["description"]
-        self.assertIn("exact_default_lookup_supported: true", query_description)
-        self.assertIn("false or missing", query_description)
-        self.assertIn("calendar_month", query_description)
-        self.assertIn("time_range", query_description)
+        self.assertIn("loads the current metric contract", query_description)
+        self.assertIn("validates availability, capabilities, filters, periods", query_description)
         self.assertIn("answer_scope_line", query_description)
         self.assertIn("Every sealed disclosure_ledger item", query_description)
         self.assertIn(
@@ -2671,319 +2605,75 @@ class BusinessContractTests(unittest.TestCase):
         request_policy = _query_rules()
         answer_policy = _answer_boundary()
         normalized = " ".join(request_policy.split())
-        self.assertIn("copy that result's `detail_receipt`", normalized)
-        self.assertIn("Never reuse it for another metric", normalized)
+        self.assertIn("exact metric detail request is optional planning help", normalized)
+        self.assertIn("execution reloads the current contract", normalized)
         self.assertIn("Preserve typed states", answer_policy)
 
-    def test_runtime_metric_detail_receipt_gate_fails_closed_before_database(
+    def test_current_metric_contract_fails_closed_for_availability_capabilities_and_time(
         self,
     ) -> None:
-        def validate(request: dict[str, object]) -> dict[str, object]:
-            normalized = tools._validate_inventory_metric_scope(
-                tools._validate_delivery_metric_scope(
-                    tools._validate_request(request)
-                )
-            )
-            _, semantics = tools._contracts(str(normalized["domain"]))
-            return tools._validate_metric_detail_gate(normalized, semantics)
-
-        base = {
-            "request_id": "receipt_gate",
-            "domain": "receipt",
+        base_request = {
+            "request_id": "current_metric_contract",
+            "domain": "delivery",
             "mode": "metric",
-            "purpose": "offline metric-detail receipt gate test",
-            "metric": "net_receipt_amount",
+            "purpose": "current metric contract validation",
+            "metric": "delivery_amount",
             "dimensions": [],
         }
-        correct = self._metric_detail_receipt("receipt", "net_receipt_amount")
 
-        with self.assertRaises(tools.QueryFailure) as missing:
-            validate(base)
-        self.assertEqual("METRIC_DETAIL_REQUIRED", missing.exception.code)
+        def validate(raw_request: dict[str, object]) -> dict[str, object]:
+            normalized = tools._validate_request(raw_request)
+            _, semantics = tools._contracts(str(normalized["domain"]))
+            return tools._validate_metric_contract(normalized, semantics)
 
-        wrong_metric_receipt = self._metric_detail_receipt(
-            "receipt", "receipt_amount"
-        )
-        with self.assertRaises(tools.QueryFailure) as wrong_metric:
-            validate({**base, "detail_receipt": wrong_metric_receipt})
+        with self.assertRaises(tools.QueryFailure) as unavailable:
+            validate({**base_request, "metric": "delivery_quantity"})
         self.assertEqual(
-            "METRIC_DETAIL_RECEIPT_INVALID", wrong_metric.exception.code
+            "SEMANTIC_UNIT_RECONCILIATION_REQUIRED",
+            unavailable.exception.code,
         )
 
-        tampered = ("0" if correct[0] != "0" else "1") + correct[1:]
-        with self.assertRaises(tools.QueryFailure) as tampered_error:
-            validate({**base, "detail_receipt": tampered})
+        with self.assertRaises(tools.QueryFailure) as unsupported_dimension:
+            validate({**base_request, "dimensions": ["warehouse"]})
         self.assertEqual(
-            "METRIC_DETAIL_RECEIPT_INVALID", tampered_error.exception.code
+            "UNSUPPORTED_DIMENSION",
+            unsupported_dimension.exception.code,
         )
 
-        stale_current = "f" * 64 if correct != "f" * 64 else "e" * 64
-        with mock.patch.object(
-            tools,
-            "_current_metric_detail_receipt",
-            return_value=stale_current,
-        ):
-            with self.assertRaises(tools.QueryFailure) as expired:
-                validate({**base, "detail_receipt": correct})
-        self.assertEqual(
-            "METRIC_DETAIL_RECEIPT_INVALID", expired.exception.code
-        )
-
-        with self.assertRaises(tools.QueryFailure) as dimension_overreach:
+        with self.assertRaises(tools.QueryFailure) as range_too_wide:
             validate(
                 {
-                    **base,
-                    "detail_receipt": correct,
-                    "dimensions": ["warehouse"],
-                }
-            )
-        self.assertEqual("UNSUPPORTED_DIMENSION", dimension_overreach.exception.code)
-
-        with self.assertRaises(tools.QueryFailure) as time_overreach:
-            validate(
-                {
-                    **base,
-                    "detail_receipt": correct,
+                    **base_request,
                     "time_range": {
                         "start": "2020-01-01",
                         "end": "2026-01-01",
                     },
                 }
             )
-        self.assertEqual("QUERY_RANGE_TOO_WIDE", time_overreach.exception.code)
+        self.assertEqual("QUERY_RANGE_TOO_WIDE", range_too_wide.exception.code)
 
-        exact_default = validate(
-            {
-                "request_id": "delivery_exact_default",
-                "domain": "delivery",
-                "mode": "metric",
-                "purpose": "offline exact-default exception test",
-                "metric": "delivery_amount",
-                "dimensions": [],
-            }
-        )
-        self.assertNotIn("detail_receipt", exact_default)
-
-        with mock.patch.object(
-            tools,
-            "_execute_with_source",
-            return_value=(
-                [{"metric_value": "42.00"}],
-                False,
-                self._read_only_source_evidence(),
-            ),
-        ):
-            exact_default_query = json.loads(
-                tools.datasage_query(
-                    {
-                        "requests": [
-                            {
-                                "request_id": "delivery_exact_default_query",
-                                "domain": "delivery",
-                                "mode": "metric",
-                                "purpose": "offline exact-default execution test",
-                                "metric": "delivery_amount",
-                                "dimensions": [],
-                            }
-                        ]
-                    }
-                )
-            )
-        self.assertEqual("success", exact_default_query["status"])
-        self.assertEqual(
-            "success", exact_default_query["results"][0]["status"]
-        )
-
-        self.assertIn("detail_receipt", schemas.REQUEST["properties"])
-        self.assertNotIn("detail_receipt", schemas.REQUEST["required"])
-        query_description = schemas.DATASAGE_QUERY["description"]
-        self.assertNotIn("content_hash", query_description)
-        self.assertIn("before any database access", query_description)
-        skill_content = " ".join(_query_rules().split())
-        self.assertIn("`detail_receipt`", skill_content)
-        self.assertIn("Never reuse it for another metric", skill_content)
-        self.assertNotIn("copy its `content_hash`", skill_content)
-
-        with mock.patch.object(
-            tools,
-            "_execute_with_source",
-            side_effect=AssertionError("database access must not occur"),
-        ):
-            runtime_failure = json.loads(
-                tools.runtime_guarded_datasage_query({"requests": [base]})
-            )
-        self.assertEqual("failed", runtime_failure["status"])
-        self.assertEqual(
-            "METRIC_DETAIL_REQUIRED",
-            runtime_failure["results"][0]["error"]["code"],
-        )
-
-    def test_public_runtime_receipt_gate_covers_plan_batch_decomposition_and_wire(
-        self,
-    ) -> None:
-        receipt = self._metric_detail_receipt("receipt", "net_receipt_amount")
-        late_plan = {
-            "request_id": "late_plan",
-            "domain": "receipt",
-            "mode": "metric",
-            "purpose": "public pre-entity capability test",
-            "metric": "net_receipt_amount",
-            "detail_receipt": receipt,
-            "dimensions": [],
-            "metric_filters": {"customer": "X"},
-            "order_by": {"field": "metric_value", "direction": "desc"},
+        decomposition_request = {
+            key: value
+            for key, value in base_request.items()
+            if key != "dimensions"
         }
-        with (
-            mock.patch.object(
-                tools,
-                "_execute_with_source",
-                side_effect=AssertionError("entity/database access must not occur"),
-            ) as execute,
-            mock.patch.object(
-                runtime_health,
-                "query_readiness_status",
-                return_value={"ready": True},
-            ),
-        ):
-            late_failure = json.loads(
-                tools.runtime_guarded_datasage_query(
-                    {"requests": [late_plan]}
-                )
+        with self.assertRaises(tools.QueryFailure) as unsupported_decomposition:
+            validate(
+                {
+                    **decomposition_request,
+                    "calendar_month": "2026-07",
+                    "metric": "gross_delivery_amount",
+                    "complete_change_decomposition": {"dimension": "currency"},
+                }
             )
-        self.assertEqual("failed", late_failure["status"])
-        self.assertNotIn("error", late_failure)
         self.assertEqual(
-            "INVALID_PLAN", late_failure["results"][0]["error"]["code"]
+            "UNSUPPORTED_CHANGE_DECOMPOSITION",
+            unsupported_decomposition.exception.code,
         )
-        execute.assert_not_called()
 
-        exact_default = {
-            "request_id": "batch_exact_default",
-            "domain": "delivery",
-            "mode": "metric",
-            "purpose": "public batch receipt test",
-            "metric": "delivery_amount",
-            "dimensions": [],
-        }
-        missing_receipt = {
-            "request_id": "batch_missing_receipt",
-            "domain": "receipt",
-            "mode": "metric",
-            "purpose": "public batch receipt test",
-            "metric": "net_receipt_amount",
-            "dimensions": [],
-        }
-        with (
-            mock.patch.object(
-                runtime_health,
-                "query_readiness_status",
-                return_value={"ready": True},
-            ),
-            mock.patch.object(
-                tools,
-                "_execute_with_source",
-                return_value=(
-                    [{"metric_value": "42.00"}],
-                    False,
-                    self._read_only_source_evidence(),
-                ),
-            ) as execute,
-        ):
-            mixed = json.loads(
-                tools.runtime_guarded_datasage_query(
-                    {"requests": [exact_default, missing_receipt]}
-                )
-            )
-        self.assertEqual("partial", mixed["status"])
-        self.assertEqual(2, mixed["request_count"])
-        by_id = {item["request_id"]: item for item in mixed["results"]}
-        self.assertEqual("success", by_id["batch_exact_default"]["status"])
-        self.assertEqual("failed", by_id["batch_missing_receipt"]["status"])
-        self.assertEqual(
-            "METRIC_DETAIL_REQUIRED",
-            by_id["batch_missing_receipt"]["error"]["code"],
-        )
-        execute.assert_called_once()
-
-        decomposition = {
-            "request_id": "bad_decomposition_receipt",
-            "domain": "receipt",
-            "mode": "metric",
-            "purpose": "public decomposition receipt test",
-            "metric": "net_receipt_amount",
-            "detail_receipt": ("0" if receipt[0] != "0" else "1") + receipt[1:],
-            "time_range": {"start": "2026-01-01", "end": "2026-02-01"},
-            "complete_change_decomposition": {"dimension": "customer"},
-        }
-        with mock.patch.object(
-            tools,
-            "_execute_with_source",
-            side_effect=AssertionError("decomposition validation must be DB-free"),
-        ) as execute:
-            decomposition_failure = json.loads(
-                tools.runtime_guarded_datasage_query(
-                    {"requests": [decomposition]}
-                )
-            )
-        self.assertEqual(
-            "METRIC_DETAIL_RECEIPT_INVALID",
-            decomposition_failure["results"][0]["error"]["code"],
-        )
-        execute.assert_not_called()
-
-        wire_request = {
-            **exact_default,
-            "request_id": "receipt_non_leak",
-            "purpose": "public receipt non-leak test",
-        }
-        with (
-            mock.patch.object(
-                runtime_health,
-                "query_readiness_status",
-                return_value={"ready": True},
-            ),
-            mock.patch.object(
-                tools,
-                "_execute_with_source",
-                return_value=(
-                    [{"metric_value": "42.00"}],
-                    False,
-                    self._read_only_source_evidence(),
-                ),
-            ),
-        ):
-            without_receipt = json.loads(
-                tools.runtime_guarded_datasage_query(
-                    {"requests": [wire_request]}
-                )
-            )
-            delivery_receipt = self._metric_detail_receipt(
-                "delivery",
-                "delivery_amount",
-            )
-            with_receipt = json.loads(
-                tools.runtime_guarded_datasage_query(
-                    {
-                        "requests": [
-                            {**wire_request, "detail_receipt": delivery_receipt}
-                        ]
-                    }
-                )
-            )
-        self.assertEqual("success", without_receipt["status"])
-        self.assertEqual("success", with_receipt["status"])
-        self.assertEqual(
-            without_receipt["results"],
-            with_receipt["results"],
-        )
-        self.assertEqual(
-            without_receipt["evidence_bundle"],
-            with_receipt["evidence_bundle"],
-        )
-        self.assertNotIn(
-            delivery_receipt,
-            json.dumps(with_receipt, ensure_ascii=False),
-        )
+        accepted = validate(base_request)
+        self.assertEqual("delivery_amount", accepted["metric"])
+        self.assertEqual([], accepted["dimensions"])
 
     def test_physical_execution_budget_is_a_local_branch_failure(self) -> None:
         requests = [
@@ -3004,9 +2694,6 @@ class BusinessContractTests(unittest.TestCase):
                 "mode": "metric",
                 "purpose": "offline physical budget complete operation probe",
                 "metric": "net_receipt_amount",
-                "detail_receipt": self._metric_detail_receipt(
-                    "receipt", "net_receipt_amount"
-                ),
                 "calendar_month": "2026-07",
                 "complete_change_decomposition": {"dimension": "customer"},
             }
@@ -3051,9 +2738,6 @@ class BusinessContractTests(unittest.TestCase):
             "mode": "metric",
             "purpose": "offline generated ID collision boundary probe",
             "metric": "delivery_amount",
-            "detail_receipt": self._metric_detail_receipt(
-                "delivery", "delivery_amount"
-            ),
             "calendar_month": "2026-07",
             "complete_change_decomposition": {"dimension": "department"},
         }
@@ -3316,33 +3000,6 @@ class BusinessContractTests(unittest.TestCase):
         def run_query(
             request: dict[str, object], rows: list[dict[str, object]]
         ) -> tuple[dict[str, object], list[dict[str, object]]]:
-            request = {
-                **request,
-                "detail_receipt": self._metric_detail_receipt(
-                    str(request["domain"]), str(request["metric"])
-                ),
-            }
-            metric_filters = request.get("metric_filters")
-            if isinstance(metric_filters, dict) and "department" in metric_filters:
-                department = str(metric_filters["department"])
-                _datasets, semantics = tools._contracts(str(request["domain"]))
-                request["resolution_receipts"] = [
-                    entities._resolution_receipt_for_candidate(
-                        {
-                            "entity_type": "department",
-                            "canonical_id": department,
-                            "canonical_code": department,
-                            "display_name": department,
-                            "filter_role": "department",
-                            "filter_values": [department],
-                        },
-                        token=department,
-                        domain=str(request["domain"]),
-                        metric=str(request["metric"]),
-                        semantics=semantics,
-                        session_id="business-contract-session",
-                    )
-                ]
             calls: list[dict[str, object]] = []
 
             def execute_query(sql, params, limit, **_kwargs):
@@ -4396,46 +4053,6 @@ class BusinessContractTests(unittest.TestCase):
             self.assertIs(disclosures[formal_dso_disclosure_id]["applies"], True)
             assert_disclosure_seals(result)
 
-        current_receipt = detail["results"][0]["detail_receipt"]
-        stale_detail = json.loads(json.dumps(detail["results"][0], ensure_ascii=False))
-        stale_detail.pop("detail_receipt")
-        stale_detail["metric"]["answer_contract"][1] = (
-            "同时呈现已返回的平均净经营欠款、期间自然日数、月末欠款快照月数和有效出库月份数；"
-            "只有同一次 datasage_query 返回的 "
-            "formal-receivable-turnover-calculation-attestation/v1 状态为 verified、"
-            "attestation_seal 与外层 claim_seal 均有效，且公式披露与双侧客户范围披露"
-            "均适用且密封有效时，才可忠实呈现同一查询已密封的正式公式披露；"
-            "attestation 缺失、无效或状态为 undefined 时，不得依据本 catalog 合同直接陈述"
-            "正式公式或正式周转数值。"
-        )
-        stale_receipt = contracts._catalog_metric_detail_receipt(stale_detail)
-        self.assertNotEqual(current_receipt, stale_receipt)
-        stale_request = {
-            **dso_request,
-            "request_id": "formal_dso_old_component_contract_receipt",
-            "dimensions": ["department"],
-            "detail_receipt": stale_receipt,
-        }
-        with mock.patch.object(
-            tools.entities,
-            "prefetch_metric_entities",
-            side_effect=AssertionError("stale receipt must fail before entity work"),
-        ) as prefetch, mock.patch.object(
-            tools,
-            "_execute_with_source",
-            side_effect=AssertionError("stale receipt must fail before database"),
-        ) as execute:
-            stale_payload = json.loads(
-                tools.runtime_guarded_datasage_query({"requests": [stale_request]})
-            )
-        prefetch.assert_not_called()
-        execute.assert_not_called()
-        self.assertEqual("failed", stale_payload["status"])
-        self.assertEqual(
-            "METRIC_DETAIL_RECEIPT_INVALID",
-            stale_payload["results"][0]["error"]["code"],
-        )
-
         delivery_receipt_result, _ = run_query(
             {
                 "request_id": "delivery_receipt_comparison",
@@ -4531,9 +4148,6 @@ class BusinessContractTests(unittest.TestCase):
                     "metric": metric_code,
                     "dimensions": [],
                     "calendar_month": "2026-07",
-                    "detail_receipt": self._metric_detail_receipt(
-                        "delivery", metric_code
-                    ),
                 }
                 calls: list[dict[str, object]] = []
 
@@ -4622,13 +4236,6 @@ class BusinessContractTests(unittest.TestCase):
             request: dict[str, object],
             rows: list[dict[str, object]],
         ) -> tuple[dict[str, object], dict[str, object], str]:
-            request = {
-                **request,
-                "detail_receipt": self._metric_detail_receipt(
-                    str(request["domain"]),
-                    str(request["metric"]),
-                ),
-            }
             calls: list[str] = []
 
             def execute_query(sql, _params, _limit, **_kwargs):
@@ -4852,7 +4459,6 @@ class BusinessContractTests(unittest.TestCase):
             rows: list[dict[str, object]],
             *,
             metric: str = "overdue_receivable_amount",
-            detail_receipt: str | None = None,
         ) -> tuple[dict[str, object], dict[str, object], list[str]]:
             sql_calls: list[str] = []
 
@@ -4864,8 +4470,6 @@ class BusinessContractTests(unittest.TestCase):
                 **base_request,
                 "request_id": request_id,
                 "metric": metric,
-                "detail_receipt": detail_receipt
-                or self._metric_detail_receipt("receivable", metric),
             }
             with mock.patch.object(
                 tools,
@@ -5065,53 +4669,6 @@ class BusinessContractTests(unittest.TestCase):
         )
         self.assertEqual("查询范围：当前业务快照", other_payload["answer_scope_line"])
 
-        current_catalog = json.loads(
-            contracts.datasage_catalog(
-                {
-                    "requests": [
-                        {
-                            "domain": "receivable",
-                            "metric": "overdue_receivable_amount",
-                        }
-                    ]
-                }
-            )
-        )
-        current_detail = json.loads(
-            json.dumps(current_catalog["results"][0], ensure_ascii=False)
-        )
-        current_detail.pop("detail_receipt")
-        stale_detail = json.loads(
-            json.dumps(current_detail, ensure_ascii=False).replace(
-                "截至数据库查询日，当前正数未结清应收中超过适用授信天数的部分按治理汇率折算后的人民币金额。",
-                "当前正数未结清应收中，超过适用授信天数的部分按治理汇率折算后的人民币金额。",
-            )
-        )
-        self.assertNotEqual(current_detail, stale_detail)
-        stale_receipt = contracts._catalog_metric_detail_receipt(stale_detail)
-        stale_request = {
-            **base_request,
-            "request_id": "overdue_stale_receipt",
-            "detail_receipt": stale_receipt,
-        }
-        with mock.patch.object(
-            tools,
-            "_execute_with_source",
-            side_effect=AssertionError("stale receipt must fail before SQL"),
-        ) as execute:
-            stale_payload = json.loads(
-                tools.runtime_guarded_datasage_query(
-                    {"requests": [stale_request]}
-                )
-            )
-        execute.assert_not_called()
-        self.assertEqual("failed", stale_payload["status"])
-        self.assertEqual(
-            "METRIC_DETAIL_RECEIPT_INVALID",
-            stale_payload["results"][0]["error"]["code"],
-        )
-        self.assertNotIn("42.00", json.dumps(stale_payload))
-
     def test_current_inventory_observation_date_is_same_query_and_fail_closed(
         self,
     ) -> None:
@@ -5153,8 +4710,6 @@ class BusinessContractTests(unittest.TestCase):
             "database_query_date_observation",
             json.dumps(detail, ensure_ascii=False),
         )
-        current_receipt = str(detail["results"][0]["detail_receipt"])
-
         def run_query(
             request_id: str,
             rows: list[dict[str, object]],
@@ -5175,9 +4730,6 @@ class BusinessContractTests(unittest.TestCase):
                 "metric": requested_metric,
                 "dimensions": [],
                 "inventory_scope": "total",
-                "detail_receipt": self._metric_detail_receipt(
-                    "inventory", requested_metric
-                ),
             }
             with mock.patch.object(
                 tools,
@@ -5478,38 +5030,6 @@ class BusinessContractTests(unittest.TestCase):
             other_result["applied_time_range"],
         )
         self.assertEqual("查询范围：当前业务快照", other_payload["answer_scope_line"])
-
-        stale_detail = json.loads(json.dumps(detail["results"][0], ensure_ascii=False))
-        stale_detail.pop("detail_receipt")
-        stale_detail["metric"].pop("answer_contract")
-        stale_receipt = contracts._catalog_metric_detail_receipt(stale_detail)
-        self.assertNotEqual(current_receipt, stale_receipt)
-        stale_request = {
-            "request_id": "inventory_old_observation_contract_receipt",
-            "domain": "inventory",
-            "mode": "metric",
-            "purpose": "verify prior inventory detail receipt is invalid",
-            "metric": metric,
-            "dimensions": [],
-            "inventory_scope": "total",
-            "detail_receipt": stale_receipt,
-        }
-        with mock.patch.object(
-            tools,
-            "_execute_with_source",
-            side_effect=AssertionError("stale receipt must fail before SQL"),
-        ) as execute:
-            stale_payload = json.loads(
-                tools.runtime_guarded_datasage_query(
-                    {"requests": [stale_request]}
-                )
-            )
-        execute.assert_not_called()
-        self.assertEqual("failed", stale_payload["status"])
-        self.assertEqual(
-            "METRIC_DETAIL_RECEIPT_INVALID",
-            stale_payload["results"][0]["error"]["code"],
-        )
 
     def test_target_catalog_publishes_candidates_without_owning_clarification(self) -> None:
         payload = json.loads(
@@ -5942,10 +5462,6 @@ class BusinessContractTests(unittest.TestCase):
     def test_public_query_redacts_calculation_when_one_operand_is_invalid(
         self,
     ) -> None:
-        detail_receipt = self._metric_detail_receipt(
-            "delivery",
-            "delivery_amount",
-        )
         requests = [
             {
                 "request_id": "left",
@@ -5953,7 +5469,6 @@ class BusinessContractTests(unittest.TestCase):
                 "mode": "metric",
                 "purpose": "calculation integrity integration test",
                 "metric": "delivery_amount",
-                "detail_receipt": detail_receipt,
                 "dimensions": [],
                 "time_range": {
                     "start": "2026-02-01",
@@ -5966,7 +5481,6 @@ class BusinessContractTests(unittest.TestCase):
                 "mode": "metric",
                 "purpose": "calculation integrity integration test",
                 "metric": "delivery_amount",
-                "detail_receipt": detail_receipt,
                 "dimensions": [],
                 "time_range": {
                     "start": "2026-01-01",
@@ -6613,13 +6127,10 @@ class BusinessContractTests(unittest.TestCase):
             "metric": "debt_balance_trend",
             "dimensions": [],
             "time_range": {"start": "2026-01-01", "end": "2026-09-01"},
-            "detail_receipt": self._metric_detail_receipt(
-                "receivable", "debt_balance_trend"
-            ),
         }
         request = tools._validate_request(raw_request)
         datasets, semantics = tools._contracts("receivable")
-        request = tools._validate_metric_detail_gate(request, semantics)
+        request = tools._validate_metric_contract(request, semantics)
         self.assertEqual("month", request["time_bucket"])
         sql, params, scope = tools._build_metric_query(
             request,
@@ -6638,7 +6149,7 @@ class BusinessContractTests(unittest.TestCase):
             {**raw_request, "request_id": "debt_trend_conflict", "time_bucket": "day"}
         )
         with self.assertRaises(tools.QueryFailure) as caught:
-            tools._validate_metric_detail_gate(conflicting, semantics)
+            tools._validate_metric_contract(conflicting, semantics)
         self.assertEqual("INVALID_PLAN", caught.exception.code)
 
     def test_debt_balance_trend_success_requires_period_in_every_returned_row(
@@ -6652,9 +6163,6 @@ class BusinessContractTests(unittest.TestCase):
             "metric": "debt_balance_trend",
             "dimensions": [],
             "time_range": {"start": "2026-07-01", "end": "2026-09-01"},
-            "detail_receipt": self._metric_detail_receipt(
-                "receivable", "debt_balance_trend"
-            ),
         }
 
         def execute_good(_sql, _params, _limit, **_kwargs):
@@ -6711,13 +6219,10 @@ class BusinessContractTests(unittest.TestCase):
             "attribution_mode": "transaction_detail",
             "time_bucket": "month",
             "time_range": {"start": "2031-12-01", "end": "2032-02-01"},
-            "detail_receipt": self._metric_detail_receipt(
-                "target", "delivery_target_completion"
-            ),
         }
         request = tools._validate_request(raw_request)
         datasets, semantics = tools._contracts("target")
-        request = tools._validate_metric_detail_gate(request, semantics)
+        request = tools._validate_metric_contract(request, semantics)
         sql, _params, scope = tools._build_metric_query(
             request,
             datasets,
@@ -6913,15 +6418,12 @@ class BusinessContractTests(unittest.TestCase):
                     "request_id": f"{domain}_date_boundary_public",
                     "domain": domain,
                     "metric": metric,
-                    "detail_receipt": self._metric_detail_receipt(domain, metric),
                 }
                 if domain == "target":
                     request["attribution_mode"] = "transaction_detail"
                 normalized = tools._validate_request(request)
                 datasets, semantics = tools._contracts(domain)
-                normalized = tools._validate_metric_detail_gate(
-                    normalized, semantics
-                )
+                normalized = tools._validate_metric_contract(normalized, semantics)
                 _sql, _params, scope = tools._build_metric_query(
                     normalized,
                     datasets,

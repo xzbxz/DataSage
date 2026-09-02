@@ -24,7 +24,6 @@ def _request(domain: str, metric: str, **overrides):
         "request_id": f"remediation_{metric}",
         "domain": domain,
         "metric": metric,
-        "detail_receipt": tb.BusinessContractTests._metric_detail_receipt(domain, metric),
     }
     value.update(overrides)
     return value
@@ -33,7 +32,7 @@ def _request(domain: str, metric: str, **overrides):
 def _build(request):
     normalized = tb.tools._validate_request(request)
     datasets, semantics = tb.tools._contracts(str(normalized["domain"]))
-    normalized = tb.tools._validate_metric_detail_gate(normalized, semantics)
+    normalized = tb.tools._validate_metric_contract(normalized, semantics)
     return tb.tools._build_metric_query(
         normalized,
         datasets,

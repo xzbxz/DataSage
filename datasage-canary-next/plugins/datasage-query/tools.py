@@ -9,7 +9,6 @@ and returns structured evidence.
 from __future__ import annotations
 
 import copy
-import hmac
 import json
 import hashlib
 import logging
@@ -22,7 +21,7 @@ import uuid
 import calendar
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Any, Callable, Mapping, Sequence
 
 from .analytical_queries import AnalysisQueryError, build_analytical_metric_query
@@ -53,8 +52,6 @@ from . import (
     db_runtime,
     entities,
     evidence,
-    metric_governance,
-    receipt_cache,
     request_contract,
     settings,
     sql_identifiers,
@@ -87,8 +84,6 @@ _COMMON_REQUEST_FIELDS = {
 }
 _METRIC_REQUEST_FIELDS = _COMMON_REQUEST_FIELDS | {
     "metric",
-    "detail_receipt",
-    "resolution_receipts",
     "dimensions",
     "metric_filters",
     "time_bucket",
@@ -146,23 +141,6 @@ _INTERNAL_RESULT_FIELDS = {
 }
 _DATABASE_CURRENT_DATE_EVIDENCE = "database_current_date"
 _DATABASE_QUERY_DATE_OBSERVATION = "database_query_date_observation"
-_DETAIL_RECEIPT = re.compile(r"^[0-9a-f]{64}$")
-_DETAIL_QUALIFIER_FIELDS = {
-    "time_range",
-    "calendar_month",
-    "metric_filters",
-    "time_bucket",
-    "comparison",
-    "decomposition_of_request_id",
-    "complete_change_decomposition",
-    "complete_target_gap_decomposition",
-    "_target_gap_of_request_id",
-    "order_by",
-    "limit",
-    "attribution_mode",
-    "delivery_scope",
-    "inventory_scope",
-}
 class QueryFailure(Exception):
     def __init__(
         self,
@@ -175,8 +153,6 @@ class QueryFailure(Exception):
         source_evidence_ref: Mapping[str, Any] | None = None,
         path: str | None = None,
         hint: str | None = None,
-        recovery_action: str | None = None,
-        catalog_request: Mapping[str, Any] | None = None,
     ):
         super().__init__(message)
         self.code = code
@@ -186,12 +162,6 @@ class QueryFailure(Exception):
         self.retryable = retryable
         self.path = path
         self.hint = hint
-        self.recovery_action = recovery_action
-        self.catalog_request = (
-            dict(catalog_request)
-            if isinstance(catalog_request, Mapping)
-            else None
-        )
         self.source_evidence_ref = (
             dict(source_evidence_ref)
             if isinstance(source_evidence_ref, Mapping)
@@ -234,15 +204,6 @@ def _max_group_dimensions(metric: Mapping[str, Any]) -> int:
             "CONTRACT_UNAVAILABLE",
             "分析指标缺少有效的分组维度上限。",
         ) from exc
-
-
-def _has_explicit_detail_qualifier(request: Mapping[str, Any]) -> bool:
-    """Match the catalog's exact-default exception without reading prose."""
-
-    dimensions = request.get("dimensions")
-    if dimensions not in (None, []):
-        return True
-    return any(field in request for field in _DETAIL_QUALIFIER_FIELDS)
 
 
 def _metric_allowed_dimensions(
@@ -322,144 +283,19 @@ def _validate_detail_request_capabilities(
         raise
 
 
-def _build_current_metric_detail_receipt(domain: str, metric_code: str) -> str:
-    """Build and validate one current per-detail receipt from the catalog."""
-
-    payload = json.loads(
-        contracts.datasage_catalog(
-            {"requests": [{"domain": domain, "metric": metric_code}]}
-        )
-    )
-    results = payload.get("results")
-    selected = results[0] if isinstance(results, list) and len(results) == 1 else None
-    selected_metric = selected.get("metric") if isinstance(selected, Mapping) else None
-    detail_receipt = (
-        selected.get("detail_receipt") if isinstance(selected, Mapping) else None
-    )
-    if (
-        not isinstance(detail_receipt, str)
-        or _DETAIL_RECEIPT.fullmatch(detail_receipt) is None
-        or not isinstance(selected, Mapping)
-        or selected.get("domain") != domain
-        or not isinstance(selected_metric, Mapping)
-        or selected_metric.get("code") != metric_code
-    ):
-        raise QueryFailure(
-            "CONTRACT_UNAVAILABLE",
-            "当前指标详情收据无法生成。",
-            stage="contract_load",
-        )
-    return detail_receipt
-
-
-def _current_metric_detail_receipt(domain: str, metric_code: str) -> str:
-    """Return a contract-signature-current per-detail receipt."""
-
-    try:
-        return receipt_cache.get_metric_capability_receipt(
-            domain,
-            metric_code,
-            builder=_build_current_metric_detail_receipt,
-        )
-    except (OSError, contract_store.ContractStoreError) as exc:
-        raise QueryFailure(
-            "CONTRACT_UNAVAILABLE",
-            "当前指标详情收据无法生成。",
-            stage="contract_load",
-        ) from exc
-
-
-def _validate_metric_detail_gate(
-    request: Mapping[str, Any],
-    semantics: Mapping[str, Any],
-    *,
-    observed_on: date | datetime | None = None,
+def _validate_metric_contract(
+    request: Mapping[str, Any], semantics: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """Enforce a current metric-detail receipt before any database preflight."""
+    """Load the current metric contract and fail closed before database access."""
 
     metrics = semantics.get("metrics")
     metric_code = request.get("metric")
     metric = metrics.get(metric_code) if isinstance(metrics, Mapping) else None
     if not isinstance(metric_code, str) or not isinstance(metric, Mapping):
         raise QueryFailure("UNSUPPORTED_METRIC", "该指标尚未进入受控指标定义。")
-    try:
-        governance_status = metric_governance.metric_status(
-            str(request.get("domain")), metric_code, observed_on
-        )
-    except (
-        metric_governance.MetricGovernanceError,
-        contract_store.ContractStoreError,
-    ) as exc:
-        raise QueryFailure(
-            "CONTRACT_UNAVAILABLE",
-            "指标治理合同不可用。",
-            stage="contract_load",
-        ) from exc
-    derived_governance = governance_status.get("derived_status")
-    if not isinstance(derived_governance, Mapping):
-        raise QueryFailure(
-            "CONTRACT_UNAVAILABLE",
-            "指标治理状态无效。",
-            stage="contract_load",
-        )
-    if governance_status.get("lifecycle") == "retired":
-        raise QueryFailure(
-            "METRIC_RETIRED",
-            "该指标已退役，不能继续查询。",
-            stage="input_validation",
-        )
-    governance_warnings = derived_governance.get("warnings")
-    if not isinstance(governance_warnings, list) or any(
-        not isinstance(item, str) or re.fullmatch(r"[A-Z0-9_]+", item) is None
-        for item in governance_warnings
-    ):
-        raise QueryFailure(
-            "CONTRACT_UNAVAILABLE",
-            "指标治理警告无效。",
-            stage="contract_load",
-        )
     _ensure_metric_available(metric)
-
-    supplied = request.get("detail_receipt")
-    catalog_request = {
-        "requests": [{"domain": request.get("domain"), "metric": metric_code}]
-    }
-    exact_default = (
-        metric.get("exact_default_lookup_supported") is True
-        and not _has_explicit_detail_qualifier(request)
-    )
-    if supplied is None:
-        if not exact_default:
-            raise QueryFailure(
-                "METRIC_DETAIL_REQUIRED",
-                "该查询必须先加载当前指标详情并携带其 detail_receipt。",
-                stage="input_validation",
-                recovery_action="reload_metric_detail",
-                catalog_request=catalog_request,
-            )
-    else:
-        if not isinstance(supplied, str) or _DETAIL_RECEIPT.fullmatch(supplied) is None:
-            raise QueryFailure(
-                "METRIC_DETAIL_RECEIPT_INVALID",
-                "detail_receipt 无效、已过期或与当前查询不匹配。",
-                stage="input_validation",
-                recovery_action="reload_metric_detail",
-                catalog_request=catalog_request,
-            )
-        domain = str(request.get("domain"))
-        expected_receipt = _current_metric_detail_receipt(domain, metric_code)
-        if not hmac.compare_digest(supplied, expected_receipt):
-            raise QueryFailure(
-                "METRIC_DETAIL_RECEIPT_INVALID",
-                "detail_receipt 无效、已过期或与当前查询不匹配。",
-                stage="input_validation",
-                recovery_action="reload_metric_detail",
-                catalog_request=catalog_request,
-            )
     _validate_detail_request_capabilities(request, metric)
     normalized = dict(request)
-    if governance_warnings:
-        normalized["_governance_warnings"] = list(governance_warnings)
     required_time_bucket = metric.get("required_time_bucket")
     if required_time_bucket is not None:
         if (
@@ -480,7 +316,6 @@ def _validate_metric_detail_gate(
                 "请求的时间分组与指标合同不一致。",
                 stage="input_validation",
             )
-    normalized.pop("detail_receipt", None)
     return normalized
 
 
@@ -4028,10 +3863,6 @@ def _public_error(failure: QueryFailure) -> dict[str, Any]:
         "message": failure.message,
         **_caller_retry_metadata(failure),
     }
-    if failure.recovery_action is not None:
-        error["recovery_action"] = failure.recovery_action
-    if failure.catalog_request is not None:
-        error["catalog_request"] = copy.deepcopy(failure.catalog_request)
     if failure.path is not None:
         error["path"] = failure.path
     if failure.hint is not None:
@@ -4374,14 +4205,11 @@ def _scope_fingerprints(
     )
 
 
-def _finite_decimal(value: Any) -> Decimal | None:
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        parsed = Decimal(str(value))
-    except (InvalidOperation, ValueError):
-        return None
-    return parsed if parsed.is_finite() else None
+# Numeric parsing and bounded comparison are owned by evidence.py so query
+# execution and evidence validation cannot silently drift apart.
+_finite_decimal = evidence._finite_decimal
+_decimal_close = evidence._decimal_close
+_target_amounts_consistent = evidence._target_amounts_consistent
 
 
 def _exact_nonnegative_int(value: Any) -> int | None:
@@ -4549,11 +4377,6 @@ def _comparison_is_complete(
     )
 
 
-def _decimal_close(left: Decimal, right: Decimal) -> bool:
-    scale = max(abs(left), abs(right), Decimal("1"))
-    return abs(left - right) <= scale * Decimal("0.000000001")
-
-
 def _target_status_is_coherent(
     facts: Mapping[str, Any], states: Mapping[str, str]
 ) -> bool:
@@ -4579,9 +4402,7 @@ def _target_status_is_coherent(
     if target_state == "zero":
         return (
             target == 0
-            and actual is not None
-            and gap is not None
-            and _decimal_close(gap, -actual)
+            and _target_amounts_consistent(target, actual, gap)
             and completion is None
             and metric_value is None
         )
@@ -4595,7 +4416,7 @@ def _target_status_is_coherent(
         ):
             return False
         return (
-            _decimal_close(gap, target - actual)
+            _target_amounts_consistent(target, actual, gap)
             and _decimal_close(completion, actual / target)
             and (
                 metric_value is None
@@ -4969,12 +4790,7 @@ _FORMAL_DSO_ATTESTED_FACTS = (
 
 
 def _finite_decimal_present(value: Any) -> bool:
-    if value is None or isinstance(value, bool):
-        return False
-    try:
-        return Decimal(str(value)).is_finite()
-    except (InvalidOperation, TypeError, ValueError):
-        return False
+    return _finite_decimal(value) is not None
 
 
 def _formal_dso_complete_window(value: Any) -> tuple[bool, int | None]:
@@ -5145,13 +4961,11 @@ def _formal_dso_calculation_attestation(
         and period_days == expected_period_days
     )
     denominator = row.get("delivery_amount_rmb")
-    denominator_present = _finite_decimal_present(denominator)
-    denominator_positive = False
-    if denominator_present:
-        try:
-            denominator_positive = Decimal(str(denominator)) > 0
-        except (InvalidOperation, TypeError, ValueError):
-            denominator_positive = False
+    denominator_decimal = _finite_decimal(denominator)
+    denominator_present = denominator_decimal is not None
+    denominator_positive = (
+        denominator_decimal is not None and denominator_decimal > 0
+    )
     effective_month_count = _finite_decimal(row.get("effective_month_count"))
     sealed_disclosures = _sealed_disclosure_ids(
         disclosure_ledger,
@@ -5993,12 +5807,7 @@ def _target_gap_claim_amounts(
     gap = _finite_decimal(facts.get("gap_amount_rmb"))
     completion = _finite_decimal(facts.get("completion_rate"))
     metric_value = _finite_decimal(facts.get("metric_value"))
-    if (
-        target is None
-        or actual is None
-        or gap is None
-        or not _decimal_close(gap, target - actual)
-    ):
+    if not _target_amounts_consistent(target, actual, gap):
         return None
     if target == 0:
         if facts.get("completion_rate") is not None or facts.get("metric_value") is not None:
@@ -6721,7 +6530,6 @@ def _failure_result(
     business_sql_attempted_count: int = 0,
     business_sql_confirmed_count: int = 0,
     source_evidence_ref: Mapping[str, Any] | None = None,
-    governance_warnings: Sequence[str] = (),
 ) -> dict[str, Any]:
     private_availability_failure = failure.code in {
         "DATA_RECONCILIATION_REQUIRED",
@@ -6732,10 +6540,6 @@ def _failure_result(
         "message": failure.message,
         **_caller_retry_metadata(failure),
     }
-    if failure.recovery_action is not None:
-        error["recovery_action"] = failure.recovery_action
-    if failure.catalog_request is not None:
-        error["catalog_request"] = copy.deepcopy(failure.catalog_request)
     result = {
         "request_id": request_id,
         "status": "timeout" if failure.timeout else "failed",
@@ -6748,7 +6552,6 @@ def _failure_result(
         "business_metric_currency_policy": None,
         "business_metric_answer_note": None,
         "business_dimension_labels": [],
-        "governance_warnings": list(governance_warnings),
         "resolved_entities": [],
         "rows": None,
         "claim_ledger": [],
@@ -6841,7 +6644,6 @@ _MODEL_WIRE_RESULT_FIELDS = (
     "business_metric_ref",
     "business_metric_label",
     "business_dimension_labels",
-    "governance_warnings",
     "scope_fingerprint",
     "projection_fingerprint",
     "claim_ledger",
@@ -8368,7 +8170,6 @@ def _validate_request_plan_without_entities(
     *,
     observed_on: date | None = None,
     request_path: str | None = None,
-    trusted_session_id: Any = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Validate one branch through the last database-free planning boundary."""
 
@@ -8385,30 +8186,13 @@ def _validate_request_plan_without_entities(
     except QueryFailure as exc:
         raise _at_stage(exc, "contract_load")
     try:
-        request = _validate_metric_detail_gate(
-            request,
-            semantics,
-            observed_on=observed_on,
-        )
+        request = _validate_metric_contract(request, semantics)
         _validate_pre_entity_metric_plan(
             request,
             datasets,
             semantics,
             observed_on=observed_on,
         )
-        try:
-            resolution_records = entities.validate_resolution_receipts(
-                request,
-                semantics,
-                session_id=trusted_session_id,
-            )
-        except entities.EntityFailure as exc:
-            raise QueryFailure(exc.code, exc.message, stage="input_validation") from exc
-        if resolution_records:
-            # Keep records only inside this preflight hand-off.  _prepare_one
-            # removes both this private value and the public opaque tokens
-            # before scope fingerprints or business SQL are built.
-            request["_resolution_receipt_records"] = resolution_records
     except QueryFailure as exc:
         raise _at_stage(exc, "input_validation")
     return request, datasets, semantics
@@ -8418,7 +8202,6 @@ def _validate_query_dispatch(
     args: Any,
     *,
     observed_on: date,
-    trusted_session_id: Any = None,
 ) -> request_contract.ValidatedQueryEnvelope:
     """Finish all database-free validation before authorization/readiness."""
 
@@ -8430,7 +8213,6 @@ def _validate_query_dispatch(
                 raw_request,
                 observed_on=observed_on,
                 request_path=request_path,
-                trusted_session_id=trusted_session_id,
             )
             change_operation = request.get("complete_change_decomposition")
             if isinstance(change_operation, Mapping):
@@ -8453,8 +8235,6 @@ def _validate_query_dispatch(
                         "METRIC_NOT_REGISTERED",
                         "UNSUPPORTED_METRIC",
                         "METRIC_NOT_AVAILABLE",
-                        "METRIC_RETIRED",
-                        "METRIC_DETAIL_REQUIRED",
                     }
                     else request_path
                 )
@@ -8475,7 +8255,6 @@ def _prepare_one(
     max_unique_lookups: int,
     preflight_stats: dict[str, Any],
     period_observed_on: date | None = None,
-    trusted_session_id: Any = None,
 ) -> dict[str, Any]:
     if deadline_at is not None and time.monotonic() >= deadline_at:
         raise QueryFailure(
@@ -8487,11 +8266,7 @@ def _prepare_one(
     request, datasets, semantics = _validate_request_plan_without_entities(
         raw_request,
         observed_on=period_observed_on,
-        trusted_session_id=trusted_session_id,
     )
-    governance_warnings = request.pop("_governance_warnings", [])
-    resolution_records = request.pop("_resolution_receipt_records", [])
-    request.pop("resolution_receipts", None)
     resolved_entities: list[dict[str, Any]] = []
     if request["mode"] == "metric":
         def exact_lookup(sql: str, params: Sequence[Any], limit: int):
@@ -8532,13 +8307,6 @@ def _prepare_one(
                 max_unique_lookups=max_unique_lookups,
             )
             request = _validate_metric_filter_value_contracts(request, semantics)
-            try:
-                entities.validate_resolution_receipt_bindings(
-                    request,
-                    resolution_records,
-                )
-            except entities.EntityFailure as exc:
-                raise QueryFailure(exc.code, exc.message, stage="entity_preflight") from exc
         except entities.EntityFailure as exc:
             stage = "contract_load" if exc.code == "CONTRACT_UNAVAILABLE" else "entity_preflight"
             raise QueryFailure(exc.code, exc.message, stage=stage) from exc
@@ -8559,7 +8327,6 @@ def _prepare_one(
         "datasets": datasets,
         "semantics": semantics,
         "resolved_entities": resolved_entities,
-        "governance_warnings": list(governance_warnings),
         "entity_resolution_db_call_count": preflight_stats.get(
             "entity_resolution_db_call_count", 0
         ),
@@ -8789,9 +8556,6 @@ def _run_one(
             **metric_context,
             "business_dimension_labels": dimension_labels,
             "business_dimension_bindings": dimension_bindings,
-            "governance_warnings": list(
-                prepared.get("governance_warnings") or []
-            ),
             "scope_fingerprint": scope_fingerprint,
             "projection_fingerprint": projection_fingerprint,
             "resolved_entities": resolved_entities,
@@ -8919,7 +8683,6 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
     """Validate, execute, and return structured evidence for one to ten requests."""
     batch_started = time.monotonic()
     period_observed_on = _kwargs.pop("_period_observed_on", None)
-    trusted_session_id = _kwargs.get("session_id")
     if not isinstance(period_observed_on, date):
         period_observed_on = _business_today()
     query_slot_owned = bool(_kwargs.pop("_query_slot_owned", False))
@@ -9024,7 +8787,6 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
                     max_unique_lookups=max_unique_lookups,
                     preflight_stats=stats,
                     period_observed_on=period_observed_on,
-                    trusted_session_id=trusted_session_id,
                 )
             except QueryFailure as exc:
                 failure = exc
@@ -9089,7 +8851,6 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
                         max_unique_lookups=max_unique_lookups,
                         preflight_stats=stats,
                         period_observed_on=period_observed_on,
-                        trusted_session_id=trusted_session_id,
                     )
                     if request_id in complete_dimensions_by_overall:
                         _validate_complete_decomposition_capability(
@@ -9288,12 +9049,11 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
                     prepared = _prepare_one(
                         request,
                         deadline_at=deadline_at,
-                        resolution_cache=resolution_cache,
-                        max_unique_lookups=max_unique_lookups,
-                        preflight_stats=stats,
-                        period_observed_on=period_observed_on,
-                        trusted_session_id=trusted_session_id,
-                    )
+                            resolution_cache=resolution_cache,
+                            max_unique_lookups=max_unique_lookups,
+                            preflight_stats=stats,
+                            period_observed_on=period_observed_on,
+                        )
                     if request_id in complete_dimensions_by_overall:
                         _validate_complete_decomposition_capability(
                             prepared,
@@ -9538,7 +9298,6 @@ def entitlement_guarded_datasage_query(
         validated_envelope = _validate_query_dispatch(
             args,
             observed_on=observed_on,
-            trusted_session_id=kwargs.get("session_id"),
         )
     except QueryFailure as failure:
         return json.dumps(
@@ -9648,20 +9407,11 @@ def runtime_guarded_datasage_query(
         results = []
         for request in guarded_requests:
             branch_failure = failure
-            governance_warnings: list[str] = []
             try:
-                normalized_request, _datasets, _semantics = (
-                    _validate_request_plan_without_entities(
-                        request,
-                        observed_on=period_observed_on,
-                        trusted_session_id=kwargs.get("session_id"),
-                    )
+                _validate_request_plan_without_entities(
+                    request,
+                    observed_on=period_observed_on,
                 )
-                raw_warnings = normalized_request.get("_governance_warnings")
-                if isinstance(raw_warnings, list):
-                    governance_warnings = [
-                        item for item in raw_warnings if isinstance(item, str)
-                    ]
             except QueryFailure as exc:
                 branch_failure = exc
             results.append(
@@ -9676,7 +9426,6 @@ def runtime_guarded_datasage_query(
                     ),
                     business_sql_attempted_count=0,
                     business_sql_confirmed_count=0,
-                    governance_warnings=governance_warnings,
                 )
             )
         _finalize_complete_decomposition_outcomes(

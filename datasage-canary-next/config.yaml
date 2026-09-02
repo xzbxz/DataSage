@@ -24,11 +24,11 @@ platform_toolsets:
   cli:
     - hermes-cli
     - datasage-query
-  # WeCom is intentionally restricted to clarification, reviewed Skill access,
-  # and governed business evidence. `skills` still includes skill_view and
-  # skill_manage; the existing skills.write_approval gate protects mutations.
+  # WeCom exposes only clarification and governed business evidence. Every
+  # host-authenticated member with a non-empty identity is intentionally
+  # admitted in both DM and group chats; this Profile adds no per-user,
+  # group, department, entity, row, domain, or metric filter.
   wecom:
-    - skills
     - clarify
     - datasage-query
 privacy:
@@ -47,8 +47,6 @@ plugins:
         require_tls: false
         mysql_allowed_grant_scopes: []
         mysql_connect_timeout_seconds: 8
-        mysql_health_connect_timeout_seconds: 5
-        mysql_grant_audit_timeout_seconds: 10
         mysql_query_timeout_seconds: 30
         call_timeout_seconds: 60
         max_concurrent_queries: 4
@@ -56,33 +54,6 @@ plugins:
         max_rows: 100
         max_cell_chars: 2000
         max_dimension_display_chars: 80
-        # Business owner approval recorded 2026-08-11 and reaffirmed 2026-09-01:
-        # every authenticated WeCom member may use the complete governed
-        # DataSage data surface without Profile-level row filtering.
-        data_entitlements:
-          enforcement: enforce
-          default_effect: deny
-          principals:
-            - platform: wecom
-              user_id: "*"
-              tools:
-                - datasage_catalog
-                - datasage_entity_resolve
-                - datasage_query
-              domains: ["*"]
-              metrics:
-                delivery: ["*"]
-                receipt: ["*"]
-                receivable: ["*"]
-                target: ["*"]
-                customer_risk: ["*"]
-                inventory: ["*"]
-              entity_types: ["*"]
-              allow_catalog_discovery: true
-              allow_unscoped_entity_resolution: true
-              allow_type_neutral_entity_resolution: true
-              allow_entity_resolution_all_rows: true
-              allow_all_rows: true
 memory:
   # Business-analysis evidence is transient unless the user approves a durable fact.
   write_approval: true

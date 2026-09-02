@@ -19,6 +19,7 @@
 负责人，支持六个受治理经营域：delivery、receipt/collections、receivable、
 target、inventory 和 customer_risk。它提供事实、诊断和证据约束的建议，
 不是通用制度/HR问答、公共研究、用户文件分析器，也不是业务执行系统。
+当前候选目标成熟度为 L3 数据专家；本候选版本不声明 L4 主动管理或主动巡检能力。
 
 建议按风险分三档：描述性监测（事实与趋势）、诊断性解释（比较、核对和
 明确标注的假设）、高影响建议（授信、客户损失、资源配置或目标承诺）。
@@ -26,18 +27,23 @@ target、inventory 和 customer_risk。它提供事实、诊断和证据约束�
 过期、不可用或歧义无法消除时，升级到相应的指标/域负责人或人工审批人，
 不得自动批准、承诺或执行。
 
-WeCom 的 Profile toolset 仅声明 `skills`、`clarify` 和 `datasage-query`；
-所有已认证企微成员均可私聊和群聊，并共享不施加 Profile 行级过滤的受治理
-DataSage 查询面。数据库执行仍由只读 SQL、合同和证据边界约束。Hermes 原生
-`skills` toolset 仍会暴露 `skill_view` 与 `skill_manage`，后者只能依靠现有
-`skills.write_approval` 门禁；这是未修改宿主时保留的残余风险。
+WeCom 的 Profile toolset 仅声明 `clarify` 和 `datasage-query`；所有已认证企微
+成员均可私聊和群聊，并共享六个经营域同一完整的 DataSage 查询面。Profile 不施加
+用户、群组、部门、实体、行或领域过滤；这不替代外部数据库授权。数据库执行仍为
+SELECT-only，并由治理查询合同、只读执行限制和 evidence 边界约束。Hermes 原生
+Skill 管理面不向 WeCom 暴露。
+本候选版本无有 owner 的 cron/主动巡检任务，因此不声明 L4 主动管理能力。
+
+## 验收门槛（唯一量化真源）
+
+本节是本 Profile 唯一的量化验收真源；README、SOUL 和 profile.yaml 只引用本节，
+不重复阈值。按 V1.0，关键流程成功率须为 100%，总体流程成功率至少 98%，核心结果
+正确率至少 97%，语义和业务交付成功率至少 95%，证据违规率为 0，故障恢复或正确失败率
+至少 90%；总分至少 85，核心域至少 75%，且无未关闭 P0/P1。L3 基线至少 150 个独立案例，
+其中开放分析不少于 25 个、专家判断不少于 15 个、故障与隔离不少于 15 个。只有在这些
+门槛和全部硬门禁均通过后，才可讨论 production 声明。
 
 ## 四层职责
-
-指标治理由单一 `metric-governance.yaml` 合同负责，并由进程级合同快照固定。
-治理复核缺失或过期只阻断发布；`retired` 指标拒绝执行，`deprecated` 指标允许
-读取但必须返回警告。Catalog `full` 与 `audit` 分别承担业务能力和治理审计，
-不得把 owner、review blocker 或 validation evidence 混入普通业务目录。
 
 ### Hermes：经营判断
 
@@ -48,9 +54,10 @@ Hermes 负责理解问题、选择指标和分析深度、安排工具调用、�
 ### Profile Skill：分析方法
 
 `skills/business-analytics/datasage/SKILL.md` 只说明何时使用 DataSage、如何
-自适应分析和解释证据；少用的稳定定义通过 Hermes 原生 `references/` 按需加载。
-Skill 不拥有指标能力、权限、receipt、物理查询或结论授权，也不再通过插件
-实现第二套 reference loader。
+自适应分析和解释证据；Skill-enabled CLI/维护面可选按需加载稳定定义。
+受限 WeCom 只依赖 SOUL、公开工具 schema 和返回 evidence，不以 `skill_view`
+或 references 作为查询前置条件。Skill 不拥有指标能力、权限、物理查询或结论
+授权，也不再通过插件实现第二套 reference loader。
 
 ### Capability contract：可验证事实
 
@@ -63,35 +70,29 @@ Skill 不拥有指标能力、权限、receipt、物理查询或结论授权，�
 指标不需要再维护一份路由注册表；能力合同也不能包含 prompt 关键词、recipe、
 question type、固定 plan、业务判断或回答模板。
 
-### DataSage plugin：确定性治理和证据
+### DataSage plugin：确定性查询安全和证据
 
-插件负责 schema、权限、receipt、只读查询编译、执行限制、typed state、
+插件负责 schema、只读查询编译、执行限制、typed state、
 证据压缩和披露。插件返回结构化证据，不读取、删改或重写 Hermes 的最终文本。
 SOUL 只保留专家身份与事实/假设/建议等高层原则；动态期间、scope、benchmark
 和兼容性只在工具证据中计算一次，wire 只做结构投影。
 
-## 规则所有权与生命周期
+## 权威与维护职责
 
-下列清单是治理库存，不改变既有模型安全约束。一个规则文件可以被发行包携带，
-但只有列出的 consumer 可以把它当作语义输入：
+Hermes 拥有问题理解、工具选择、推理和最终结论；受限 WeCom 只使用 SOUL、公开
+工具 schema 与返回 evidence。references 只在 skill-enabled CLI/维护面可选加载，
+不改变 WeCom 查询路径。插件不注册 prompt 副本，也不拥有结论授权。
 
-| 规则 ID / 资源 | Owner | Consumer | 生命周期与权威边界 |
+| 资源 | Owner | 使用方 | 边界 |
 | --- | --- | --- | --- |
-| `SOUL.md` | Profile 身份层 | Hermes 启动上下文 | 高层身份与安全原则；不是指标、实体或查询事实源 |
-| `skills/business-analytics/datasage/SKILL.md` | Profile Skill | Hermes Skill loader | 激活、工作流与既有安全边界；随 Skill 版本发布 |
-| `datasage.query-rules/v1` | Skill 请求规则 | Hermes 按需加载、库存测试 | 请求构造方法；live schema/catalog 拥有可用字段和值 |
-| `datasage.entity-guidance/v1` | Skill 实体指导 | Hermes 按需加载、库存测试 | 模型安全投影；不能创建或覆盖实体映射 |
-| `datasage.answer-boundary/v1` | Skill 最终回答策略 | Hermes 按需加载、库存测试 | 详细回答边界；插件不注册 prompt 副本 |
-| `datasage.entity-maintainer-rationale/v1` | 插件维护者 | 维护者、库存测试 | 源码仓库中的非模型、非运行时文档；不进入发行载荷，只有落入 registry/domain semantics 并有测试才生效 |
-| `query-policy.yaml`、维度 `value_contract`、`target-gap-decomposition.yaml` | Capability contract | catalog、executor、evidence | 只保留被 typed parser 消费的机器字段；未知或影子字段 fail closed |
-| `receipt_cache.py` | 指标详情 receipt 缓存 | `tools.py` receipt gate | 只缓存由相关合同文件签名绑定的 catalog 投影；合同变化自动失效，不拥有业务语义 |
-| `db_executor.py` | 只读数据库执行生命周期 | `tools.py` 单语句与一致性快照外壳 | 统一连接、事务、时限、取行与清理；公共错误码、业务序列化和数据库安全策略仍由组合边界拥有 |
-| plugin contracts/schema/results | DataSage plugin | plugin runtime、Hermes tools | 指标能力、权限、执行与返回证据的确定性权威 |
+| `datasage.query-rules/v1` | Profile Skill | CLI/维护面（可选） | 请求构造提示；可用字段以 live schema/catalog 为准 |
+| `datasage.entity-guidance/v1` | Profile Skill | CLI/维护面（可选） | 实体消歧提示；不能创建或覆盖实体映射 |
+| `datasage.answer-boundary/v1` | Profile Skill | CLI/维护面（可选） | 解释提示；插件不注册 prompt 副本 |
 
-发行与模型权威是两回事：`entity-rules-maintainer.md` 只留在源码仓库供审计，
-不属于 `distribution_owned`；Skill 不得加载它，插件也不得 import 它。
-库存测试负责机械检查这些 owner、consumer、lifecycle 和引用关系，防止无
-consumer 的孤儿规则。
+`*-semantics.yaml`、typed capability contract、实体 registry 和公开工具结果分别
+拥有指标定义、执行事实、实体身份和当前证据；`datasage.entity-maintainer-rationale/v1`
+（`entity-rules-maintainer.md`）仅供源码维护者使用，不进入发行载荷。`contract_store`
+只做受限路径和缓存，不引入规则引擎或运行状态机。
 
 ## 请求与失败域
 
@@ -107,7 +108,7 @@ consumer 的孤儿规则。
 ```
 
 只有 envelope 无法解析、权限整体拒绝或无法建立可信执行环境时可以整批失败。
-某个 branch 的字段、receipt、实体、能力或物理预算错误必须局部化，不能清空
+某个 branch 的字段、实体、能力或物理预算错误必须局部化，不能清空
 其他有效结果。`complete` 操作成本为两个物理槽；普通操作成本为一个。公开
 最多十个 branch，每个 branch 放不进剩余物理预算时仅返回
 `EXECUTION_BUDGET_EXCEEDED`。
@@ -119,7 +120,7 @@ consumer 的孤儿规则。
 ## Scorecard 边界
 
 `performance_scorecard` 是经营分析候选镜头的目录视图，不是一份必须照抄的
-执行计划。它可以提供增长、目标、回款、库存、风险等可用镜头和各自 receipt，
+执行计划。它可以提供增长、目标、回款、库存、风险等可用镜头，
 并披露利润、现金流等缺口；Hermes 根据问题和证据重要性选择最小充分子集。
 测试不得锁定固定八项、固定顺序、固定调用数或固定最终答案。
 
@@ -142,7 +143,7 @@ Golden 测试改为“必需能力 + 禁止行为 + 语义结论”约束。它�
 
 Profile Memory 只保存声明式的稳定偏好和稳定事实；`USER.md`
 明确记录当前请求和用户纠正代表最新意图，可以取代旧偏好。Profile
-不将指令式工作流、receipt、临时 period、临时 entity、工具步骤或模型草稿
+不将指令式工作流、临时 period、临时 entity、工具步骤或模型草稿
 写入 Memory。宿主角色优先级不由 Profile 重新定义。
 
 Memory 永远不是查询语法、指标/实体 ID、别名、地域映射、catalog 能力或插件
@@ -203,44 +204,21 @@ Catalog 的 metric detail 与 domain view 在公开 schema 和运行时都机械
 避免模型得到“schema 可表达、运行时却拒绝”的伪能力。上述合同同样贯通完整
 变化分解的 overall 与 partition 分支，并保留既有逐分支 partial-success 语义。
 
-## 发布身份与回滚
+## 发布与维护边界
 
-Git commit/tag 是当前源码与运行目录的版本身份，`distribution.yaml` 定义未来独立
-发行时的安装载荷与版本声明。当前同址工作区由 Git 原地维护，不通过
-`hermes profile install/update` 覆盖，也不创建第二个安装实例。
-Profile 不实现第二套安装器、版本解析器或回滚器。
+Git commit/tag 负责源码身份，`distribution.yaml` 只描述运行载荷；Profile 不实现
+安装器、版本解析器或回滚器。`build_release_receipt.py`、离线测试、Host/E2E 检查
+和 candidate receipt 都是源码质量工具，不进入 runtime，也不拥有业务结论。
+`distribution_owned` 只包含运行文件；测试、eval、release/pending 产物和历史文档
+留在源码仓库。运行时事实来自当前 semantics、typed contracts、实体 registry 和
+工具返回 evidence；本架构不保存测试结果、会话结论或发布状态。
 
-源码仓库中的 `build_release_receipt.py` 根据 `distribution_owned` 的运行文件计算
-SHA-256，把 DataSage 特有的 replay、compaction、交付和性能门禁绑定到一个受测
-载荷。Hermes 合法写入的 `name`、`source`、`installed_at` 会在计算时归一化；
-这个 checksum 不是发行版本身份，也不能替代 Git tag 或安装来源证明。receipt
-不读取 `.env`、数据库状态、sessions、logs、Memory 或企微凭据，并且构建脚本、
-测试、E2E scorer 与历史设计文档不进入运行载荷。
+所有 CLI/维护命令必须显式使用 `-p datasage-canary-next`；不得依赖默认 Profile、
+当前目录或 `HERMES_HOME` 推断。代码冻结、candidate receipt 和 Git tag 只表示
+canary 载荷已固定并可审查，不等于 production-ready 或生产安全证明。生产声明还须
+满足本节的发布边界和“验收门槛（唯一量化真源）”；owner 仅指 Profile 维护/发布
+责任角色，具体责任人和 SLA 由发布记录填写，不在 Profile 文档中虚构。
 
-重启前必须保持当前 Git 工作区可审计，并完成离线、宿主和候选门禁。回滚使用
-上一份经过审查的 Git tag/commit，且不得覆盖 `.env`、`state.db`、sessions、
-logs 或用户 Memory。未来如发布独立 Profile Distribution，必须先满足官方发行根
-布局；该发布工作不是当前原地维护或重启的前置步骤。
-
-## 验收门槛
-
-- schema 与逐分支运行时字段合同机械等价；
-- mixed valid/invalid batch 保留成功证据；
-- complete 扩展超预算只局部失败；
-- 领域语义压缩保留全部完整分支，并由 Hermes 原生 spillover 承载宿主预算；
-- scorecard 的指标选择、顺序和调用数可自适应；
-- planner/companion/fixed-answer scorer 不在发布路径；
-- Git commit/tag 与 Profile Distribution 提供发行/安装身份，receipt 只绑定领域质量证据；
-- 完整离线测试通过，并单独记录宿主 E2E、真实企微交付和三次稳定性测试的
-  未验证状态，不能用单元测试替代。
-
-## 验证状态的事实源
-
-架构文档不记录测试数量、耗时、单次会话结论或候选是否通过；这些信息会随代码、
-模型和环境变化，嵌入本文会成为漂移的第二事实源。离线测试报告、不可变 candidate
-receipt、真实 gateway replay/delivery、宿主 compaction 以及性能/成本产物共同构成
-当次发布证据，`build_release_receipt.py --verify-candidate` 汇总其机器可读状态。
-
-任何缺失、目标版本不一致或未通过的 live/host/performance 证据都保持候选阻断。
-离线 semantic fixture、provider 接收或正文字符数都不能单独解除门禁；是否可以
-重启、切换或扩大流量必须读取当前证据，而不是引用本文件中的历史描述。
+维护检查只确认 schema/contract、只读执行和宿主兼容性；不改变 WeCom 身份面、
+查询边界或 Hermes 的判断权。运行目录中的 `.env`、state、sessions、logs 和
+Memory 不由发行或回滚覆盖。

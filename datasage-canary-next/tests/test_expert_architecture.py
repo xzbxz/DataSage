@@ -131,10 +131,8 @@ class ExpertArchitectureTests(unittest.TestCase):
         self.assertIn("datasage.entity-guidance/v1", skill)
         self.assertIn("datasage.entity-guidance/v1", query_rules)
         for required in (
-            "datasage_catalog",
             "datasage_entity_resolve",
             "datasage_query",
-            "same assistant tool-call batch",
             "ordinary assistant text",
             "end the current turn",
             "Do not call blocking `clarify`",
@@ -146,6 +144,7 @@ class ExpertArchitectureTests(unittest.TestCase):
             self.assertNotIn("ordinary assistant text", routed_text)
             self.assertNotIn("Do not call blocking `clarify`", routed_text)
             self.assertNotIn("same assistant tool-call batch", routed_text)
+        self.assertIn("datasage_catalog", query_rules)
         self.assertIn("empty bounded candidate result", entity_guidance)
         self.assertIn("does not prove that the entity is absent", entity_guidance)
         self.assertNotIn("empty query", entity_guidance)
@@ -159,9 +158,9 @@ class ExpertArchitectureTests(unittest.TestCase):
         query = schemas.DATASAGE_QUERY["description"]
         schema_contract = " ".join((catalog, resolver, query))
         self.assertIn("before entity resolution or query", catalog)
-        self.assertIn("same assistant tool-call batch", resolver)
-        self.assertIn("stop before query", resolver)
-        self.assertIn("already unique or user-confirmed", query)
+        self.assertIn("after the user selects one", resolver)
+        self.assertIn("Entity-only questions stop after this result", resolver)
+        self.assertIn("before any database access", query)
         self.assertNotIn("final safety gate", schema_contract)
         self.assertNotIn("proves user confirmation", schema_contract)
 
@@ -198,7 +197,7 @@ class ExpertArchitectureTests(unittest.TestCase):
         self.assertIn('skill_view(name="datasage", file_path=', skill)
         self.assertFalse(hasattr(schemas, "DATASAGE_REFERENCE"))
 
-    def test_batch_metric_details_return_independent_receipts(self):
+    def test_batch_metric_details_return_independent_semantics(self):
         selections: list[tuple[str, str]] = []
         for domain in ("delivery", "inventory"):
             index = json.loads(contracts.datasage_catalog({
@@ -213,10 +212,11 @@ class ExpertArchitectureTests(unittest.TestCase):
             ]
         }))
         self.assertEqual("success", payload["status"])
-        receipts = [result["detail_receipt"] for result in payload["results"]]
-        self.assertEqual(2, len(set(receipts)))
-        for (domain, metric), receipt in zip(selections, receipts):
-            self.assertEqual(receipt, tools._current_metric_detail_receipt(domain, metric))
+        self.assertEqual(2, len(payload["results"]))
+        for (domain, metric), result in zip(selections, payload["results"]):
+            self.assertEqual(domain, result["domain"])
+            self.assertEqual("metric", result["level"])
+            self.assertEqual(metric, result["metric"]["code"])
 
     def test_ranked_limit_is_not_silently_reduced_to_ten(self):
         with mock.patch.object(tools, "_bounded_int", return_value=100):

@@ -9,7 +9,7 @@ import unicodedata
 from functools import lru_cache
 from typing import Any, Mapping, Sequence
 
-from . import contract_store, contracts, db_runtime, receipt_cache, sql_identifiers
+from . import contract_store, contracts, db_runtime, sql_identifiers
 from .capability_contract import (
     ATTRIBUTION_MODES,
     DOMAIN_SOURCES,
@@ -548,143 +548,6 @@ def _with_roles(
     return result
 
 
-def _receipt_values(value: Any) -> list[str]:
-    """Return unique string identities without coercing arbitrary values."""
-
-    raw_values = value if isinstance(value, list) else [value]
-    result: list[str] = []
-    for item in raw_values:
-        if isinstance(item, str) and item and item not in result:
-            result.append(item)
-    return result
-
-
-def _resolution_receipt_for_candidate(
-    candidate: Mapping[str, Any],
-    *,
-    token: str,
-    domain: str | None,
-    metric: str | None,
-    semantics: Mapping[str, Any] | None,
-    session_id: Any,
-    contract_signature: str | None = None,
-) -> str:
-    """Issue one opaque selection receipt for a resolver candidate.
-
-    The token is process-local and random; the record binds the exact
-    candidate and current contract identity.  It deliberately says nothing
-    about whether a user confirmed the candidate.
-    """
-
-    entity_type = candidate.get("entity_type")
-    filter_role = candidate.get("filter_role")
-    role_candidates = _receipt_values(candidate.get("filter_role_candidates"))
-    filter_values = _receipt_values(candidate.get("filter_values"))
-    canonical_id = candidate.get("canonical_id")
-    canonical_code = candidate.get("canonical_code")
-    canonical_id = canonical_id if isinstance(canonical_id, str) and canonical_id else None
-    canonical_code = (
-        canonical_code if isinstance(canonical_code, str) and canonical_code else None
-    )
-    display_name = candidate.get("display_name")
-    display_name = display_name if isinstance(display_name, str) and display_name else None
-
-    value_field: str | None = None
-    identity_values = list(filter_values)
-    if (
-        isinstance(semantics, Mapping)
-        and isinstance(filter_role, str)
-        and isinstance(semantics.get("dimensions"), Mapping)
-    ):
-        definition = semantics["dimensions"].get(filter_role)
-        identity_filter = (
-            definition.get("identity_filter")
-            if isinstance(definition, Mapping)
-            else None
-        )
-        if isinstance(identity_filter, Mapping):
-            raw_field = identity_filter.get("value_field")
-            if raw_field in {"canonical_id", "canonical_code"}:
-                value_field = str(raw_field)
-                selected_value = candidate.get(value_field)
-                if isinstance(selected_value, str) and selected_value:
-                    identity_values = [selected_value]
-
-    accepted_values = _receipt_values(
-        [
-            token,
-            display_name,
-            canonical_id,
-            canonical_code,
-            *filter_values,
-            *identity_values,
-        ]
-    )
-    if (
-        contract_signature is None
-        and isinstance(domain, str)
-        and domain
-        and isinstance(metric, str)
-        and metric
-    ):
-        contract_signature = receipt_cache.resolution_contract_signature(domain)
-    record: dict[str, Any] = {
-        "version": receipt_cache.RESOLUTION_RECEIPT_VERSION,
-        "domain": domain,
-        "metric": metric,
-        "entity_type": entity_type if isinstance(entity_type, str) else None,
-        "filter_role": filter_role if isinstance(filter_role, str) else None,
-        "filter_role_candidates": role_candidates,
-        "canonical_identity": {
-            "value_field": value_field,
-            "canonical_id": canonical_id,
-            "canonical_code": canonical_code,
-            "values": identity_values,
-        },
-        "filter_values": identity_values,
-        "input_values": [token],
-        "accepted_filter_values": accepted_values,
-        "contract_signature": contract_signature,
-        "confirmation_state": "not_proven",
-    }
-    record.update(receipt_cache.resolution_session_binding(session_id))
-    return receipt_cache.issue_resolution_receipt(record)
-
-
-def _attach_resolution_receipts(
-    candidates: Sequence[Mapping[str, Any]],
-    *,
-    token: str,
-    domain: str | None,
-    metric: str | None,
-    semantics: Mapping[str, Any] | None,
-    session_id: Any,
-) -> list[dict[str, Any]]:
-    """Attach a receipt to every returned candidate, including ambiguities."""
-
-    contract_signature: str | None = None
-    if isinstance(domain, str) and domain and isinstance(metric, str) and metric:
-        contract_signature = receipt_cache.resolution_contract_signature(domain)
-    attached: list[dict[str, Any]] = []
-    for candidate in candidates:
-        item = dict(candidate)
-        item["resolution_receipt"] = _resolution_receipt_for_candidate(
-            item,
-            token=token,
-            domain=domain,
-            metric=metric,
-            semantics=semantics,
-            session_id=session_id,
-            contract_signature=contract_signature,
-        )
-        item["resolution_session_binding"] = receipt_cache.resolution_session_binding(
-            session_id
-        )["session_binding"]
-        item["confirmation_state"] = "not_proven"
-        attached.append(item)
-    return attached
-
-
 def _exact_resolution_status(
     candidates: Sequence[Mapping[str, Any]],
     *,
@@ -755,185 +618,6 @@ def _validate_args(
         )
     limit = raw_limit
     return token.strip(), entity_types, domain, metric, attribution_mode, limit
-
-
-def _entity_filter_specs(
-    request: Mapping[str, Any],
-    semantics: Mapping[str, Any],
-) -> list[tuple[str, str, list[str]]]:
-    """Return entity filter roles and their exact raw values."""
-
-    raw_filters = request.get("metric_filters")
-    if not isinstance(raw_filters, Mapping) or not raw_filters:
-        return []
-    dimensions = semantics.get("dimensions")
-    if not isinstance(dimensions, Mapping):
-        raise EntityFailure("CONTRACT_UNAVAILABLE", "业务域缺少维度语义。")
-    specs: list[tuple[str, str, list[str]]] = []
-    for raw_role, raw_value in raw_filters.items():
-        role = str(raw_role)
-        entity_type = _entity_type_for_filter_role(role)
-        # The registry is the authority for governed entity roles.  Some
-        # registered department roles intentionally use source_exact rather
-        # than a master-data entity_exact contract, but they are still entity
-        # filters and therefore still require a prior selection receipt.
-        if entity_type is None:
-            continue
-        values = raw_value if isinstance(raw_value, list) else [raw_value]
-        if not values or any(not isinstance(value, str) or not value for value in values):
-            raise EntityFailure("INVALID_INPUT", "实体筛选值必须是非空字符串。")
-        specs.append((role, entity_type, list(values)))
-    return specs
-
-
-def _receipt_session_matches(record: Mapping[str, Any], session_id: Any) -> bool:
-    expected = receipt_cache.resolution_session_binding(session_id)
-    binding = record.get("session_binding")
-    stored_hash = record.get("session_id_sha256")
-    return (
-        binding == expected.get("session_binding")
-        and stored_hash == expected.get("session_id_sha256")
-        and record.get("session_ref") == expected.get("session_ref")
-    )
-
-
-def validate_resolution_receipts(
-    request: Mapping[str, Any],
-    semantics: Mapping[str, Any],
-    *,
-    session_id: Any = None,
-) -> list[dict[str, Any]]:
-    """Validate opaque resolver receipts before entity/database preflight.
-
-    The function returns private records for a second, post-canonicalization
-    identity check.  It does not treat a resolver receipt as user confirmation.
-    """
-
-    specs = _entity_filter_specs(request, semantics)
-    raw_receipts = request.get("resolution_receipts")
-    if not specs:
-        if raw_receipts is not None:
-            raise EntityFailure(
-                "RESOLUTION_RECEIPT_UNEXPECTED",
-                "没有实体筛选时不能携带实体解析收据。",
-            )
-        return []
-    if not isinstance(session_id, str) or not session_id.strip():
-        raise EntityFailure(
-            "RESOLUTION_RECEIPT_SESSION_REQUIRED",
-            "实体筛选收据必须绑定可信会话；请在当前会话重新解析实体。",
-        )
-    if (
-        not isinstance(raw_receipts, list)
-        or not raw_receipts
-        or any(
-            not isinstance(receipt, str)
-            or receipt_cache.RESOLUTION_RECEIPT_PATTERN.fullmatch(receipt) is None
-            for receipt in raw_receipts
-        )
-        or len(raw_receipts) != len(set(raw_receipts))
-    ):
-        raise EntityFailure(
-            "RESOLUTION_RECEIPT_INVALID",
-            "实体筛选必须携带每个已解析候选的有效 resolution_receipt。",
-        )
-
-    domain = request.get("domain")
-    metric = request.get("metric")
-    if not isinstance(domain, str) or not isinstance(metric, str):
-        raise EntityFailure("RESOLUTION_RECEIPT_CONTEXT_MISMATCH", "实体收据缺少当前业务上下文。")
-    try:
-        current_signature = receipt_cache.resolution_contract_signature(domain)
-    except (OSError, contract_store.ContractStoreError) as exc:
-        raise EntityFailure("CONTRACT_UNAVAILABLE", "实体解析合同签名不可用。") from exc
-
-    records: list[dict[str, Any]] = []
-    identity_keys: set[tuple[str, tuple[str, ...]]] = set()
-    for token in raw_receipts:
-        record = receipt_cache.get_resolution_receipt(token)
-        if not isinstance(record, Mapping):
-            raise EntityFailure("RESOLUTION_RECEIPT_INVALID", "实体解析收据未知、已篡改或已失效。")
-        record = dict(record)
-        if record.get("version") != receipt_cache.RESOLUTION_RECEIPT_VERSION:
-            raise EntityFailure("RESOLUTION_RECEIPT_STALE", "实体解析收据版本已过期，请重新解析实体。")
-        if record.get("contract_signature") != current_signature:
-            raise EntityFailure("RESOLUTION_RECEIPT_STALE", "实体解析收据对应的业务合同已变化，请重新解析实体。")
-        if record.get("domain") != domain or record.get("metric") != metric:
-            raise EntityFailure("RESOLUTION_RECEIPT_CONTEXT_MISMATCH", "实体解析收据与当前业务域或指标不匹配。")
-        if not _receipt_session_matches(record, session_id):
-            raise EntityFailure("RESOLUTION_RECEIPT_SESSION_MISMATCH", "实体解析收据与当前会话不匹配。")
-        if record.get("confirmation_state") != "not_proven":
-            raise EntityFailure("RESOLUTION_RECEIPT_INVALID", "实体解析收据确认状态无效。")
-        role = record.get("filter_role")
-        if not isinstance(role, str) or record.get("filter_role_candidates"):
-            raise EntityFailure("RESOLUTION_RECEIPT_NOT_RESOLVED", "实体候选尚未形成唯一可执行筛选角色。")
-        identity = record.get("canonical_identity")
-        identity_values = identity.get("values") if isinstance(identity, Mapping) else None
-        if (
-            not isinstance(record.get("entity_type"), str)
-            or not isinstance(identity_values, list)
-            or not identity_values
-            or any(not isinstance(value, str) or not value for value in identity_values)
-        ):
-            raise EntityFailure("RESOLUTION_RECEIPT_INVALID", "实体解析收据缺少稳定筛选身份。")
-        accepted_values = record.get("accepted_filter_values")
-        if not isinstance(accepted_values, list) or any(
-            not isinstance(value, str) or not value for value in accepted_values
-        ):
-            raise EntityFailure("RESOLUTION_RECEIPT_INVALID", "实体解析收据筛选身份无效。")
-        identity_key = (role, tuple(sorted(identity_values)))
-        if identity_key in identity_keys:
-            raise EntityFailure("RESOLUTION_RECEIPT_SCOPE_MISMATCH", "实体解析收据重复绑定同一实体身份。")
-        identity_keys.add(identity_key)
-        records.append(record)
-
-    # Exact coverage is checked at role/value granularity.  A token issued for
-    # another role, an extra token, or an unrepresented filter value is denied
-    # before any master-data lookup can occur.
-    expected_roles = {role for role, _entity_type, _values in specs}
-    record_roles = [record.get("filter_role") for record in records]
-    if set(record_roles) != expected_roles:
-        raise EntityFailure("RESOLUTION_RECEIPT_SCOPE_MISMATCH", "实体解析收据未逐一覆盖当前实体筛选角色。")
-    for role, entity_type, values in specs:
-        role_records = [record for record in records if record.get("filter_role") == role]
-        if any(record.get("entity_type") != entity_type for record in role_records):
-            raise EntityFailure("RESOLUTION_RECEIPT_SCOPE_MISMATCH", "实体解析收据的实体类型与筛选角色不匹配。")
-        for value in values:
-            if not any(value in record.get("accepted_filter_values", []) for record in role_records):
-                raise EntityFailure("RESOLUTION_RECEIPT_SCOPE_MISMATCH", "实体解析收据与当前实体筛选值不匹配。")
-    return records
-
-
-def validate_resolution_receipt_bindings(
-    request: Mapping[str, Any],
-    records: Sequence[Mapping[str, Any]],
-) -> None:
-    """Check canonical identities after the existing exact entity preflight."""
-
-    if not records:
-        return
-    filters = request.get("metric_filters")
-    if not isinstance(filters, Mapping):
-        raise EntityFailure("RESOLUTION_RECEIPT_SCOPE_MISMATCH", "实体筛选归一化结果不可用。")
-    bindings = request.get("_entity_bindings")
-    bindings = bindings if isinstance(bindings, Mapping) else {}
-    for role in {str(record.get("filter_role")) for record in records}:
-        role_records = [record for record in records if record.get("filter_role") == role]
-        expected: set[str] = set()
-        for record in role_records:
-            identity = record.get("canonical_identity")
-            values = identity.get("values") if isinstance(identity, Mapping) else None
-            if isinstance(values, list):
-                expected.update(value for value in values if isinstance(value, str))
-        binding = bindings.get(role)
-        actual_value = (
-            binding.get("filter_values")
-            if isinstance(binding, Mapping)
-            else filters.get(role)
-        )
-        actual = set(_receipt_values(actual_value))
-        if actual != expected:
-            raise EntityFailure("RESOLUTION_RECEIPT_SCOPE_MISMATCH", "实体解析收据与归一化实体身份不匹配。")
 
 
 def _default_entity_types(domain: str | None) -> set[str]:
@@ -1329,14 +1013,6 @@ def datasage_entity_resolve(args: dict[str, Any], **_kwargs: Any) -> str:
                 )
                 for item in exact
             ]
-            candidates = _attach_resolution_receipts(
-                candidates,
-                token=token,
-                domain=domain,
-                metric=metric,
-                semantics=semantics,
-                session_id=_kwargs.get("session_id"),
-            )
             public_candidates, public_bytes_truncated = _public_payload_candidates(
                 candidates,
                 limit,
@@ -1372,14 +1048,6 @@ def datasage_entity_resolve(args: dict[str, Any], **_kwargs: Any) -> str:
                         )
                         for item in exact
                     ]
-                    candidates = _attach_resolution_receipts(
-                        candidates,
-                        token=token,
-                        domain=domain,
-                        metric=metric,
-                        semantics=semantics,
-                        session_id=_kwargs.get("session_id"),
-                    )
                     public_candidates, public_bytes_truncated = _public_payload_candidates(
                         candidates,
                         limit,
@@ -1456,14 +1124,6 @@ def datasage_entity_resolve(args: dict[str, Any], **_kwargs: Any) -> str:
             else:
                 status = "not_found"
                 must_clarify = False
-            candidates = _attach_resolution_receipts(
-                candidates,
-                token=token,
-                domain=domain,
-                metric=metric,
-                semantics=semantics,
-                session_id=_kwargs.get("session_id"),
-            )
             candidate_count = len(candidates)
             public_candidates, public_bytes_truncated = _public_payload_candidates(
                 candidates,
@@ -1657,7 +1317,7 @@ def canonicalize_metric_request(
                 elif roles:
                     raise EntityFailure(
                         "ENTITY_ROLE_AMBIGUOUS",
-                        "该实体在所选指标中对应多个筛选角色，请明确业务口径。",
+                        "该实体在所选指标中对应多个筛选角色，请使用 datasage_entity_resolve 或明确业务口径。",
                     )
                 else:
                     raise EntityFailure(
@@ -1684,7 +1344,7 @@ def canonicalize_metric_request(
                     if not isinstance(source, Mapping):
                         raise EntityFailure(
                             "ENTITY_NOT_FOUND",
-                            "未找到与输入完全一致的受控实体。",
+                            "未找到与输入完全一致的受控实体，请使用 datasage_entity_resolve 澄清实体后重试。",
                         )
                     sql, params = _build_candidate_query(
                         value,
@@ -1723,12 +1383,12 @@ def canonicalize_metric_request(
                 if truncated or len(exact_candidates) > 1:
                     raise EntityFailure(
                         "ENTITY_AMBIGUOUS",
-                        "存在多个完全匹配的实体，请使用唯一编码进一步明确。",
+                        "存在多个完全匹配的实体，请使用 datasage_entity_resolve 或唯一编码进一步明确。",
                     )
                 if not exact_candidates:
                     raise EntityFailure(
                         "ENTITY_NOT_FOUND",
-                        "未找到与输入完全一致的受控实体。",
+                        "未找到与输入完全一致的受控实体，请使用 datasage_entity_resolve 澄清实体后重试。",
                     )
                 _exact_resolution_status(exact_candidates, metric=metric)
                 resolved_candidates.append(exact_candidates[0])

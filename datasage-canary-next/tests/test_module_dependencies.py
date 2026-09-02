@@ -39,7 +39,6 @@ db_runtime = importlib.import_module(f"{TEST_PACKAGE}.db_runtime")
 db_security = importlib.import_module(f"{TEST_PACKAGE}.db_security")
 entities = importlib.import_module(f"{TEST_PACKAGE}.entities")
 runtime_health = importlib.import_module(f"{TEST_PACKAGE}.runtime_health")
-receipt_cache = importlib.import_module(f"{TEST_PACKAGE}.receipt_cache")
 sql_identifiers = importlib.import_module(f"{TEST_PACKAGE}.sql_identifiers")
 tools = importlib.import_module(f"{TEST_PACKAGE}.tools")
 
@@ -387,58 +386,29 @@ class ModuleDependencyTests(unittest.TestCase):
         finally:
             set_multiplex_active(previous_multiplex)
 
-    def test_live_readiness_cache_key_includes_profile_and_scoped_secrets(self) -> None:
-        scoped_values = {
-            "DATA_QUERY_MYSQL_HOST": "scoped-db.invalid",
-            "DATA_QUERY_MYSQL_PORT": "4407",
-            "DATA_QUERY_MYSQL_DATABASE": "scoped_schema",
-            "DATA_QUERY_MYSQL_USER": "scoped_user",
-            "DATA_QUERY_MYSQL_PASSWORD": "scoped_password",
-            "DATA_QUERY_MYSQL_SSL_CA": "C:\\synthetic\\scoped-ca.pem",
+    def test_query_readiness_does_not_open_a_live_connection(self) -> None:
+        identity = {
+            "ready": True,
+            "active_profile_path": str(PROFILE_ROOT),
+            "contract_snapshot_loaded": True,
         }
-        homes = (
-            PROFILE_ROOT / "synthetic-profile-a",
-            PROFILE_ROOT / "synthetic-profile-b",
-        )
-        keys = []
-        same_profile_keys = []
-        previous_multiplex = is_multiplex_active()
-        set_multiplex_active(True)
-        secret_token = set_secret_scope(scoped_values)
-        try:
-            with mock.patch.object(
-                runtime_health.settings, "get", return_value=None
-            ), mock.patch.object(
-                runtime_health.settings, "get_list", return_value=[]
-            ), mock.patch.object(
-                runtime_health.settings,
-                "get_int",
-                side_effect=lambda _name, default, _minimum, _maximum: default,
-            ):
-                for home in homes:
-                    home_token = set_hermes_home_override(home)
-                    try:
-                        keys.append(runtime_health._live_cache_key())
-                    finally:
-                        reset_hermes_home_override(home_token)
-                same_profile_keys.append(keys[0])
-                alternate_scope = set_secret_scope(
-                    {**scoped_values, "DATA_QUERY_MYSQL_PASSWORD": "alternate_password"}
-                )
-                try:
-                    home_token = set_hermes_home_override(homes[0])
-                    try:
-                        same_profile_keys.append(runtime_health._live_cache_key())
-                    finally:
-                        reset_hermes_home_override(home_token)
-                finally:
-                    reset_secret_scope(alternate_scope)
-        finally:
-            reset_secret_scope(secret_token)
-            set_multiplex_active(previous_multiplex)
+        static_status = {
+            "ready": True,
+            "reason_code": None,
+            "missing_names": [],
+        }
+        with mock.patch.object(
+            runtime_health, "runtime_identity_status", return_value=identity
+        ), mock.patch.object(
+            runtime_health, "database_configuration_status", return_value=static_status
+        ), mock.patch.object(runtime_health.db_runtime, "connect") as connect:
+            status = runtime_health.query_readiness_status()
 
-        self.assertEqual(keys[0], keys[1])
-        self.assertNotEqual(same_profile_keys[0], same_profile_keys[1])
+        self.assertTrue(status["ready"])
+        self.assertEqual(static_status["reason_code"], status["reason_code"])
+        self.assertEqual([], status["missing_names"])
+        self.assertIs(identity, status["identity"])
+        connect.assert_not_called()
 
     def test_entity_registry_cache_uses_profile_bound_content_signatures(self) -> None:
         signatures = {
@@ -511,76 +481,40 @@ class ModuleDependencyTests(unittest.TestCase):
         self.assertEqual("not_found", payload["status"])
         execute.assert_called_once()
 
-    def test_runtime_health_uses_shared_database_adapter(self) -> None:
-        class Connection:
-            _datasage_security_evidence = {
-                "live_connection_verified": True,
-                "grants_verified": True,
-                "transport_mode": "tls",
-            }
-
-            def close(self) -> None:
-                return None
-
-        scoped_values = {
-            "DATA_QUERY_MYSQL_HOST": "scoped-db.invalid",
-            "DATA_QUERY_MYSQL_PORT": "4407",
-            "DATA_QUERY_MYSQL_DATABASE": "scoped_schema",
-            "DATA_QUERY_MYSQL_USER": "scoped_user",
-            "DATA_QUERY_MYSQL_PASSWORD": "scoped_password",
-            "DATA_QUERY_MYSQL_SSL_CA": "C:\\synthetic\\scoped-ca.pem",
+    def test_database_configuration_status_is_static(self) -> None:
+        values = {
+            "DATA_QUERY_MYSQL_HOST": "db.invalid",
+            "DATA_QUERY_MYSQL_DATABASE": "schema",
+            "DATA_QUERY_MYSQL_USER": "user",
+            "DATA_QUERY_MYSQL_PASSWORD": "password",
         }
-        previous_cache = runtime_health._LIVE_CACHE
-        previous_multiplex = is_multiplex_active()
-        set_multiplex_active(True)
-        secret_token = set_secret_scope(scoped_values)
-        try:
-            runtime_health._LIVE_CACHE = None
-            with mock.patch.object(
-                runtime_health.settings, "get", return_value=None
-            ), mock.patch.object(
-                runtime_health.settings, "get_list", return_value=[]
-            ), mock.patch.object(
-                runtime_health.settings,
-                "get_int",
-                side_effect=lambda _name, default, _minimum, _maximum: default,
-            ), mock.patch.object(
-                db_runtime, "connect", return_value=Connection()
-            ) as connect:
-                status = runtime_health.live_database_security_status()
-        finally:
-            runtime_health._LIVE_CACHE = previous_cache
-            reset_secret_scope(secret_token)
-            set_multiplex_active(previous_multiplex)
+        module = types.SimpleNamespace(VERSION=(1, 2, 0))
+        with mock.patch.object(
+            runtime_health,
+            "canary_existing_account_accepted",
+            return_value=True,
+        ), mock.patch.object(
+            runtime_health,
+            "get_secret",
+            side_effect=lambda name, default="": values.get(name, default),
+        ), mock.patch.object(
+            runtime_health,
+            "mysql_tls_policy",
+            return_value={
+                "production_mode": False,
+                "tls_required": False,
+                "tls_configured": False,
+            },
+        ), mock.patch.object(
+            runtime_health, "mysql_tls_kwargs", return_value={"ssl_disabled": True}
+        ), mock.patch.object(
+            runtime_health.db_runtime, "load_pymysql", return_value=module
+        ), mock.patch.object(runtime_health.db_runtime, "connect") as connect:
+            status = runtime_health.database_configuration_status()
+
         self.assertTrue(status["ready"], status)
-        connect.assert_called_once()
-
-    def test_receipt_facade_uses_the_signature_aware_cache(self) -> None:
-        with mock.patch.object(
-            receipt_cache,
-            "get_metric_capability_receipt",
-            return_value="a" * 64,
-        ) as cached:
-            receipt = tools._current_metric_detail_receipt(
-                "delivery", "delivery_amount"
-            )
-        self.assertEqual("a" * 64, receipt)
-        cached.assert_called_once_with(
-            "delivery",
-            "delivery_amount",
-            builder=tools._build_current_metric_detail_receipt,
-        )
-
-        with mock.patch.object(
-            receipt_cache,
-            "get_metric_capability_receipt",
-            side_effect=contract_store.ContractStoreError(
-                "CONTRACT_UNAVAILABLE", "missing"
-            ),
-        ), self.assertRaises(tools.QueryFailure) as caught:
-            tools._current_metric_detail_receipt("delivery", "delivery_amount")
-        self.assertEqual("CONTRACT_UNAVAILABLE", caught.exception.code)
-        self.assertEqual("contract_load", caught.exception.stage)
+        self.assertEqual("plaintext_nonproduction", status["transport_policy"])
+        connect.assert_not_called()
 
     def test_single_statement_facade_preserves_public_error_taxonomy(self) -> None:
         source = {"source_identity": "warehouse-a"}

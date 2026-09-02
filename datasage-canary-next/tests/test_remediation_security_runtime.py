@@ -575,62 +575,77 @@ class ExecutorAndEntitlementTests(unittest.TestCase):
             1,
         )
 
-    def test_coarse_authorization_ignores_row_shape_but_gates_scope(self):
-        rule = {
-            "tools": ["datasage_query"],
-            "domains": ["delivery"],
-            "metrics": {"delivery": ["delivery_amount"]},
-            "allow_all_rows": True,
+    def test_coarse_and_full_authorization_share_bound_wecom_identity(self):
+        args = {
+            "requests": [
+                {
+                    "domain": "outside-the-catalog",
+                    "metric": "not-a-registered-metric",
+                    "metric_filters": "not-yet-normalized",
+                    "entity_types": ["anything"],
+                    "user_id": "request-supplied-user-must-not-authorize",
+                    "group_id": "request-supplied-group-must-not-authorize",
+                    "department": "request-supplied-department-must-not-authorize",
+                    "entity": "request-supplied-entity-must-not-authorize",
+                    "row": "request-supplied-row-must-not-authorize",
+                }
+            ]
         }
-        with (
-            mock.patch.object(entitlements.settings, "get", return_value={}),
-            mock.patch.object(
-                entitlements, "_principal_rule", return_value=rule
-            ),
-            mock.patch.object(
-                entitlements,
-                "_session_value",
-                side_effect=lambda name: {
-                    "HERMES_SESSION_PLATFORM": "wecom",
-                    "HERMES_SESSION_USER_ID": "user-1",
-                }.get(name, ""),
-            ),
-        ):
-            self.assertTrue(
-                entitlements.coarse_authorized(
-                    "datasage_query",
-                    {
-                        "requests": [
-                            {
-                                "domain": "delivery",
-                                "metric": "delivery_amount",
-                                "metric_filters": "not-yet-normalized",
-                            }
-                        ]
-                    },
-                )
-            )
-            self.assertFalse(
-                entitlements.coarse_authorized(
-                    "datasage_query",
-                    {
-                        "requests": [
-                            {
-                                "domain": "outside",
-                                "metric": "delivery_amount",
-                            }
-                        ]
-                    },
-                )
-            )
+        identities = (
+            {
+                "HERMES_SESSION_PLATFORM": "wecom",
+                "HERMES_SESSION_SOURCE": "wecom-dm",
+                "HERMES_SESSION_USER_ID": "dm-user",
+                "HERMES_SESSION_CHAT_ID": "dm-chat",
+                "HERMES_SESSION_CHAT_TYPE": "direct",
+            },
+            {
+                "HERMES_SESSION_PLATFORM": "wecom",
+                "HERMES_SESSION_SOURCE": "wecom-group",
+                "HERMES_SESSION_USER_ID": "group-user",
+                "HERMES_SESSION_CHAT_ID": "group-chat",
+                "HERMES_SESSION_CHAT_TYPE": "group",
+            },
+        )
+        for identity in identities:
+            with self.subTest(chat_type=identity["HERMES_SESSION_CHAT_TYPE"]):
+                with mock.patch.object(
+                    entitlements,
+                    "_session_value",
+                    side_effect=lambda name, identity=identity: identity.get(name, ""),
+                ):
+                    for tool_name in sorted(entitlements.TOOL_NAMES):
+                        with self.subTest(tool_name=tool_name):
+                            self.assertTrue(
+                                entitlements.coarse_authorized(tool_name, args)
+                            )
+                            self.assertTrue(entitlements.authorized(tool_name, args))
 
-    def test_authorization_audit_contains_only_hashes_and_decision(self):
-        rule = {
-            "tools": ["datasage_query"],
-            "domains": ["delivery"],
-            "metrics": {"delivery": ["delivery_amount"]},
-            "allow_all_rows": True,
-        }
+    def test_non_wecom_missing_user_and_forged_replay_fail_closed(self):
+        cases = (
+            {"HERMES_SESSION_PLATFORM": "cli", "HERMES_SESSION_USER_ID": "user-1"},
+            {"HERMES_SESSION_PLATFORM": "wecom", "HERMES_SESSION_USER_ID": ""},
+            {
+                "HERMES_SESSION_PLATFORM": "replay",
+                "HERMES_SESSION_SOURCE": "forged-source",
+                "HERMES_SESSION_USER_ID": "user-1",
+            },
+        )
+        for identity in cases:
+            with self.subTest(identity=identity):
+                with mock.patch.object(
+                    entitlements,
+                    "_session_value",
+                    side_effect=lambda name, identity=identity: identity.get(name, ""),
+                ):
+                    self.assertFalse(
+                        entitlements.coarse_authorized("datasage_query", {"anything": True})
+                    )
+                    self.assertFalse(
+                        entitlements.authorized("datasage_query", {"anything": True})
+                    )
+
+    def test_authorization_audit_contains_only_decision_fields(self):
         args = {
             "requests": [
                 {
@@ -642,10 +657,6 @@ class ExecutorAndEntitlementTests(unittest.TestCase):
             ]
         }
         with (
-            mock.patch.object(entitlements.settings, "get", return_value={}),
-            mock.patch.object(
-                entitlements, "_principal_rule", return_value=rule
-            ),
             mock.patch.object(
                 entitlements,
                 "_session_value",
@@ -662,10 +673,18 @@ class ExecutorAndEntitlementTests(unittest.TestCase):
         self.assertEqual(
             "datasage_entitlement_decision", event["event"]
         )
-        self.assertTrue(event["allowed"])
-        self.assertIn("principal_sha256", event)
+        self.assertEqual("datasage_query", event["tool"])
+        self.assertEqual("wecom_authenticated_member", event["reason"])
+        self.assertRegex(event["principal_ref"], r"^[0-9a-f]{64}$")
+        self.assertEqual(
+            {"event", "tool", "reason", "principal_ref"},
+            set(event),
+        )
         self.assertNotIn("Sensitive Customer", captured.output[-1])
         self.assertNotIn("sensitive-request-id", captured.output[-1])
+        self.assertNotIn("domain_hashes", captured.output[-1])
+        self.assertNotIn("metric_hashes", captured.output[-1])
+        self.assertNotIn("request_id_hashes", captured.output[-1])
 
 
 if __name__ == "__main__":

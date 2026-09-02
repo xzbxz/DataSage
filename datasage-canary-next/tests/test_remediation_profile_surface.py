@@ -7,6 +7,7 @@ not import the DataSage plugin implementation or mutate Hermes host code.
 from __future__ import annotations
 
 import importlib
+import json
 import os
 from pathlib import Path
 import re
@@ -76,9 +77,10 @@ class RemediationProfileSurfaceTests(unittest.TestCase):
             platform_toolsets["cli"],
         )
         self.assertEqual(
-            ["skills", "clarify", "datasage-query"],
+            ["clarify", "datasage-query"],
             platform_toolsets["wecom"],
         )
+        self.assertNotIn("skills", platform_toolsets["wecom"])
         self.assertNotIn("hermes-wecom", platform_toolsets["wecom"])
 
     def test_resolved_wecom_tools_exclude_system_and_mutation_tools(self):
@@ -136,8 +138,8 @@ class RemediationProfileSurfaceTests(unittest.TestCase):
         self.assertEqual([], violations)
 
         skills_tools = set(resolve_toolset("skills"))
-        self.assertIn("skill_view", skills_tools)
-        self.assertIn("skill_manage", skills_tools)
+        self.assertTrue(skills_tools)
+        self.assertTrue(skills_tools.isdisjoint(resolved_tools))
 
     def test_wecom_private_group_and_data_access_match_business_policy(self):
         config = _load_config()
@@ -155,44 +157,52 @@ class RemediationProfileSurfaceTests(unittest.TestCase):
         self.assertEqual(["*"], extra["groups"]["*"]["allow_from"])
 
         settings = config["plugins"]["entries"]["datasage-query"]["settings"]
-        policy = settings["data_entitlements"]
-        principals = policy["principals"]
-        self.assertEqual(1, len(principals))
-        principal = principals[0]
-        self.assertEqual("*", principal["user_id"])
-        self.assertEqual(["*"], principal["domains"])
-        self.assertEqual(SUPPORTED_DOMAINS, set(principal["metrics"]))
-        self.assertEqual(["*"], principal["entity_types"])
-        self.assertTrue(principal["allow_unscoped_entity_resolution"])
-        self.assertTrue(principal["allow_type_neutral_entity_resolution"])
-        self.assertTrue(principal["allow_entity_resolution_all_rows"])
-        self.assertTrue(principal["allow_all_rows"])
+        self.assertNotIn("data_entitlements", settings)
+        for removed in (
+            "mysql_health_connect_timeout_seconds",
+            "mysql_grant_audit_timeout_seconds",
+        ):
+            self.assertNotIn(removed, settings)
 
-    def test_all_wecom_users_match_principal_with_all_row_access(self):
-        """The business owner explicitly grants the governed surface to WeCom."""
+        plugin_manifest = yaml.safe_load(
+            (PROFILE_ROOT / "plugins" / "datasage-query" / "plugin.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        schema = plugin_manifest["config_schema"]
+        for removed in (
+            "data_entitlements",
+            "mysql_health_connect_timeout_seconds",
+            "mysql_grant_audit_timeout_seconds",
+        ):
+            self.assertNotIn(removed, schema)
+
+    def test_wecom_does_not_require_skill_references(self):
+        skill = SKILL_PATH.read_text(encoding="utf-8")
+        self.assertIn("restricted WeCom", skill)
+        self.assertIn("references are never a query prerequisite", skill)
+        self.assertIn("skill-enabled CLI or maintenance", skill)
+        self.assertIn('skill_view(name="datasage", file_path=', skill)
+        self.assertNotIn("Load only the governing reference", skill)
+        verification = skill.split("## Verification", 1)[1]
+        self.assertIn("absence never blocks a WeCom query", verification)
+        self.assertNotIn("reference was loaded", verification)
+
+    def test_all_wecom_users_are_admitted_without_data_policy(self):
+        """Every bound WeCom member gets the same complete DataSage surface."""
 
         entitlements = _load_entitlements()
-        config = _load_config()
-        home_user = config["platforms"]["wecom"]["home_channel"]["user_id"]
-        policy = config["plugins"]["entries"]["datasage-query"]["settings"][
-            "data_entitlements"
-        ]
         query_args = {
             "requests": [
                 {
-                    "domain": "delivery",
-                    "metric": "delivery_amount",
-                    "metric_filters": {},
+                    "domain": "an-unlisted-domain",
+                    "metric": "an-unlisted-metric",
+                    "metric_filters": {"customer": ["any-row"]},
                 }
             ]
         }
-        entity_args = {
-            "domain": "delivery",
-            "metric": "delivery_amount",
-            "entity_types": ["department"],
-        }
 
-        for user_id in (home_user, "another-authenticated-wecom-user"):
+        for user_id in ("home-user", "another-authenticated-wecom-user"):
             with self.subTest(user_id=user_id):
                 def session_value(name: str) -> str:
                     if name == "HERMES_SESSION_PLATFORM":
@@ -206,10 +216,82 @@ class RemediationProfileSurfaceTests(unittest.TestCase):
                     "_session_value",
                     side_effect=session_value,
                 ):
-                    rule = entitlements._principal_rule(policy)
-                    self.assertIsNotNone(rule)
-                    self.assertTrue(entitlements._query_allowed(rule, query_args))
-                    self.assertTrue(entitlements._entity_allowed(rule, entity_args))
+                    self.assertTrue(
+                        entitlements.coarse_authorized("datasage_query", query_args)
+                    )
+                    self.assertTrue(
+                        entitlements.authorized("datasage_query", query_args)
+                    )
+
+    def test_trusted_replay_requires_exact_bound_source_marker(self):
+        entitlements = _load_entitlements()
+        cases = (
+            ("replay", "datasage-trusted-replay", "replay-user", True),
+            ("replay", "forged-source", "replay-user", False),
+            ("cli", "datasage-trusted-replay", "replay-user", False),
+            ("replay", "datasage-trusted-replay", "", False),
+        )
+
+        for platform, source, user_id, expected in cases:
+            with self.subTest(platform=platform, source=source, user_id=user_id):
+                def session_value(name: str) -> str:
+                    return {
+                        "HERMES_SESSION_PLATFORM": platform,
+                        "HERMES_SESSION_SOURCE": source,
+                        "HERMES_SESSION_USER_ID": user_id,
+                    }.get(name, "")
+
+                with mock.patch.object(
+                    entitlements,
+                    "_session_value",
+                    side_effect=session_value,
+                ):
+                    self.assertEqual(
+                        expected,
+                        entitlements.authorized(
+                            "datasage_query",
+                            {"requests": [{"domain": "anything", "metric": "anything"}]},
+                        ),
+                    )
+
+    def test_authorization_audit_contains_only_decision_fields(self):
+        entitlements = _load_entitlements()
+        args = {
+            "requests": [
+                {
+                    "request_id": "sensitive-request-id",
+                    "domain": "delivery",
+                    "metric": "delivery_amount",
+                    "metric_filters": {"customer": "Sensitive Customer"},
+                }
+            ]
+        }
+
+        with (
+            mock.patch.object(
+                entitlements,
+                "_session_value",
+                side_effect=lambda name: {
+                    "HERMES_SESSION_PLATFORM": "wecom",
+                    "HERMES_SESSION_USER_ID": "user-1",
+                }.get(name, ""),
+            ),
+            self.assertLogs(entitlements.logger, level="INFO") as captured,
+        ):
+            self.assertTrue(entitlements.authorized("datasage_query", args))
+
+        line = captured.output[-1]
+        event = json.loads(line[line.index("{") :])
+        self.assertEqual(
+            {"event", "tool", "reason", "principal_ref"},
+            set(event),
+        )
+        self.assertEqual("datasage_entitlement_decision", event["event"])
+        self.assertEqual("datasage_query", event["tool"])
+        self.assertEqual("wecom_authenticated_member", event["reason"])
+        self.assertRegex(event["principal_ref"], r"^[0-9a-f]{64}$")
+        self.assertNotIn("Sensitive Customer", captured.output[-1])
+        self.assertNotIn("sensitive-request-id", captured.output[-1])
 
     def test_skill_frontmatter_and_answer_boundary_declare_scope(self):
         frontmatter = _frontmatter(SKILL_PATH)

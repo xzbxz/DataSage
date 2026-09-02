@@ -541,7 +541,7 @@
       "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage", "context_transition"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
     },
     {
-      "id": "compaction_01_delivery_base", "category": "memory_compaction", "conversation_id": "compaction_receipt_recovery", "turn": 1,
+      "id": "compaction_01_delivery_base", "category": "memory_compaction", "conversation_id": "compaction_context_recovery", "turn": 1,
       "prompt": "先看示例A区6月按客户的净出库前5。",
       "plan_constraints": {"domains": ["delivery"], "metrics": ["delivery_amount"], "dimensions": ["customer"], "operations": ["top_n"], "time_semantics": "2026-06", "context_action": "new", "context_bindings": {"department": "example_region_a", "limit": 5}, "must_not_metrics": []},
       "required_conclusions": ["report_top_n", "disclose_ranking_scope"],
@@ -550,13 +550,13 @@
       "evidence_requirements": {"required_receipts": ["catalog", "metric_detail", "query", "coverage"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
     },
     {
-      "id": "compaction_02_reload_detail_followup", "category": "memory_compaction", "conversation_id": "compaction_receipt_recovery", "turn": 2,
+      "id": "compaction_02_reload_detail_followup", "category": "memory_compaction", "conversation_id": "compaction_context_recovery", "turn": 2,
       "prompt": "上下文压缩后改成按产品看，地区、月份和前5不变。",
-      "plan_constraints": {"domains": ["delivery"], "metrics": ["delivery_amount"], "dimensions": ["product"], "operations": ["reload_metric_detail", "replace_dimension", "top_n"], "time_semantics": "2026-06", "context_action": "replace", "context_bindings": {"department": "example_region_a", "limit": 5}, "must_not_metrics": [], "must_not_operations": ["guess_detail_receipt", "reuse_missing_receipt"]},
-      "required_conclusions": ["reload_missing_detail_receipt", "preserve_period_entity_and_limit", "report_top_n"],
-      "allowed_conclusions": ["reload_missing_detail_receipt", "preserve_period_entity_and_limit", "report_top_n", "disclose_ranking_scope", "disclose_data_limits"],
-      "forbidden_conclusions": ["guess_detail_receipt", "reuse_missing_receipt", "change_period", "change_entity", "invent_result"],
-      "evidence_requirements": {"required_receipts": ["catalog", "metric_detail", "query", "coverage", "context_transition"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
+      "plan_constraints": {"domains": ["delivery"], "metrics": ["delivery_amount"], "dimensions": ["product"], "operations": ["top_n"], "time_semantics": "2026-06", "context_action": "replace", "context_bindings": {"department": "example_region_a", "limit": 5}, "must_not_metrics": []},
+      "required_conclusions": ["preserve_period_entity_and_limit", "report_top_n"],
+      "allowed_conclusions": ["preserve_period_entity_and_limit", "report_top_n", "disclose_ranking_scope", "disclose_data_limits"],
+      "forbidden_conclusions": ["change_period", "change_entity", "invent_result"],
+      "evidence_requirements": {"required_receipts": ["query", "coverage", "context_transition"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
     }
   ]
 }

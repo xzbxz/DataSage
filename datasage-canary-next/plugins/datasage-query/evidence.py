@@ -25,7 +25,6 @@ _SEMANTIC_FINGERPRINT_PRESENTATION_KEYS = {
     "request_id",
     "purpose",
     "decomposition_of_request_id",
-    "detail_receipt",
 }
 
 _LIMITED_STATES = {"empty", "undefined", "incomplete"}
@@ -155,6 +154,21 @@ def _decimal_close(left: Decimal, right: Decimal) -> bool:
     return abs(left - right) <= scale * Decimal("0.000000001")
 
 
+def _target_amounts_consistent(
+    target: Decimal | None,
+    actual: Decimal | None,
+    gap: Decimal | None,
+) -> bool:
+    """Check only the additive target/actual/gap relationship."""
+
+    return (
+        target is not None
+        and actual is not None
+        and gap is not None
+        and _decimal_close(gap, target - actual)
+    )
+
+
 def _target_claim_amounts(
     claim: Mapping[str, Any],
     result: Mapping[str, Any],
@@ -195,9 +209,7 @@ def _target_claim_amounts(
     gap = _finite_decimal(facts.get("gap_amount_rmb"))
     completion = _finite_decimal(facts.get("completion_rate"))
     metric_value = _finite_decimal(facts.get("metric_value"))
-    if target is None or actual is None or gap is None:
-        return None
-    if not _decimal_close(gap, target - actual):
+    if not _target_amounts_consistent(target, actual, gap):
         return None
     if target_state == "zero":
         if target != 0 or completion is not None or metric_value is not None:
@@ -634,17 +646,8 @@ _COMPLETENESS_PROOF_FIELDS = {
 
 
 def _exact_nonnegative_int(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    try:
-        parsed = Decimal(str(value))
-    except (InvalidOperation, ValueError):
-        return None
-    if (
-        not parsed.is_finite()
-        or parsed < 0
-        or parsed != parsed.to_integral_value()
-    ):
+    parsed = _finite_decimal(value)
+    if parsed is None or parsed < 0 or parsed != parsed.to_integral_value():
         return None
     return int(parsed)
 

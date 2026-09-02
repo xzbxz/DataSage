@@ -55,14 +55,6 @@ backups/
 !tests/
 !tests/test_remediation_*.py
 
-# DataSage governance source added after the parent repository's default-ignore
-# rule; keep only these explicit new plugin assets trackable.
-!plugins/
-!plugins/datasage-query/
-!plugins/datasage-query/metric_governance.py
-!plugins/datasage-query/contracts/
-!plugins/datasage-query/contracts/metric-governance.yaml
-
 # Generated language/tool caches
 __pycache__/
 .pytest_cache/

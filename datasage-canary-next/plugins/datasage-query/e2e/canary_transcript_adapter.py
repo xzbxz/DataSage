@@ -912,12 +912,6 @@ def _is_bound_metric_detail_catalog_call(
     }:
         if set(payload) != compact_keys:
             return False
-        detail_receipt = results[0].get("detail_receipt")
-        if (
-            not isinstance(detail_receipt, str)
-            or re.fullmatch(r"[0-9a-f]{64}", detail_receipt) is None
-        ):
-            return False
     else:
         return False
     request = requests[0]

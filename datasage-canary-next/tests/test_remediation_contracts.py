@@ -7,7 +7,6 @@ import importlib
 import json
 import os
 from pathlib import Path
-import re
 import sys
 import types
 import unittest
@@ -64,14 +63,9 @@ class ContractRemediationTests(unittest.TestCase):
         self.assertRegex(
             versions["query_policy"]["content_sha256"], r"^[0-9a-f]{64}$"
         )
-        detail_without_receipt = dict(detail)
-        detail_without_receipt.pop("detail_receipt")
-        self.assertEqual(
-            contracts._catalog_metric_detail_receipt(detail_without_receipt),
-            detail["detail_receipt"],
-        )
+        self.assertNotIn("detail_receipt", detail)
 
-    def test_detail_receipt_changes_when_common_contract_digest_changes(self) -> None:
+    def test_metric_detail_source_identity_changes_when_common_contract_digest_changes(self) -> None:
         original_signature = contracts.contract_store.content_signature
         datasets_path = contracts._DATASETS_CONTRACT_PATH
         policy_path = capability_contract.QUERY_POLICY_PATH
@@ -101,7 +95,6 @@ class ContractRemediationTests(unittest.TestCase):
                         {"domain": "delivery", "metric": "delivery_amount"}
                     )["results"][0]
 
-                self.assertNotEqual(first["detail_receipt"], second["detail_receipt"])
                 self.assertNotEqual(
                     first["source_versions"][
                         "datasets" if changed_path == datasets_path else "query_policy"

@@ -88,12 +88,32 @@ class GoldenExpertGateTests(unittest.TestCase):
         compacted = [
             case
             for case in selected
-            if case["conversation_id"] == "compaction_receipt_recovery"
+            if case["conversation_id"] == "compaction_context_recovery"
         ]
         self.assertEqual([1, 2], [case["turn"] for case in compacted])
-        self.assertIn(
-            "reload_metric_detail",
-            compacted[1]["plan_constraints"]["operations"],
+        followup = compacted[1]
+        self.assertEqual(["top_n"], followup["plan_constraints"]["operations"])
+        self.assertEqual("replace", followup["plan_constraints"]["context_action"])
+        self.assertEqual(
+            {"department": "example_region_a", "limit": 5},
+            followup["plan_constraints"]["context_bindings"],
+        )
+        self.assertEqual(
+            ["preserve_period_entity_and_limit", "report_top_n"],
+            followup["required_conclusions"],
+        )
+        self.assertNotIn(
+            "reload_missing_metric_detail", followup["required_conclusions"]
+        )
+        self.assertEqual(
+            ["query", "coverage", "context_transition"],
+            followup["evidence_requirements"]["required_receipts"],
+        )
+        self.assertNotIn(
+            "catalog", followup["evidence_requirements"]["required_receipts"]
+        )
+        self.assertNotIn(
+            "metric_detail", followup["evidence_requirements"]["required_receipts"]
         )
         tampered = copy.deepcopy(SUITE)
         tampered["release_validation"]["adversarial_behavior_gate"][

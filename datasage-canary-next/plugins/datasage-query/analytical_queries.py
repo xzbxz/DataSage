@@ -718,6 +718,31 @@ def _settlement_query(
     }
 
 
+def _mapping_filter_clauses(
+    alias: str,
+    request_filters: Mapping[str, Any],
+    mappings: Mapping[str, Any],
+    dataset: Mapping[str, Any],
+    params: list[Any],
+    bindings: Mapping[str, Any],
+    fields: tuple[str, str],
+) -> list[str]:
+    bound_field, unbound_field = fields
+    where: list[str] = []
+    for code, value in request_filters.items():
+        mapping = mappings.get(code)
+        binding, bound_value = _bound_value(bindings, code, value)
+        column = (
+            mapping.get(bound_field)
+            if binding is not None and isinstance(mapping, dict)
+            else mapping.get(unbound_field) if isinstance(mapping, dict) else None
+        )
+        if binding is not None:
+            column = _bound_mapping_column(binding, column)
+        where.append(_value_filter(alias, _approved(column, dataset), bound_value, params))
+    return where
+
+
 def _mapping_filters(
     alias: str,
     side: str,
@@ -727,37 +752,52 @@ def _mapping_filters(
     params: list[Any],
     bindings: Mapping[str, Any],
 ) -> list[str]:
-    where: list[str] = []
-    for code, value in request_filters.items():
-        mapping = mappings.get(code)
-        binding, bound_value = _bound_value(bindings, code, value)
-        column = (
-            mapping.get(f"{side}_key")
-            if binding is not None and isinstance(mapping, dict)
-            else mapping.get(f"{side}_filter") if isinstance(mapping, dict) else None
-        )
-        if binding is not None:
-            column = _bound_mapping_column(binding, column)
-        where.append(_value_filter(alias, _approved(column, dataset), bound_value, params))
-    return where
+    return _mapping_filter_clauses(
+        alias,
+        request_filters,
+        mappings,
+        dataset,
+        params,
+        bindings,
+        (f"{side}_key", f"{side}_filter"),
+    )
 
 
-def _mapping_parts(
-    selected: list[str], mappings: Mapping[str, Any], side: str, dataset: Mapping[str, Any]
+def _mapping_parts_for_fields(
+    selected: list[str],
+    mappings: Mapping[str, Any],
+    dataset: Mapping[str, Any],
+    fields: tuple[str, str],
+    messages: tuple[str, str],
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    key_field, outputs_field = fields
+    unsupported_message, output_error_message = messages
     keys: list[tuple[str, str]] = []
     outputs: list[tuple[str, str]] = []
     for index, code in enumerate(selected):
         mapping = mappings.get(code)
         if not isinstance(mapping, dict):
-            raise AnalysisQueryError("UNSUPPORTED_DIMENSION", "分析指标不支持请求中的维度。")
-        key = _approved(mapping.get(f"{side}_key"), dataset)
+            raise AnalysisQueryError("UNSUPPORTED_DIMENSION", unsupported_message)
+        key = _approved(mapping.get(key_field), dataset)
         keys.append((key, f"key_{index + 1}"))
-        for item in mapping.get(f"{side}_outputs") or []:
+        for item in mapping.get(outputs_field) or []:
             if not isinstance(item, dict):
-                raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "分析维度输出定义无效。")
-            outputs.append((_approved(item.get("column"), dataset), str(item.get("alias") or item.get("column"))))
+                raise AnalysisQueryError("CONTRACT_UNAVAILABLE", output_error_message)
+            column = _approved(item.get("column"), dataset)
+            outputs.append((column, str(item.get("alias") or column)))
     return keys, outputs
+
+
+def _mapping_parts(
+    selected: list[str], mappings: Mapping[str, Any], side: str, dataset: Mapping[str, Any]
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    return _mapping_parts_for_fields(
+        selected,
+        mappings,
+        dataset,
+        (f"{side}_key", f"{side}_outputs"),
+        ("分析指标不支持请求的维度。", "分析维度输出定义无效。"),
+    )
 
 
 def _fixed_filters(alias: str, specs: Mapping[str, Any], dataset: Mapping[str, Any], params: list[Any]) -> list[str]:
@@ -768,20 +808,13 @@ def _component_mapping_parts(
     selected: list[str], mappings: Mapping[str, Any], dataset: Mapping[str, Any]
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """Resolve the governed grain for one independently aggregated component."""
-
-    keys: list[tuple[str, str]] = []
-    outputs: list[tuple[str, str]] = []
-    for index, code in enumerate(selected):
-        mapping = mappings.get(code)
-        if not isinstance(mapping, dict):
-            raise AnalysisQueryError("UNSUPPORTED_DIMENSION", "分析组件不支持请求中的维度。")
-        keys.append((_approved(mapping.get("key"), dataset), f"key_{index + 1}"))
-        for item in mapping.get("outputs") or []:
-            if not isinstance(item, dict):
-                raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "分析组件维度输出定义无效。")
-            column = _approved(item.get("column"), dataset)
-            outputs.append((column, str(item.get("alias") or column)))
-    return keys, outputs
+    return _mapping_parts_for_fields(
+        selected,
+        mappings,
+        dataset,
+        ("key", "outputs"),
+        ("分析组件不支持请求中的维度。", "分析组件维度输出定义无效。"),
+    )
 
 
 def _component_mapping_filters(
@@ -792,19 +825,15 @@ def _component_mapping_filters(
     params: list[Any],
     bindings: Mapping[str, Any],
 ) -> list[str]:
-    where: list[str] = []
-    for code, value in request_filters.items():
-        mapping = mappings.get(code)
-        binding, bound_value = _bound_value(bindings, code, value)
-        column = (
-            mapping.get("key")
-            if binding is not None and isinstance(mapping, dict)
-            else mapping.get("filter") if isinstance(mapping, dict) else None
-        )
-        if binding is not None:
-            column = _bound_mapping_column(binding, column)
-        where.append(_value_filter(alias, _approved(column, dataset), bound_value, params))
-    return where
+    return _mapping_filter_clauses(
+        alias,
+        request_filters,
+        mappings,
+        dataset,
+        params,
+        bindings,
+        ("key", "filter"),
+    )
 
 
 def _aggregate_components(

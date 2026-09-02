@@ -100,7 +100,22 @@ class RuntimeContractImmutabilityTests(unittest.TestCase):
             contract_store.contract_snapshot_status()["file_count"],
         )
 
-    def test_repeated_reads_use_one_fixed_path_and_digest_snapshot(self) -> None:
+    def test_repeated_reads_use_registration_snapshot(self) -> None:
+        with mock.patch.object(
+            contract_store,
+            "_read_current_contract_bytes",
+            wraps=contract_store._read_current_contract_bytes,
+        ) as read_current, mock.patch.object(
+            contract_store,
+            "parse_yaml_cached",
+            wraps=contract_store.parse_yaml_cached,
+        ) as parse_yaml:
+            contract_store.pin_contract_snapshot()
+        self.assertEqual(len(contract_store.PINNED_CONTRACT_PATHS), read_current.call_count)
+        self.assertEqual(len(contract_store.PINNED_CONTRACT_PATHS), parse_yaml.call_count)
+
+        original = self.query_policy_path.read_bytes()
+        self.query_policy_path.write_bytes(b"version: changed\nvalue: changed\n")
         first = contract_store.read_yaml(
             "plugins/datasage-query/contracts/query-policy.yaml"
         )
@@ -114,37 +129,36 @@ class RuntimeContractImmutabilityTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(str(self.query_policy_path.resolve()), path)
         self.assertEqual(
-            hashlib.sha256(self.query_policy_path.read_bytes()).hexdigest(),
+            hashlib.sha256(original).hexdigest(),
             digest,
         )
         self.assertTrue(status["fixed"])
-        self.assertTrue(status["enforced_per_read"])
+        self.assertTrue(status["loaded"])
+        self.assertFalse(status["enforced_per_read"])
         self.assertFalse(status["drifted"])
         self.assertEqual(len(contract_store.PINNED_CONTRACT_PATHS), status["file_count"])
         self.assertEqual(1, contract_store._SNAPSHOT_BOOTSTRAP_COUNT)
 
-    def test_content_change_is_latched_and_restoration_cannot_reenable_reads(self) -> None:
+    def test_content_change_waits_for_process_restart(self) -> None:
         original = self.query_policy_path.read_bytes()
-        contract_store.read_yaml(
+        first = contract_store.read_yaml(
             "plugins/datasage-query/contracts/query-policy.yaml"
         )
         self.query_policy_path.write_bytes(b"version: changed\nvalue: changed\n")
-        with self.assertRaises(contract_store.ContractStoreError) as changed:
-            contract_store.read_yaml(
-                "plugins/datasage-query/contracts/query-policy.yaml"
-            )
-        self.assertEqual("CONTRACT_UNAVAILABLE", changed.exception.code)
-        self.assertEqual("contract_content_changed", changed.exception.reason_code)
-        self.query_policy_path.write_bytes(original)
-        with self.assertRaises(contract_store.ContractStoreError) as restored:
-            contract_store.content_signature(
-                "plugins/datasage-query/contracts/query-policy.yaml"
-            )
-        self.assertEqual("contract_content_changed", restored.exception.reason_code)
+        second = contract_store.read_yaml(
+            "plugins/datasage-query/contracts/query-policy.yaml"
+        )
+        path, digest = contract_store.content_signature(
+            "plugins/datasage-query/contracts/query-policy.yaml"
+        )
+        self.assertEqual(first, second)
+        self.assertEqual("test-1", second["version"])
+        self.assertEqual(str(self.query_policy_path.resolve()), path)
+        self.assertEqual(hashlib.sha256(original).hexdigest(), digest)
         status = contract_store.contract_snapshot_status()
         self.assertTrue(status["fixed"])
-        self.assertTrue(status["drifted"])
-        self.assertEqual("contract_content_changed", status["drift_reason"])
+        self.assertTrue(status["loaded"])
+        self.assertFalse(status["drifted"])
 
     def test_root_switch_is_rejected_even_when_the_file_matches(self) -> None:
         contract_store.read_yaml(
@@ -162,61 +176,52 @@ class RuntimeContractImmutabilityTests(unittest.TestCase):
         self.assertEqual("CONTRACT_UNAVAILABLE", switched.exception.code)
         self.assertEqual("profile_root_changed", switched.exception.reason_code)
 
-    def test_yaml_cache_cannot_bypass_per_read_verification(self) -> None:
+    def test_registered_bytes_and_parse_results_are_used_without_file_reads(self) -> None:
         relative_path = "plugins/datasage-query/contracts/query-policy.yaml"
         first = contract_store.read_yaml(relative_path)
-        original_text = self.query_policy_path.read_text(encoding="utf-8")
-        original_digest = hashlib.sha256(
-            original_text.encode("utf-8")
-        ).hexdigest()
-        self.query_policy_path.write_text(
-            "version: changed\nvalue: changed\n",
-            encoding="utf-8",
-        )
-        # The parser cache can still return an old value when called directly;
-        # the file-facing API must not trust that cache entry.
-        cached = contract_store.parse_yaml_cached(
-            str(self.query_policy_path.resolve()),
-            original_digest,
-            original_text,
-        )
-        self.assertEqual(first, cached)
-        with self.assertRaises(contract_store.ContractStoreError):
-            contract_store.read_yaml(relative_path)
+        with mock.patch.object(
+            contract_store,
+            "_read_current_contract_bytes",
+            side_effect=AssertionError("registered reads must not touch files"),
+        ), mock.patch.object(
+            contract_store,
+            "parse_yaml_cached",
+            side_effect=AssertionError("registered reads must not parse again"),
+        ):
+            second = contract_store.read_yaml(relative_path)
+            path, digest = contract_store.content_signature(relative_path)
+            raw_path, raw_content, raw_digest = contract_store._contract_bytes(relative_path)
+        self.assertIs(first, second)
+        self.assertEqual(str(self.query_policy_path.resolve()), path)
+        self.assertEqual(str(self.query_policy_path.resolve()), str(raw_path))
+        self.assertEqual(self.query_policy_path.read_bytes(), raw_content)
+        self.assertEqual(digest, raw_digest)
 
     def test_runtime_identity_status_reports_snapshot_truthfully(self) -> None:
         with mock.patch.object(runtime_health.settings, "get_list", return_value=[]):
             cold = runtime_health.runtime_identity_status(profile_root=self.root)
         self.assertFalse(cold["ready"])
-        self.assertFalse(cold["contract_snapshot_fixed"])
-        self.assertFalse(cold["contract_snapshot_enforced_per_read"])
+        self.assertEqual(str(self.root), cold["active_profile_path"])
+        self.assertFalse(cold["contract_snapshot_loaded"])
         self.assertEqual("CONTRACT_SNAPSHOT_UNAVAILABLE", cold["reason_code"])
 
         contract_store.pin_contract_snapshot()
         with mock.patch.object(runtime_health.settings, "get_list", return_value=[]):
             clean = runtime_health.runtime_identity_status(profile_root=self.root)
         self.assertTrue(clean["ready"])
-        self.assertTrue(clean["contract_snapshot_fixed"])
-        self.assertTrue(clean["contract_snapshot_enforced_per_read"])
-        self.assertIsInstance(clean["contract_manifest_digest"], str)
-        self.assertIsNone(clean["contract_snapshot_drift_reason"])
-        self.assertFalse(clean["git_binding"]["available"])
-        self.assertFalse(clean["release_binding"]["enforced_per_query"])
+        self.assertEqual(str(self.root), clean["active_profile_path"])
+        self.assertTrue(clean["contract_snapshot_loaded"])
+        self.assertNotIn("git_binding", clean)
+        self.assertNotIn("release_binding", clean)
 
         self.query_policy_path.write_text(
             "version: changed\nvalue: changed\n",
             encoding="utf-8",
         )
-        with self.assertRaises(contract_store.ContractStoreError):
-            contract_store.read_yaml(
-                "plugins/datasage-query/contracts/query-policy.yaml"
-            )
         with mock.patch.object(runtime_health.settings, "get_list", return_value=[]):
-            drifted = runtime_health.runtime_identity_status(profile_root=self.root)
-        self.assertFalse(drifted["ready"])
-        self.assertEqual("contract_snapshot_integrity", drifted["state"])
-        self.assertEqual("CONTRACT_SNAPSHOT_DRIFT", drifted["reason_code"])
-        self.assertEqual("contract_content_changed", drifted["contract_snapshot_drift_reason"])
+            unchanged = runtime_health.runtime_identity_status(profile_root=self.root)
+        self.assertTrue(unchanged["ready"])
+        self.assertTrue(unchanged["contract_snapshot_loaded"])
 
     def test_concurrent_initialization_publishes_one_snapshot(self) -> None:
         relative_path = "plugins/datasage-query/contracts/query-policy.yaml"

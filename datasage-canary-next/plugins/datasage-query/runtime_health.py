@@ -1,19 +1,12 @@
-"""Static and bounded live readiness checks for the query tool."""
+"""Static readiness checks for the query tool."""
 
 from __future__ import annotations
 
-import json
-import hashlib
-import logging
 from pathlib import Path
 import stat
-import threading
-import time
 from typing import Any
 
 from agent.secret_scope import get_secret
-from hermes_constants import hermes_home_key
-
 from .db_security import (
     DatabaseSecurityError,
     canary_existing_account_accepted,
@@ -21,11 +14,6 @@ from .db_security import (
     mysql_tls_policy,
 )
 from . import contract_store, db_runtime, settings
-logger = logging.getLogger(__name__)
-_LIVE_LOCK = threading.Lock()
-_LIVE_CACHE: tuple[float, str, dict[str, Any]] | None = None
-_LIVE_SUCCESS_TTL_SECONDS = 30.0
-_LIVE_FAILURE_TTL_SECONDS = 10.0
 
 _REQUIRED_DATABASE_ENV = (
     "DATA_QUERY_MYSQL_HOST",
@@ -109,34 +97,9 @@ def _validate_profile_path(candidate: Path, active_root: Path) -> Path:
 
 
 def runtime_identity_status(*, profile_root: Path | None = None) -> dict[str, Any]:
-    """Verify the profile path and the process-lifetime contract identity.
+    """Verify only the active profile path and registration-time snapshot."""
 
-    Hermes owns active-profile and runtime selection. Historical release
-    manifests, imported-Hermes paths, and private launcher layouts are not
-    DataSage runtime prerequisites. This bounded check cannot prove a Git
-    commit/tree or release-receipt binding and reports that limitation
-    explicitly. Candidate identity, live replay, host compaction, stability,
-    latency, and cost are verified once before release with
-    ``python -B build_release_receipt.py --verify-candidate``; they are not
-    recomputed on every business query. The database transport/grant/account
-    gates below remain fail-closed.
-    """
-
-    git_binding = {
-        "available": False,
-        "commit": None,
-        "tree": None,
-        "reason_code": "GIT_BINDING_UNAVAILABLE",
-    }
-    release_binding = {
-        "available": False,
-        "enforced_per_query": False,
-        "verification_scope": "prestart_release_gate",
-        "verification_command": "python -B build_release_receipt.py --verify-candidate",
-        "reason_code": "RELEASE_PRESTART_VERIFICATION_REQUIRED",
-    }
-    contract_snapshot = contract_store.contract_snapshot_status()
-
+    snapshot = contract_store.contract_snapshot_status()
     active_root = _profile_root()
     candidate = active_root if profile_root is None else Path(profile_root)
     try:
@@ -152,29 +115,14 @@ def runtime_identity_status(*, profile_root: Path | None = None) -> dict[str, An
             "state": "profile_path_integrity",
             "reason_code": reason,
             "path_integrity_verified": False,
-            "contract_snapshot": contract_snapshot,
-            "contract_snapshot_fixed": contract_snapshot.get("fixed") is True,
-            "contract_snapshot_enforced_per_read": (
-                contract_snapshot.get("enforced_per_read") is True
-            ),
-            "contract_manifest_digest": contract_snapshot.get("manifest_digest"),
-            "contract_snapshot_drift_reason": contract_snapshot.get(
-                "drift_reason"
-            ),
-            "git_binding": git_binding,
-            "release_binding": release_binding,
-            "identity_override": False,
-            "runtime": "hermes_managed",
+            "active_profile_path": str(active_root),
+            "contract_snapshot_loaded": snapshot.get("loaded") is True,
         }
 
-    snapshot_ready = bool(
-        contract_snapshot.get("fixed") is True
-        and contract_snapshot.get("drifted") is not True
-    )
-    if not snapshot_ready:
+    if snapshot.get("loaded") is not True:
         reason_code = (
-            "CONTRACT_SNAPSHOT_DRIFT"
-            if contract_snapshot.get("drifted") is True
+            "CONTRACT_SNAPSHOT_ROOT_CHANGED"
+            if snapshot.get("drifted") is True
             else "CONTRACT_SNAPSHOT_UNAVAILABLE"
         )
         return {
@@ -182,19 +130,8 @@ def runtime_identity_status(*, profile_root: Path | None = None) -> dict[str, An
             "state": "contract_snapshot_integrity",
             "reason_code": reason_code,
             "path_integrity_verified": True,
-            "contract_snapshot": contract_snapshot,
-            "contract_snapshot_fixed": contract_snapshot.get("fixed") is True,
-            "contract_snapshot_enforced_per_read": (
-                contract_snapshot.get("enforced_per_read") is True
-            ),
-            "contract_manifest_digest": contract_snapshot.get("manifest_digest"),
-            "contract_snapshot_drift_reason": contract_snapshot.get(
-                "drift_reason"
-            ),
-            "git_binding": git_binding,
-            "release_binding": release_binding,
-            "identity_override": False,
-            "runtime": "hermes_managed",
+            "active_profile_path": str(active_root),
+            "contract_snapshot_loaded": False,
         }
 
     return {
@@ -202,80 +139,9 @@ def runtime_identity_status(*, profile_root: Path | None = None) -> dict[str, An
         "state": "profile_path_integrity",
         "reason_code": None,
         "path_integrity_verified": True,
-        "contract_snapshot": contract_snapshot,
-        "contract_snapshot_fixed": True,
-        "contract_snapshot_enforced_per_read": True,
-        "contract_manifest_digest": contract_snapshot.get("manifest_digest"),
-        "contract_snapshot_drift_reason": contract_snapshot.get(
-            "drift_reason"
-        ),
-        "git_binding": git_binding,
-        "release_binding": release_binding,
-        "identity_override": False,
-        "runtime": "hermes_managed",
+        "active_profile_path": str(active_root),
+        "contract_snapshot_loaded": True,
     }
-
-
-def _live_cache_key() -> str:
-    """Invalidate live evidence whenever connection policy changes."""
-    connection_names = (
-        "DATA_QUERY_MYSQL_HOST",
-        "DATA_QUERY_MYSQL_PORT",
-        "DATA_QUERY_MYSQL_DATABASE",
-        "DATA_QUERY_MYSQL_USER",
-        "DATA_QUERY_MYSQL_PASSWORD",
-        "DATA_QUERY_MYSQL_SSL_CA",
-    )
-    payload = json.dumps(
-        {
-            "profile": hermes_home_key(contract_store.profile_root()),
-            "connection": {
-                name: get_secret(name, "") or ""
-                for name in connection_names
-            },
-            "policy": {
-                # Preserve raw security values in the cache key. Strict policy
-                # validation happens before query I/O; coercing "false" to
-                # False here could otherwise reuse evidence from valid config.
-                "production_mode": settings.get("production_mode"),
-                "canary_accept_existing_account": settings.get(
-                    "canary_accept_existing_account"
-                ),
-                "require_tls": settings.get("require_tls"),
-                "mysql_allowed_grant_scopes": settings.get_list(
-                    "mysql_allowed_grant_scopes"
-                ),
-                "mysql_allowed_server_uuids": settings.get_list(
-                    "mysql_allowed_server_uuids"
-                ),
-                "mysql_server_uuid_allowlist": settings.get_list(
-                    "mysql_server_uuid_allowlist"
-                ),
-                "mysql_approved_path_roots": settings.get_list(
-                    "mysql_approved_path_roots"
-                ),
-                "approved_profile_roots": settings.get_list(
-                    "approved_profile_roots"
-                ),
-                "mysql_health_connect_timeout_seconds": settings.get_int(
-                    "mysql_health_connect_timeout_seconds",
-                    5,
-                    1,
-                    60,
-                ),
-                "mysql_grant_audit_timeout_seconds": settings.get_int(
-                    "mysql_grant_audit_timeout_seconds",
-                    10,
-                    1,
-                    60,
-                ),
-            },
-        },
-        ensure_ascii=True,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def database_configuration_status() -> dict[str, Any]:
@@ -355,7 +221,7 @@ def database_configuration_status() -> dict[str, Any]:
 
 
 def query_readiness_status() -> dict[str, Any]:
-    """Return the complete runtime gate used immediately before query work."""
+    """Return static readiness; the real query connection owns live checks."""
 
     identity = runtime_identity_status()
     if not identity["ready"]:
@@ -366,83 +232,4 @@ def query_readiness_status() -> dict[str, Any]:
             "identity": identity,
         }
     status = database_configuration_status()
-    if status["ready"]:
-        status = live_database_security_status()
     return {**status, "identity": identity}
-
-
-def live_database_security_status() -> dict[str, Any]:
-    """TTL-cached live connection/grant proof with truthful transport status."""
-    global _LIVE_CACHE
-    now = time.monotonic()
-    cache_key = _live_cache_key()
-    cached = _LIVE_CACHE
-    if cached is not None and cache_key == cached[1] and now < cached[0]:
-        return dict(cached[2])
-    with _LIVE_LOCK:
-        now = time.monotonic()
-        cache_key = _live_cache_key()
-        cached = _LIVE_CACHE
-        if cached is not None and cache_key == cached[1] and now < cached[0]:
-            return dict(cached[2])
-        try:
-            connection = db_runtime.connect(
-                connect_timeout_seconds=settings.get_int(
-                    "mysql_health_connect_timeout_seconds",
-                    5,
-                    1,
-                    60,
-                ),
-                read_timeout_seconds=settings.get_int(
-                    "mysql_grant_audit_timeout_seconds",
-                    10,
-                    1,
-                    60,
-                ),
-            )
-        except db_runtime.DatabaseRuntimeError as exc:
-            status = {
-                "ready": False,
-                "reason_code": exc.code,
-                "missing_names": [],
-            }
-        except Exception:
-            status = {
-                "ready": False,
-                "reason_code": "DATABASE_CONNECTION_FAILED",
-                "missing_names": [],
-            }
-        else:
-            evidence = getattr(connection, "_datasage_security_evidence", None)
-            try:
-                connection.close()
-            except Exception:
-                logger.warning(
-                    "datasage_health_connection_close_failed",
-                    exc_info=True,
-                )
-            if (
-                not isinstance(evidence, dict)
-                or evidence.get("live_connection_verified") is not True
-                or evidence.get("grants_verified") is not True
-                or evidence.get("transport_mode") not in {"tls", "plaintext"}
-            ):
-                status = {
-                    "ready": False,
-                    "reason_code": "DATABASE_SECURITY_EVIDENCE_MISSING",
-                    "missing_names": [],
-                }
-            else:
-                status = {
-                    "ready": True,
-                    "reason_code": None,
-                    "missing_names": [],
-                    **evidence,
-                }
-        ttl = (
-            _LIVE_SUCCESS_TTL_SECONDS
-            if status["ready"]
-            else _LIVE_FAILURE_TTL_SECONDS
-        )
-        _LIVE_CACHE = (time.monotonic() + ttl, cache_key, dict(status))
-        return status

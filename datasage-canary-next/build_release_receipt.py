@@ -13,7 +13,6 @@ import argparse
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import hashlib
-import importlib
 import importlib.util
 import json
 import math
@@ -25,14 +24,12 @@ import statistics
 import subprocess
 import sys
 import tempfile
-import types
 from typing import Iterable
 
 import yaml
 
 
 ROOT = Path(__file__).resolve().parent
-DATASAGE_PLUGIN_ROOT = ROOT / "plugins" / "datasage-query"
 MANIFEST = ROOT / "distribution.yaml"
 RELEASE_DIR = ROOT / "release"
 PENDING_DIR = ROOT / "pending"
@@ -2884,141 +2881,6 @@ def _run_offline_tests() -> dict[str, object]:
     }
 
 
-def _load_metric_governance_module():
-    """Load the single plugin governance parser without registering tools."""
-
-    package_name = "_datasage_release_metric_governance"
-    package = sys.modules.get(package_name)
-    if package is None:
-        package = types.ModuleType(package_name)
-        package.__path__ = [str(DATASAGE_PLUGIN_ROOT)]
-        sys.modules[package_name] = package
-    module = importlib.import_module(f"{package_name}.metric_governance")
-    origin = Path(str(getattr(module, "__file__", ""))).resolve(strict=True)
-    try:
-        origin.relative_to(DATASAGE_PLUGIN_ROOT.resolve(strict=True))
-    except (OSError, ValueError) as exc:
-        raise ValueError("metric governance parser origin is outside the Profile") from exc
-    return module
-
-
-def _evaluate_metric_governance() -> tuple[dict[str, object], list[dict[str, str]]]:
-    """Evaluate release-only governance without changing runtime availability."""
-
-    try:
-        module = _load_metric_governance_module()
-        contract = module.load_contract()
-        summary = contract.get("summary")
-        digest = contract.get("contract_sha256")
-        if (
-            not isinstance(summary, dict)
-            or set(summary)
-            != {
-                "metric_count",
-                "availability",
-                "lifecycle",
-                "review",
-                "execution",
-                "release",
-                "blocker_counts",
-            }
-            or type(summary.get("metric_count")) is not int
-            or summary["metric_count"] < 1
-            or not isinstance(digest, str)
-            or SHA256_RE.fullmatch(digest) is None
-            or any(
-                not isinstance(summary.get(key), dict)
-                for key in (
-                    "availability",
-                    "lifecycle",
-                    "review",
-                    "execution",
-                    "release",
-                    "blocker_counts",
-                )
-            )
-        ):
-            raise ValueError("metric governance summary is invalid")
-    except Exception as exc:
-        code = getattr(exc, "code", "METRIC_GOVERNANCE_CONTRACT_INVALID")
-        blocker_code = (
-            "METRIC_GOVERNANCE_COVERAGE_MISMATCH"
-            if code == "METRIC_GOVERNANCE_COVERAGE_MISMATCH"
-            else "METRIC_GOVERNANCE_CONTRACT_INVALID"
-        )
-        return (
-            {
-                "status": "invalid",
-                "contract_sha256": None,
-                "metric_count": None,
-                "availability": {},
-                "lifecycle": {},
-                "review": {},
-                "execution": {},
-                "release": {},
-                "blocker_counts": {},
-                "reason_code": blocker_code,
-            },
-            [_blocker(blocker_code, "Metric governance contract is invalid.")],
-        )
-
-    blocker_counts = dict(summary["blocker_counts"])
-    supported_blockers = {
-        "METRIC_GOVERNANCE_OWNER_MISSING": "Metric governance owners are incomplete.",
-        "METRIC_GOVERNANCE_REVIEW_MISSING": "Metric governance reviews are incomplete.",
-        "METRIC_GOVERNANCE_REVIEW_OVERDUE": "Metric governance reviews are overdue.",
-        "METRIC_GOVERNANCE_INTERVAL_INVALID": "Metric governance review intervals are incomplete or invalid.",
-        "METRIC_GOVERNANCE_REVIEW_INVALID": "Metric governance review state is invalid.",
-        "METRIC_GOVERNANCE_VALIDATION_PENDING": "One or more metrics remain pending validation.",
-        "METRIC_GOVERNANCE_METRIC_RETIRED": "One or more metrics are retired.",
-    }
-    blockers = [
-        _blocker(code, message)
-        for code, message in supported_blockers.items()
-        if type(blocker_counts.get(code)) is int and blocker_counts[code] > 0
-    ]
-    release_counts = summary["release"]
-    if (
-        type(release_counts.get("pass")) is not int
-        or type(release_counts.get("block")) is not int
-        or release_counts["pass"] + release_counts["block"]
-        != summary["metric_count"]
-    ):
-        return (
-            {
-                "status": "invalid",
-                "contract_sha256": digest,
-                "metric_count": summary["metric_count"],
-                "availability": dict(summary["availability"]),
-                "lifecycle": dict(summary["lifecycle"]),
-                "review": dict(summary["review"]),
-                "execution": dict(summary["execution"]),
-                "release": dict(release_counts),
-                "blocker_counts": blocker_counts,
-                "reason_code": "METRIC_GOVERNANCE_CONTRACT_INVALID",
-            },
-            [
-                _blocker(
-                    "METRIC_GOVERNANCE_CONTRACT_INVALID",
-                    "Metric governance release totals are invalid.",
-                )
-            ],
-        )
-    report = {
-        "status": "passed" if not blockers else "blocked",
-        "contract_sha256": digest,
-        "metric_count": summary["metric_count"],
-        "availability": dict(summary["availability"]),
-        "lifecycle": dict(summary["lifecycle"]),
-        "review": dict(summary["review"]),
-        "execution": dict(summary["execution"]),
-        "release": dict(release_counts),
-        "blocker_counts": blocker_counts,
-        "reason_code": None if not blockers else "METRIC_GOVERNANCE_INCOMPLETE",
-    }
-    return report, blockers
-
-
 def verify_candidate(*, receipt_path: Path | None = None, offline_runner=None) -> dict[str, object]:
     """Return one answer about candidate identity and release eligibility."""
 
@@ -3086,8 +2948,6 @@ def verify_candidate(*, receipt_path: Path | None = None, offline_runner=None) -
         hermes_worktree_clean=hermes_worktree_clean,
     )
     blockers = list(gates.pop("blockers"))
-    governance_report, governance_blockers = _evaluate_metric_governance()
-    blockers.extend(governance_blockers)
     pinned_hermes = str(yaml.safe_load(MANIFEST.read_text(encoding="utf-8")).get("hermes_requires", "")).removeprefix("==")
     if not _host_pins_match(host_fixture, performance_contract, version=pinned_hermes, commit=hermes_git_commit):
         blockers.append(_blocker("HERMES_PIN_MISMATCH", "Current Hermes HEAD does not match both tracked test-contract pins."))
@@ -3108,7 +2968,6 @@ def verify_candidate(*, receipt_path: Path | None = None, offline_runner=None) -
         "eligible": not blockers,
         "identity": identity,
         "offline_tests": offline,
-        "metric_governance": governance_report,
         **gates,
         "blockers": blockers,
         "interpretation": (
