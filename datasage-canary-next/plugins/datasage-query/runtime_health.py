@@ -9,7 +9,10 @@ from typing import Any
 from agent.secret_scope import get_secret
 from .db_security import (
     DatabaseSecurityError,
+    _canary_allowed_source_port_pairs,
     canary_existing_account_accepted,
+    canary_privileged_account_allowed,
+    canary_source_port_mismatch_allowed,
     mysql_tls_kwargs,
     mysql_tls_policy,
 )
@@ -148,6 +151,9 @@ def database_configuration_status() -> dict[str, Any]:
     """Return non-secret evidence explaining whether query can be advertised."""
     try:
         existing_account_accepted = canary_existing_account_accepted()
+        privileged_account_accepted = canary_privileged_account_allowed()
+        source_port_mismatch_accepted = canary_source_port_mismatch_allowed()
+        allowed_source_port_pair_count = len(_canary_allowed_source_port_pairs())
     except DatabaseSecurityError as exc:
         return {
             "ready": False,
@@ -213,10 +219,21 @@ def database_configuration_status() -> dict[str, Any]:
             settings.get_list("mysql_allowed_grant_scopes")
         ),
         "grant_policy": (
-            "user_accepted_canary_existing_account"
+            "user_accepted_canary_privileged_account"
+            if privileged_account_accepted
+            else "user_accepted_canary_existing_account"
             if existing_account_accepted
             else "strict_object_read_only"
         ),
+        "canary_account_exception": existing_account_accepted,
+        "canary_privileged_account_exception": privileged_account_accepted,
+        "source_port_policy": (
+            "user_accepted_canary_port_mismatch"
+            if source_port_mismatch_accepted
+            else "strict_configured_port_match"
+        ),
+        "canary_source_port_mismatch_exception": source_port_mismatch_accepted,
+        "canary_allowed_source_port_pair_count": allowed_source_port_pair_count,
     }
 
 

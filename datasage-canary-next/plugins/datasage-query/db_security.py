@@ -36,12 +36,46 @@ _SOURCE_SECURITY_DOMAIN = b"datasage-query-source-evidence/v1\x00"
 _SOURCE_GRANT_POLICIES = {
     "strict_object_read_only",
     "user_accepted_canary_existing_account",
+    "user_accepted_canary_privileged_account",
 }
+_SOURCE_IDENTITY_CONFIGURED_FIELDS = ("host", "port", "database", "user")
+_SOURCE_IDENTITY_OBSERVED_FIELDS = (
+    "server_uuid",
+    "server_id",
+    "server_hostname",
+    "server_port",
+    "database_name",
+    "authenticated_user",
+)
+_SOURCE_EVIDENCE_LEGACY_FIELDS = frozenset(
+    {
+        "schema",
+        "identity_sha256",
+        "connection_verified",
+        "transport_mode",
+        "transport_policy_verified",
+        "grant_policy",
+        "grants_verified",
+        "read_only",
+        "source_commitment_sha256",
+        "security_evidence_sha256",
+    }
+)
+_SOURCE_EVIDENCE_IDENTITY_FIELDS = frozenset(
+    {
+        "configured_port",
+        "observed_server_port",
+        "canary_source_port_mismatch_exception",
+    }
+)
 _DATABASE_SECURITY_BOOL_SETTINGS = (
     "production_mode",
     "require_tls",
     "canary_accept_existing_account",
+    "canary_allow_privileged_account",
+    "canary_allow_source_port_mismatch",
 )
+_CANARY_SOURCE_PORT_PAIR_PATTERN = re.compile(r"^(\d{1,5}):(\d{1,5})$")
 
 
 def _is_reparse(path: Path) -> bool:
@@ -209,12 +243,50 @@ def _database_security_policy() -> dict[str, bool]:
     policy = {
         name: configured[name] for name in _DATABASE_SECURITY_BOOL_SETTINGS
     }
+    if policy["canary_allow_privileged_account"] and (
+        policy["production_mode"]
+        or not policy["canary_accept_existing_account"]
+    ):
+        raise DatabaseSecurityError(
+            "DATABASE_CANARY_PRIVILEGED_ACCOUNT_FORBIDDEN",
+            "临时 Canary 高权限账号例外仅允许在非生产且启用现有账号例外时使用。",
+        )
+    if policy["canary_allow_source_port_mismatch"] and policy["production_mode"]:
+        raise DatabaseSecurityError(
+            "DATABASE_CANARY_SOURCE_PORT_MISMATCH_FORBIDDEN",
+            "临时 Canary 数据库端口例外仅允许在非生产模式使用。",
+        )
     if policy["production_mode"] and policy["canary_accept_existing_account"]:
         raise DatabaseSecurityError(
             "DATABASE_CANARY_ACCOUNT_ACCEPTANCE_FORBIDDEN",
             "生产模式禁止 Canary 现有账号例外。",
         )
     return policy
+
+
+def _canary_allowed_source_port_pairs() -> frozenset[tuple[int, int]]:
+    """Return the validated, explicit configured-to-observed port pairs."""
+
+    pairs: set[tuple[int, int]] = set()
+    for raw in settings.get_list("canary_allowed_source_port_pairs"):
+        match = _CANARY_SOURCE_PORT_PAIR_PATTERN.fullmatch(raw.strip())
+        if match is None:
+            raise DatabaseSecurityError(
+                "DATABASE_CANARY_SOURCE_PORT_PAIR_INVALID",
+                "Canary 数据库端口对配置无效。",
+            )
+        configured_port, observed_port = (int(value) for value in match.groups())
+        if not (
+            1 <= configured_port <= 65535
+            and 1 <= observed_port <= 65535
+            and configured_port != observed_port
+        ):
+            raise DatabaseSecurityError(
+                "DATABASE_CANARY_SOURCE_PORT_PAIR_INVALID",
+                "Canary 数据库端口对配置无效。",
+            )
+        pairs.add((configured_port, observed_port))
+    return frozenset(pairs)
 
 
 def canary_existing_account_accepted(
@@ -225,6 +297,26 @@ def canary_existing_account_accepted(
 
     del profile_root
     return _database_security_policy()["canary_accept_existing_account"]
+
+
+def canary_privileged_account_allowed(
+    *,
+    profile_root: Path | None = None,
+) -> bool:
+    """Return the explicitly gated temporary privileged-account exception."""
+
+    del profile_root
+    return _database_security_policy()["canary_allow_privileged_account"]
+
+
+def canary_source_port_mismatch_allowed(
+    *,
+    profile_root: Path | None = None,
+) -> bool:
+    """Return the explicitly gated temporary source-port exception."""
+
+    del profile_root
+    return _database_security_policy()["canary_allow_source_port_mismatch"]
 
 
 def mysql_tls_policy(
@@ -355,6 +447,31 @@ def _mysql_server_uuid_has_sufficient_entropy(value: uuid.UUID) -> bool:
     )
 
 
+def _source_evidence_identity_is_valid(evidence: Mapping[str, Any]) -> bool:
+    """Validate optional configured/observed identity retention in evidence."""
+
+    present = set(evidence)
+    if present == _SOURCE_EVIDENCE_LEGACY_FIELDS:
+        return True
+    if present != _SOURCE_EVIDENCE_LEGACY_FIELDS | _SOURCE_EVIDENCE_IDENTITY_FIELDS:
+        return False
+    configured_port_value = evidence.get("configured_port")
+    observed_port_value = evidence.get("observed_server_port")
+    mismatch_exception = evidence.get("canary_source_port_mismatch_exception")
+    if (
+        not isinstance(mismatch_exception, bool)
+    ):
+        return False
+    try:
+        configured_port = int(str(configured_port_value).strip())
+        observed_port = int(str(observed_port_value).strip())
+    except (TypeError, ValueError):
+        return False
+    if not 1 <= configured_port <= 65535 or not 1 <= observed_port <= 65535:
+        return False
+    return mismatch_exception is (configured_port != observed_port)
+
+
 def validate_mysql_source_evidence(
     evidence: Any,
     *,
@@ -362,21 +479,9 @@ def validate_mysql_source_evidence(
 ) -> dict[str, Any]:
     """Validate a non-secret reference derived from one verified connection."""
 
-    required = {
-        "schema",
-        "identity_sha256",
-        "connection_verified",
-        "transport_mode",
-        "transport_policy_verified",
-        "grant_policy",
-        "grants_verified",
-        "read_only",
-        "source_commitment_sha256",
-        "security_evidence_sha256",
-    }
     if (
         not isinstance(evidence, dict)
-        or set(evidence) != required
+        or not _source_evidence_identity_is_valid(evidence)
         or evidence.get("schema") != "datasage-query-source-evidence/v1"
         or re.fullmatch(r"[0-9a-f]{64}", str(evidence.get("identity_sha256") or "")) is None
         or evidence.get("connection_verified") is not True
@@ -414,14 +519,7 @@ def verify_mysql_source_identity(
         cursor.execute(MYSQL_SOURCE_IDENTITY_STATEMENT)
         rows = cursor.fetchall()
     row = rows[0] if len(rows) == 1 and isinstance(rows[0], dict) else None
-    fields = (
-        "server_uuid",
-        "server_id",
-        "server_hostname",
-        "server_port",
-        "database_name",
-        "authenticated_user",
-    )
+    fields = _SOURCE_IDENTITY_OBSERVED_FIELDS
     if row is None or any(not str(row.get(field) or "").strip() for field in fields):
         raise DatabaseSecurityError(
             "DATABASE_SOURCE_IDENTITY_INVALID",
@@ -439,8 +537,8 @@ def verify_mysql_source_identity(
             "DATABASE_SOURCE_IDENTITY_INVALID",
             "Database source identity is invalid.",
         )
-    allowed_server_uuids, allowlist_configured = _server_uuid_allowlist()
     security_policy = _database_security_policy()
+    allowed_server_uuids, allowlist_configured = _server_uuid_allowlist()
     observed_uuid = str(parsed_uuid).casefold()
     if security_policy["production_mode"] and not allowlist_configured:
         raise DatabaseSecurityError(
@@ -466,11 +564,24 @@ def verify_mysql_source_identity(
             "DATABASE_SOURCE_IDENTITY_INVALID",
             "Database source port identity is invalid.",
         ) from exc
-    if not 1 <= configured_port <= 65535 or observed_port != configured_port:
+    if not 1 <= configured_port <= 65535 or not 1 <= observed_port <= 65535:
         raise DatabaseSecurityError(
-            "DATABASE_SOURCE_IDENTITY_MISMATCH",
-            "数据库 server port 与配置不一致。",
+            "DATABASE_SOURCE_IDENTITY_INVALID",
+            "Database source port identity is invalid.",
         )
+    canary_port_mismatch_exception = False
+    if observed_port != configured_port:
+        if not (
+            security_policy["canary_allow_source_port_mismatch"]
+            and not security_policy["production_mode"]
+            and (configured_port, observed_port)
+            in _canary_allowed_source_port_pairs()
+        ):
+            raise DatabaseSecurityError(
+                "DATABASE_SOURCE_IDENTITY_MISMATCH",
+                "数据库 server port 与配置不一致。",
+            )
+        canary_port_mismatch_exception = True
 
     def _mysql_account_name(value: Any) -> str:
         text = str(value or "").strip()
@@ -522,6 +633,9 @@ def verify_mysql_source_identity(
     evidence = {
         "schema": "datasage-query-source-evidence/v1",
         "identity_sha256": _canonical_hash(_SOURCE_IDENTITY_DOMAIN, identity_tuple),
+        "configured_port": configured_port,
+        "observed_server_port": observed_port,
+        "canary_source_port_mismatch_exception": canary_port_mismatch_exception,
         "connection_verified": True,
         "transport_mode": transport_mode,
         "transport_policy_verified": True,
@@ -534,6 +648,7 @@ def verify_mysql_source_identity(
                 "identity": identity_tuple,
                 "transport": tls_evidence,
                 "grant": grant_evidence,
+                "canary_source_port_mismatch_exception": canary_port_mismatch_exception,
                 "read_only": False,
             },
         ),
@@ -542,6 +657,7 @@ def verify_mysql_source_identity(
         "identity": identity_tuple,
         "transport": dict(tls_evidence),
         "grant": dict(grant_evidence),
+        "canary_source_port_mismatch_exception": canary_port_mismatch_exception,
     }
     evidence["security_evidence_sha256"] = _source_evidence_hash(evidence)
     connection._datasage_source_evidence = dict(evidence)
@@ -666,7 +782,63 @@ def verify_mysql_read_only_grants(
             "DATABASE_GRANTS_UNAVAILABLE",
             "无法取得数据库账号授权证明。",
         )
-    if canary_existing_account_accepted(profile_root=profile_root):
+    policy = _database_security_policy()
+    if policy["canary_allow_privileged_account"]:
+        observed_privileges: set[str] = set()
+        observed_read_only: set[str] = set()
+        observed_scopes: set[str] = set()
+        select_capable = False
+        for grant in grants:
+            if re.search(r"\bWITH\s+GRANT\s+OPTION\b", grant, re.IGNORECASE):
+                raise DatabaseSecurityError(
+                    "DATABASE_GRANT_OPTION_FORBIDDEN",
+                    "数据库账号具有转授权能力，已拒绝查询。",
+                )
+            match = re.match(
+                r"^GRANT\s+(.+?)\s+ON\s+"
+                r"((?:`[^`]+`|[^.\s]+)\.(?:`[^`]+`|[^\s]+))\s+TO\s+",
+                grant,
+                re.IGNORECASE,
+            )
+            if not match:
+                raise DatabaseSecurityError(
+                    "DATABASE_GRANT_FORMAT_INVALID",
+                    "The database grant format could not be audited.",
+                )
+            privileges = {
+                item.strip().upper()
+                for item in match.group(1).split(",")
+                if item.strip()
+            }
+            if not privileges:
+                raise DatabaseSecurityError(
+                    "DATABASE_GRANT_FORMAT_INVALID",
+                    "The database grant format could not be audited.",
+                )
+            select_capable = select_capable or bool(
+                privileges & {"SELECT", "ALL", "ALL PRIVILEGES"}
+            )
+            observed_privileges.update(privileges)
+            observed_read_only.update(privileges & _READ_ONLY_PRIVILEGES)
+            observed_scopes.add(match.group(2).replace("`", "").casefold())
+        if not select_capable:
+            raise DatabaseSecurityError(
+                "DATABASE_SELECT_PRIVILEGE_MISSING",
+                "数据库账号缺少可验证的 SELECT 权限。",
+            )
+        # ALL/ALL PRIVILEGES semantically include SELECT; retain that required
+        # capability in the evidence while exposing every observed privilege.
+        observed_read_only.add("SELECT")
+        return {
+            "grants_verified": True,
+            "read_only_privileges": sorted(observed_read_only),
+            "observed_privileges": sorted(observed_privileges),
+            "grant_scopes": sorted(observed_scopes),
+            "grant_policy": "user_accepted_canary_privileged_account",
+            "canary_account_exception": True,
+            "canary_privileged_account_exception": True,
+        }
+    if policy["canary_accept_existing_account"]:
         observed_privileges: set[str] = set()
         observed_read_only: set[str] = set()
         observed_scopes: set[str] = set()
@@ -726,6 +898,7 @@ def verify_mysql_read_only_grants(
             "grant_scopes": sorted(observed_scopes),
             "grant_policy": "user_accepted_canary_existing_account",
             "canary_account_exception": True,
+            "canary_privileged_account_exception": False,
         }
     allowed_scopes = {
         item.strip().replace("`", "").casefold()
@@ -794,4 +967,5 @@ def verify_mysql_read_only_grants(
         "grant_scopes": sorted(observed_scopes),
         "grant_policy": "strict_object_read_only",
         "canary_account_exception": False,
+        "canary_privileged_account_exception": False,
     }

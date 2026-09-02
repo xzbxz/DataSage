@@ -20,7 +20,7 @@
   },
   "release_validation": {
     "schema": "datasage-live-replay-manifest/v2",
-    "release_target": "0.15.0-rc9",
+    "release_target": "0.15.0-rc10",
     "source_release": "0.15.0-rc5",
     "transcript_source": "wecom",
     "semantic_fixture_status": "reviewed_failure_frozen",

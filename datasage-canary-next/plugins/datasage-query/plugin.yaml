@@ -1,5 +1,5 @@
 name: datasage-query
-version: "0.15.0-rc9"
+version: "0.15.0-rc10"
 manifest_version: 2
 api_version: 1
 # Python dependency ownership is deliberately single-source: PyMySQL 1.2.0 is
@@ -34,6 +34,9 @@ requires_env:
 config_schema:
   production_mode: {type: bool, default: false, description: "Enable production safety requirements."}
   canary_accept_existing_account: {type: bool, default: false, description: "Allow a validated existing read-only account in canary mode."}
+  canary_allow_privileged_account: {type: bool, default: false, description: "Temporary canary-only exception for an existing account with extra privileges; requires production_mode=false and canary_accept_existing_account=true."}
+  canary_allow_source_port_mismatch: {type: bool, default: false, description: "Temporary non-production exception for a configured/server port mismatch; requires production_mode=false and retains both port values in evidence."}
+  canary_allowed_source_port_pairs: {type: list, default: [], description: "Exact canary-only configured-to-observed MySQL source port pairs in 'configured:observed' form; an empty list permits no mismatch exception."}
   require_tls: {type: bool, default: true, description: "Require verified TLS for database access."}
   mysql_allowed_grant_scopes: {type: list, default: [], description: "Allowed read-only database grant scopes."}
   mysql_allowed_server_uuids: {type: list, default: [], description: "Optional approved MySQL server UUIDs; required in production mode."}

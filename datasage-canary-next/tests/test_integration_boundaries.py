@@ -554,6 +554,8 @@ class ProductionSafetyTests(unittest.TestCase):
         "production_mode": False,
         "require_tls": False,
         "canary_accept_existing_account": True,
+        "canary_allow_privileged_account": False,
+        "canary_allow_source_port_mismatch": False,
     }
 
     def test_explicit_canary_policy_allows_declared_canary_exceptions(self):
@@ -597,6 +599,8 @@ class ProductionSafetyTests(unittest.TestCase):
             "production_mode": True,
             "require_tls": False,
             "canary_accept_existing_account": False,
+            "canary_allow_privileged_account": False,
+            "canary_allow_source_port_mismatch": False,
         }
         with (
             mock.patch.object(

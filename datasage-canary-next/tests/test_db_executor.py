@@ -151,6 +151,34 @@ class ReadOnlyDbExecutorTests(unittest.TestCase):
         self.assertEqual(1, connection.close_count)
         self.assertTrue(executor.closed)
 
+    def test_locking_read_forms_are_rejected_before_connect(self):
+        connection = FakeConnection([])
+        executor, factory = self._single(connection)
+
+        for sql in (
+            "SELECT amount FROM fact FOR SHARE",
+            "SELECT amount FROM fact LOCK IN SHARE MODE",
+        ):
+            with self.subTest(sql=sql):
+                with self.assertRaises(ValueError):
+                    executor.execute(sql, (), 1)
+
+        self.assertEqual([], factory.calls)
+        self.assertEqual([], connection.executions)
+
+    def test_ordinary_cte_select_remains_allowed(self):
+        connection = FakeConnection([{"value": 1}])
+        executor, _factory = self._single(connection)
+
+        rows, truncated, _source = executor.execute(
+            "WITH fact AS (SELECT 1 AS value) SELECT value FROM fact",
+            (),
+            1,
+        )
+
+        self.assertEqual([{"value": 1}], rows)
+        self.assertFalse(truncated)
+
     def test_deadline_controls_connection_and_statement_budgets(self):
         connection = FakeConnection([])
         executor, factory = self._single(

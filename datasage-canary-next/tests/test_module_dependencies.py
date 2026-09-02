@@ -494,6 +494,20 @@ class ModuleDependencyTests(unittest.TestCase):
             "canary_existing_account_accepted",
             return_value=True,
         ), mock.patch.object(
+            runtime_health.settings,
+            "get",
+            side_effect={
+                "production_mode": False,
+                "require_tls": False,
+                "canary_accept_existing_account": True,
+                "canary_allow_privileged_account": False,
+                "canary_allow_source_port_mismatch": False,
+            }.get,
+        ), mock.patch.object(
+            runtime_health.settings,
+            "get_list",
+            side_effect=lambda _key: [],
+        ), mock.patch.object(
             runtime_health,
             "get_secret",
             side_effect=lambda name, default="": values.get(name, default),

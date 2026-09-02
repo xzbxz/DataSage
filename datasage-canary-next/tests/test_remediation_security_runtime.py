@@ -291,6 +291,8 @@ class DatabaseSecurityTests(unittest.TestCase):
             "production_mode": False,
             "require_tls": False,
             "canary_accept_existing_account": False,
+            "canary_allow_privileged_account": False,
+            "canary_allow_source_port_mismatch": False,
         }
         value.update(overrides)
         return value
@@ -365,6 +367,223 @@ class DatabaseSecurityTests(unittest.TestCase):
                 },
             )
         self.assertTrue(evidence["connection_verified"])
+        self.assertEqual(3306, evidence["configured_port"])
+        self.assertEqual(3306, evidence["observed_server_port"])
+        self.assertFalse(evidence["canary_source_port_mismatch_exception"])
+
+    def test_canary_source_port_mismatch_is_explicit_and_minimally_retained(self):
+        row = {
+            "server_uuid": "123e4567-e89b-12d3-a456-426614174000",
+            "server_id": "1",
+            "server_hostname": "warehouse",
+            "server_port": "3002",
+            "database_name": "governed_schema",
+            "authenticated_user": "governed_user@%",
+        }
+        tls = {
+            "transport_mode": "plaintext",
+            "tls_required": False,
+            "tls_configured": False,
+            "insecure_transport_allowed": True,
+            "tls_verified": False,
+            "transport_encrypted": False,
+        }
+        grants = {
+            "grants_verified": True,
+            "grant_policy": "user_accepted_canary_privileged_account",
+        }
+        with (
+            mock.patch.object(
+                db_security.settings,
+                "get",
+                side_effect=self._policy(
+                    canary_accept_existing_account=True,
+                    canary_allow_privileged_account=True,
+                    canary_allow_source_port_mismatch=True,
+                ).get,
+            ),
+            mock.patch.object(
+                db_security.settings,
+                "get_list",
+                side_effect=lambda key: (
+                    ["3306:3002"]
+                    if key == "canary_allowed_source_port_pairs"
+                    else []
+                ),
+            ),
+        ):
+            evidence = db_security.verify_mysql_source_identity(
+                self._source_connection(row),
+                tls_evidence=tls,
+                grant_evidence=grants,
+                configured_identity={
+                    "host": "proxy-host",
+                    "port": 3306,
+                    "database": "governed_schema",
+                    "user": "governed_user",
+                },
+            )
+        self.assertEqual(3306, evidence["configured_port"])
+        self.assertEqual(3002, evidence["observed_server_port"])
+        self.assertTrue(evidence["canary_source_port_mismatch_exception"])
+        self.assertNotIn("configured_identity", evidence)
+        self.assertNotIn("observed_identity", evidence)
+        validated = db_security.validate_mysql_source_evidence(
+            evidence, require_read_only=False
+        )
+        self.assertEqual(evidence, validated)
+
+    def test_canary_source_port_mismatch_allows_only_exact_declared_pair(self):
+        base_row = {
+            "server_uuid": "123e4567-e89b-12d3-a456-426614174000",
+            "server_id": "1",
+            "server_hostname": "warehouse",
+            "database_name": "governed_schema",
+            "authenticated_user": "governed_user@%",
+        }
+        tls = {
+            "transport_mode": "plaintext",
+            "tls_required": False,
+            "tls_configured": False,
+            "insecure_transport_allowed": True,
+            "tls_verified": False,
+            "transport_encrypted": False,
+        }
+        grants = {
+            "grants_verified": True,
+            "grant_policy": "user_accepted_canary_existing_account",
+        }
+        policy = self._policy(
+            canary_accept_existing_account=True,
+            canary_allow_source_port_mismatch=True,
+        )
+        for observed_port, expected_code in (
+            (3002, None),
+            (3306, None),
+            (3006, "DATABASE_SOURCE_IDENTITY_MISMATCH"),
+            (3302, "DATABASE_SOURCE_IDENTITY_MISMATCH"),
+        ):
+            with (
+                self.subTest(observed_port=observed_port),
+                mock.patch.object(
+                    db_security.settings, "get", side_effect=policy.get
+                ),
+                mock.patch.object(
+                    db_security.settings,
+                    "get_list",
+                    side_effect=lambda key: (
+                        ["3306:3002"]
+                        if key == "canary_allowed_source_port_pairs"
+                        else []
+                    ),
+                ),
+            ):
+                row = {**base_row, "server_port": str(observed_port)}
+                if expected_code is None:
+                    evidence = db_security.verify_mysql_source_identity(
+                        self._source_connection(row),
+                        tls_evidence=tls,
+                        grant_evidence=grants,
+                        configured_identity={
+                            "host": "warehouse",
+                            "port": 3306,
+                            "database": "governed_schema",
+                            "user": "governed_user",
+                        },
+                    )
+                    self.assertEqual(observed_port, evidence["observed_server_port"])
+                else:
+                    with self.assertRaises(
+                        db_security.DatabaseSecurityError
+                    ) as caught:
+                        db_security.verify_mysql_source_identity(
+                            self._source_connection(row),
+                            tls_evidence=tls,
+                            grant_evidence=grants,
+                            configured_identity={
+                                "host": "warehouse",
+                                "port": 3306,
+                                "database": "governed_schema",
+                                "user": "governed_user",
+                            },
+                        )
+                    self.assertEqual(expected_code, caught.exception.code)
+
+    def test_canary_source_port_pair_rejects_reverse_and_invalid_declarations(self):
+        row = {
+            "server_uuid": "123e4567-e89b-12d3-a456-426614174000",
+            "server_id": "1",
+            "server_hostname": "warehouse",
+            "server_port": "3002",
+            "database_name": "governed_schema",
+            "authenticated_user": "governed_user@%",
+        }
+        tls = {
+            "transport_mode": "plaintext",
+            "tls_required": False,
+            "tls_configured": False,
+            "insecure_transport_allowed": True,
+            "tls_verified": False,
+            "transport_encrypted": False,
+        }
+        grants = {
+            "grants_verified": True,
+            "grant_policy": "strict_object_read_only",
+        }
+        policy = self._policy(canary_allow_source_port_mismatch=True)
+        for declaration, expected_code in (
+            (["3002:3306"], "DATABASE_SOURCE_IDENTITY_MISMATCH"),
+            (["3306"], "DATABASE_CANARY_SOURCE_PORT_PAIR_INVALID"),
+            (["3306:3306"], "DATABASE_CANARY_SOURCE_PORT_PAIR_INVALID"),
+            (["0:3002"], "DATABASE_CANARY_SOURCE_PORT_PAIR_INVALID"),
+        ):
+            with (
+                self.subTest(declaration=declaration),
+                mock.patch.object(
+                    db_security.settings, "get", side_effect=policy.get
+                ),
+                mock.patch.object(
+                    db_security.settings,
+                    "get_list",
+                    side_effect=lambda key, declaration=declaration: (
+                        declaration
+                        if key == "canary_allowed_source_port_pairs"
+                        else []
+                    ),
+                ),
+                self.assertRaises(db_security.DatabaseSecurityError) as caught,
+            ):
+                db_security.verify_mysql_source_identity(
+                    self._source_connection(row),
+                    tls_evidence=tls,
+                    grant_evidence=grants,
+                    configured_identity={
+                        "host": "warehouse",
+                        "port": 3306,
+                        "database": "governed_schema",
+                        "user": "governed_user",
+                    },
+                )
+            self.assertEqual(expected_code, caught.exception.code)
+
+    def test_source_port_mismatch_exception_is_forbidden_in_production(self):
+        with (
+            mock.patch.object(
+                db_security.settings,
+                "get",
+                side_effect=self._policy(
+                    production_mode=True,
+                    require_tls=True,
+                    canary_allow_source_port_mismatch=True,
+                ).get,
+            ),
+            self.assertRaises(db_security.DatabaseSecurityError) as caught,
+        ):
+            db_security.mysql_tls_policy()
+        self.assertEqual(
+            "DATABASE_CANARY_SOURCE_PORT_MISMATCH_FORBIDDEN",
+            caught.exception.code,
+        )
 
     def test_production_requires_and_enforces_server_uuid_allowlist(self):
         row = {
@@ -478,6 +697,88 @@ class DatabaseSecurityTests(unittest.TestCase):
                 db_security.verify_mysql_read_only_grants(
                     _Connection([{"Grant": grant}])
                 )
+
+    def test_privileged_canary_account_allows_extra_privileges_and_global_scope(self):
+        grants = [
+            {"Grant": "GRANT ALL PRIVILEGES ON *.* TO 'reader'@'%'"},
+            {"Grant": "GRANT SELECT, FILE, UPDATE ON analytics.* TO 'reader'@'%'"},
+        ]
+        with mock.patch.object(
+            db_security.settings,
+            "get",
+            side_effect=self._policy(
+                canary_accept_existing_account=True,
+                canary_allow_privileged_account=True,
+            ).get,
+        ):
+            accepted = db_security.verify_mysql_read_only_grants(
+                _Connection(grants)
+            )
+        self.assertEqual(
+            "user_accepted_canary_privileged_account",
+            accepted["grant_policy"],
+        )
+        self.assertTrue(accepted["grants_verified"])
+        self.assertTrue(accepted["canary_account_exception"])
+        self.assertTrue(accepted["canary_privileged_account_exception"])
+        self.assertIn("ALL PRIVILEGES", accepted["observed_privileges"])
+        self.assertIn("UPDATE", accepted["observed_privileges"])
+        self.assertEqual(["*.*", "analytics.*"], accepted["grant_scopes"])
+
+    def test_privileged_canary_account_still_requires_select_and_no_grant_option(self):
+        policy = self._policy(
+            canary_accept_existing_account=True,
+            canary_allow_privileged_account=True,
+        )
+        cases = (
+            (
+                "GRANT UPDATE ON *.* TO 'reader'@'%'",
+                "DATABASE_SELECT_PRIVILEGE_MISSING",
+            ),
+            (
+                "GRANT ALL PRIVILEGES ON *.* TO 'reader'@'%' WITH GRANT OPTION",
+                "DATABASE_GRANT_OPTION_FORBIDDEN",
+            ),
+        )
+        for grant, code in cases:
+            with (
+                self.subTest(grant=grant),
+                mock.patch.object(
+                    db_security.settings, "get", side_effect=policy.get
+                ),
+                self.assertRaises(db_security.DatabaseSecurityError) as caught,
+            ):
+                db_security.verify_mysql_read_only_grants(
+                    _Connection([{"Grant": grant}])
+                )
+            self.assertEqual(code, caught.exception.code)
+
+    def test_privileged_canary_account_requires_both_canary_prerequisites(self):
+        cases = (
+            self._policy(
+                production_mode=True,
+                canary_accept_existing_account=True,
+                canary_allow_privileged_account=True,
+            ),
+            self._policy(
+                production_mode=False,
+                canary_accept_existing_account=False,
+                canary_allow_privileged_account=True,
+            ),
+        )
+        for policy in cases:
+            with (
+                self.subTest(policy=policy),
+                mock.patch.object(
+                    db_security.settings, "get", side_effect=policy.get
+                ),
+                self.assertRaises(db_security.DatabaseSecurityError) as caught,
+            ):
+                db_security.mysql_tls_policy()
+            self.assertEqual(
+                "DATABASE_CANARY_PRIVILEGED_ACCOUNT_FORBIDDEN",
+                caught.exception.code,
+            )
 
     def test_required_tls_rejects_plaintext_even_with_snapshot(self):
         policy = {"tls_required": True, "tls_configured": False}

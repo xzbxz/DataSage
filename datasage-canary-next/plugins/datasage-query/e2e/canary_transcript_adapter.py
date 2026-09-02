@@ -56,9 +56,15 @@ LEGACY_SOURCE_EVIDENCE_FIELDS = {
     "source_commitment_sha256",
     "security_evidence_sha256",
 }
+LEGACY_SOURCE_IDENTITY_FIELDS = {
+    "configured_port",
+    "observed_server_port",
+    "canary_source_port_mismatch_exception",
+}
 LEGACY_SOURCE_GRANT_POLICIES = {
     "strict_object_read_only",
     "user_accepted_canary_existing_account",
+    "user_accepted_canary_privileged_account",
 }
 LEGACY_SOURCE_SECURITY_DOMAIN = b"datasage-query-source-evidence/v1\x00"
 PUBLIC_TOOLS = {
@@ -110,8 +116,13 @@ def _business_database_source_digest(reference: Any) -> str:
             isinstance(value, str)
             and re.fullmatch(r"[0-9a-f]{64}", value) is not None
         )
+        fields = set(reference)
         if (
-            set(reference) != LEGACY_SOURCE_EVIDENCE_FIELDS
+            fields
+            not in (
+                LEGACY_SOURCE_EVIDENCE_FIELDS,
+                LEGACY_SOURCE_EVIDENCE_FIELDS | LEGACY_SOURCE_IDENTITY_FIELDS,
+            )
             or not is_digest(reference.get("identity_sha256"))
             or reference.get("connection_verified") is not True
             or reference.get("transport_mode") not in {"tls", "plaintext"}
@@ -124,6 +135,23 @@ def _business_database_source_digest(reference: Any) -> str:
             or not is_digest(reference.get("security_evidence_sha256"))
         ):
             raise ValueError("legacy source evidence fields are invalid")
+        if fields == LEGACY_SOURCE_EVIDENCE_FIELDS | LEGACY_SOURCE_IDENTITY_FIELDS:
+            configured_port = reference.get("configured_port")
+            observed_port = reference.get("observed_server_port")
+            mismatch_exception = reference.get(
+                "canary_source_port_mismatch_exception"
+            )
+            if (
+                isinstance(configured_port, bool)
+                or not isinstance(configured_port, int)
+                or not 1 <= configured_port <= 65535
+                or isinstance(observed_port, bool)
+                or not isinstance(observed_port, int)
+                or not 1 <= observed_port <= 65535
+                or not isinstance(mismatch_exception, bool)
+                or mismatch_exception is (configured_port == observed_port)
+            ):
+                raise ValueError("legacy source evidence identity fields are invalid")
         sealed = {
             key: value
             for key, value in reference.items()

@@ -44,6 +44,15 @@ plugins:
       settings:
         production_mode: false
         canary_accept_existing_account: true
+        # Temporary canary-only exception for the existing account; never
+        # enable this together with production_mode or without the flag above.
+        canary_allow_privileged_account: true
+        # Temporary canary-only source identity exception; it records, but does
+        # not rewrite, an observed server port mismatch.
+        canary_allow_source_port_mismatch: true
+        # The exception above is bound to this exact configured-to-observed
+        # source port pair; other, reverse, or malformed pairs remain denied.
+        canary_allowed_source_port_pairs: ["3306:3002"]
         require_tls: false
         mysql_allowed_grant_scopes: []
         mysql_connect_timeout_seconds: 8

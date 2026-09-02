@@ -5687,6 +5687,56 @@ class BusinessContractTests(unittest.TestCase):
             ),
         )
 
+        privileged_reference = self._read_only_source_evidence()
+        privileged_reference.update(
+            {
+                "grant_policy": "user_accepted_canary_privileged_account",
+                "configured_port": 3306,
+                "observed_server_port": 3002,
+                "canary_source_port_mismatch_exception": True,
+            }
+        )
+        sealed = {
+            key: value
+            for key, value in privileged_reference.items()
+            if key != "security_evidence_sha256"
+        }
+        privileged_reference["security_evidence_sha256"] = hashlib.sha256(
+            b"datasage-query-source-evidence/v1\x00"
+            + json.dumps(
+                sealed,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        self.assertEqual(
+            canary_transcript_adapter._sha256(privileged_reference),
+            canary_transcript_adapter._business_database_source_digest(
+                privileged_reference
+            ),
+        )
+
+        invalid_identity_cases = {}
+        extra_identity = json.loads(json.dumps(privileged_reference))
+        extra_identity["private_source"] = "must-not-be-accepted"
+        invalid_identity_cases["extra_identity_field"] = extra_identity
+        bad_port = json.loads(json.dumps(privileged_reference))
+        bad_port["configured_port"] = 0
+        invalid_identity_cases["bad_port"] = bad_port
+        bad_boolean = json.loads(json.dumps(privileged_reference))
+        bad_boolean["canary_source_port_mismatch_exception"] = 1
+        invalid_identity_cases["bad_boolean"] = bad_boolean
+        inconsistent = json.loads(json.dumps(privileged_reference))
+        inconsistent["observed_server_port"] = 3306
+        invalid_identity_cases["inconsistent_mismatch"] = inconsistent
+        for label, reference in invalid_identity_cases.items():
+            with self.subTest(privileged_case=label):
+                with self.assertRaises(ValueError):
+                    canary_transcript_adapter._business_database_source_digest(
+                        reference
+                    )
+
         legacy_tamper_cases: dict[str, object] = {}
         extra_field = json.loads(json.dumps(legacy_reference))
         extra_field["private_source"] = "must-not-be-accepted"

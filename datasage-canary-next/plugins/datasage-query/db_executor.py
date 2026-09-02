@@ -121,6 +121,8 @@ def _validate_read_only_statement(sql: Any, limit: Any) -> None:
         raise ValueError("SQL result redirection is not allowed")
     if "PROCEDURE" in words:
         raise ValueError("SQL contains an unsupported execution directive")
+    if "FOR" in words and "SHARE" in words:
+        raise ValueError("locking SELECT statements are not allowed")
     if "FOR" in words and "UPDATE" in words:
         raise ValueError("locking SELECT statements are not allowed")
     if "LOCK" in words:
