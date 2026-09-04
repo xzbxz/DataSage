@@ -144,8 +144,8 @@ class ContractRemediationTests(unittest.TestCase):
 
         unavailable = copy.deepcopy(semantics)
         unavailable["related_metric_refs"][0] = {
-            "domain": "target",
-            "metric": "receipt_allocated_target_amount",
+            "domain": "receivable",
+            "metric": "receivable_quantity",
         }
         with self.assertRaises(contracts.ContractFailure) as unavailable_error:
             contracts._related_metric_refs_projection("customer_risk", unavailable)

@@ -3,7 +3,7 @@
   "scope": "test_only_official_hermes_wecom_inbound_live_release",
   "subject": {
     "name": "datasage-canary-next",
-    "version": "0.15.0-rc10"
+    "version": "0.15.0-rc11"
   },
   "host": {
     "hermes_version": "0.20.5",

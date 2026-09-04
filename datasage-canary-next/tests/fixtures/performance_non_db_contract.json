@@ -4,7 +4,7 @@
   "scope": "test-only host/plugin/model non-database denial path",
   "subject": {
     "name": "datasage-canary-next",
-    "version": "0.15.0-rc10"
+    "version": "0.15.0-rc11"
   },
   "host": {
     "hermes_version": "0.20.5",

@@ -303,7 +303,10 @@ datasets:
     required_filters:
       - {column: is_inner_cus, op: eq, value: n}
     joins: []
-    warnings: [Use only for salesperson target questions.]
+    warnings:
+      - This split table is the authoritative source for salesperson delivery targets.
+      - Transaction-detail base comparisons are diagnostic only and do not define salesperson-allocation coverage.
+      - Never backfill a missing split row from a transaction-detail base table or mix the two ledgers.
 
   vk_dwd.sale_bill_split_dwd:
     domains: [target]
@@ -319,7 +322,8 @@ datasets:
     warnings:
       - Use only for salesperson target, collaboration, or explicitly allocated performance questions.
       - Aggregate actuals to the exact target keys before merging.
-      - ETL owns coverage and amount reconciliation; the Profile applies the confirmed allocation semantics without a static runtime quality gate.
+      - This split table is authoritative for salesperson-allocation delivery actuals.
+      - Transaction-detail base comparisons are diagnostic only; missing base coverage does not authorize fallback or cross-ledger mixing.
 
   vk_dwd.receive_target_split_dwd:
     domains: [target]
@@ -330,7 +334,10 @@ datasets:
     allowed_columns: [target_id, plan_receive_time, sales_id, sales_name, customer_dept, org_name, plan_receive_rmb, plan_receive_amount, is_inner_cus]
     required_filters: []
     joins: []
-    warnings: [Use only for salesperson target questions; receipt targets include internal customers.]
+    warnings:
+      - This split table is the authoritative source for salesperson receipt targets; receipt targets include internal customers.
+      - Transaction-detail base comparisons are diagnostic only and do not define salesperson-allocation coverage.
+      - Never backfill a missing split row from a transaction-detail base table or mix the two ledgers.
 
   vk_dwd.receive_bill_split_dwd:
     domains: [target]
@@ -345,7 +352,8 @@ datasets:
     warnings:
       - Use only for salesperson target, collaboration, or explicitly allocated performance questions.
       - Aggregate actuals to the exact target keys before merging; receipt actuals include internal customers.
-      - ETL owns coverage and amount reconciliation; the Profile applies the confirmed allocation semantics without a static runtime quality gate.
+      - This split table is authoritative for salesperson-allocation receipt actuals.
+      - Transaction-detail base comparisons are diagnostic only; missing base coverage does not authorize fallback or cross-ledger mixing.
 
   vk_dwd.receive_return_bill_split_dwd:
     domains: [target]
@@ -360,7 +368,8 @@ datasets:
     warnings:
       - Use only for salesperson target, collaboration, or explicitly allocated performance questions; ordinary refund and net receipt remain on the transaction-detail ledger.
       - No collaborator means one 100-percent row for the final salesperson; collaborators produce proportional rows.
-      - ETL must reconcile each detail_id to the base refund detail; the Profile does not substitute the transaction-detail refund fact.
+      - This split table is authoritative for salesperson-allocation receipt refunds.
+      - Transaction-detail base comparisons are diagnostic only; the Profile must not substitute, backfill, or mix the transaction-detail refund fact.
 
   vk_dwd.delivery_target_detail_dwd:
     domains: [target]

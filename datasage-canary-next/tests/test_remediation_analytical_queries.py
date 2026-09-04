@@ -150,7 +150,7 @@ class AnalyticalQueryRemediationTests(unittest.TestCase):
             )
         self.assertEqual("COLUMN_NOT_ALLOWED", caught.exception.code)
 
-    def test_analytical_dispatch_rejects_blocked_metric(self) -> None:
+    def test_allocated_metric_sql_uses_declared_split_source(self) -> None:
         datasets, semantics = contracts.execution_contracts("target")
         metric = copy.deepcopy(semantics["metrics"]["allocated_net_delivery_amount"])
         request = {
@@ -159,16 +159,74 @@ class AnalyticalQueryRemediationTests(unittest.TestCase):
             "dimensions": [],
             "metric_filters": {},
         }
-        with self.assertRaises(analytical_queries.AnalysisQueryError) as caught:
-            analytical_queries.build_analytical_metric_query(
-                request,
-                metric,
-                datasets,
-                semantics,
-                10,
-                observed_on=date(2026, 8, 18),
-            )
-        self.assertEqual("DATA_RECONCILIATION_REQUIRED", caught.exception.code)
+        sql, _params, scope = analytical_queries.build_analytical_metric_query(
+            request,
+            metric,
+            datasets,
+            semantics,
+            10,
+            observed_on=date(2026, 8, 18),
+        )
+        self.assertTrue(sql.strip())
+        self.assertEqual("available", metric["availability"]["status"])
+        self.assertEqual("salesperson_allocation", metric["required_attribution_mode"])
+        source_metric = semantics["metrics"][metric["source_completion_metric"]]
+        source_path = source_metric["paths"][metric["source_path"]]
+        self.assertEqual("salesperson_allocation", source_path["ledger"])
+        self.assertEqual(
+            [
+                "vk_dwd.sale_bill_split_dwd",
+                "vk_dwd.delivery_return_detail_dwd",
+            ],
+            scope["source_datasets"],
+        )
+        self.assertIn("`vk_dwd`.`sale_bill_split_dwd`", sql)
+        self.assertIn("`vk_dwd`.`delivery_return_detail_dwd`", sql)
+        self.assertNotIn("`vk_dwd`.`sale_bill_goods_detail_dwd`", sql)
+        self.assertNotIn("`vk_dwd`.`delivery_target_detail_dwd`", sql)
+
+    def test_salesperson_completion_paths_compile_with_dimension_and_filter(self) -> None:
+        datasets, semantics = contracts.execution_contracts("target")
+        expected_sources = {
+            "delivery_target_completion": [
+                "vk_dwd.delivery_target_split_dwd",
+                "vk_dwd.sale_bill_split_dwd",
+                "vk_dwd.delivery_return_detail_dwd",
+            ],
+            "receipt_target_completion": [
+                "vk_dwd.receive_target_split_dwd",
+                "vk_dwd.receive_bill_split_dwd",
+                "vk_dwd.receive_return_bill_split_dwd",
+            ],
+        }
+        for metric_code, source_datasets in expected_sources.items():
+            with self.subTest(metric=metric_code):
+                metric = semantics["metrics"][metric_code]
+                path = metric["paths"]["salesperson_allocation"]
+                self.assertEqual("available", path["availability"]["status"])
+                self.assertEqual("salesperson_allocation", path["ledger"])
+                self.assertIn("salesperson", path["allowed_dimensions"])
+                self.assertIn("salesperson", path["dimension_mappings"])
+                sql, _params, scope = analytical_queries.build_analytical_metric_query(
+                    {
+                        "metric": metric_code,
+                        "attribution_mode": "salesperson_allocation",
+                        "dimensions": ["salesperson"],
+                        "metric_filters": {"salesperson": "synthetic-salesperson"},
+                        "calendar_month": "2026-08",
+                    },
+                    metric,
+                    datasets,
+                    semantics,
+                    10,
+                    observed_on=date(2026, 8, 18),
+                )
+                self.assertTrue(sql.strip())
+                self.assertEqual(source_datasets, scope["source_datasets"])
+                self.assertIn("`sales_id`", sql)
+                self.assertIn("`sales_name`", sql)
+                self.assertNotIn("`vk_dwd`.`sale_bill_goods_detail_dwd`", sql)
+                self.assertNotIn("`vk_dwd`.`receive_bill_detail_dwd`", sql)
 
     def test_allocated_path_availability_is_checked_independently(self) -> None:
         datasets, semantics = contracts.execution_contracts("target")

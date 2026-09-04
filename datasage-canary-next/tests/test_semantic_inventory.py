@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import importlib
 import os
 from pathlib import Path
@@ -92,10 +91,8 @@ class SemanticSingleSourceTests(unittest.TestCase):
             "allocated_net_receipt_amount": "receipt_target_completion",
         }
 
-        # Exercise the same inheritance helper used by the catalog projection,
-        # with the canonical path made available in-memory. The real path is
-        # pending and therefore intentionally fail-closed during this test.
-        available_metrics = copy.deepcopy(metrics)
+        # Exercise the same inheritance helper used by the catalog projection
+        # against the active canonical salesperson_allocation paths.
         sorted_dimensions = sorted(expected_dimensions)
         for metric_code, source_code in expected_sources.items():
             metric = metrics[metric_code]
@@ -107,14 +104,12 @@ class SemanticSingleSourceTests(unittest.TestCase):
             self.assertEqual(source_code, metric["source_completion_metric"])
             self.assertEqual("salesperson_allocation", metric["source_path"])
             source_path = metrics[source_code]["paths"]["salesperson_allocation"]
+            self.assertEqual("available", metric["availability"]["status"])
+            self.assertEqual("available", source_path["availability"]["status"])
             self.assertEqual(expected_dimensions, source_path["allowed_dimensions"])
 
-            available_path = available_metrics[source_code]["paths"][
-                "salesperson_allocation"
-            ]
-            available_path.pop("availability", None)
             inherited, by_attribution = contracts._metric_dimension_contract(
-                available_metrics[metric_code], available_metrics
+                metric, metrics
             )
             self.assertEqual(sorted_dimensions, inherited)
             self.assertEqual(
@@ -122,21 +117,28 @@ class SemanticSingleSourceTests(unittest.TestCase):
                 by_attribution["salesperson_allocation"],
             )
 
-    def test_allocated_net_metrics_fail_closed_when_canonical_path_is_pending(self):
+    def test_allocated_net_metrics_inherit_dimensions_from_active_canonical_path(self):
         target = yaml.safe_load(
             (CONTRACT_ROOT / "target-semantics.yaml").read_text(encoding="utf-8")
         )
         metrics = target["metrics"]
-        for metric_code in (
-            "allocated_net_delivery_amount",
-            "allocated_net_receipt_amount",
+        expected_dimensions = ["department", "organization", "salesperson"]
+        for metric_code, source_code in (
+            ("allocated_net_delivery_amount", "delivery_target_completion"),
+            ("allocated_net_receipt_amount", "receipt_target_completion"),
         ):
             with self.subTest(metric=metric_code):
+                metric = metrics[metric_code]
+                source_path = metrics[source_code]["paths"]["salesperson_allocation"]
+                self.assertEqual("available", source_path["availability"]["status"])
                 inherited, by_attribution = contracts._metric_dimension_contract(
-                    metrics[metric_code], metrics
+                    metric, metrics
                 )
-                self.assertEqual([], inherited)
-                self.assertEqual({}, by_attribution)
+                self.assertEqual(expected_dimensions, inherited)
+                self.assertEqual(
+                    {"salesperson_allocation": expected_dimensions}, by_attribution
+                )
+                self.assertNotIn("allowed_dimensions", metric)
 
 
 class PendingCapabilityLifecycleTests(unittest.TestCase):
@@ -152,12 +154,6 @@ class PendingCapabilityLifecycleTests(unittest.TestCase):
             "order_quantity",
         },
         "receivable": {"receivable_quantity"},
-        "target": {
-            "delivery_allocated_target_amount",
-            "receipt_allocated_target_amount",
-            "allocated_net_delivery_amount",
-            "allocated_net_receipt_amount",
-        },
     }
 
     def test_exact_pending_metric_set_remains_blocked_and_denied(self):
@@ -180,20 +176,11 @@ class PendingCapabilityLifecycleTests(unittest.TestCase):
                     encoding="utf-8"
                 )
             )
-            expected_evidence = (
-                {
-                    "executable_unit_filter_or_group_contract",
-                    "production_read_only_reconciliation",
-                    "mixed_unit_regression",
-                }
-                if domain in {"delivery", "receivable"}
-                else {
-                    "production_read_only_reconciliation",
-                    "attribution_completeness_validation",
-                    "trusted_live_replay",
-                    "semantic_inventory_regression",
-                }
-            )
+            expected_evidence = {
+                "executable_unit_filter_or_group_contract",
+                "production_read_only_reconciliation",
+                "mixed_unit_regression",
+            }
             for metric_code in metric_codes:
                 with self.subTest(domain=domain, metric=metric_code):
                     metric = parsed["metrics"][metric_code]
@@ -224,7 +211,7 @@ class PendingCapabilityLifecycleTests(unittest.TestCase):
                 ):
                     pending.append((path.name, metric_code, availability))
 
-        self.assertEqual(13, len(pending))
+        self.assertEqual(9, len(pending))
         for path_name, metric_code, availability in pending:
             with self.subTest(path=path_name, metric=metric_code):
                 self.assertTrue(str(availability.get("owner", "")).strip())

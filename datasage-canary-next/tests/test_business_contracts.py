@@ -5044,7 +5044,14 @@ class BusinessContractTests(unittest.TestCase):
             "delivery_target_completion",
             "receipt_target_completion",
         }
+        allocation_metrics = {
+            "delivery_allocated_target_amount",
+            "receipt_allocated_target_amount",
+            "allocated_net_delivery_amount",
+            "allocated_net_receipt_amount",
+        }
         self.assertTrue(completion_metrics.issubset(metric_codes))
+        self.assertTrue(allocation_metrics.issubset(metric_codes))
 
         self.assertNotIn("metric_selection_boundary", expert_index)
         self.assertNotIn("next_step", expert_index)
@@ -5061,7 +5068,22 @@ class BusinessContractTests(unittest.TestCase):
             self.assertEqual("success", detail["status"], metric)
             projected = detail["results"][0]
             self.assertEqual(metric, projected["metric"]["code"])
+            self.assertEqual(
+                ["salesperson_allocation", "transaction_detail"],
+                projected["metric"]["allowed_attribution_modes"],
+            )
+            self.assertEqual(
+                ["department", "organization", "salesperson"],
+                projected["metric"]["dimensions_by_attribution_mode"][
+                    "salesperson_allocation"
+                ],
+            )
+            self.assertIn(
+                "salesperson", projected["metric"]["allowed_dimensions"]
+            )
             serialized_detail = json.dumps(projected, ensure_ascii=False)
+            self.assertNotIn("vk_dwd", serialized_detail)
+            self.assertNotIn("split_dwd", serialized_detail)
             for forbidden in (
                 "planning_guidance",
                 "recipe_policy",
@@ -5070,6 +5092,21 @@ class BusinessContractTests(unittest.TestCase):
                 "call_official_clarify",
             ):
                 self.assertNotIn(forbidden, serialized_detail)
+
+        for metric in sorted(allocation_metrics):
+            detail = json.loads(
+                contracts.datasage_catalog(
+                    {"requests": [{"domain": "target", "metric": metric}]}
+                )
+            )
+            self.assertEqual("success", detail["status"], metric)
+            projected = detail["results"][0]["metric"]
+            self.assertEqual(metric, projected["code"])
+            self.assertEqual(
+                "salesperson_allocation",
+                projected["required_attribution_mode"],
+            )
+            self.assertIn("salesperson", projected["allowed_dimensions"])
 
     def test_model_planner_skill_contracts_are_absent_from_release_tree(self) -> None:
         planner_contracts = list(

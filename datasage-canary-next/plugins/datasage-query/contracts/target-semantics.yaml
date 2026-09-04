@@ -1,4 +1,4 @@
-version: datasage-mini-target-semantics/v12
+version: datasage-mini-target-semantics/v13
 domain: target
 contract_role: plugin_physical_execution
 target_gap_decomposition_contract: contracts/target-gap-decomposition.yaml
@@ -9,8 +9,12 @@ ledger_policy:
     use_for: [ordinary_target, customer_target, department_target, organization_target, overall_target]
   salesperson_allocation:
     use_for: [salesperson_target, collaboration, allocation, allocated_performance]
-    etl_contract: [complete_base_coverage, unique_allocation_key, no_orphans, amount_reconciliation]
-  runtime_policy: disable_until_production_read_only_reconciliation_passes
+    source_of_truth: split_tables
+    integrity_contract: [unique_allocation_key, non_null_attribution, no_orphans]
+    transaction_detail_base_role: diagnostic_only_not_activation_authority
+    base_fallback: forbidden
+    cross_ledger_substitution: forbidden
+  runtime_policy: salesperson_allocation_enabled_from_authoritative_split_ledger
 dimensions:
   salesperson: {label: 业务员, columns: [sales_id, sales_name], filter_column: sales_name, identity_filter: {entity_type: salesperson, value_field: canonical_id, column: sales_id}, value_contract: {kind: entity_exact, model_rule: 保留用户明确提供的精确实体 token；由工具做实体预检和稳定身份绑定，不得猜测。}}
   department: {label: 客户部门, columns: [customer_dept], filter_column: customer_dept, value_contract: {kind: source_exact, model_rule: 仅使用用户明确提供或受控结果返回的精确原值；不得猜测、翻译、归一化或扩展。}}
@@ -19,25 +23,25 @@ dimensions:
 metrics:
   delivery_allocated_target_amount:
     disclosures: []
-    availability: &allocation_pending_reconciliation
-      status: pending_validation
-      error_code: DATA_RECONCILIATION_REQUIRED
-      message: 业务员分摊数据尚未完成生产只读对账，当前不能用于回答。
+    availability: &allocation_split_ledger_available
+      status: available
       owner: datasage.data_governance.target_allocation
       activation_gate:
-        state: blocked
-        required_evidence:
-          - production_read_only_reconciliation
-          - attribution_completeness_validation
-          - trusted_live_replay
-          - semantic_inventory_regression
+        state: ready_for_live_replay
+        data_gate: passed
+        evidence:
+          owner_directive: user_confirmed_2026-09-04_split_tables_are_authoritative
+          split_ledger_integrity_receipt_sha256: 63b88be49c5a29fa476a90887a03b190ae2aaa680fbd088861f38db050e12f17
+          live_data_path_validation_receipt_sha256: 929278d938ddc63eaafddd7621affce556ea1681f2d48664f60f07cd6f5a73e5
+          semantic_inventory_regression: passed_2026-09-04
+        remaining_candidate_checks: [trusted_live_replay]
         activation_authority: owner_and_release_review
       review:
         cadence: every_release_candidate
         triggers: [allocation_source_change, attribution_contract_change]
       lifecycle:
-        state: pending_validation
-        activation_effect: remains_unavailable_until_gate_passes
+        state: canary_candidate
+        activation_effect: available_for_canary_validation
         retirement_rule: retire_if_owner_or_validation_plan_removed
     label: 业务员分摊口径出库目标金额
     business_definition: 所选期间按业务员目标分摊归属统计的出库目标人民币金额；用于业务员目标、协作或分摊场景。
@@ -53,7 +57,7 @@ metrics:
     required_attribution_mode: salesperson_allocation
   receipt_allocated_target_amount:
     disclosures: []
-    availability: *allocation_pending_reconciliation
+    availability: *allocation_split_ledger_available
     label: 业务员分摊口径收款目标金额
     business_definition: 所选期间按业务员目标分摊归属统计的收款目标人民币金额；用于业务员目标、协作或分摊场景。
     unit: 人民币元
@@ -104,7 +108,7 @@ metrics:
       - id: target.allocated_net_delivery_amount.legacy-note
         mode: contract_only
         text: &answer_note_allocated_net_delivery_amount "分摊净出库为拆分毛出库减退货事实金额；退货按退货事实业务员100%归属，排除内部客户。"
-    availability: *allocation_pending_reconciliation
+    availability: *allocation_split_ledger_available
     label: 业务员分摊口径净出库金额
     business_definition: 所选期间按业务员分摊归属统计的净出库人民币实际金额；出库目标与实际均排除内部客户。
     unit: 人民币元
@@ -120,7 +124,7 @@ metrics:
       - id: target.allocated_net_receipt_amount.legacy-note
         mode: contract_only
         text: &answer_note_allocated_net_receipt_amount "分摊净收款为收款拆分金额减退款拆分金额，包含内部客户。"
-    availability: *allocation_pending_reconciliation
+    availability: *allocation_split_ledger_available
     label: 业务员分摊口径净收款金额
     business_definition: 所选期间按业务员分摊归属统计的净收款人民币实际金额；收款目标与实际均包含内部客户。
     unit: 人民币元
@@ -149,7 +153,7 @@ metrics:
     answer_note: *answer_note_delivery_target_completion
     paths:
       salesperson_allocation:
-        availability: *allocation_pending_reconciliation
+        availability: *allocation_split_ledger_available
         allowed_dimensions: [salesperson, department, organization]
         ledger: salesperson_allocation
         target: {table: vk_dwd.delivery_target_split_dwd, measure: detail_target_rmb, time_field: year_month, time_granularity: month, required_filters: {is_inner_cus: {op: eq, value: n}}}
@@ -223,7 +227,7 @@ metrics:
     answer_note: *answer_note_receipt_target_completion
     paths:
       salesperson_allocation:
-        availability: *allocation_pending_reconciliation
+        availability: *allocation_split_ledger_available
         allowed_dimensions: [salesperson, department, organization]
         ledger: salesperson_allocation
         target: {table: vk_dwd.receive_target_split_dwd, measure: plan_receive_rmb, time_field: plan_receive_time, required_filters: {}}

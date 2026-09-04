@@ -39,7 +39,7 @@ SUITE = json.loads(
 
 class GoldenExpertGateTests(unittest.TestCase):
     def test_original_suite_is_preserved_and_holdout_rubric_covers_twelve_cases(self):
-        self.assertEqual(51, len(SUITE["cases"]))
+        self.assertEqual(52, len(SUITE["cases"]))
         self.assertEqual([], SCORER.validate_suite(SUITE))
         holdout_ids = SUITE["release_validation"]["decision_holdout_gate"][
             "case_ids"

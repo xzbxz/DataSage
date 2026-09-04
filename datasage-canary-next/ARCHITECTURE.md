@@ -1,6 +1,6 @@
 # DataSage Expert 0.15 架构
 
-版本：`0.15.0-rc10`
+版本：`0.15.0-rc11`
 运行基线：Hermes `0.20.5`
 
 ## 唯一目标
@@ -33,6 +33,10 @@ WeCom 的 Profile toolset 仅声明 `clarify` 和 `datasage-query`；所有已�
 SELECT-only，并由治理查询合同、只读执行限制和 evidence 边界约束。Hermes 原生
 Skill 管理面不向 WeCom 暴露。
 本候选版本无有 owner 的 cron/主动巡检任务，因此不声明 L4 主动管理能力。
+
+业务员个人目标、分摊实际和完成率以 `salesperson_allocation` 的 split 账本为
+独立权威来源。transaction-detail 基表只承担诊断参照，不是销售分摊账的覆盖
+门禁；Profile 禁止在 split 缺失时从基表回填或跨账替代。
 
 ## 验收门槛（唯一量化真源）
 

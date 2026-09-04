@@ -20,7 +20,7 @@
   },
   "release_validation": {
     "schema": "datasage-live-replay-manifest/v2",
-    "release_target": "0.15.0-rc10",
+    "release_target": "0.15.0-rc11",
     "source_release": "0.15.0-rc5",
     "transcript_source": "wecom",
     "semantic_fixture_status": "reviewed_failure_frozen",
@@ -154,13 +154,22 @@
       "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage", "target_gap_decomposition"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
     },
     {
-      "id": "target_04_pending_salesperson", "category": "target_gap", "conversation_id": "target_04", "turn": 1,
-      "prompt": "查示例业务员甲的个人分摊收款目标完成率；如果这条能力尚未开放就明确拒绝。",
-      "plan_constraints": {"domains": ["target"], "metrics": [], "dimensions": ["salesperson"], "operations": ["capability_check"], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": ["receipt_target_completion", "allocated_net_receipt_amount"]},
-      "required_conclusions": ["refuse_unavailable_capability"],
-      "allowed_conclusions": ["refuse_unavailable_capability", "disclose_data_limits"],
-      "forbidden_conclusions": ["substitute_department_target", "invent_salesperson_target", "claim_success"],
-      "evidence_requirements": {"required_receipts": ["catalog"], "minimum_successful_queries": 0, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": true, "required_error_codes": ["CAPABILITY_UNAVAILABLE"]}
+      "id": "target_04_salesperson_receipt", "category": "target_gap", "conversation_id": "target_04", "turn": 1,
+      "prompt": "查示例业务员甲本月个人分摊收款目标完成率，给出目标、实际、差额和完成率；不要改成部门目标。",
+      "plan_constraints": {"domains": ["target"], "metrics": ["receipt_target_completion"], "dimensions": ["salesperson"], "operations": ["target_actual_gap"], "time_semantics": "current_calendar_month", "context_action": "new", "context_bindings": {"salesperson": "example_salesperson_a"}, "must_not_metrics": ["delivery_target_completion"], "domain_metric_pairs": [{"domain": "target", "metric": "receipt_target_completion"}]},
+      "required_conclusions": ["report_target_gap"],
+      "allowed_conclusions": ["report_target_gap", "disclose_data_limits"],
+      "forbidden_conclusions": ["substitute_department_target", "invent_salesperson_target", "refuse_unavailable_capability"],
+      "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
+    },
+    {
+      "id": "target_05_salesperson_receipt_followup", "category": "multiturn", "conversation_id": "target_04", "turn": 2,
+      "prompt": "她上个月的目标完成情况呢？",
+      "plan_constraints": {"domains": ["target"], "metrics": ["receipt_target_completion"], "dimensions": ["salesperson"], "operations": ["target_actual_gap"], "time_semantics": "previous_calendar_month", "context_action": "preserve", "context_bindings": {"salesperson": "example_salesperson_a"}, "must_not_metrics": ["delivery_target_completion"], "domain_metric_pairs": [{"domain": "target", "metric": "receipt_target_completion"}]},
+      "required_conclusions": ["report_target_gap"],
+      "allowed_conclusions": ["report_target_gap", "disclose_data_limits"],
+      "forbidden_conclusions": ["substitute_department_target", "change_entity", "change_metric", "refuse_unavailable_capability"],
+      "evidence_requirements": {"required_receipts": ["query", "coverage", "context_transition"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
     },
 
     {
