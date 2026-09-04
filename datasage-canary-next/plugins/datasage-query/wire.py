@@ -62,7 +62,7 @@ def _compact_dimension(
             rule = contract.get("model_rule")
             if isinstance(rule, str) and rule:
                 value_policies.setdefault(kind, rule)
-        for key in ("allowed_values", "business_meanings"):
+        for key in ("allowed_values", "canonical_aliases", "business_meanings"):
             if key in contract:
                 compact[key] = contract[key]
     return compact

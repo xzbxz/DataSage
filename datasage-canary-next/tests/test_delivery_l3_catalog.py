@@ -32,7 +32,7 @@ tools = importlib.import_module(f"{PACKAGE}.tools")
 wire = importlib.import_module(f"{PACKAGE}.wire")
 
 
-PENDING_METRICS = {
+QUANTITY_METRICS = {
     "warehouse_gross_delivery_quantity",
     "warehouse_return_quantity",
     "warehouse_delivery_quantity",
@@ -72,7 +72,7 @@ class DeliveryL3CatalogTests(unittest.TestCase):
             if not contracts._is_unavailable(definition)
         }
 
-    def test_pending_capabilities_are_non_executable_and_wire_stable(self) -> None:
+    def test_quantity_capabilities_are_executable_only_with_unit_scope(self) -> None:
         for request in (
             {"domain": "delivery"},
             {"domain": "delivery", "view": "expert_index"},
@@ -84,48 +84,41 @@ class DeliveryL3CatalogTests(unittest.TestCase):
                 compact = _catalog(request, compact=True)
                 for payload in (raw, compact):
                     result = payload["results"][0]
-                    pending = {
-                        item["code"]: item
-                        for item in result["pending_capabilities"]
-                    }
+                    pending = result.get("pending_capabilities", [])
                     executable = {item["code"] for item in result["metrics"]}
-                    self.assertEqual(PENDING_METRICS, set(pending))
-                    self.assertTrue(PENDING_METRICS.isdisjoint(executable))
-                    for item in pending.values():
-                        self.assertEqual("pending_validation", item["status"])
-                        self.assertEqual("blocked", item["activation_gate"])
-                        self.assertFalse(item["selectable"])
-                        self.assertEqual(
-                            "SEMANTIC_UNIT_RECONCILIATION_REQUIRED",
-                            item["error"]["code"],
-                        )
-                        self.assertTrue(item["label"])
-                        self.assertTrue(item["reason"])
+                    self.assertEqual([], pending)
+                    self.assertTrue(QUANTITY_METRICS.issubset(executable))
 
         detail = _catalog({"domain": "delivery", "metric": "delivery_quantity"})
         compact_detail = _catalog(
             {"domain": "delivery", "metric": "delivery_quantity"},
             compact=True,
         )
-        for payload in (detail, compact_detail):
+        for compact, payload in ((False, detail), (True, compact_detail)):
             result = payload["results"][0]
             self.assertEqual("success", payload["status"])
             self.assertEqual("metric", result["level"])
-            self.assertEqual([], result["dimensions"])
-            self.assertEqual(result["metric"], result["pending_capability"])
-            self.assertFalse(result["metric"]["selectable"])
+            self.assertNotIn("pending_capability", result)
+            self.assertIn("unit", result["metric"]["allowed_dimensions"])
             self.assertEqual(
-                "SEMANTIC_UNIT_RECONCILIATION_REQUIRED",
-                result["metric"]["error"]["code"],
+                "group_or_filter", result["metric"]["unit_policy"]["mode"]
             )
+            unit = next(item for item in result["dimensions"] if item["code"] == "unit")
+            contract = unit if compact else unit["value_contract"]
+            self.assertEqual(
+                ["m", "y", "kg", "Pcs", "m2", "tao"],
+                contract["allowed_values"],
+            )
+            self.assertEqual("m2", contract["canonical_aliases"]["平方"])
+            self.assertIn("待业务owner确认", contract["business_meanings"]["tao"])
 
     def test_all_available_metrics_and_capabilities_remain_complete(self) -> None:
         summary = _catalog({"domain": "delivery"})["results"][0]
         expert = _catalog(
             {"domain": "delivery", "view": "expert_index"}
         )["results"][0]
-        self.assertEqual(27, summary["metric_count"])
-        self.assertEqual(27, expert["metric_count"])
+        self.assertEqual(35, summary["metric_count"])
+        self.assertEqual(35, expert["metric_count"])
         self.assertEqual(
             self.available,
             {item["code"] for item in summary["metrics"]},

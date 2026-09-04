@@ -52,9 +52,9 @@ entity_types:
       delivery: [warehouse]
       inventory: [warehouse]
   supplier:
-    input_filter_roles: [supplier, product_supplier]
+    input_filter_roles: [supplier, product_supplier, final_supplier]
     roles_by_domain:
-      delivery: [supplier]
+      delivery: [supplier, final_supplier]
       inventory: [product_supplier]
 
 # These are verified literals, not guesses. A bare department code never

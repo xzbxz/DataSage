@@ -352,6 +352,162 @@ class DeliveryL3RuntimeTests(unittest.TestCase):
         )
         self.assertEqual("compatible", annotated["comparison_compatibility"]["status"])
 
+    def test_quantity_requires_one_unit_or_unit_group_and_normalizes_aliases(self):
+        datasets, semantics = contracts.execution_contracts("delivery")
+
+        missing_scope = _validated_plan(
+            _request("delivery", "delivery_quantity"), semantics
+        )
+        with self.assertRaises(tools.QueryFailure) as missing_failure:
+            tools._build_metric_query(
+                missing_scope,
+                datasets,
+                semantics,
+                tools._metric_query_limit(missing_scope),
+                observed_on=date(2026, 8, 18),
+            )
+        self.assertEqual("UNIT_SCOPE_REQUIRED", missing_failure.exception.code)
+
+        grouped = _validated_plan(
+            _request("delivery", "delivery_quantity", dimensions=["unit"]),
+            semantics,
+        )
+        sql, _params, scope = tools._build_metric_query(
+            grouped,
+            datasets,
+            semantics,
+            tools._metric_query_limit(grouped),
+            observed_on=date(2026, 8, 18),
+        )
+        self.assertEqual(["unit"], scope["dimension_outputs"])
+        self.assertIn("`unit`", sql)
+
+        for alias, canonical in (("码", "y"), ("PCS", "Pcs"), ("平方", "m2")):
+            with self.subTest(alias=alias):
+                filtered = _validated_plan(
+                    _request(
+                        "delivery",
+                        "delivery_quantity",
+                        metric_filters={"unit": alias},
+                    ),
+                    semantics,
+                )
+                filtered = tools._validate_metric_filter_value_contracts(
+                    filtered, semantics
+                )
+                self.assertEqual(canonical, filtered["metric_filters"]["unit"])
+                _sql, params, _scope = tools._build_metric_query(
+                    filtered,
+                    datasets,
+                    semantics,
+                    tools._metric_query_limit(filtered),
+                    observed_on=date(2026, 8, 18),
+                )
+                self.assertIn(canonical, params)
+
+        multiple = _validated_plan(
+            _request(
+                "delivery",
+                "delivery_quantity",
+                metric_filters={"unit": ["m", "y"]},
+            ),
+            semantics,
+        )
+        with self.assertRaises(tools.QueryFailure) as multiple_failure:
+            tools._build_metric_query(
+                multiple,
+                datasets,
+                semantics,
+                tools._metric_query_limit(multiple),
+                observed_on=date(2026, 8, 18),
+            )
+        self.assertEqual("UNIT_SCOPE_REQUIRED", multiple_failure.exception.code)
+
+    def test_final_supplier_is_physical_gross_only(self):
+        datasets, semantics = contracts.execution_contracts("delivery")
+        gross = _validated_plan(
+            _request(
+                "delivery",
+                "warehouse_gross_delivery_amount",
+                dimensions=["final_supplier"],
+                delivery_scope="explicit_gross",
+            ),
+            semantics,
+        )
+        sql, _params, scope = tools._build_metric_query(
+            gross,
+            datasets,
+            semantics,
+            tools._metric_query_limit(gross),
+            observed_on=date(2026, 8, 18),
+        )
+        self.assertEqual(
+            ["final_supplier_id", "final_supplier_no", "final_supplier_name"],
+            scope["dimension_outputs"],
+        )
+        self.assertIn("`final_supplier_id`", sql)
+
+        with self.assertRaises(tools.QueryFailure) as net_failure:
+            _validated_plan(
+                _request(
+                    "delivery",
+                    "warehouse_delivery_amount",
+                    dimensions=["final_supplier"],
+                ),
+                semantics,
+            )
+        self.assertEqual("UNSUPPORTED_DIMENSION", net_failure.exception.code)
+
+    def test_owner_confirmed_organization_and_department_roles_compile(self):
+        datasets, semantics = contracts.execution_contracts("delivery")
+        request = _validated_plan(
+            _request(
+                "delivery",
+                "delivery_amount",
+                dimensions=["department", "business_department"],
+            ),
+            semantics,
+        )
+        sql, _params, scope = tools._build_metric_query(
+            request,
+            datasets,
+            semantics,
+            tools._metric_query_limit(request),
+            observed_on=date(2026, 8, 18),
+        )
+        self.assertEqual(["customer_dept", "biz_dept"], scope["dimension_outputs"])
+        self.assertIn("`customer_dept`", sql)
+        self.assertIn("`biz_dept`", sql)
+
+        organization = _validated_plan(
+            _request("delivery", "delivery_amount", dimensions=["organization"]),
+            semantics,
+        )
+        org_sql, _params, org_scope = tools._build_metric_query(
+            organization,
+            datasets,
+            semantics,
+            tools._metric_query_limit(organization),
+            observed_on=date(2026, 8, 18),
+        )
+        self.assertEqual(["org_name"], org_scope["dimension_outputs"])
+        self.assertIn("`biz_org`", org_sql)
+
+        physical_org = _validated_plan(
+            _request(
+                "delivery", "warehouse_delivery_amount", dimensions=["organization"]
+            ),
+            semantics,
+        )
+        _physical_sql, _params, physical_scope = tools._build_metric_query(
+            physical_org,
+            datasets,
+            semantics,
+            tools._metric_query_limit(physical_org),
+            observed_on=date(2026, 8, 18),
+        )
+        self.assertEqual(["org_name"], physical_scope["dimension_outputs"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,4 +1,4 @@
-version: datasage-mini-datasets/v11
+version: datasage-mini-datasets/v12
 
 defaults:
   blocked_columns:
@@ -135,7 +135,7 @@ datasets:
     grain: one_sales_or_delivery_document_product_color_detail
     primary_key: [goods_detail_id]
     updated_at: gmt_modified
-    allowed_columns: [goods_detail_id, sale_bill_id, delivery_time, sale_time, bill_status, is_inner_cus, currency_no, delivery_exchange_rate, sale_exchange_rate, delivery_amount_rmb, sale_amount_rmb, delivery_amount, sale_amount, sorted_goods_num, sorted_piece_num, sale_goods_num, sale_piece_num, customer_id, customer_no, customer_name, customer_dept, customer_region, customer_type, customer_category, customer_label, sales_id, sales_name, org_name, goods_id, goods_no, goods_name, goods_region, goods_category, goods_sku_id, attr_val, color_label, supplier_id, supplier_no, supplier_name, is_ready, is_print, is_ht, bill_type, is_brand_cus, is_ha_cus, is_ccbs_cus, is_ht_cus, is_vip_cus, is_customized]
+    allowed_columns: [goods_detail_id, sale_bill_id, delivery_time, sale_time, bill_status, is_inner_cus, currency_no, unit, delivery_exchange_rate, sale_exchange_rate, delivery_amount_rmb, sale_amount_rmb, delivery_amount, sale_amount, sorted_goods_num, sorted_piece_num, sale_goods_num, sale_piece_num, customer_id, customer_no, customer_name, customer_dept, customer_region, customer_type, customer_category, customer_label, sales_id, sales_name, org_name, biz_dept, biz_region, goods_id, goods_no, goods_name, goods_region, goods_category, goods_sku_id, attr_val, color_label, supplier_id, supplier_no, supplier_name, is_ready, is_print, is_ht, bill_type, is_brand_cus, is_ha_cus, is_ccbs_cus, is_ht_cus, is_vip_cus, is_customized]
     forbidden_columns: [is_self]
     required_filters: []
     joins:
@@ -148,7 +148,8 @@ datasets:
       - Fact is_self is deprecated and forbidden; ready-goods queries use is_ready.
       - Fact is_customized is an order attribute; product-master is_customized is a different current product attribute.
       - Delivery color and color_label authority is the transaction fact snapshot; goods_sku_ods is reference/lineage only and must not replace or filter those fact values.
-      - The governed delivery department is customer_dept (customer department); biz_dept is not a substitute dimension.
+      - The default governed department is customer_dept. biz_dept and biz_region are separate transaction-time business attribution dimensions and never replace the default department.
+      - Quantity measures may execute only with the governed unit dimension grouped or restricted to one canonical unit; mixed units are never summed.
       - An actual aggregate with no matching valid delivery fact rows is a missing actual state, not a proven business zero; preserve the typed state unless an owner-approved no-activity rule says otherwise.
       - Current customer/product master enrichment is a governed LEFT JOIN ON; unmatched master keys stay as unknown/null groups and remain in aggregate coverage rather than being dropped.
       - Aggregate before joining another fact to avoid multiplication; only governed many-to-one master joins are supported for metric dimensions.
@@ -159,7 +160,7 @@ datasets:
     grain: one_actual_returned_piece_or_barcode
     primary_key: [barcode_detail_id]
     updated_at: gmt_modified
-    allowed_columns: [barcode_detail_id, complnt_apply_id, complnt_no, complnt_goods_id, channel_id, channel_no, sale_bill_type, statement_time, status, complnt_type, channel_type, return_amount_rmb, return_amount, return_goods_num, return_piece_num, currency_no, in_whse_id, whse_name, whse_dept, whse_category, batch_no, bar_code, is_defective, customer_id, customer_no, customer_name, customer_dept, customer_region, customer_type, customer_category, sales_id, sales_name, biz_org, biz_dept, biz_region, goods_id, goods_no, goods_name, goods_region, goods_sku_id, attr_val, color_label, supplier_id, supplier_no, supplier_name, is_ready, is_print, is_customized, is_brand_cus, is_ha_cus, is_ccbs_cus, is_ht_cus, is_vip_cus, is_inner_cus]
+    allowed_columns: [barcode_detail_id, complnt_apply_id, complnt_no, complnt_goods_id, channel_id, channel_no, sale_bill_type, statement_time, status, complnt_type, channel_type, return_amount_rmb, return_amount, return_goods_num, return_piece_num, currency_no, unit, in_whse_id, whse_name, whse_dept, whse_category, batch_no, bar_code, is_defective, customer_id, customer_no, customer_name, customer_dept, customer_region, customer_type, customer_category, sales_id, sales_name, biz_org, biz_dept, biz_region, goods_id, goods_no, goods_name, goods_region, goods_sku_id, attr_val, color_label, supplier_id, supplier_no, supplier_name, is_ready, is_print, is_customized, is_brand_cus, is_ha_cus, is_ccbs_cus, is_ht_cus, is_vip_cus, is_inner_cus]
     required_filters: []
     joins:
       - {target: vk_dwd.customer_dwd, local: [customer_id], remote: [customer_id], cardinality: many_to_one, stage: before_metric_aggregation}
@@ -170,9 +171,10 @@ datasets:
       - Standard delivery returns use statement_time, status = 4, complnt_type = 1, channel_type = 1, and exclude internal customers.
       - Return salesperson and ready-goods attribution use this return fact; they are not inherited from the source delivery.
       - For target salesperson allocation, this governed return fact is the explicit non-split delivery-return component; never substitute the sale-detail base or backfill from another ledger.
-      - Return biz_org may map to the logical organization represented by split org_name only under an owner-approved equivalence; do not silently normalize or merge unlike organization fields.
+      - The business owner confirmed return biz_org is the same governed business-organization role as sale and outbound org_name; each fact keeps its own physical field and normalized output alias.
       - Return document type uses the fact sale_bill_type field and is exposed as the governed bill_type dimension; it must not be backfilled from the source delivery.
-      - The governed delivery department remains customer_dept (customer department); biz_dept is a physical source field and must not replace it.
+      - The default governed department remains customer_dept. biz_dept and biz_region are separate source-exact business attribution dimensions and must not replace it.
+      - Quantity measures may execute only with unit grouped or restricted to one canonical unit; mixed units are never summed.
       - The table has no goods_category, customer_label, or product is_ht snapshot. Missing attributes may use an explicitly disclosed current master attribute.
       - An actual aggregate with no matching return fact rows is a missing actual state, not a proven business zero; preserve the typed state unless an owner-approved no-activity rule says otherwise.
       - Current customer/product master enrichment is a governed LEFT JOIN ON; unmatched master keys stay as unknown/null groups and remain in aggregate coverage rather than being dropped.
@@ -185,7 +187,7 @@ datasets:
     primary_key: [barcode_detail_id]
     updated_at: gmt_modified
     metric_only: true
-    allowed_columns: [barcode_detail_id, sale_bill_id, sale_bill_goods_id, delivery_time, sale_time, whse_id, whse_name, whse_region, whse_dept, whse_category, bar_code, resource_barcode, batch_no, cylinder_no, goods_id, goods_sku_id, currency_no, delivery_amount, delivery_amount_rmb, exchange_rate, goods_num, piece_num, is_inner_cus, is_missing, is_defective_whse, is_defective, is_ccbs_whse]
+    allowed_columns: [barcode_detail_id, sale_bill_id, sale_bill_goods_id, delivery_time, sale_time, whse_id, whse_name, whse_region, whse_dept, whse_category, bar_code, resource_barcode, batch_no, cylinder_no, goods_id, goods_sku_id, customer_dept, org_name, biz_dept, biz_region, final_supplier_id, final_supplier_no, final_supplier_name, currency_no, unit, delivery_amount, delivery_amount_rmb, exchange_rate, goods_num, piece_num, is_inner_cus, is_missing, is_defective_whse, is_defective, is_ccbs_whse]
     required_filters: []
     joins:
       - {target: vk_dwd.sale_bill_goods_detail_dwd, local: [sale_bill_goods_id], remote: [goods_detail_id], cardinality: many_to_one, stage: before_metric_aggregation}
@@ -195,6 +197,9 @@ datasets:
       - A governed many-to-one join to sale detail enforces bill_status = 6 without changing the barcode grain.
       - Dataset mode is disabled because the valid-delivery status is a related-table rule; use governed physical-delivery metrics.
       - An actual aggregate with no matching outbound barcode fact rows is a missing actual state, not a proven business zero; preserve the typed state unless an owner-approved no-activity rule says otherwise.
+      - "final_supplier_id/no/name is the owner-confirmed physical supplier: barcode supplier when present, otherwise product supplier. It is not the same role as the ordinary product supplier dimension."
+      - customer_dept remains the default department; biz_dept and biz_region are separate business-attribution dimensions, and org_name is the owner-confirmed business organization.
+      - Quantity measures may execute only with unit grouped or restricted to one canonical unit; mixed units are never summed.
       - Barcode is_self and is_customized are intentionally not exposed in the first phase.
       - Business remarks, order remarks, receiver or collaborator text, and price-detail fields are intentionally excluded.
 

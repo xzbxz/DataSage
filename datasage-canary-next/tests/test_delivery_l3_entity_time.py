@@ -182,7 +182,18 @@ class DeliveryL3EntityTimeTests(unittest.TestCase):
         self.assertEqual([], calls)
 
         calls.clear()
-        with mock.patch.object(entities.db_runtime, "execute", side_effect=no_rows):
+        supplier_row = self._master_row(
+            "supplier",
+            "supplier-1",
+            "SUP-1",
+            "供应商甲",
+            "供应商甲",
+        )
+        with mock.patch.object(
+            entities.db_runtime,
+            "execute",
+            return_value=([supplier_row], False),
+        ) as supplier_lookup:
             payload = json.loads(
                 entities.datasage_entity_resolve(
                     {
@@ -193,9 +204,36 @@ class DeliveryL3EntityTimeTests(unittest.TestCase):
                     }
                 )
             )
-        self.assertEqual("failed", payload["status"])
-        self.assertEqual("UNSUPPORTED_ENTITY_ROLE", payload["error"]["code"])
-        self.assertEqual([], calls)
+        self.assertEqual("resolved", payload["status"])
+        self.assertEqual("final_supplier", payload["candidates"][0]["filter_role"])
+        self.assertEqual("supplier-1", payload["candidates"][0]["canonical_id"])
+        supplier_lookup.assert_called_once()
+
+    def test_final_supplier_filter_binds_supplier_identity(self) -> None:
+        row = self._master_row(
+            "supplier",
+            "supplier-1",
+            "SUP-1",
+            "供应商甲",
+            "供应商甲",
+        )
+        normalized, evidence = entities.canonicalize_metric_request(
+            {
+                "domain": "delivery",
+                "metric": "warehouse_gross_delivery_amount",
+                "metric_filters": {"final_supplier": "供应商甲"},
+            },
+            self.semantics,
+            exact_lookup=lambda *_args: ([row], False),
+        )
+        self.assertEqual(
+            "supplier-1",
+            normalized["metric_filters"]["final_supplier"],
+        )
+        binding = normalized["_entity_bindings"]["final_supplier"]
+        self.assertEqual("canonical_id", binding["value_field"])
+        self.assertIn("final_supplier_id", binding["identity_columns"])
+        self.assertEqual("master_exact_preflight", evidence[0]["resolution_path"])
 
     @staticmethod
     def _calendar_evidence(observed_on: date, state: str) -> dict[str, object]:

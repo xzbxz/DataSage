@@ -33,8 +33,8 @@ class DeliveryL3SemanticContractTests(unittest.TestCase):
         cls.metrics = cls.delivery["metrics"]
         cls.query_tools = importlib.import_module(f"{PACKAGE}.tools")
 
-    def test_quantity_capability_is_shared_safe_and_pending(self) -> None:
-        expected_pending = {
+    def test_quantity_capability_is_shared_unit_scoped_and_available(self) -> None:
+        expected_quantity = {
             "warehouse_gross_delivery_quantity",
             "warehouse_return_quantity",
             "warehouse_delivery_quantity",
@@ -49,25 +49,44 @@ class DeliveryL3SemanticContractTests(unittest.TestCase):
             for code, metric in self.metrics.items()
             if metric.get("availability", {}).get("status") == "pending_validation"
         }
-        self.assertEqual(expected_pending, pending)
+        self.assertEqual(set(), pending)
 
         capability = self.delivery["capability_contracts"]["quantity_metrics"]
         self.assertEqual("delivery_quantity_metrics", capability["code"])
-        self.assertEqual("pending_validation", capability["status"])
+        self.assertEqual("available_with_unit_scope", capability["status"])
         self.assertIs(capability["model_visible"], True)
-        self.assertIn("多个计量单位", capability["public_description"])
-        self.assertEqual("safe_capability_disclosure", capability["projection"]["kind"])
-        self.assertIs(capability["projection"]["no_execution_authority"], True)
+        self.assertIn("按计量单位分别回答", capability["public_description"])
+        self.assertEqual(
+            ["m", "y", "kg", "Pcs", "m2", "tao"],
+            capability["canonical_units"],
+        )
+        self.assertEqual("governed_unit_scoped_capability", capability["projection"]["kind"])
 
-        availability_objects = {
-            id(self.metrics[code]["availability"]) for code in expected_pending
+        policy_objects = {
+            id(self.metrics[code]["unit_policy"]) for code in expected_quantity
         }
-        self.assertEqual(1, len(availability_objects))
-        for code in expected_pending:
-            availability = self.metrics[code]["availability"]
-            self.assertEqual("delivery_quantity_metrics", availability["capability_ref"])
-            self.assertEqual("SEMANTIC_UNIT_RECONCILIATION_REQUIRED", availability["error_code"])
-            self.assertEqual("blocked", availability["activation_gate"]["state"])
+        self.assertEqual(1, len(policy_objects))
+        for code in expected_quantity:
+            metric = self.metrics[code]
+            self.assertNotIn("availability", metric)
+            self.assertIn("unit", metric["allowed_dimensions"])
+            self.assertEqual("group_or_filter", metric["unit_policy"]["mode"])
+            self.assertIs(metric["unit_policy"]["require_filter_or_group"], True)
+            self.assertIs(metric["unit_policy"]["never_sum_mixed_unit"], True)
+
+        unit = self.delivery["dimensions"]["unit"]
+        self.assertEqual(["unit"], unit["columns"])
+        self.assertEqual(
+            ["m", "y", "kg", "Pcs", "m2", "tao"],
+            unit["value_contract"]["allowed_values"],
+        )
+        self.assertEqual("y", unit["value_contract"]["canonical_aliases"]["码"])
+        self.assertEqual("Pcs", unit["value_contract"]["canonical_aliases"]["PCS"])
+        self.assertEqual("m2", unit["value_contract"]["canonical_aliases"]["平方"])
+        self.assertIn(
+            "待业务owner确认",
+            unit["value_contract"]["business_meanings"]["tao"],
+        )
 
         physical_keys = {
             "table",
@@ -109,7 +128,7 @@ class DeliveryL3SemanticContractTests(unittest.TestCase):
         self.assertIn("transaction fact snapshot", sale_warnings)
         self.assertIn("reference/lineage only", sale_warnings)
 
-    def test_derived_net_and_rate_paths_remove_unapproved_organization(self) -> None:
+    def test_derived_net_and_rate_paths_use_owner_approved_organization(self) -> None:
         derived = (
             "delivery_amount",
             "delivery_amount_original",
@@ -122,17 +141,20 @@ class DeliveryL3SemanticContractTests(unittest.TestCase):
         for code in derived:
             with self.subTest(metric=code):
                 metric = self.metrics[code]
-                self.assertNotIn("organization", metric["allowed_dimensions"])
+                self.assertIn("organization", metric["allowed_dimensions"])
                 disclosure_ids = {
                     declaration["id"] for declaration in metric["disclosures"]
                 }
-                self.assertIn("delivery.net-organization.no-equivalence", disclosure_ids)
+                self.assertIn(
+                    "delivery.net-organization.owner-confirmed-equivalence",
+                    disclosure_ids,
+                )
                 self.assertIn("delivery.net-flow.period-scope", disclosure_ids)
                 self.assertIn(
                     "delivery.net-flow.current-master-reclassification", disclosure_ids
                 )
 
-        self.assertNotIn(
+        self.assertIn(
             "organization", self.metrics["delivery_amount"]["change_decomposition"]["dimensions"]
         )
         self.assertIn("organization", self.metrics["gross_delivery_amount"]["allowed_dimensions"])
@@ -148,7 +170,7 @@ class DeliveryL3SemanticContractTests(unittest.TestCase):
         return_organization = self.delivery["return_dimension_overrides"]["organization"]
         self.assertEqual("biz_org", return_organization["columns"][0]["column"])
         self.assertEqual(
-            "owner_approved_equivalence_required",
+            "owner_approved_equivalence",
             return_organization["cross_fact_merge"],
         )
 
@@ -195,9 +217,13 @@ class DeliveryL3SemanticContractTests(unittest.TestCase):
         self.assertIn("不从分组或总体中丢弃", public["return_current_master_reclassification"]["text"])
         self.assertEqual("required_always", public["return_completed_period"]["mode"])
         self.assertEqual("required_when", public["physical_actual_inbound"]["mode"])
+        self.assertEqual("required_when", public["net_organization_equivalence"]["mode"])
         self.assertEqual(
-            "contract_only", public["net_organization_unavailable"]["mode"]
+            {"any_request_dimension_or_filter_present": ["organization"]},
+            public["net_organization_equivalence"]["when"],
         )
+        self.assertEqual("required_always", public["quantity_unit_scope"]["mode"])
+        self.assertEqual("required_when", public["final_supplier_scope"]["mode"])
         self.assertEqual("required_when", public["gross_organization_source"]["mode"])
         self.assertEqual(
             {"any_request_dimension_or_filter_present": ["organization"]},
@@ -225,6 +251,9 @@ class DeliveryL3SemanticContractTests(unittest.TestCase):
             ids = {item["id"] for item in self.metrics[code]["disclosures"]}
             self.assertIn("delivery.net-flow.period-scope", ids)
             self.assertIn("delivery.physical.net.actual-inbound-warehouse", ids)
+            self.assertIn(
+                "delivery.net-organization.owner-confirmed-equivalence", ids
+            )
         self.assertIn(
             "delivery.warehouse-delivery-amount-original.net-scope",
             {item["id"] for item in self.metrics["warehouse_delivery_amount_original"]["disclosures"]},
@@ -328,6 +357,10 @@ class DeliveryL3SemanticContractTests(unittest.TestCase):
         self.assertTrue(
             applies("physical_actual_inbound", {"dimensions": ["warehouse"]})
         )
+        self.assertFalse(applies("net_organization_equivalence", {"dimensions": []}))
+        self.assertTrue(
+            applies("net_organization_equivalence", {"dimensions": ["organization"]})
+        )
 
     def test_ready_goods_is_fact_based_and_lifecycle_table_is_reference_only(self) -> None:
         self.assertNotIn("vk_ods.ready_goods_detail", self.delivery["tables"])
@@ -350,8 +383,16 @@ class DeliveryL3SemanticContractTests(unittest.TestCase):
 
     def test_department_and_actual_missing_contracts_are_explicit(self) -> None:
         department = self.delivery["dimensions"]["department"]
-        self.assertIn("客户部门", department["semantics"])
-        self.assertIn("不替代", department["semantics"])
+        self.assertEqual(["customer_dept"], department["columns"])
+        self.assertIn("用户只说部门", department["semantics"])
+        self.assertIn("不得替代", department["semantics"])
+        self.assertEqual(
+            ["biz_dept"],
+            self.delivery["dimensions"]["business_department"]["columns"],
+        )
+        self.assertEqual(
+            ["biz_region"], self.delivery["dimensions"]["business_region"]["columns"]
+        )
 
         missing = self.delivery["data_state_contract"]["actual_missing"]
         self.assertEqual("missing", missing["state"])

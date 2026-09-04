@@ -20,7 +20,7 @@
   },
   "release_validation": {
     "schema": "datasage-live-replay-manifest/v2",
-    "release_target": "0.15.0-rc13",
+    "release_target": "0.15.0-rc14",
     "source_release": "0.15.0-rc5",
     "transcript_source": "wecom",
     "semantic_fixture_status": "reviewed_failure_frozen",
@@ -647,13 +647,13 @@
       "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
     },
     {
-      "id": "l3_03_delivery_quantity_pending_no_substitution", "category": "capability_boundary", "conversation_id": "l3_delivery_quantity_pending", "turn": 1, "evaluation_mode": "design/offline contract", "formal_release_eligible": false, "strict_plan": true,
-      "prompt": "查询本月出库数量；该数量口径若仍在待验证状态，明确拒绝并说明不能用金额或其他数量替代，且不要访问业务数据。",
-      "plan_constraints": {"domains": ["delivery"], "metrics": ["delivery_quantity"], "dimensions": [], "operations": [], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": ["gross_delivery_quantity", "return_quantity", "order_quantity", "delivery_amount"], "domain_metric_pairs": []},
-      "required_conclusions": ["refuse_pending_capability", "disclose_pending_validation", "state_no_substitution"],
-      "allowed_conclusions": ["refuse_pending_capability", "disclose_pending_validation", "state_no_substitution", "disclose_data_limits"],
-      "forbidden_conclusions": ["report_quantity", "substitute_delivery_amount", "substitute_order_quantity", "invent_result"],
-      "evidence_requirements": {"required_receipts": ["catalog", "metric_detail"], "minimum_successful_queries": 0, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": true, "required_error_codes": []}
+      "id": "l3_03_delivery_quantity_unit_scoped", "category": "capability_boundary", "conversation_id": "l3_delivery_quantity_unit_scoped", "turn": 1, "evaluation_mode": "design/offline contract", "formal_release_eligible": false, "strict_plan": true,
+      "prompt": "查询本月净出库数量；按计量单位分别回答，说明米、码、公斤、件和平方米，不得跨单位合计，也不要用金额或卷数替代。",
+      "plan_constraints": {"domains": ["delivery"], "metrics": ["delivery_quantity"], "dimensions": ["unit"], "operations": [], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": ["gross_delivery_quantity", "return_quantity", "order_quantity", "delivery_amount", "delivery_roll_count"], "domain_metric_pairs": [{"domain": "delivery", "metric": "delivery_quantity"}]},
+      "required_conclusions": ["report_quantity_by_unit", "state_no_cross_unit_sum", "state_no_substitution"],
+      "allowed_conclusions": ["report_quantity_by_unit", "state_no_cross_unit_sum", "state_no_substitution", "disclose_unit_meanings", "disclose_data_limits"],
+      "forbidden_conclusions": ["report_mixed_unit_total", "substitute_delivery_amount", "substitute_roll_count", "invent_result"],
+      "evidence_requirements": {"required_receipts": ["catalog", "metric_detail", "query", "coverage"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
     },
     {
       "id": "l3_04_delivery_internal_customer_scope", "category": "causal_boundary", "conversation_id": "l3_delivery_internal_scope", "turn": 1, "evaluation_mode": "design/offline contract", "formal_release_eligible": false, "strict_plan": true,
@@ -665,12 +665,12 @@
       "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
     },
     {
-      "id": "l3_05_delivery_salesperson_organization_attribution", "category": "ambiguity", "conversation_id": "l3_delivery_salesperson_organization", "turn": 1, "evaluation_mode": "design/offline contract", "formal_release_eligible": false, "strict_plan": true,
-      "prompt": "分别按各自事实查看本月毛出库和退货，并按业务员与组织说明来源归属；不要把两侧合并成净出库，也不要只靠显示名称拼接身份。",
-      "plan_constraints": {"domains": ["delivery"], "metrics": ["gross_delivery_amount", "return_amount"], "dimensions": ["salesperson", "organization"], "operations": [], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": [], "domain_metric_pairs": [{"domain": "delivery", "metric": "gross_delivery_amount"}, {"domain": "delivery", "metric": "return_amount"}]},
-      "required_conclusions": ["report_source_specific_organization_attribution", "state_no_cross_fact_merge", "state_identity_evidence_needed"],
-      "allowed_conclusions": ["report_source_specific_organization_attribution", "state_no_cross_fact_merge", "state_identity_evidence_needed", "disclose_data_limits"],
-      "forbidden_conclusions": ["merge_gross_and_return_by_unproven_scope", "claim_organization_id_binding", "merge_same_name_entities", "invent_result"],
+      "id": "l3_05_delivery_owner_confirmed_organization", "category": "ambiguity", "conversation_id": "l3_delivery_owner_confirmed_organization", "turn": 1, "evaluation_mode": "design/offline contract", "formal_release_eligible": false, "strict_plan": true,
+      "prompt": "按业务员和业务组织查看本月净出库；说明毛出库与退货先按各自事实独立聚合，再按业务 owner 已确认的同一组织口径对齐。",
+      "plan_constraints": {"domains": ["delivery"], "metrics": ["delivery_amount"], "dimensions": ["salesperson", "organization"], "operations": [], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": ["gross_delivery_amount", "return_amount"], "domain_metric_pairs": [{"domain": "delivery", "metric": "delivery_amount"}]},
+      "required_conclusions": ["report_grouped_structure", "state_owner_confirmed_organization_equivalence", "state_independent_fact_aggregation"],
+      "allowed_conclusions": ["report_grouped_structure", "state_owner_confirmed_organization_equivalence", "state_independent_fact_aggregation", "disclose_data_limits"],
+      "forbidden_conclusions": ["claim_unapproved_organization_merge", "claim_organization_id_binding", "merge_same_name_entities", "invent_result"],
       "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
     },
     {

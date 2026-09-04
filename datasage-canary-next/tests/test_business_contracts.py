@@ -2626,12 +2626,24 @@ class BusinessContractTests(unittest.TestCase):
             _, semantics = tools._contracts(str(normalized["domain"]))
             return tools._validate_metric_contract(normalized, semantics)
 
-        with self.assertRaises(tools.QueryFailure) as unavailable:
-            validate({**base_request, "metric": "delivery_quantity"})
-        self.assertEqual(
-            "SEMANTIC_UNIT_RECONCILIATION_REQUIRED",
-            unavailable.exception.code,
+        quantity = validate(
+            {
+                **base_request,
+                "metric": "delivery_quantity",
+                "dimensions": ["unit"],
+            }
         )
+        self.assertEqual(["unit"], quantity["dimensions"])
+
+        missing_unit = validate({**base_request, "metric": "delivery_quantity"})
+        delivery_datasets, delivery_semantics = tools._contracts("delivery")
+        with self.assertRaises(tools.QueryFailure) as unit_scope:
+            tools._validate_pre_entity_metric_plan(
+                missing_unit,
+                delivery_datasets,
+                delivery_semantics,
+            )
+        self.assertEqual("UNIT_SCOPE_REQUIRED", unit_scope.exception.code)
 
         with self.assertRaises(tools.QueryFailure) as unsupported_dimension:
             validate({**base_request, "dimensions": ["warehouse"]})
@@ -4121,7 +4133,19 @@ class BusinessContractTests(unittest.TestCase):
                     "id": "delivery.external-customer.scope",
                     "mode": "required_always",
                     "text": "出库域指标固定排除内部客户。",
-                }
+                },
+                {
+                    "id": "delivery.department.roles",
+                    "mode": "required_when",
+                    "when": {
+                        "any_request_dimension_or_filter_present": [
+                            "department",
+                            "business_department",
+                            "business_region",
+                        ]
+                    },
+                    "text": "用户只说部门时使用默认归属部门；业务发生部门和业务发生地区为独立交易归属，不能与默认部门互相替代。",
+                },
             ],
             inherited,
         )
@@ -5943,7 +5967,10 @@ class BusinessContractTests(unittest.TestCase):
                 dimension["code"]: dimension["label"]
                 for dimension in projection["dimensions"]
             }
-            self.assertEqual("客户部门", labels["department"])
+            self.assertEqual(
+                "默认归属部门" if domain == "delivery" else "客户部门",
+                labels["department"],
+            )
             self.assertEqual("业务组织", labels["organization"])
 
     def test_distribution_and_component_versions_are_content_consistent(self) -> None:

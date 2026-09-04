@@ -1,4 +1,4 @@
-version: datasage-mini-delivery-semantics/v18
+version: datasage-mini-delivery-semantics/v19
 domain: delivery
 contract_role: plugin_physical_execution
 
@@ -109,29 +109,31 @@ capability_contracts:
   quantity_metrics: &quantity_capability
     code: delivery_quantity_metrics
     label: 出库、退货和下单数量指标
-    status: pending_validation
+    status: available_with_unit_scope
     model_visible: true
-    public_description: 数量指标当前不可用于回答；来源可能存在多个计量单位，尚未提供可执行的单位筛选或分组。
-    error_code: SEMANTIC_UNIT_RECONCILIATION_REQUIRED
-    activation_gate:
-      state: blocked
-      required_evidence:
-        - executable_unit_filter_or_group_contract
-        - production_read_only_reconciliation
-        - mixed_unit_regression
-      activation_authority: owner_and_release_review
+    public_description: 数量指标按计量单位分别回答；必须按单位分组或限定单一单位，禁止跨单位相加。
+    unit_dimension: unit
+    canonical_units: [m, y, kg, Pcs, m2, tao]
     lifecycle:
-      state: pending_validation
-      activation_effect: remains_unavailable_until_gate_passes
+      state: active
+      execution_guard: group_or_single_unit_filter
     projection:
-      kind: safe_capability_disclosure
-      no_execution_authority: true
+      kind: governed_unit_scoped_capability
+
+unit_policy_contracts:
+  quantity_group_or_filter: &quantity_group_or_filter
+    mode: group_or_filter
+    require_filter_or_group: true
+    never_sum_mixed_unit: true
+    business_rule: 数量指标必须按计量单位分组或限定单一单位；米、码、公斤、件、平方米及含义待确认的原始码 tao 之间不得换算或合计。
 
 dimension_sets:
   delivery_analysis: &delivery_analysis
     - customer
     - salesperson
     - department
+    - business_department
+    - business_region
     - organization
     - product
     - color
@@ -169,12 +171,15 @@ dimension_sets:
     - supplier_level
     - supplier_full_name
     - supplier_main_products
+    - unit
     - currency
 
   net_delivery_analysis: &net_delivery_analysis
     - customer
     - salesperson
     - department
+    - business_department
+    - business_region
     - organization
     - product
     - color
@@ -212,12 +217,16 @@ dimension_sets:
     - supplier_level
     - supplier_full_name
     - supplier_main_products
+    - unit
     - currency
 
   net_delivery_derived_analysis: &net_delivery_derived_analysis
     - customer
     - salesperson
     - department
+    - business_department
+    - business_region
+    - organization
     - product
     - color
     - color_label
@@ -254,9 +263,15 @@ dimension_sets:
     - supplier_level
     - supplier_full_name
     - supplier_main_products
+    - unit
     - currency
 
   physical_delivery_analysis: &physical_delivery_analysis
+    - department
+    - business_department
+    - business_region
+    - organization
+    - final_supplier
     - warehouse
     - warehouse_region
     - warehouse_department
@@ -269,9 +284,14 @@ dimension_sets:
     - defective_warehouse
     - defective_item
     - ccbs_warehouse
+    - unit
     - currency
 
   actual_warehouse_net_analysis: &actual_warehouse_net_analysis
+    - department
+    - business_department
+    - business_region
+    - organization
     - warehouse
     - warehouse_region
     - warehouse_department
@@ -282,6 +302,7 @@ dimension_sets:
     - batch_no
     - barcode
     - defective_item
+    - unit
     - currency
 
 value_contract_templates:
@@ -295,6 +316,12 @@ value_contract_templates:
     kind: closed
     allowed_values: [y, n]
     business_meanings: {y: 是, n: 否}
+  governed_unit: &vc_governed_unit
+    kind: closed
+    allowed_values: [m, y, kg, Pcs, m2, tao]
+    canonical_aliases: {M: m, 米: m, Y: y, 码: y, KG: kg, 公斤: kg, PCS: Pcs, pcs: Pcs, 件: Pcs, M2: m2, m²: m2, ㎡: m2, 平方: m2, 平方米: m2}
+    business_meanings: {m: 米, y: 码, kg: 公斤, Pcs: 件, m2: 平方米, tao: 含义待业务owner确认的原始单位码}
+    model_rule: 数量必须按计量单位分别查询；可使用米、码、公斤、件、平方米及登记别名，禁止跨单位合计；tao 只能按原始码报告，不得擅自解释为套或其他单位。
 
 dimensions:
   customer:
@@ -316,13 +343,28 @@ dimensions:
     answer_note: 默认使用交易事实账；毛出库和退货分别采用各自事实的 sales_id。只有目标、协作或明确分摊问题才交给目标域的业务员分摊账。
     semantics: 使用销售或出库事实上的业务员，不使用客户当前负责人。
   department:
-    label: 客户部门
+    label: 默认归属部门
     entity: customer_department
     source: {type: fact}
     columns: [customer_dept]
     filter_column: customer_dept
     value_contract: *vc_source_exact
-    semantics: 部门维度固定表示客户部门；退货事实的业务部门不替代客户部门。
+    semantics: 用户只说部门时固定使用 customer_dept；它是默认业绩/产品/客户归属部门，业务发生部门不得替代。
+  business_department:
+    label: 业务发生部门
+    entity: transaction_department
+    source: {type: fact}
+    columns: [biz_dept]
+    filter_column: biz_dept
+    value_contract: *vc_source_exact
+    semantics: 销售、出库或退货事实记录的订单业务发生部门；与默认归属部门分别统计。
+  business_region:
+    label: 业务发生地区
+    entity: transaction_region
+    source: {type: fact}
+    columns: [biz_region]
+    filter_column: biz_region
+    value_contract: *vc_source_exact
   organization:
     label: 业务组织
     entity: transaction_organization
@@ -330,6 +372,7 @@ dimensions:
     columns: [org_name]
     filter_column: org_name
     value_contract: *vc_source_exact
+    answer_note: 销售、物理出库和退货使用各自事实的业务组织；退货侧组织已由业务 owner 确认为同口径，各事实独立聚合后按同一组织名称对齐。
   product:
     label: 产品
     entity: product
@@ -481,6 +524,26 @@ dimensions:
     filter_column: supplier_name
     identity_filter: {entity_type: supplier, value_field: canonical_id, column: supplier_id}
     value_contract: *vc_entity_exact
+    answer_note: 普通订单、出库和退货的供应商表示产品供应商；不等于条码最终物理供应商。
+
+  final_supplier:
+    label: 最终物理供应商
+    entity: supplier
+    source: {type: barcode_fact}
+    columns: [final_supplier_id, final_supplier_no, final_supplier_name]
+    filter_column: final_supplier_name
+    identity_filter: {entity_type: supplier, value_field: canonical_id, column: final_supplier_id}
+    value_contract: *vc_entity_exact
+    answer_note: 仅用于物理毛出库；条码供应商存在时优先，否则使用产品供应商。退货不能按原条码稳定回连，因此物理净出库不开放该维度。
+
+  unit:
+    label: 计量单位
+    entity: measurement_unit
+    source: {type: fact}
+    columns: [unit]
+    filter_column: unit
+    value_contract: *vc_governed_unit
+    answer_note: m为米、y为码、kg为公斤、Pcs（含用户输入PCS）为件、m2/㎡为平方米；tao 是含义待业务owner确认的原始码，不得擅自翻译；数量必须按单位分别回答。
 
   currency:
     label: 币种
@@ -743,8 +806,8 @@ return_dimension_overrides: &return_dimension_overrides
     source: {type: fact}
     columns: [{column: biz_org, alias: org_name}]
     filter_column: biz_org
-    answer_note: 退货组织只在直接退货指标中使用退货事实 biz_org；未经 owner equivalence 不得与出库组织合并。
-    cross_fact_merge: owner_approved_equivalence_required
+    answer_note: 退货使用自身事实的业务组织；业务 owner 已确认它与销售及物理出库组织为同一口径，可在各事实独立聚合后对齐。
+    cross_fact_merge: owner_approved_equivalence
   bill_type:
     label: 单据类型
     entity: transaction_order
@@ -754,6 +817,7 @@ return_dimension_overrides: &return_dimension_overrides
     answer_note: 退货单据类型直接使用退货事实 sale_bill_type，并统一输出为 bill_type；不回连原出库补充。
 
 actual_return_warehouse_overrides: &actual_return_warehouse_overrides
+  <<: *return_dimension_overrides
   warehouse:
     label: 实际退入仓
     entity: physical_warehouse
@@ -858,10 +922,11 @@ public_disclosures:
     id: delivery.warehouse-delivery-amount-original.net-scope
     mode: required_always
     text: 原币物理净出库按同币种毛出库金额扣除有效退货金额，退货按实际退入仓归属；不同币种不得相加，结果允许为负数。
-  net_organization_unavailable: &disclosure_net_organization_unavailable
-    id: delivery.net-organization.no-equivalence
-    mode: contract_only
-    text: 净出库及退货率暂不按业务组织分组；两侧组织口径尚未完成等价确认，不做跨侧合并。
+  net_organization_equivalence: &disclosure_net_organization_equivalence
+    id: delivery.net-organization.owner-confirmed-equivalence
+    mode: required_when
+    when: {any_request_dimension_or_filter_present: [organization]}
+    text: 净出库及退货率按同一业务组织口径对齐；销售、物理出库和退货使用各自事实的组织值，退货侧已由业务 owner 确认等价，各事实先独立聚合再相减或计算比例。
   gross_organization_source: &disclosure_gross_organization_source
     id: delivery.gross-organization.fact-source
     mode: required_when
@@ -871,16 +936,31 @@ public_disclosures:
     id: delivery.return-organization.fact-source
     mode: required_when
     when: {any_request_dimension_or_filter_present: [organization]}
-    text: 退货指标按退货事实自身业务组织归属统计，不与出库侧业务组织合并。
+    text: 退货指标按退货事实自身业务组织归属统计；该组织已由业务 owner 确认为与销售及物理出库组织同一口径。
+  quantity_unit_scope: &disclosure_quantity_unit_scope
+    id: delivery.quantity.unit-scope
+    mode: required_always
+    text: 数量按计量单位分别回答；m为米、y为码、kg为公斤、Pcs（含用户输入PCS）为件、m2/㎡为平方米；tao 只能按含义待确认的原始码报告，不同单位不得换算或合计。
+  final_supplier_scope: &disclosure_final_supplier_scope
+    id: delivery.physical.final-supplier
+    mode: required_when
+    when: {any_request_dimension_or_filter_present: [final_supplier]}
+    text: 最终物理供应商仅用于物理毛出库；条码供应商存在时优先，否则使用产品供应商。退货不能稳定回连原条码，因此不用于物理净出库。
 
 default_disclosures:
   - id: delivery.external-customer.scope
     mode: required_always
     text: "出库域指标固定排除内部客户。"
+  - id: delivery.department.roles
+    mode: required_when
+    when: {any_request_dimension_or_filter_present: [department, business_department, business_region]}
+    text: 用户只说部门时使用默认归属部门；业务发生部门和业务发生地区为独立交易归属，不能与默认部门互相替代。
 
 metrics:
   warehouse_gross_delivery_amount:
     disclosures:
+      - *disclosure_gross_organization_source
+      - *disclosure_final_supplier_scope
       - id: delivery.warehouse-gross-delivery-amount.no-duplicate
         mode: required_always
         text: "真实物理维度毛出库金额使用出库记录自身金额，不与销售明细金额重复汇总。"
@@ -907,30 +987,13 @@ metrics:
     allowed_dimensions: *physical_delivery_analysis
     answer_note: *answer_note_warehouse_gross_delivery_amount
   warehouse_gross_delivery_quantity:
-    disclosures: []
-    availability: &quantity_pending_unit_reconciliation
-      status: pending_validation
-      capability_ref: delivery_quantity_metrics
-      error_code: SEMANTIC_UNIT_RECONCILIATION_REQUIRED
-      message: 数量来源存在多计量单位，当前合同尚未提供可执行单位筛选或分组，核验前不可用于回答。
-      owner: datasage.data_governance.delivery
-      activation_gate:
-        state: blocked
-        required_evidence:
-          - executable_unit_filter_or_group_contract
-          - production_read_only_reconciliation
-          - mixed_unit_regression
-        activation_authority: owner_and_release_review
-      review:
-        cadence: every_release_candidate
-        triggers: [source_schema_change, unit_contract_change]
-      lifecycle:
-        state: pending_validation
-        activation_effect: remains_unavailable_until_gate_passes
-        retirement_rule: retire_if_owner_or_validation_plan_removed
+    disclosures:
+      - *disclosure_gross_organization_source
+      - *disclosure_final_supplier_scope
+      - *disclosure_quantity_unit_scope
     label: 真实物理维度毛出库数量
     business_definition: 按仓库、批次、条码等受控实物流转维度统计的毛出库业务数量，尚未扣除退货。
-    unit_policy: 来源业务数量单位；不同计量单位不得换算或合并解释
+    unit_policy: *quantity_group_or_filter
     table: vk_dwd.delivery_bill_barcode_detail_dwd
     aggregation: sum
     measure: goods_num
@@ -940,7 +1003,9 @@ metrics:
     metric_join: *barcode_sale_detail_metric_join
     allowed_dimensions: *physical_delivery_analysis
   warehouse_gross_delivery_roll_count:
-    disclosures: []
+    disclosures:
+      - *disclosure_gross_organization_source
+      - *disclosure_final_supplier_scope
     label: 真实物理维度毛出库卷数
     business_definition: 按仓库、批次、条码等受控实物流转维度统计的毛出库卷数，尚未扣除退货。
     unit: 卷
@@ -953,7 +1018,9 @@ metrics:
     metric_join: *barcode_sale_detail_metric_join
     allowed_dimensions: *physical_delivery_analysis
   warehouse_gross_delivery_amount_original:
-    disclosures: []
+    disclosures:
+      - *disclosure_gross_organization_source
+      - *disclosure_final_supplier_scope
     label: 原币真实物理维度毛出库金额
     business_definition: 按仓库、批次、条码等受控实物流转维度统计的毛出库原币金额，尚未扣除退货；必须按币种筛选或分组，不得跨币种相加。
     unit: 原币金额（按币种分别计量）
@@ -970,6 +1037,7 @@ metrics:
   warehouse_return_amount:
     disclosures:
       - *disclosure_return_completed_period
+      - *disclosure_return_organization_source
       - id: delivery.warehouse-return-amount.attribution
         mode: required_always
         text: "物理维度退货按实际退入仓或退货记录自身的批次、条码和次品项归属统计。"
@@ -996,6 +1064,8 @@ metrics:
   warehouse_return_quantity:
     disclosures:
       - *disclosure_return_completed_period
+      - *disclosure_return_organization_source
+      - *disclosure_quantity_unit_scope
       - id: delivery.warehouse-return-quantity.attribution
         mode: contract_only
         text: "物理维度退货数量按实际退入仓或退货记录自身的批次、条码和次品项归属统计。"
@@ -1003,10 +1073,9 @@ metrics:
       - id: delivery.warehouse_return_quantity.legacy-note
         mode: contract_only
         text: &answer_note_warehouse_return_quantity "仓库族按实际退入仓扣减；批次、条码和次品项按退货事实自身记录值扣减。"
-    availability: *quantity_pending_unit_reconciliation
     label: 物理维度退货数量
     business_definition: 与物理维度退货金额相同业务范围内的退货业务数量。
-    unit_policy: 来源业务数量单位；不同计量单位不得换算或合并解释
+    unit_policy: *quantity_group_or_filter
     table: vk_dwd.delivery_return_detail_dwd
     aggregation: sum
     measure: return_goods_num
@@ -1019,6 +1088,7 @@ metrics:
   warehouse_return_roll_count:
     disclosures:
       - *disclosure_return_completed_period
+      - *disclosure_return_organization_source
       - id: delivery.warehouse-return-roll-count.attribution
         mode: required_always
         text: "物理维度退货卷数按实际退入仓或退货记录自身的批次、条码和次品项归属统计。"
@@ -1041,6 +1111,7 @@ metrics:
   warehouse_return_amount_original:
     disclosures:
       - *disclosure_return_completed_period
+      - *disclosure_return_organization_source
       - *disclosure_physical_actual_inbound
     label: 原币物理维度退货金额
     business_definition: 按受控实物流转维度统计的有效销售退货原币金额；必须按币种筛选或分组，不得跨币种相加。
@@ -1059,6 +1130,7 @@ metrics:
     disclosures:
       - *disclosure_net_period_scope
       - *disclosure_physical_actual_inbound
+      - *disclosure_net_organization_equivalence
       - id: delivery.warehouse-delivery-amount.net-scope
         mode: required_always
         text: "未明确要求毛出库时采用期间净出库；退货按实际退入仓或退货记录归属扣减，结果允许为负数。"
@@ -1079,16 +1151,17 @@ metrics:
     disclosures:
       - *disclosure_net_period_scope
       - *disclosure_physical_actual_inbound
+      - *disclosure_net_organization_equivalence
+      - *disclosure_quantity_unit_scope
       - id: delivery.warehouse-delivery-quantity.net-scope
         mode: contract_only
         text: "物理维度净出库数量以毛出库数量扣除同范围有效退货数量，退货按实际归属扣减，结果允许为负数。"
       - id: delivery.warehouse_delivery_quantity.legacy-note
         mode: contract_only
         text: &answer_note_warehouse_delivery_quantity "仓库族退货按实际退入仓扣减；批次、条码和次品项按各自事实记录值扣减；结果允许为负数。"
-    availability: *quantity_pending_unit_reconciliation
     label: 物理维度净出库数量
     business_definition: 按受控实物流转维度统计的期间净出库业务数量；毛出库数量扣除同范围有效退货数量。
-    unit_policy: 来源业务数量单位；不同计量单位不得换算或合并解释
+    unit_policy: *quantity_group_or_filter
     formula: warehouse_gross_delivery_quantity - warehouse_return_quantity
     components:
       - {metric: warehouse_gross_delivery_quantity, sign: 1}
@@ -1100,6 +1173,7 @@ metrics:
     disclosures:
       - *disclosure_net_period_scope
       - *disclosure_physical_actual_inbound
+      - *disclosure_net_organization_equivalence
       - id: delivery.warehouse-delivery-roll-count.net-scope
         mode: required_always
         text: "物理维度净出库卷数以毛出库卷数扣除同范围有效退货卷数，退货按实际归属扣减，结果允许为负数。"
@@ -1120,6 +1194,7 @@ metrics:
     disclosures:
       - *disclosure_net_period_scope
       - *disclosure_physical_actual_inbound
+      - *disclosure_net_organization_equivalence
       - *disclosure_warehouse_delivery_amount_original_scope
       - id: currency.original.no-cross-currency
         mode: required_always
@@ -1156,7 +1231,7 @@ metrics:
     allowed_dimensions: *delivery_analysis
     change_decomposition:
       mode: additive_partition
-      dimensions: [customer, salesperson, department, organization, product]
+      dimensions: [customer, salesperson, department, business_department, organization, product]
   gross_delivery_amount_original:
     disclosures:
       - *disclosure_gross_organization_source
@@ -1174,10 +1249,10 @@ metrics:
   gross_delivery_quantity:
     disclosures:
       - *disclosure_gross_organization_source
-    availability: *quantity_pending_unit_reconciliation
+      - *disclosure_quantity_unit_scope
     label: 毛出库数量
     business_definition: 所选范围内有效出库在扣除退货前的业务数量。
-    unit_policy: 来源业务数量单位；不同计量单位不得换算或合并解释
+    unit_policy: *quantity_group_or_filter
     table: vk_dwd.sale_bill_goods_detail_dwd
     aggregation: sum
     measure: sorted_goods_num
@@ -1226,7 +1301,7 @@ metrics:
     allowed_dimensions: *net_delivery_analysis
     change_decomposition:
       mode: additive_partition
-      dimensions: [customer, salesperson, department, organization, product]
+      dimensions: [customer, salesperson, department, business_department, organization, product]
     dimension_overrides: *return_dimension_overrides
     answer_note: *answer_note_return_amount
   return_amount_original:
@@ -1258,10 +1333,10 @@ metrics:
       - *disclosure_return_completed_period
       - *disclosure_return_current_master_reclassification
       - *disclosure_return_organization_source
-    availability: *quantity_pending_unit_reconciliation
+      - *disclosure_quantity_unit_scope
     label: 退货数量
     business_definition: 与退货金额相同业务范围内的退货业务数量。
-    unit_policy: 来源业务数量单位；不同计量单位不得换算或合并解释
+    unit_policy: *quantity_group_or_filter
     table: vk_dwd.delivery_return_detail_dwd
     aggregation: sum
     measure: return_goods_num
@@ -1324,7 +1399,7 @@ metrics:
     disclosures:
       - *disclosure_net_period_scope
       - *disclosure_net_current_master_reclassification
-      - *disclosure_net_organization_unavailable
+      - *disclosure_net_organization_equivalence
       - id: delivery.net-flow.meaning
         mode: required_always
         text: "该指标为当期流量净出库，即毛出库减退货；结果允许为负数。"
@@ -1342,7 +1417,7 @@ metrics:
     allowed_dimensions: *net_delivery_derived_analysis
     change_decomposition:
       mode: additive_partition
-      dimensions: [customer, salesperson, department, product]
+      dimensions: [customer, salesperson, department, business_department, organization, product]
     dimension_overrides: *current_attribute_overrides
     answer_note: *answer_note_delivery_amount
     answer_contract:
@@ -1351,7 +1426,7 @@ metrics:
     disclosures:
       - *disclosure_net_period_scope
       - *disclosure_net_current_master_reclassification
-      - *disclosure_net_organization_unavailable
+      - *disclosure_net_organization_equivalence
       - id: currency.original.no-cross-currency
         mode: required_always
         text: "原币金额必须限定单一币种或按币种分组，不同币种不得直接相加。"
@@ -1374,17 +1449,17 @@ metrics:
     disclosures:
       - *disclosure_net_period_scope
       - *disclosure_net_current_master_reclassification
-      - *disclosure_net_organization_unavailable
+      - *disclosure_net_organization_equivalence
+      - *disclosure_quantity_unit_scope
       - id: delivery.net-flow.meaning
         mode: contract_only
         text: "该指标为当期流量净出库，即毛出库减退货；结果允许为负数。"
       - id: delivery.delivery_quantity.legacy-note
         mode: contract_only
         text: &answer_note_delivery_quantity "默认出库数量为当期流量净出库数量，结果允许为负数。"
-    availability: *quantity_pending_unit_reconciliation
     label: 净出库数量
     business_definition: 所选期间毛出库业务数量扣除同期有效退货业务数量后的净流量。
-    unit_policy: 来源业务数量单位；不同计量单位不得换算或合并解释
+    unit_policy: *quantity_group_or_filter
     formula: gross_delivery_quantity - return_quantity
     components:
       - {metric: gross_delivery_quantity, sign: 1}
@@ -1397,7 +1472,7 @@ metrics:
     disclosures:
       - *disclosure_net_period_scope
       - *disclosure_net_current_master_reclassification
-      - *disclosure_net_organization_unavailable
+      - *disclosure_net_organization_equivalence
       - id: delivery.net-flow.meaning
         mode: required_always
         text: "该指标为当期流量净出库，即毛出库减退货；结果允许为负数。"
@@ -1420,7 +1495,7 @@ metrics:
     disclosures:
       - *disclosure_net_period_scope
       - *disclosure_net_current_master_reclassification
-      - *disclosure_net_organization_unavailable
+      - *disclosure_net_organization_equivalence
       - id: delivery.return-amount-rate.denominator
         mode: required_always
         text: "金额退货率以同期毛出库金额为分母；毛出库金额小于等于零时结果未定义，退货率允许超过100%。"
@@ -1440,17 +1515,18 @@ metrics:
     disclosures:
       - *disclosure_net_period_scope
       - *disclosure_net_current_master_reclassification
-      - *disclosure_net_organization_unavailable
+      - *disclosure_net_organization_equivalence
+      - *disclosure_quantity_unit_scope
       - id: delivery.return-quantity-rate.denominator
         mode: contract_only
         text: "数量退货率仅用于明确的数量口径，并以同期毛出库数量为分母；毛出库数量小于等于零时结果未定义。"
       - id: delivery.return_quantity_rate.legacy-note
         mode: contract_only
         text: &answer_note_return_quantity_rate "仅在用户明确要求数量退货率时使用；毛出库数量小于等于零时返回空值。"
-    availability: *quantity_pending_unit_reconciliation
     label: 当期数量退货率
     business_definition: 所选期间退货业务数量相对于同期毛出库业务数量的比例；基数不可用时结果未定义。
     unit: 比例（可大于1；展示为百分比时可超过100%）
+    unit_policy: *quantity_group_or_filter
     formula: return_quantity / gross_delivery_quantity
     ratio: {numerator: return_quantity, denominator: gross_delivery_quantity}
     time_policy: current_month
@@ -1461,7 +1537,7 @@ metrics:
     disclosures:
       - *disclosure_net_period_scope
       - *disclosure_net_current_master_reclassification
-      - *disclosure_net_organization_unavailable
+      - *disclosure_net_organization_equivalence
       - id: delivery.return-roll-rate.denominator
         mode: required_always
         text: "卷数退货率仅用于明确的卷数口径，并以同期毛出库卷数为分母；毛出库卷数小于等于零时结果未定义。"
@@ -1512,7 +1588,7 @@ metrics:
     allowed_dimensions: *delivery_analysis
     change_decomposition:
       mode: additive_partition
-      dimensions: [customer, salesperson, department, organization, product]
+      dimensions: [customer, salesperson, department, business_department, organization, product]
   order_amount_original:
     disclosures: []
     label: 原币下单金额
@@ -1527,11 +1603,11 @@ metrics:
     allowed_dimensions: *delivery_analysis
     currency_policy: {mode: original_currency, column: currency_no, require_filter_or_group: true, never_sum_mixed_currency: true}
   order_quantity:
-    disclosures: []
-    availability: *quantity_pending_unit_reconciliation
+    disclosures:
+      - *disclosure_quantity_unit_scope
     label: 下单数量
     business_definition: 所选下单期间内订单记录的业务数量。
-    unit_policy: 来源业务数量单位；不同计量单位不得换算或合并解释
+    unit_policy: *quantity_group_or_filter
     table: vk_dwd.sale_bill_goods_detail_dwd
     aggregation: sum
     measure: sale_goods_num

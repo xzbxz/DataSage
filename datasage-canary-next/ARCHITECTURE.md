@@ -1,6 +1,6 @@
 # DataSage Expert 0.15 架构
 
-版本：`0.15.0-rc13`
+版本：`0.15.0-rc14`
 运行基线：Hermes `0.20.5`
 
 ## 唯一目标
@@ -38,10 +38,13 @@ Skill 管理面不向 WeCom 暴露。
 独立权威来源。transaction-detail 基表只承担诊断参照，不是销售分摊账的覆盖
 门禁；Profile 禁止在 split 缺失时从基表回填或跨账替代。
 
-rc13 是出库 L3 canary 整改：数量类 8 项仍 pending；净出库组织跨侧不合并，毛出库与
-退货可分别查询；披露、unknown、truncation、actual-missing 与 adapter 证据边界已
-加固。企微全员私聊/群聊和数据库业务权限策略保持不变；正式 L3 live replay 与 150
-案例门槛仍 pending。
+rc14 落实本轮出库事实口径：8 项数量指标恢复查询，必须按单位分组或限定单一单位，
+`y`、`Pcs/PCS`、`m2/㎡` 分别解释为码、件、平方米且禁止跨单位合计；默认部门固定为
+`customer_dept`，`biz_dept`/`biz_region` 作为独立业务发生归属；退货 `biz_org` 与
+销售/出库 `org_name` 经业务 owner 确认为同一组织口径，各事实仍独立聚合；条码
+`final_supplier` 仅开放于物理毛出库。历史原始码 `tao` 暂只按原码单列，不擅自解释。
+企微全员私聊/群聊和数据库业务权限策略保持不变；正式 L3 live replay 与 150 案例门槛
+仍 pending。
 
 ## 验收门槛（唯一量化真源）
 

@@ -1,5 +1,5 @@
 name: datasage-query
-version: "0.15.0-rc13"
+version: "0.15.0-rc14"
 manifest_version: 2
 api_version: 1
 # Python dependency ownership is deliberately single-source: PyMySQL 1.2.0 is

@@ -176,16 +176,6 @@ class SemanticSingleSourceTests(unittest.TestCase):
 
 class PendingCapabilityLifecycleTests(unittest.TestCase):
     EXPECTED_PENDING_METRICS = {
-        "delivery": {
-            "warehouse_gross_delivery_quantity",
-            "warehouse_return_quantity",
-            "warehouse_delivery_quantity",
-            "gross_delivery_quantity",
-            "return_quantity",
-            "delivery_quantity",
-            "return_quantity_rate",
-            "order_quantity",
-        },
         "receivable": {"receivable_quantity"},
     }
 
@@ -244,7 +234,7 @@ class PendingCapabilityLifecycleTests(unittest.TestCase):
                 ):
                     pending.append((path.name, metric_code, availability))
 
-        self.assertEqual(9, len(pending))
+        self.assertEqual(1, len(pending))
         for path_name, metric_code, availability in pending:
             with self.subTest(path=path_name, metric=metric_code):
                 self.assertTrue(str(availability.get("owner", "")).strip())

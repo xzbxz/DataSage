@@ -297,8 +297,9 @@ class ContractRemediationTests(unittest.TestCase):
         )
         self.assertIn("explicit non-split delivery-return component", warnings)
         self.assertIn("biz_org", warnings)
-        self.assertIn("split org_name", warnings)
-        self.assertIn("owner-approved equivalence", warnings)
+        self.assertIn("sale and outbound org_name", warnings)
+        self.assertIn("business owner confirmed", warnings)
+        self.assertIn("each fact keeps its own physical field", warnings)
 
     def test_datasets_domain_values_close_over_supported_domains(self) -> None:
         datasets = yaml.safe_load(

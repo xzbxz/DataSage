@@ -299,16 +299,16 @@ class GoldenExpertGateTests(unittest.TestCase):
             "not_verified", SCORER.VERIFICATION_SCOPE["business_arithmetic"]
         )
 
-    def test_l3_quantity_pending_and_internal_scope_require_safe_conclusions(self):
-        quantity = self._l3_case("l3_03_delivery_quantity_pending_no_substitution")
+    def test_l3_quantity_unit_scope_and_internal_scope_require_safe_conclusions(self):
+        quantity = self._l3_case("l3_03_delivery_quantity_unit_scoped")
         observed = self._passing_l3_observed(quantity)
         self.assertEqual([], SCORER._score_case(quantity, observed))
-        queried = copy.deepcopy(observed)
-        queried["evidence"]["query_attempted"] = True
+        unscoped = copy.deepcopy(observed)
+        unscoped["plan"]["dimensions"] = []
         self.assertTrue(
             any(
-                "query was attempted" in error
-                for error in SCORER._score_case(quantity, queried)
+                "plan.dimensions" in error
+                for error in SCORER._score_case(quantity, unscoped)
             )
         )
         substituted = copy.deepcopy(observed)
@@ -317,6 +317,14 @@ class GoldenExpertGateTests(unittest.TestCase):
             any(
                 "substitute_delivery_amount" in error
                 for error in SCORER._score_case(quantity, substituted)
+            )
+        )
+        mixed = copy.deepcopy(observed)
+        mixed["conclusions"].append("report_mixed_unit_total")
+        self.assertTrue(
+            any(
+                "report_mixed_unit_total" in error
+                for error in SCORER._score_case(quantity, mixed)
             )
         )
 
@@ -331,17 +339,17 @@ class GoldenExpertGateTests(unittest.TestCase):
             )
         )
 
-    def test_l3_salesperson_organization_and_top5_cases_preserve_identity_and_scope(self):
-        identity = self._l3_case("l3_05_delivery_salesperson_organization_attribution")
+    def test_l3_owner_confirmed_organization_and_top5_cases_preserve_scope(self):
+        identity = self._l3_case("l3_05_delivery_owner_confirmed_organization")
         observed = self._passing_l3_observed(identity)
         self.assertEqual([], SCORER._score_case(identity, observed))
         missing_scope = copy.deepcopy(observed)
         missing_scope["conclusions"].remove(
-            "report_source_specific_organization_attribution"
+            "state_owner_confirmed_organization_equivalence"
         )
         self.assertTrue(
             any(
-                "report_source_specific_organization_attribution" in error
+                "state_owner_confirmed_organization_equivalence" in error
                 for error in SCORER._score_case(identity, missing_scope)
             )
         )

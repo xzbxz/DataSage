@@ -92,12 +92,13 @@ class DeliveryL3GoldenTests(unittest.TestCase):
         self.assertEqual("not_verified", SCORER.VERIFICATION_SCOPE["business_values"])
         self.assertEqual("not_verified", SCORER.VERIFICATION_SCOPE["business_arithmetic"])
 
-    def test_order_and_pending_quantity_contracts_are_distinct(self):
+    def test_order_and_unit_scoped_quantity_contracts_are_distinct(self):
         order = L3_CASES["l3_02_delivery_order_amount_positive"]
-        quantity = L3_CASES["l3_03_delivery_quantity_pending_no_substitution"]
+        quantity = L3_CASES["l3_03_delivery_quantity_unit_scoped"]
         self.assertEqual(["order_amount"], order["plan_constraints"]["metrics"])
         self.assertEqual(["delivery_quantity"], quantity["plan_constraints"]["metrics"])
-        self.assertTrue(quantity["evidence_requirements"]["must_not_query"])
+        self.assertEqual(["unit"], quantity["plan_constraints"]["dimensions"])
+        self.assertFalse(quantity["evidence_requirements"]["must_not_query"])
 
 
 if __name__ == "__main__":
