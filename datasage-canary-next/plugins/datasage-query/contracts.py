@@ -530,6 +530,110 @@ def _metric_group_dimension_limit(
     return limit
 
 
+def _metric_operation_summary(definition: Mapping[str, Any]) -> list[str]:
+    """Return the execution operations exposed for one projected metric."""
+
+    operations = ["direct_fact"]
+    if definition.get("comparison_kinds"):
+        operations.append("returned_comparison")
+    if definition.get("allowed_dimensions") or definition.get(
+        "allowed_dimension_set"
+    ):
+        operations.append("dimension_breakdown")
+    if definition.get("change_decomposition_dimensions"):
+        operations.append("complete_change_decomposition")
+    if definition.get("target_gap_decomposition"):
+        operations.append("complete_target_gap_decomposition")
+    raw_modes = definition.get("allowed_attribution_modes")
+    modes = {
+        str(mode)
+        for mode in raw_modes
+        if isinstance(mode, str) and mode
+    } if isinstance(raw_modes, list) else set()
+    by_mode = definition.get("dimensions_by_attribution_mode")
+    if isinstance(by_mode, Mapping):
+        modes.update(str(mode) for mode in by_mode if str(mode))
+    if len(modes) <= 1:
+        return operations
+
+    mode_operations = _metric_operation_summary_by_attribution_mode(definition)
+    if not mode_operations:
+        return operations
+    common = set.intersection(
+        *(set(values) for values in mode_operations.values())
+    )
+    return [operation for operation in operations if operation in common]
+
+
+def _metric_operation_summary_by_attribution_mode(
+    definition: Mapping[str, Any],
+) -> dict[str, list[str]]:
+    """Keep path-specific operations separate from the metric-wide union.
+
+    A target completion metric can support customer grouping on the ordinary
+    transaction-detail path while supporting salesperson grouping on the
+    allocation path.  Publishing one flat operation list for both paths would
+    invite the planner to combine an operation with the wrong ledger.
+    """
+
+    raw_by_mode = definition.get("dimensions_by_attribution_mode")
+    by_mode = raw_by_mode if isinstance(raw_by_mode, Mapping) else {}
+    declared_modes: list[str] = []
+    raw_modes = definition.get("allowed_attribution_modes")
+    if isinstance(raw_modes, list):
+        declared_modes.extend(
+            str(mode) for mode in raw_modes if isinstance(mode, str) and mode
+        )
+    required_mode = definition.get("required_attribution_mode")
+    if isinstance(required_mode, str) and required_mode:
+        declared_modes.append(required_mode)
+    declared_modes.extend(str(mode) for mode in by_mode if str(mode))
+    modes = sorted(set(declared_modes))
+    if not modes:
+        return {}
+
+    target_gap = definition.get("target_gap_decomposition")
+    target_gap_mode = (
+        target_gap.get("required_attribution_mode")
+        if isinstance(target_gap, Mapping)
+        else None
+    )
+    result: dict[str, list[str]] = {}
+    for mode in modes:
+        dimensions = by_mode.get(mode)
+        has_dimensions = isinstance(dimensions, list) and bool(dimensions)
+        if not has_dimensions and mode == required_mode:
+            has_dimensions = bool(definition.get("allowed_dimensions"))
+        operations = ["direct_fact"]
+        if definition.get("comparison_kinds"):
+            operations.append("returned_comparison")
+        if has_dimensions:
+            operations.append("dimension_breakdown")
+        if definition.get("change_decomposition_dimensions"):
+            operations.append("complete_change_decomposition")
+        if target_gap_mode == mode:
+            operations.append("complete_target_gap_decomposition")
+        result[mode] = operations
+    return result
+
+
+def _metric_allowed_dimensions(
+    metric: Mapping[str, Any], planner: Mapping[str, Any]
+) -> list[str]:
+    """Resolve compressed dimension authorization for catalog views."""
+
+    raw_allowed = metric.get("allowed_dimensions")
+    if isinstance(raw_allowed, list):
+        return [str(value) for value in raw_allowed if isinstance(value, str)]
+    set_id = metric.get("allowed_dimension_set")
+    dimension_sets = planner.get("allowed_dimension_sets")
+    if isinstance(set_id, str) and isinstance(dimension_sets, Mapping):
+        values = dimension_sets.get(set_id)
+        if isinstance(values, list):
+            return [str(value) for value in values if isinstance(value, str)]
+    return []
+
+
 def _is_unavailable(definition: Mapping[str, Any]) -> bool:
     try:
         status = capability_contract.validate_availability(definition)
@@ -811,6 +915,14 @@ def _model_semantic_projection(
                 "dimensions": list(target_gap_dimensions),
                 "required_attribution_mode": required_mode,
             }
+        item["operation_summary"] = _metric_operation_summary(item)
+        operation_summary_by_mode = _metric_operation_summary_by_attribution_mode(
+            item
+        )
+        if operation_summary_by_mode:
+            item["operation_summary_by_attribution_mode"] = (
+                operation_summary_by_mode
+            )
         scopes = definition.get("inventory_scope_filters")
         if isinstance(scopes, Mapping):
             item["available_inventory_scopes"] = sorted(str(scope) for scope in scopes)
@@ -1018,6 +1130,13 @@ def _catalog_summary(domain: str, planner: Mapping[str, Any]) -> dict[str, Any]:
                 "currency_policy",
                 "required_attribution_mode",
                 "allowed_attribution_modes",
+                "allowed_dimensions",
+                "dimensions_by_attribution_mode",
+                "operation_summary",
+                "operation_summary_by_attribution_mode",
+                "target_gap_decomposition",
+                "comparison_kinds",
+                "exact_default_lookup_supported",
                 "available_inventory_scopes",
                 "default_inventory_scope",
                 "max_group_dimensions",
@@ -1030,6 +1149,9 @@ def _catalog_summary(domain: str, planner: Mapping[str, Any]) -> dict[str, Any]:
         item["supports_change_decomposition"] = bool(
             raw.get("change_decomposition_dimensions")
         )
+        allowed_dimensions = _metric_allowed_dimensions(raw, planner)
+        if allowed_dimensions:
+            item["allowed_dimensions"] = allowed_dimensions
         metrics.append(item)
     result: dict[str, Any] = {
         "domain": domain,
@@ -1073,11 +1195,16 @@ def _catalog_expert_index(domain: str, planner: Mapping[str, Any]) -> dict[str, 
                 "currency_policy",
                 "required_attribution_mode",
                 "allowed_attribution_modes",
+                "allowed_dimensions",
+                "dimensions_by_attribution_mode",
                 "available_inventory_scopes",
                 "default_inventory_scope",
                 "exact_default_lookup_supported",
                 "max_group_dimensions",
                 "comparison_kinds",
+                "operation_summary",
+                "operation_summary_by_attribution_mode",
+                "target_gap_decomposition",
             )
             if raw.get(key) is not None
         }
@@ -1087,16 +1214,10 @@ def _catalog_expert_index(domain: str, planner: Mapping[str, Any]) -> dict[str, 
         item["supports_change_decomposition"] = bool(
             raw.get("change_decomposition_dimensions")
         )
-        operations = ["direct_fact"]
-        if raw.get("comparison_kinds"):
-            operations.append("returned_comparison")
-        if item["supports_dimensions"]:
-            operations.append("dimension_breakdown")
-        if item["supports_change_decomposition"]:
-            operations.append("complete_change_decomposition")
-        if raw.get("target_gap_decomposition"):
-            operations.append("complete_target_gap_decomposition")
-        item["operation_summary"] = operations
+        allowed_dimensions = _metric_allowed_dimensions(raw, planner)
+        if allowed_dimensions:
+            item["allowed_dimensions"] = allowed_dimensions
+        item["operation_summary"] = _metric_operation_summary(raw)
         if raw.get("answer_contract") is not None:
             item["limitations"] = _copy_guidance(raw.get("answer_contract"))
         item["requires_metric_detail"] = (

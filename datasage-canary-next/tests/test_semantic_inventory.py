@@ -85,7 +85,7 @@ class SemanticSingleSourceTests(unittest.TestCase):
             (CONTRACT_ROOT / "target-semantics.yaml").read_text(encoding="utf-8")
         )
         metrics = target["metrics"]
-        expected_dimensions = ["salesperson", "department", "organization"]
+        expected_dimensions = ["salesperson", "department", "organization", "customer"]
         expected_sources = {
             "allocated_net_delivery_amount": "delivery_target_completion",
             "allocated_net_receipt_amount": "receipt_target_completion",
@@ -122,7 +122,7 @@ class SemanticSingleSourceTests(unittest.TestCase):
             (CONTRACT_ROOT / "target-semantics.yaml").read_text(encoding="utf-8")
         )
         metrics = target["metrics"]
-        expected_dimensions = ["department", "organization", "salesperson"]
+        expected_dimensions = ["customer", "department", "organization", "salesperson"]
         for metric_code, source_code in (
             ("allocated_net_delivery_amount", "delivery_target_completion"),
             ("allocated_net_receipt_amount", "receipt_target_completion"),
@@ -139,6 +139,39 @@ class SemanticSingleSourceTests(unittest.TestCase):
                     {"salesperson_allocation": expected_dimensions}, by_attribution
                 )
                 self.assertNotIn("allowed_dimensions", metric)
+
+    def test_salesperson_allocation_customer_mapping_is_id_bound_and_display_safe(self):
+        target = yaml.safe_load(
+            (CONTRACT_ROOT / "target-semantics.yaml").read_text(encoding="utf-8")
+        )
+        customer = target["dimensions"]["customer"]
+        self.assertEqual(["customer_id", "customer_name"], customer["columns"])
+        self.assertEqual("customer_name", customer["filter_column"])
+        self.assertEqual("customer_id", customer["identity_filter"]["column"])
+
+        metrics = target["metrics"]
+        for metric_code in (
+            "delivery_allocated_target_amount",
+            "receipt_allocated_target_amount",
+        ):
+            self.assertIn("customer", metrics[metric_code]["allowed_dimensions"])
+
+        for metric_code in ("delivery_target_completion", "receipt_target_completion"):
+            path = metrics[metric_code]["paths"]["salesperson_allocation"]
+            self.assertIn("customer", path["allowed_dimensions"])
+            mapping = path["dimension_mappings"]["customer"]
+            self.assertEqual("customer_id", mapping["target_key"])
+            self.assertEqual("customer_id", mapping["actual_key"])
+            self.assertEqual("customer_name", mapping["target_filter"])
+            self.assertEqual("customer_name", mapping["actual_filter"])
+            for component in path["actual"]["components"]:
+                component_mapping = component["dimension_mappings"]["customer"]
+                self.assertEqual("customer_id", component_mapping["key"])
+                self.assertEqual("customer_name", component_mapping["filter"])
+                self.assertEqual(
+                    [{"column": "customer_name", "alias": "customer_name"}],
+                    component_mapping["outputs"],
+                )
 
 
 class PendingCapabilityLifecycleTests(unittest.TestCase):

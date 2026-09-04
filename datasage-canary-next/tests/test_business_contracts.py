@@ -5073,7 +5073,7 @@ class BusinessContractTests(unittest.TestCase):
                 projected["metric"]["allowed_attribution_modes"],
             )
             self.assertEqual(
-                ["department", "organization", "salesperson"],
+                ["customer", "department", "organization", "salesperson"],
                 projected["metric"]["dimensions_by_attribution_mode"][
                     "salesperson_allocation"
                 ],

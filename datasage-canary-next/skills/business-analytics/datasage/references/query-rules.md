@@ -28,6 +28,43 @@ Rule ID: `datasage.query-rules/v1`
   `expert_index` only when the metric is unknown, and inspect a small candidate
   set before asking the user.
 
+## Target question planning
+
+Target questions have an explicit evidence order. For “目标完成情况” or
+“为什么没完成”:
+
+1. Query the exact target completion metric(s) for the requested period, scope,
+   and attribution mode, keeping target and net registered actual on the
+   returned split/allocation ledger. The first answer must report target, net
+   registered actual, gap, and completion rate. If any of these are not
+   returned, say that the target baseline was not obtained; do not fill it from
+   a related actual metric or another ledger.
+2. If customer detail is requested or is the next diagnostic cut, issue an
+   ordinary `customer` breakdown of the same target metric with the same period,
+   scope, attribution mode, and ledger. A successful query is required; catalog
+   metadata alone does not authorize a customer drill. Do not silently change
+   the dimension to department, organization, or month when customer is
+   unavailable or fails.
+3. Treat ordinary customer breakdown, structural contribution, and complete or
+   causal decomposition as different capabilities. A breakdown is descriptive;
+   structural contribution requires a complete compatible reconciliation;
+   complete decomposition requires an explicitly supported exhaustive operation;
+   causal explanation additionally requires independent applicable customer,
+   order, receivable, receipt, or collection mechanism evidence.
+4. Never call a complete target-gap decomposition merely because the user asks
+   “why”. In particular, do not assume that a salesperson allocation path is
+   compatible with a decomposition operation unless the exact current contract
+   says so. A failed or unsupported decomposition is a local capability gap,
+   not a reason to discard the valid target baseline. If the runtime returns
+   `UNSUPPORTED_TARGET_GAP_DECOMPOSITION` or `UNSUPPORTED_DIMENSION`, keep the
+   error local to that branch and do not silently re-label a fallback result.
+5. If driver evidence is failed, unsupported, partial, ambiguous, stale, or
+   truncated, preserve successful target facts, state that the evidence is
+   insufficient to explain the cause, and name the next discriminating query.
+   Trends, month-over-month movement, co-movement, arithmetic, or target design
+   do not prove a cause. “钱没收回” and “下单节奏” must never be emitted as
+   verified causes; at most they are labelled hypotheses pending evidence.
+
 ## Time
 
 - Transaction totals and rankings without a time phrase default to the current

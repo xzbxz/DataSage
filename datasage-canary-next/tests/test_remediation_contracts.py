@@ -237,6 +237,69 @@ class ContractRemediationTests(unittest.TestCase):
                 self.assertNotIn("本月使用完整月目标与截至当前实际", text)
                 self.assertIn("所选期间", text)
 
+    def test_salesperson_target_customer_split_contract_is_complete(self) -> None:
+        target = yaml.safe_load(
+            (CONTRACT_ROOT / "target-semantics.yaml").read_text(encoding="utf-8")
+        )
+        datasets = yaml.safe_load(
+            (CONTRACT_ROOT / "datasets.yaml").read_text(encoding="utf-8")
+        )
+        split_tables = (
+            "vk_dwd.delivery_target_split_dwd",
+            "vk_dwd.sale_bill_split_dwd",
+            "vk_dwd.receive_target_split_dwd",
+            "vk_dwd.receive_bill_split_dwd",
+            "vk_dwd.receive_return_bill_split_dwd",
+            "vk_dwd.delivery_return_detail_dwd",
+        )
+        for table in split_tables:
+            with self.subTest(table=table):
+                columns = set(datasets["datasets"][table]["allowed_columns"])
+                self.assertTrue({"customer_id", "customer_name"} <= columns)
+
+        for metric_code in (
+            "delivery_target_completion",
+            "receipt_target_completion",
+        ):
+            path = target["metrics"][metric_code]["paths"][
+                "salesperson_allocation"
+            ]
+            self.assertIn("customer", path["allowed_dimensions"])
+            self.assertEqual(
+                "customer_id", path["dimension_mappings"]["customer"]["target_key"]
+            )
+            self.assertEqual(
+                "customer_id", path["dimension_mappings"]["customer"]["actual_key"]
+            )
+
+    def test_target_receipt_uses_registered_net_amount_wording(self) -> None:
+        target = yaml.safe_load(
+            (CONTRACT_ROOT / "target-semantics.yaml").read_text(encoding="utf-8")
+        )
+        receipt_completion = target["metrics"]["receipt_target_completion"]
+        receipt_net = target["metrics"]["allocated_net_receipt_amount"]
+        completion_text = json.dumps(receipt_completion, ensure_ascii=False)
+        net_text = json.dumps(receipt_net, ensure_ascii=False)
+        for text in (completion_text, net_text):
+            self.assertIn("净收款登记额", text)
+            self.assertIn("不代表实结或到账", text)
+        for component in receipt_completion["paths"]["salesperson_allocation"][
+            "actual"
+        ]["components"]:
+            self.assertIn(component["measure"], {"detail_receive_rmb", "detail_return_rmb"})
+
+    def test_delivery_return_exception_and_organization_boundary_are_declared(self) -> None:
+        datasets = yaml.safe_load(
+            (CONTRACT_ROOT / "datasets.yaml").read_text(encoding="utf-8")
+        )
+        warnings = " ".join(
+            datasets["datasets"]["vk_dwd.delivery_return_detail_dwd"]["warnings"]
+        )
+        self.assertIn("explicit non-split delivery-return component", warnings)
+        self.assertIn("biz_org", warnings)
+        self.assertIn("split org_name", warnings)
+        self.assertIn("owner-approved equivalence", warnings)
+
     def test_datasets_domain_values_close_over_supported_domains(self) -> None:
         datasets = yaml.safe_load(
             (CONTRACT_ROOT / "datasets.yaml").read_text(encoding="utf-8")

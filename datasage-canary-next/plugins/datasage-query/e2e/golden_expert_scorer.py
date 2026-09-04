@@ -42,6 +42,13 @@ DECISION_QUALITY_DIMENSIONS = (
 DECISION_QUALITY_SCORE_MAX = 2
 DECISION_QUALITY_REQUIREMENT_KEYS = {"required_dimensions", "minimum_score"}
 DOMAIN_METRIC_PAIR_KEYS = {"domain", "metric"}
+STRUCTURED_EVIDENCE_KEYS = {
+    "source_authority",
+    "identity_bindings",
+    "source_receipts",
+    "reconciled_totals",
+    "base_fallback",
+}
 
 
 def _is_lower_sha256(value: Any) -> bool:
@@ -143,6 +150,56 @@ def _validate_decision_quality_scores(
         else:
             normalized[dimension] = score
     return normalized, errors
+
+
+def _validate_structured_evidence_requirements(
+    value: Any, *, label: str
+) -> None:
+    """Validate optional machine-checkable evidence assertions.
+
+    The assertions deliberately describe provenance and integrity, not business
+    amounts.  This keeps Golden cases useful without hard-coding a fixture's
+    numbers into the evaluator.
+    """
+
+    if not isinstance(value, dict) or not value:
+        raise ValueError(f"{label} must be a non-empty object")
+    unknown = set(value).difference(STRUCTURED_EVIDENCE_KEYS)
+    if unknown:
+        raise ValueError(
+            f"{label} has unknown keys {sorted(unknown)!r}"
+        )
+    if "source_authority" in value and (
+        not isinstance(value["source_authority"], str)
+        or not value["source_authority"].strip()
+    ):
+        raise ValueError(f"{label}.source_authority is invalid")
+    if "identity_bindings" in value:
+        bindings = value["identity_bindings"]
+        if (
+            not isinstance(bindings, dict)
+            or not bindings
+            or any(
+                not isinstance(key, str)
+                or not key
+                or not isinstance(binding, str)
+                or not binding
+                for key, binding in bindings.items()
+            )
+        ):
+            raise ValueError(f"{label}.identity_bindings is invalid")
+    if "source_receipts" in value:
+        receipts = value["source_receipts"]
+        if (
+            not isinstance(receipts, list)
+            or not receipts
+            or any(not isinstance(item, str) or not item for item in receipts)
+            or len(receipts) != len(set(receipts))
+        ):
+            raise ValueError(f"{label}.source_receipts is invalid")
+    for key in ("reconciled_totals", "base_fallback"):
+        if key in value and type(value[key]) is not bool:
+            raise ValueError(f"{label}.{key} must be boolean")
 
 
 def _prompt_leak_tokens(case: dict[str, Any]) -> list[str]:
@@ -505,8 +562,21 @@ def validate_suite(suite: Any) -> list[str]:
             "require_untruncated", "require_reconciled_decomposition", "must_not_query",
             "required_error_codes",
         }
-        if not isinstance(evidence, dict) or set(evidence) != evidence_keys:
+        optional_evidence_keys = {"structured_evidence_requirements"}
+        if (
+            not isinstance(evidence, dict)
+            or not evidence_keys.issubset(set(evidence))
+            or set(evidence).difference(evidence_keys | optional_evidence_keys)
+        ):
             errors.append(f"{where}.evidence_requirements has invalid keys")
+        elif "structured_evidence_requirements" in evidence:
+            try:
+                _validate_structured_evidence_requirements(
+                    evidence["structured_evidence_requirements"],
+                    label=f"{where}.evidence_requirements.structured_evidence_requirements",
+                )
+            except ValueError as exc:
+                errors.append(str(exc))
     if len(ids) != len(set(ids)):
         errors.append("case IDs must be unique")
     for conversation, turns in conversations.items():
@@ -714,6 +784,49 @@ def _score_case(
     )
     if missing_codes:
         errors.append(f"required error codes missing {sorted(missing_codes)!r}")
+    structured_requirement = requirement.get("structured_evidence_requirements")
+    if structured_requirement is not None:
+        try:
+            _validate_structured_evidence_requirements(
+                structured_requirement,
+                label="evidence_requirements.structured_evidence_requirements",
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
+        else:
+            structured = evidence.get("structured_evidence")
+            if not isinstance(structured, dict):
+                errors.append("structured evidence is missing")
+            else:
+                for key, expected in structured_requirement.items():
+                    if key not in structured:
+                        errors.append(
+                            f"structured evidence is missing {key!r}"
+                        )
+                        continue
+                    actual = structured[key]
+                    if isinstance(expected, dict):
+                        if actual != expected:
+                            errors.append(
+                                f"structured evidence.{key} does not exactly match the required bindings"
+                            )
+                    elif isinstance(expected, list):
+                        if (
+                            not isinstance(actual, list)
+                            or any(
+                                not isinstance(item, str) or not item
+                                for item in actual
+                            )
+                            or len(actual) != len(set(actual))
+                            or set(actual) != set(expected)
+                        ):
+                            errors.append(
+                                f"structured evidence.{key} does not exactly match the required values"
+                            )
+                    elif actual != expected:
+                        errors.append(
+                            f"structured evidence.{key}={actual!r}, expected {expected!r}"
+                        )
     return errors
 
 

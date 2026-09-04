@@ -207,9 +207,18 @@ def _max_group_dimensions(metric: Mapping[str, Any]) -> int:
 
 
 def _metric_allowed_dimensions(
-    request: Mapping[str, Any], metric: Mapping[str, Any]
+    request: Mapping[str, Any],
+    metric: Mapping[str, Any],
+    semantics: Mapping[str, Any] | None = None,
 ) -> set[str]:
-    """Resolve the executable dimension capability for this metric path."""
+    """Resolve the executable dimension capability for this metric path.
+
+    Allocated amount metrics intentionally inherit their dimensions from the
+    canonical target-completion path instead of copying that list into the
+    metric declaration.  Keep this preflight resolver aligned with the
+    catalog and entity resolvers so a published inherited capability is not
+    rejected before the analytical builder gets a chance to compile it.
+    """
 
     allowed = metric.get("allowed_dimensions")
     if isinstance(allowed, list) and all(isinstance(code, str) for code in allowed):
@@ -223,7 +232,36 @@ def _metric_allowed_dimensions(
     ):
         return set(path_allowed)
     if allowed is None and paths is None:
-        return set()
+        source_metric = metric.get("source_completion_metric")
+        source_path = metric.get("source_path")
+        if source_metric is None and source_path is None:
+            return set()
+        metrics = semantics.get("metrics") if isinstance(semantics, Mapping) else None
+        source = (
+            metrics.get(source_metric)
+            if isinstance(metrics, Mapping) and isinstance(source_metric, str)
+            else None
+        )
+        source_paths = source.get("paths") if isinstance(source, Mapping) else None
+        source_definition = (
+            source_paths.get(source_path)
+            if isinstance(source_paths, Mapping) and isinstance(source_path, str)
+            else None
+        )
+        source_allowed = (
+            source_definition.get("allowed_dimensions")
+            if isinstance(source_definition, Mapping)
+            else None
+        )
+        if isinstance(source_allowed, list) and all(
+            isinstance(code, str) for code in source_allowed
+        ):
+            return set(source_allowed)
+        raise QueryFailure(
+            "CONTRACT_UNAVAILABLE",
+            "指标引用的来源维度能力合同无效。",
+            stage="contract_load",
+        )
     raise QueryFailure(
         "CONTRACT_UNAVAILABLE",
         "指标维度能力合同无效。",
@@ -232,7 +270,9 @@ def _metric_allowed_dimensions(
 
 
 def _validate_detail_request_capabilities(
-    request: Mapping[str, Any], metric: Mapping[str, Any]
+    request: Mapping[str, Any],
+    metric: Mapping[str, Any],
+    semantics: Mapping[str, Any] | None = None,
 ) -> None:
     """Fail before entity or business-data access when detail cannot authorize a request."""
 
@@ -248,7 +288,7 @@ def _validate_detail_request_capabilities(
         raise QueryFailure("INVALID_PLAN", "请求的分组维度数量超过该指标发布的上限。")
     if not isinstance(requested_filters, Mapping):
         raise QueryFailure("INVALID_PLAN", "过滤条件格式无效。")
-    allowed_dimensions = _metric_allowed_dimensions(request, metric)
+    allowed_dimensions = _metric_allowed_dimensions(request, metric, semantics)
     if not {*requested_dimensions, *requested_filters}.issubset(allowed_dimensions):
         raise QueryFailure(
             "UNSUPPORTED_DIMENSION",
@@ -294,7 +334,7 @@ def _validate_metric_contract(
     if not isinstance(metric_code, str) or not isinstance(metric, Mapping):
         raise QueryFailure("UNSUPPORTED_METRIC", "该指标尚未进入受控指标定义。")
     _ensure_metric_available(metric)
-    _validate_detail_request_capabilities(request, metric)
+    _validate_detail_request_capabilities(request, metric, semantics)
     normalized = dict(request)
     required_time_bucket = metric.get("required_time_bucket")
     if required_time_bucket is not None:
@@ -869,11 +909,27 @@ def _period_comparison_authorized(value: Any) -> bool:
     )
 
 
+def _metric_time_value_format(metric: Mapping[str, Any]) -> str:
+    """Resolve the storage format for a month-granular metric."""
+
+    if metric.get("time_granularity") != "month":
+        return "date"
+    value_format = metric.get("time_value_format", "month")
+    if value_format not in {"month", "date"}:
+        raise QueryFailure("CONTRACT_UNAVAILABLE", "月粒度指标的时间值格式无效。")
+    return str(value_format)
+
+
 def _metric_time_bounds(metric: Mapping[str, Any], start: str, end: str) -> tuple[str, str]:
+    value_format = _metric_time_value_format(metric)
     if metric.get("time_granularity") != "month":
         return start, end
     month_pattern = re.compile(r"^\d{4}-\d{2}$")
     boundary_pattern = re.compile(r"^\d{4}-\d{2}-01$")
+    if value_format == "date":
+        if boundary_pattern.fullmatch(start) and boundary_pattern.fullmatch(end):
+            return start, end
+        raise QueryFailure("INVALID_PLAN", "日期承载的月粒度指标必须使用自然月首日边界。")
     if month_pattern.fullmatch(start) and month_pattern.fullmatch(end):
         return start, end
     if boundary_pattern.fullmatch(start) and boundary_pattern.fullmatch(end):
@@ -1331,6 +1387,7 @@ def _validate_request(
             "order_by",
             "limit",
             "comparison",
+            "time_bucket",
             "decomposition_of_request_id",
             "complete_change_decomposition",
             "_target_gap_of_request_id",
@@ -1338,7 +1395,7 @@ def _validate_request(
         if conflicts.intersection(request):
             raise QueryFailure(
                 "INVALID_INPUT",
-                "complete_target_gap_decomposition cannot be combined with dimensions, ordering, limits, comparisons, or another decomposition link.",
+                "complete_target_gap_decomposition cannot be combined with dimensions, ordering, limits, comparisons, time_bucket, or another decomposition link.",
             )
         if (
             domain != "target"
@@ -2248,7 +2305,10 @@ def _build_metric_core(
         qualified_time = _qualified_identifier("f", time_field)
         if time_bucket == "day":
             expression = f"DATE({qualified_time})"
-        elif metric.get("time_granularity") == "month":
+        elif (
+            metric.get("time_granularity") == "month"
+            and _metric_time_value_format(metric) == "month"
+        ):
             expression = qualified_time
         else:
             expression = f"DATE_FORMAT({qualified_time}, '{_MYSQL_MONTH_FORMAT}')"
@@ -2362,16 +2422,16 @@ def _build_metric_core(
         start, end = _validate_time_bounds(
             start,
             end,
-            "month" if metric.get("time_granularity") == "month" else "date",
+            _metric_time_value_format(metric),
             max_days=_max_metric_range_days(),
         )
         if time_policy in {"latest_snapshot", "latest_non_null_snapshot"}:
             try:
                 snapshot_start = date.fromisoformat(
-                    f"{start}-01" if metric.get("time_granularity") == "month" else start
+                    f"{start}-01" if _metric_time_value_format(metric) == "month" else start
                 )
                 snapshot_end = date.fromisoformat(
-                    f"{end}-01" if metric.get("time_granularity") == "month" else end
+                    f"{end}-01" if _metric_time_value_format(metric) == "month" else end
                 )
             except ValueError as exc:
                 raise QueryFailure("INVALID_PLAN", "快照指标的显式期间无效。") from exc
@@ -2401,7 +2461,7 @@ def _build_metric_core(
             default_range = _validate_time_bounds(
                 default_range[0],
                 default_range[1],
-                "month" if metric.get("time_granularity") == "month" else "date",
+                _metric_time_value_format(metric),
                 max_days=_max_metric_range_days(),
             )
             _approved_column(time_field, base_allowed, base_blocked)
@@ -3453,6 +3513,19 @@ def _evidence_rows_and_state(
         except (TypeError, ValueError, OverflowError) as exc:
             raise QueryFailure("CONTRACT_UNAVAILABLE", "查询证据覆盖计数无效。") from exc
         if matched == 0:
+            # Target-completion aggregates deliberately retain one structural
+            # row when both sides have no matching facts.  Keep that row so
+            # target_data_state/period_state can tell the model "missing" or
+            # "not_set_for_future"; never turn it into a numeric zero.
+            if any(
+                isinstance(row, Mapping)
+                and (
+                    "target_data_state" in row
+                    or "period_state" in row
+                )
+                for row in rows
+            ):
+                return public_rows, "undefined"
             return [], "empty"
     metric_states = [row.get("metric_data_state") for row in rows if "metric_data_state" in row]
     if metric_states:
@@ -4396,7 +4469,12 @@ def _target_status_is_coherent(
             and metric_value is None
         )
     if target_state == "missing":
-        return completion is None and metric_value is None and target in {None, Decimal("0")}
+        return (
+            completion is None
+            and metric_value is None
+            and gap is None
+            and target in {None, Decimal("0")}
+        )
     if target_state == "incomplete":
         return completion is None and metric_value is None and gap is None
     if target_state == "zero":

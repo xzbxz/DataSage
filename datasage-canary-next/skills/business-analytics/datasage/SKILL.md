@@ -1,7 +1,7 @@
 ---
 name: datasage
 description: Governed DataSage company facts; not public/user-provided.
-version: 0.15.0-rc11
+version: 0.15.0-rc12
 author: datasage
 platforms: [windows]
 metadata:

@@ -4,7 +4,7 @@
   "scope": "test-only host/plugin/model non-database denial path",
   "subject": {
     "name": "datasage-canary-next",
-    "version": "0.15.0-rc11"
+    "version": "0.15.0-rc12"
   },
   "host": {
     "hermes_version": "0.20.5",
@@ -57,7 +57,7 @@
     "required_api_calls_per_run": 2,
     "max_duration_ns": 120000000000,
     "threshold_basis": "test_execution_safety_not_business_sla",
-    "expected_tool_schema_sha256": "46d441331d127e00f1e70aa8b749473b49d93fa912ca80a6d05bdad02b2c761d"
+    "expected_tool_schema_sha256": "7bdbf2a96f88a62a5431ac279db69722453bb6d0d6bd27c77c7f26a9aea9a4d2"
   },
   "pricing_snapshot": {
     "schema": "deepseek-public-pricing/v1",

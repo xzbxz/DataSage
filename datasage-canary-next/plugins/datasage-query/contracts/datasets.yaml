@@ -1,4 +1,4 @@
-version: datasage-mini-datasets/v9
+version: datasage-mini-datasets/v10
 
 defaults:
   blocked_columns:
@@ -160,6 +160,8 @@ datasets:
     warnings:
       - Standard delivery returns use statement_time, status = 4, complnt_type = 1, channel_type = 1, and exclude internal customers.
       - Return salesperson and ready-goods attribution use this return fact; they are not inherited from the source delivery.
+      - For target salesperson allocation, this governed return fact is the explicit non-split delivery-return component; never substitute the sale-detail base or backfill from another ledger.
+      - Return biz_org may map to the logical organization represented by split org_name only under an owner-approved equivalence; do not silently normalize or merge unlike organization fields.
       - Return document type uses the fact sale_bill_type field and is exposed as the governed bill_type dimension; it must not be backfilled from the source delivery.
       - The table has no goods_category, customer_label, or product is_ht snapshot. Missing attributes may use an explicitly disclosed current master attribute.
       - Never join this fact row-by-row to delivery facts for net metrics; aggregate each fact independently and combine the aggregates.
@@ -299,7 +301,7 @@ datasets:
     grain: delivery_target_detail_by_sales
     primary_key: [detail_id, sales_id]
     updated_at: null
-    allowed_columns: [detail_id, year_month, sales_id, sales_name, customer_dept, org_name, detail_target_rmb, detail_target_amount, is_inner_cus]
+    allowed_columns: [detail_id, year_month, sales_id, sales_name, customer_id, customer_name, customer_dept, org_name, detail_target_rmb, detail_target_amount, is_inner_cus]
     required_filters:
       - {column: is_inner_cus, op: eq, value: n}
     joins: []
@@ -314,7 +316,7 @@ datasets:
     grain: delivery_actual_product_detail_by_sales
     primary_key: [goods_detail_id, sales_id]
     updated_at: null
-    allowed_columns: [goods_detail_id, delivery_time, sales_id, sales_name, customer_dept, org_name, delivery_amount_rmb, delivery_amount, bill_status, is_inner_cus]
+    allowed_columns: [goods_detail_id, delivery_time, sales_id, sales_name, customer_id, customer_name, customer_dept, org_name, delivery_amount_rmb, delivery_amount, bill_status, is_inner_cus]
     required_filters:
       - {column: bill_status, op: eq, value: 6}
       - {column: is_inner_cus, op: eq, value: n}
@@ -331,7 +333,7 @@ datasets:
     grain: receipt_target_by_sales
     primary_key: [target_id, sales_id]
     updated_at: null
-    allowed_columns: [target_id, plan_receive_time, sales_id, sales_name, customer_dept, org_name, plan_receive_rmb, plan_receive_amount, is_inner_cus]
+    allowed_columns: [target_id, plan_receive_time, sales_id, sales_name, customer_id, customer_name, customer_dept, org_name, plan_receive_rmb, plan_receive_amount, is_inner_cus]
     required_filters: []
     joins: []
     warnings:
@@ -345,7 +347,7 @@ datasets:
     grain: receipt_actual_detail_by_sales
     primary_key: [sales_id, detail_id]
     updated_at: null
-    allowed_columns: [sales_id, sales_name, detail_id, bill_time, customer_dept, org_name, detail_receive_rmb, detail_receive_amount, bill_status, is_inner_cus]
+    allowed_columns: [sales_id, sales_name, detail_id, bill_time, customer_id, customer_name, customer_dept, org_name, detail_receive_rmb, detail_receive_amount, bill_status, is_inner_cus]
     required_filters:
       - {column: bill_status, op: ne, value: A}
     joins: []

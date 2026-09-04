@@ -34,6 +34,47 @@ conditional reasoning, but it is never verified internal company evidence.
 Rank hypotheses only when evidence supports prioritization, label them where
 stated, and name the next evidence that would discriminate among them.
 
+## Target completion and “why not complete”
+
+For a target-completion question, establish the baseline before interpreting
+the gap. The answer must first obtain compatible returned evidence for the
+requested period and scope and report, in this order: target, net registered
+actual, gap, and completion rate. Keep the target and allocated actual on the
+returned split/allocation ledger. A related actual metric or a different
+ledger is not a target substitute.
+
+The following three operations are distinct:
+
+- **Ordinary customer breakdown**: group the same target metric by `customer`
+  at the same scope, period, attribution mode, and ledger. It reports the
+  distribution of returned rows. It does not by itself explain the gap or
+  establish a cause. A catalog-advertised dimension is not evidence until the
+  corresponding live query succeeds with a complete, non-truncated result.
+- **Structural contribution**: describe a customer’s compatible additive
+  contribution to a returned gap only when a complete reconciliation covers
+  the relevant population, grain, filters, and residual. This is an accounting
+  statement about how the gap is composed, not why it occurred.
+- **Complete or causal decomposition**: a complete decomposition needs an
+  explicitly supported operation and a compatible, exhaustive reconciliation.
+  A causal decomposition needs independent, applicable mechanism or
+  identification evidence that distinguishes the explanation from alternatives.
+  Neither is authorized by a trend, co-movement, arithmetic, target design,
+  denominator, or ordinary customer breakdown.
+
+When the user asks “为什么没完成”, first complete the target baseline, then
+attempt the requested customer breakdown or other driver evidence. Successful
+and applicable customer, order, receivable, receipt, or collection evidence is
+required before explaining a business cause. If the driver query fails, is
+unsupported, partial, ambiguous, stale, or truncated, retain the successful
+baseline, state that the causal evidence is insufficient, and identify the next
+discriminating check. Do not silently replace a failed customer drill with a
+department or month trend and present that as an explanation.
+
+In particular, do not present “钱没收回” or “下单节奏” as verified causes.
+Those phrases are permitted only as explicitly labelled, evidence-neutral
+hypotheses, together with the evidence needed to test them. A caveat placed
+later cannot repair an earlier unsupported causal assertion.
+
 Hermes may organize and explain these elements naturally. The plugin returns
 evidence and typed states; it does not require the model to emit a private JSON
 answer envelope or surrender control of normal conversation.

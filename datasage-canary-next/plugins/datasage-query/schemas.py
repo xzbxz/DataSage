@@ -27,6 +27,11 @@ SCALAR = {
     ]
 }
 
+_TARGET_GAP_METRICS = [
+    "delivery_target_completion",
+    "receipt_target_completion",
+]
+
 REQUEST = {
     "type": "object",
     "additionalProperties": False,
@@ -46,7 +51,9 @@ REQUEST = {
             "description": (
                 "Required for target-domain metric requests. Use transaction_detail for ordinary, customer, "
                 "department, organization, or unqualified salesperson questions. Use salesperson_allocation "
-                "only for explicit salesperson target, collaboration, allocation, or allocated-performance questions."
+                "only for explicit salesperson target, collaboration, allocation, or allocated-performance questions. "
+                "When complete_target_gap_decomposition is present, the mode must be transaction_detail; "
+                "salesperson_allocation uses ordinary target_completion dimension_breakdown instead."
             ),
         },
         "delivery_scope": {
@@ -269,14 +276,18 @@ REQUEST = {
                     "enum": ["customer", "department", "organization"],
                     "description": (
                         "Governed transaction-detail dimension used to reconcile a complete "
-                        "target, actual, and target-gap partition to the same-scope overall result."
+                        "target, actual, and target-gap partition to the same-scope overall result. "
+                        "This operation is transaction_detail-only and must not be paired with "
+                        "salesperson_allocation."
                     ),
                 },
             },
             "required": ["dimension"],
             "description": (
                 "Explicitly request a complete target-gap composition for delivery_target_completion "
-                "or receipt_target_completion. The tool expands it into same-snapshot overall and "
+                "or receipt_target_completion using transaction_detail only. Never pair this operation "
+                "with salesperson_allocation; a salesperson allocation question should use ordinary "
+                "target_completion with its authorized dimensions. The tool expands it into same-snapshot overall and "
                 "full-partition queries, reconciles target, actual, and gap amounts independently, "
                 "and never sums completion rates or authorizes causal claims."
             ),
@@ -408,10 +419,7 @@ REQUEST = {
                 "properties": {
                     "domain": {"const": "target"},
                     "metric": {
-                        "enum": [
-                            "delivery_target_completion",
-                            "receipt_target_completion",
-                        ]
+                        "enum": _TARGET_GAP_METRICS
                     },
                     "attribution_mode": {"const": "transaction_detail"},
                 },
@@ -424,6 +432,7 @@ REQUEST = {
                         {"required": ["comparison"]},
                         {"required": ["decomposition_of_request_id"]},
                         {"required": ["complete_change_decomposition"]},
+                        {"required": ["time_bucket"]},
                     ]
                 },
             },
@@ -767,7 +776,79 @@ def _model_schema_node(value):
     return projected
 
 
+def _add_model_target_gap_operation_guard(projected_schema: dict) -> None:
+    """Keep the target-gap operation mode-safe after projection.
+
+    The model-facing DeepSeek schema intentionally removes conditional JSON
+    Schema keywords.  Encode this one high-impact cross-field rule as two
+    explicit object alternatives so an allocation request cannot carry the
+    transaction-detail-only target-gap operation.  The canonical schema and
+    runtime validator remain the authorities for every other constraint.
+    """
+
+    try:
+        request_schema = projected_schema["parameters"]["properties"]["requests"][
+            "items"
+        ]
+        properties = request_schema["properties"]
+    except (KeyError, TypeError):
+        return
+    if not isinstance(properties, dict) or "complete_target_gap_decomposition" not in properties:
+        return
+
+    normal_properties = {
+        key: value
+        for key, value in properties.items()
+        if key != "complete_target_gap_decomposition"
+    }
+    complete_keys = {
+        "request_id",
+        "domain",
+        "metric",
+        "attribution_mode",
+        "metric_filters",
+        "time_range",
+        "calendar_month",
+        "complete_target_gap_decomposition",
+    }
+    complete_properties = {
+        key: properties[key] for key in complete_keys if key in properties
+    }
+    for key, allowed in (
+        ("domain", ["target"]),
+        ("metric", _TARGET_GAP_METRICS),
+        ("attribution_mode", ["transaction_detail"]),
+    ):
+        current = complete_properties.get(key)
+        if isinstance(current, dict):
+            complete_properties[key] = {**current, "enum": list(allowed)}
+
+    request_schema["anyOf"] = [
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": normal_properties,
+            "required": ["request_id", "domain", "metric"],
+        },
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": complete_properties,
+            "required": [
+                "request_id",
+                "domain",
+                "metric",
+                "attribution_mode",
+                "complete_target_gap_decomposition",
+            ],
+        },
+    ]
+
+
 def model_tool_schema(canonical_tool_schema: dict) -> dict:
     """Return a DeepSeek-compatible model schema without weakening runtime guards."""
 
-    return _model_schema_node(canonical_tool_schema)
+    projected = _model_schema_node(canonical_tool_schema)
+    if canonical_tool_schema.get("name") == "datasage_query":
+        _add_model_target_gap_operation_guard(projected)
+    return projected

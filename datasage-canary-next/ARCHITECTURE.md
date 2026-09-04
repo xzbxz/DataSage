@@ -1,6 +1,6 @@
 # DataSage Expert 0.15 架构
 
-版本：`0.15.0-rc11`
+版本：`0.15.0-rc12`
 运行基线：Hermes `0.20.5`
 
 ## 唯一目标
@@ -37,6 +37,11 @@ Skill 管理面不向 WeCom 暴露。
 业务员个人目标、分摊实际和完成率以 `salesperson_allocation` 的 split 账本为
 独立权威来源。transaction-detail 基表只承担诊断参照，不是销售分摊账的覆盖
 门禁；Profile 禁止在 split 缺失时从基表回填或跨账替代。
+
+rc12 补充 salesperson→customer 的 split 普通下钻；净收款登记额按收款拆分登记额减
+退款拆分登记额解释，不代表实结或到账。期间或分解证据不完整时须披露限制，因果分解
+不得无证据推断；canary live replay 仍 pending。企微全员私聊/群聊与数据库业务权限
+保持不变。
 
 ## 验收门槛（唯一量化真源）
 

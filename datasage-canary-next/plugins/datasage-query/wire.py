@@ -25,9 +25,13 @@ _CATALOG_METRIC_FIELDS = (
     "max_group_dimensions",
     "exact_default_lookup_supported",
     "comparison_kinds",
+    "allowed_dimensions",
+    "dimensions_by_attribution_mode",
+    "target_gap_decomposition",
     "supports_dimensions",
     "supports_change_decomposition",
     "operation_summary",
+    "operation_summary_by_attribution_mode",
     "requires_metric_detail",
 )
 
@@ -59,13 +63,37 @@ def _metric_operation_summary(metric: Mapping[str, Any]) -> list[str]:
     operations = ["direct_fact"]
     if metric.get("comparison_kinds"):
         operations.append("returned_comparison")
-    if metric.get("allowed_dimensions"):
+    if metric.get("allowed_dimensions") or metric.get("supports_dimensions"):
         operations.append("dimension_breakdown")
     if metric.get("change_decomposition_dimensions"):
         operations.append("complete_change_decomposition")
-    if metric.get("target_gap_decomposition"):
+    if metric.get("target_gap_decomposition") or metric.get(
+        "supports_target_gap_decomposition"
+    ):
         operations.append("complete_target_gap_decomposition")
-    return operations
+    raw_modes = metric.get("allowed_attribution_modes")
+    modes = {
+        str(mode)
+        for mode in raw_modes
+        if isinstance(mode, str) and mode
+    } if isinstance(raw_modes, list) else set()
+    by_mode = metric.get("dimensions_by_attribution_mode")
+    if isinstance(by_mode, Mapping):
+        modes.update(str(mode) for mode in by_mode if str(mode))
+    if len(modes) <= 1:
+        return operations
+    mode_operations = metric.get("operation_summary_by_attribution_mode")
+    if not isinstance(mode_operations, Mapping):
+        return operations
+    values = [
+        {str(item) for item in items if isinstance(item, str)}
+        for items in mode_operations.values()
+        if isinstance(items, list)
+    ]
+    if len(values) != len(modes):
+        return operations
+    common = set.intersection(*values)
+    return [operation for operation in operations if operation in common]
 
 
 def _compact_metric_detail(
@@ -86,6 +114,7 @@ def _compact_metric_detail(
         "change_decomposition_dimensions",
         "target_gap_decomposition",
         "dimensions_by_attribution_mode",
+        "operation_summary_by_attribution_mode",
     ):
         if key in metric:
             compact_metric[key] = metric[key]

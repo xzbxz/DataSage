@@ -20,7 +20,7 @@
   },
   "release_validation": {
     "schema": "datasage-live-replay-manifest/v2",
-    "release_target": "0.15.0-rc11",
+    "release_target": "0.15.0-rc12",
     "source_release": "0.15.0-rc5",
     "transcript_source": "wecom",
     "semantic_fixture_status": "reviewed_failure_frozen",
@@ -566,6 +566,65 @@
       "allowed_conclusions": ["preserve_period_entity_and_limit", "report_top_n", "disclose_ranking_scope", "disclose_data_limits"],
       "forbidden_conclusions": ["change_period", "change_entity", "invent_result"],
       "evidence_requirements": {"required_receipts": ["query", "coverage", "context_transition"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
+    },
+    {
+      "id": "target_06_salesperson_customer_delivery", "category": "target_gap", "conversation_id": "target_06_salesperson_customer_delivery", "turn": 1,
+      "prompt": "查示例业务员甲本月出库目标完成情况，按客户下钻，给出每个客户的目标、实际、差额和完成率；只用销售分摊账本，不要回退基础交易账。",
+      "plan_constraints": {"domains": ["target"], "metrics": ["delivery_target_completion"], "dimensions": ["salesperson", "customer"], "operations": ["target_actual_gap", "customer_drilldown"], "time_semantics": "current_calendar_month", "context_action": "new", "context_bindings": {"salesperson": "example_salesperson_a"}, "must_not_metrics": ["receipt_target_completion"], "must_not_operations": ["complete_target_gap_decomposition", "base_fallback"], "domain_metric_pairs": [{"domain": "target", "metric": "delivery_target_completion"}]},
+      "decision_quality_requirements": {"required_dimensions": ["conclusion_clarity", "decision_relevance", "actionability", "evidence_basis", "assumptions", "material_risks", "validation_steps"], "minimum_score": 1},
+      "required_conclusions": ["report_target_gap", "report_customer_gap_structure", "state_split_authority", "bind_customer_id", "report_reconciled_target_gap", "state_no_base_fallback", "state_noncausal"],
+      "allowed_conclusions": ["report_target_gap", "report_customer_gap_structure", "state_split_authority", "bind_customer_id", "report_reconciled_target_gap", "state_no_base_fallback", "state_noncausal", "disclose_data_limits"],
+      "forbidden_conclusions": ["substitute_receipt_target", "substitute_department_target", "claim_causal_driver", "claim_unreconciled_contribution", "invent_target", "omit_customer_id", "use_transaction_detail_base"],
+      "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": [], "structured_evidence_requirements": {"source_authority": "split_tables", "identity_bindings": {"salesperson": "sales_id", "customer": "customer_id"}, "source_receipts": ["target", "actual", "return"], "reconciled_totals": true, "base_fallback": false}}
+    },
+    {
+      "id": "target_07_salesperson_customer_receipt", "category": "target_gap", "conversation_id": "target_07_salesperson_customer_receipt", "turn": 1,
+      "prompt": "查示例业务员甲本月收款目标完成情况，按客户下钻，并列出目标未完成客户；只用销售分摊账本，不要回退基础交易账。",
+      "plan_constraints": {"domains": ["target"], "metrics": ["receipt_target_completion"], "dimensions": ["salesperson", "customer"], "operations": ["target_actual_gap", "customer_drilldown"], "time_semantics": "current_calendar_month", "context_action": "new", "context_bindings": {"salesperson": "example_salesperson_a"}, "must_not_metrics": ["delivery_target_completion"], "must_not_operations": ["complete_target_gap_decomposition", "base_fallback"], "domain_metric_pairs": [{"domain": "target", "metric": "receipt_target_completion"}]},
+      "decision_quality_requirements": {"required_dimensions": ["conclusion_clarity", "decision_relevance", "actionability", "evidence_basis", "assumptions", "material_risks", "validation_steps"], "minimum_score": 1},
+      "required_conclusions": ["report_target_gap", "report_customer_gap_structure", "state_split_authority", "bind_customer_id", "report_reconciled_target_gap", "state_no_base_fallback", "state_noncausal"],
+      "allowed_conclusions": ["report_target_gap", "report_customer_gap_structure", "state_split_authority", "bind_customer_id", "report_reconciled_target_gap", "state_no_base_fallback", "state_noncausal", "disclose_data_limits"],
+      "forbidden_conclusions": ["substitute_delivery_target", "substitute_department_target", "claim_causal_driver", "claim_unreconciled_contribution", "invent_target", "omit_customer_id", "use_transaction_detail_base"],
+      "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": [], "structured_evidence_requirements": {"source_authority": "split_tables", "identity_bindings": {"salesperson": "sales_id", "customer": "customer_id"}, "source_receipts": ["target", "actual", "refund"], "reconciled_totals": true, "base_fallback": false}}
+    },
+    {
+      "id": "target_08_salesperson_gap_diagnosis", "category": "multiturn", "conversation_id": "target_08_salesperson_gap_diagnosis", "turn": 1,
+      "prompt": "查示例业务员甲本月收款目标完成情况，先给目标、实际、差额和完成率。",
+      "plan_constraints": {"domains": ["target"], "metrics": ["receipt_target_completion"], "dimensions": ["salesperson"], "operations": ["target_actual_gap"], "time_semantics": "current_calendar_month", "context_action": "new", "context_bindings": {"salesperson": "example_salesperson_a"}, "must_not_metrics": ["delivery_target_completion"], "must_not_operations": ["complete_target_gap_decomposition", "base_fallback"], "domain_metric_pairs": [{"domain": "target", "metric": "receipt_target_completion"}]},
+      "decision_quality_requirements": {"required_dimensions": ["conclusion_clarity", "decision_relevance", "actionability", "evidence_basis", "assumptions", "material_risks", "validation_steps"], "minimum_score": 1},
+      "required_conclusions": ["report_target_gap", "state_split_authority", "report_reconciled_target_gap", "state_no_base_fallback"],
+      "allowed_conclusions": ["report_target_gap", "state_split_authority", "report_reconciled_target_gap", "state_no_base_fallback", "state_noncausal", "disclose_data_limits"],
+      "forbidden_conclusions": ["substitute_delivery_target", "substitute_department_target", "claim_causal_driver", "claim_unreconciled_contribution", "invent_target", "use_transaction_detail_base"],
+      "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": [], "structured_evidence_requirements": {"source_authority": "split_tables", "identity_bindings": {"salesperson": "sales_id"}, "source_receipts": ["target", "actual", "refund"], "reconciled_totals": true, "base_fallback": false}}
+    },
+    {
+      "id": "target_08_salesperson_gap_diagnosis_followup", "category": "multiturn", "conversation_id": "target_08_salesperson_gap_diagnosis", "turn": 2,
+      "prompt": "为什么没完成？按客户看差额贡献，给出合计可对账的客户结构；没有独立证据不要归因。",
+      "plan_constraints": {"domains": ["target"], "metrics": ["receipt_target_completion"], "dimensions": ["salesperson", "customer"], "operations": ["target_actual_gap", "customer_gap_contribution"], "time_semantics": "current_calendar_month", "context_action": "preserve", "context_bindings": {"salesperson": "example_salesperson_a"}, "must_not_metrics": ["delivery_target_completion"], "must_not_operations": ["complete_target_gap_decomposition", "base_fallback"], "domain_metric_pairs": [{"domain": "target", "metric": "receipt_target_completion"}]},
+      "decision_quality_requirements": {"required_dimensions": ["conclusion_clarity", "decision_relevance", "actionability", "evidence_basis", "assumptions", "material_risks", "validation_steps"], "minimum_score": 1},
+      "required_conclusions": ["report_target_gap", "report_customer_gap_structure", "state_split_authority", "bind_customer_id", "report_reconciled_target_gap", "state_no_base_fallback", "state_noncausal"],
+      "allowed_conclusions": ["report_target_gap", "report_customer_gap_structure", "state_split_authority", "bind_customer_id", "report_reconciled_target_gap", "state_no_base_fallback", "state_noncausal", "disclose_data_limits"],
+      "forbidden_conclusions": ["substitute_delivery_target", "substitute_department_target", "claim_causal_driver", "claim_unreconciled_contribution", "invent_target", "omit_customer_id", "use_transaction_detail_base", "change_entity", "change_metric"],
+      "evidence_requirements": {"required_receipts": ["query", "coverage", "context_transition"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": [], "structured_evidence_requirements": {"source_authority": "split_tables", "identity_bindings": {"salesperson": "sales_id", "customer": "customer_id"}, "source_receipts": ["target", "actual", "refund"], "reconciled_totals": true, "base_fallback": false}}
+    },
+    {
+      "id": "target_09_target_entity_ambiguity", "category": "ambiguity", "conversation_id": "target_09_target_entity_ambiguity", "turn": 1,
+      "prompt": "查示例甲本月目标完成率；甲可能是客户，也可能是业务员，请先确认身份。",
+      "plan_constraints": {"domains": ["target"], "metrics": ["receipt_target_completion"], "dimensions": ["customer", "salesperson"], "operations": ["entity_preflight", "clarify_entity_type"], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": ["delivery_target_completion"], "must_not_operations": ["datasage_query", "query_before_entity_binding"], "domain_metric_pairs": [{"domain": "target", "metric": "receipt_target_completion"}]},
+      "required_conclusions": ["ask_entity_clarification", "state_no_unconfirmed_entity_substitution"],
+      "allowed_conclusions": ["ask_entity_clarification", "state_no_unconfirmed_entity_substitution", "report_entity_candidates"],
+      "forbidden_conclusions": ["guess_customer", "guess_salesperson", "query_before_entity_binding", "invent_result"],
+      "evidence_requirements": {"required_receipts": ["catalog", "entity_resolution"], "minimum_successful_queries": 0, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": true, "required_error_codes": ["ENTITY_AMBIGUOUS"], "structured_evidence_requirements": {"base_fallback": false}}
+    },
+    {
+      "id": "target_10_salesperson_zero_or_future", "category": "target_gap", "conversation_id": "target_10_salesperson_zero_or_future", "turn": 1,
+      "prompt": "查示例业务员甲下一个尚未开始但已发布的出库目标；若目标为零，只保留结构化目标状态，不要返回实际、完成率或差额。",
+      "plan_constraints": {"domains": ["target"], "metrics": ["delivery_target_completion"], "dimensions": ["salesperson"], "operations": ["future_target_only"], "time_semantics": "future_published_month", "context_action": "new", "context_bindings": {"salesperson": "example_salesperson_a"}, "must_not_metrics": ["receipt_target_completion"], "must_not_operations": ["target_actual_gap", "complete_target_gap_decomposition", "base_fallback"], "domain_metric_pairs": [{"domain": "target", "metric": "delivery_target_completion"}]},
+      "decision_quality_requirements": {"required_dimensions": ["conclusion_clarity", "decision_relevance", "actionability", "evidence_basis", "assumptions", "material_risks", "validation_steps"], "minimum_score": 1},
+      "required_conclusions": ["report_future_target_only", "disclose_data_limits", "state_split_authority", "state_no_base_fallback"],
+      "allowed_conclusions": ["report_future_target_only", "disclose_data_limits", "state_split_authority", "state_no_base_fallback", "disclose_undefined_rate"],
+      "forbidden_conclusions": ["report_future_actual", "report_future_completion", "report_future_gap", "report_target_gap", "infer_missing_value", "invent_result", "use_transaction_detail_base"],
+      "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": [], "structured_evidence_requirements": {"source_authority": "split_tables", "identity_bindings": {"salesperson": "sales_id"}, "source_receipts": ["target"], "base_fallback": false}}
     }
   ]
 }

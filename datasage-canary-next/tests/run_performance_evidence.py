@@ -113,7 +113,7 @@ def _is_hex_digest(value: Any, length: int) -> bool:
 def _validate_contract(contract: Mapping[str, Any]) -> None:
     if contract.get("schema") != CONTRACT_SCHEMA:
         raise EvidenceError("unsupported performance contract schema")
-    if contract.get("subject") != {"name": "datasage-canary-next", "version": "0.15.0-rc11"}:
+    if contract.get("subject") != {"name": "datasage-canary-next", "version": "0.15.0-rc12"}:
         raise EvidenceError("contract subject drifted from the reviewed profile")
     if contract.get("host") != {
         "hermes_version": PINNED_HERMES_VERSION,

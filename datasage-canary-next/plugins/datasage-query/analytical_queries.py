@@ -1380,6 +1380,12 @@ def _target_completion_query(
     target_dataset = _dataset(target_table, datasets_contract)
     target_measure = _approved(target.get("measure"), target_dataset)
     target_time = _approved(target.get("time_field"), target_dataset)
+    target_time_value_format = target.get("time_value_format", "month")
+    if target.get("time_granularity") == "month" and target_time_value_format not in {
+        "month",
+        "date",
+    }:
+        raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "目标时间值格式无效。")
 
     if time_bucket == "month" and request.get("time_range") is None:
         current_month = query_observed_on.replace(day=1)
@@ -1409,7 +1415,10 @@ def _target_completion_query(
         start_date, end_date = date.fromisoformat(start), date.fromisoformat(end)
         if start_date.day != 1 or end_date.day != 1:
             raise AnalysisQueryError("INVALID_PLAN", "月粒度目标必须使用自然月首日边界。")
-        target_start, target_end = start_date.strftime("%Y-%m"), end_date.strftime("%Y-%m")
+        if target_time_value_format == "month":
+            target_start, target_end = start_date.strftime("%Y-%m"), end_date.strftime("%Y-%m")
+        else:
+            target_start, target_end = start, end
 
     actual_start = start
     actual_end = min(
@@ -1492,7 +1501,10 @@ def _target_completion_query(
         target_where,
         "target_amount_rmb",
         time_field=target_time,
-        monthly_source=target.get("time_granularity") == "month",
+        monthly_source=(
+            target.get("time_granularity") == "month"
+            and target_time_value_format == "month"
+        ),
         target_measure_with_null_state=True,
     )
     if actual.get("components") is not None:
@@ -1636,7 +1648,7 @@ def _target_completion_query(
     )
     gap = (
         f"CASE WHEN {period_state} IN ('not_started', 'includes_future') "
-        f"OR {target_nulls} > 0 OR {actual_nulls} > 0 "
+        f"OR {target_rows} = 0 OR {target_nulls} > 0 OR {actual_nulls} > 0 "
         f"THEN NULL ELSE {target_value} - {actual_value} END"
     )
     select = [
