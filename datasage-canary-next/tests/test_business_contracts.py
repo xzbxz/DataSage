@@ -6533,8 +6533,8 @@ class BusinessContractTests(unittest.TestCase):
             self.skipTest("Hermes host runtime is unavailable")
         code = (
             "import json; from tools.skills_tool import skill_view; "
-            "files=['references/answer-boundary.md','references/entity-guidance.md',"
-            "'references/query-rules.md']; "
+            "files=['references/answer-boundary.md','references/delivery-analysis.md',"
+            "'references/entity-guidance.md','references/query-rules.md']; "
             "print(json.dumps({'bare':json.loads(skill_view('datasage', preprocess=False)), "
             "'qualified':json.loads(skill_view('datasage:datasage', preprocess=False)), "
             "'references':[json.loads(skill_view('datasage', file_path=f, preprocess=False)) "

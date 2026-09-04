@@ -1,4 +1,4 @@
-version: datasage-mini-datasets/v10
+version: datasage-mini-datasets/v11
 
 defaults:
   blocked_columns:
@@ -38,6 +38,7 @@ datasets:
     joins: []
     warnings:
       - Current attributes are not transaction-time history.
+      - Current-master enrichment for delivery and return dimensions uses a governed LEFT JOIN ON with active predicates; unmatched customer keys remain in the fact population as unknown/null and must remain in coverage counts.
 
   vk_dwd.employee_dwd:
     domains: [shared]
@@ -69,6 +70,7 @@ datasets:
     joins: []
     warnings:
       - Current attributes are not transaction-time history.
+      - Current-master enrichment for delivery and return dimensions uses a governed LEFT JOIN ON with active predicates; unmatched product keys remain in the fact population as unknown/null and must remain in coverage counts.
 
   vk_ods.goods_sku_ods:
     domains: [shared]
@@ -100,6 +102,8 @@ datasets:
   vk_ods.ready_goods_detail:
     domains: [delivery, inventory]
     kind: lifecycle_reference
+    execution_role: reference_only
+    executable: false
     grain: one_ready_or_trial_ready_product_department_lifecycle
     primary_key: [id]
     updated_at: null
@@ -109,6 +113,7 @@ datasets:
     warnings:
       - A product and department can have multiple lifecycle rows; never directly join this table to delivery facts.
       - Standard delivery metrics use the fact is_ready field, where ready and trial-ready are both included.
+      - This table is reference-only/non-executable for delivery metrics; it must not become an alternate ready-goods source of truth.
 
   vk_dwd.whse_info_dwd:
     domains: [delivery, inventory]
@@ -142,6 +147,10 @@ datasets:
       - Delivery uses delivery_time and bill_status = 6; order uses sale_time and must not inherit that delivery status filter.
       - Fact is_self is deprecated and forbidden; ready-goods queries use is_ready.
       - Fact is_customized is an order attribute; product-master is_customized is a different current product attribute.
+      - Delivery color and color_label authority is the transaction fact snapshot; goods_sku_ods is reference/lineage only and must not replace or filter those fact values.
+      - The governed delivery department is customer_dept (customer department); biz_dept is not a substitute dimension.
+      - An actual aggregate with no matching valid delivery fact rows is a missing actual state, not a proven business zero; preserve the typed state unless an owner-approved no-activity rule says otherwise.
+      - Current customer/product master enrichment is a governed LEFT JOIN ON; unmatched master keys stay as unknown/null groups and remain in aggregate coverage rather than being dropped.
       - Aggregate before joining another fact to avoid multiplication; only governed many-to-one master joins are supported for metric dimensions.
 
   vk_dwd.delivery_return_detail_dwd:
@@ -163,7 +172,10 @@ datasets:
       - For target salesperson allocation, this governed return fact is the explicit non-split delivery-return component; never substitute the sale-detail base or backfill from another ledger.
       - Return biz_org may map to the logical organization represented by split org_name only under an owner-approved equivalence; do not silently normalize or merge unlike organization fields.
       - Return document type uses the fact sale_bill_type field and is exposed as the governed bill_type dimension; it must not be backfilled from the source delivery.
+      - The governed delivery department remains customer_dept (customer department); biz_dept is a physical source field and must not replace it.
       - The table has no goods_category, customer_label, or product is_ht snapshot. Missing attributes may use an explicitly disclosed current master attribute.
+      - An actual aggregate with no matching return fact rows is a missing actual state, not a proven business zero; preserve the typed state unless an owner-approved no-activity rule says otherwise.
+      - Current customer/product master enrichment is a governed LEFT JOIN ON; unmatched master keys stay as unknown/null groups and remain in aggregate coverage rather than being dropped.
       - Never join this fact row-by-row to delivery facts for net metrics; aggregate each fact independently and combine the aggregates.
 
   vk_dwd.delivery_bill_barcode_detail_dwd:
@@ -182,6 +194,7 @@ datasets:
       - Physical outbound metrics aggregate this barcode fact's own measures; never re-sum sale-detail measures after the one-to-many relationship.
       - A governed many-to-one join to sale detail enforces bill_status = 6 without changing the barcode grain.
       - Dataset mode is disabled because the valid-delivery status is a related-table rule; use governed physical-delivery metrics.
+      - An actual aggregate with no matching outbound barcode fact rows is a missing actual state, not a proven business zero; preserve the typed state unless an owner-approved no-activity rule says otherwise.
       - Barcode is_self and is_customized are intentionally not exposed in the first phase.
       - Business remarks, order remarks, receiver or collaborator text, and price-detail fields are intentionally excluded.
 

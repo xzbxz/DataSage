@@ -1,6 +1,6 @@
 # DataSage Expert 0.15 架构
 
-版本：`0.15.0-rc12`
+版本：`0.15.0-rc13`
 运行基线：Hermes `0.20.5`
 
 ## 唯一目标
@@ -38,10 +38,10 @@ Skill 管理面不向 WeCom 暴露。
 独立权威来源。transaction-detail 基表只承担诊断参照，不是销售分摊账的覆盖
 门禁；Profile 禁止在 split 缺失时从基表回填或跨账替代。
 
-rc12 补充 salesperson→customer 的 split 普通下钻；净收款登记额按收款拆分登记额减
-退款拆分登记额解释，不代表实结或到账。期间或分解证据不完整时须披露限制，因果分解
-不得无证据推断；canary live replay 仍 pending。企微全员私聊/群聊与数据库业务权限
-保持不变。
+rc13 是出库 L3 canary 整改：数量类 8 项仍 pending；净出库组织跨侧不合并，毛出库与
+退货可分别查询；披露、unknown、truncation、actual-missing 与 adapter 证据边界已
+加固。企微全员私聊/群聊和数据库业务权限策略保持不变；正式 L3 live replay 与 150
+案例门槛仍 pending。
 
 ## 验收门槛（唯一量化真源）
 
@@ -97,6 +97,7 @@ Hermes 拥有问题理解、工具选择、推理和最终结论；受限 WeCom 
 | `datasage.query-rules/v1` | Profile Skill | CLI/维护面（可选） | 请求构造提示；可用字段以 live schema/catalog 为准 |
 | `datasage.entity-guidance/v1` | Profile Skill | CLI/维护面（可选） | 实体消歧提示；不能创建或覆盖实体映射 |
 | `datasage.answer-boundary/v1` | Profile Skill | CLI/维护面（可选） | 解释提示；插件不注册 prompt 副本 |
+| `datasage.delivery-analysis/v1` | Profile Skill | CLI/维护面（可选） | 出库 L3 分析提示；不能替代工具证据 |
 
 `*-semantics.yaml`、typed capability contract、实体 registry 和公开工具结果分别
 拥有指标定义、执行事实、实体身份和当前证据；`datasage.entity-maintainer-rationale/v1`

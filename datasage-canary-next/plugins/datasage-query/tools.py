@@ -196,6 +196,100 @@ def _ensure_metric_available(metric: Mapping[str, Any]) -> None:
         raise QueryFailure(exc.code, exc.message) from exc
 
 
+def _ensure_metric_tree_available(
+    metric_code: Any,
+    semantics: Mapping[str, Any],
+    *,
+    _visiting: set[str] | None = None,
+    _checked: set[str] | None = None,
+) -> None:
+    """Check availability for every governed operand before compilation.
+
+    Derived metrics reference other metrics through ``components``, ``ratio``,
+    or ``source_completion_metric``.  Availability is a property of each
+    operand, not only the public wrapper.  Keep this traversal bounded and fail
+    closed if a malformed contract introduces a reference cycle.
+    """
+
+    if not isinstance(metric_code, str) or not metric_code:
+        raise QueryFailure(
+            "CONTRACT_UNAVAILABLE",
+            "指标来源引用必须是非空字符串。",
+            stage="contract_load",
+        )
+    if not isinstance(semantics, Mapping):
+        raise QueryFailure(
+            "CONTRACT_UNAVAILABLE",
+            "指标来源合同格式无效。",
+            stage="contract_load",
+        )
+    metrics = semantics.get("metrics")
+    if not isinstance(metrics, Mapping):
+        raise QueryFailure(
+            "CONTRACT_UNAVAILABLE",
+            "指标来源合同缺少指标注册表。",
+            stage="contract_load",
+        )
+    metric = metrics.get(metric_code)
+    if not isinstance(metric, Mapping):
+        raise QueryFailure(
+            "CONTRACT_UNAVAILABLE",
+            "指标来源引用了未注册指标。",
+            stage="contract_load",
+        )
+    visiting = _visiting if _visiting is not None else set()
+    checked = _checked if _checked is not None else set()
+    if metric_code in checked:
+        return
+    if metric_code in visiting:
+        raise QueryFailure(
+            "CONTRACT_UNAVAILABLE",
+            "指标来源合同存在循环引用。",
+            stage="contract_load",
+        )
+    visiting.add(metric_code)
+    try:
+        _ensure_metric_available(metric)
+        references: list[Any] = []
+        components = metric.get("components")
+        if components is not None:
+            if not isinstance(components, list) or not components:
+                raise QueryFailure(
+                    "CONTRACT_UNAVAILABLE",
+                    "复合指标组成合同格式无效。",
+                    stage="contract_load",
+                )
+            for component in components:
+                if not isinstance(component, Mapping):
+                    raise QueryFailure(
+                        "CONTRACT_UNAVAILABLE",
+                        "复合指标组成引用格式无效。",
+                        stage="contract_load",
+                    )
+                references.append(component.get("metric"))
+        ratio = metric.get("ratio")
+        if ratio is not None:
+            if not isinstance(ratio, Mapping):
+                raise QueryFailure(
+                    "CONTRACT_UNAVAILABLE",
+                    "比例指标来源合同格式无效。",
+                    stage="contract_load",
+                )
+            references.extend((ratio.get("numerator"), ratio.get("denominator")))
+        if "source_completion_metric" in metric:
+            references.append(metric.get("source_completion_metric"))
+        for reference in references:
+            _ensure_metric_tree_available(
+                reference,
+                semantics,
+                _visiting=visiting,
+                _checked=checked,
+            )
+    finally:
+        visiting.remove(metric_code)
+    checked.add(metric_code)
+
+
 def _max_group_dimensions(metric: Mapping[str, Any]) -> int:
     try:
         return capability_contract._metric_group_dimension_limit(metric)
@@ -334,6 +428,7 @@ def _validate_metric_contract(
     if not isinstance(metric_code, str) or not isinstance(metric, Mapping):
         raise QueryFailure("UNSUPPORTED_METRIC", "该指标尚未进入受控指标定义。")
     _ensure_metric_available(metric)
+    _ensure_metric_tree_available(metric_code, semantics)
     _validate_detail_request_capabilities(request, metric, semantics)
     normalized = dict(request)
     required_time_bucket = metric.get("required_time_bucket")
@@ -840,7 +935,17 @@ def assess_period_compatibility(
             try:
                 aligned = (
                     right_start == _shift_calendar_year(left_start, -1)
-                    and right_end == _shift_calendar_year(left_end, -1)
+                    and (
+                        right_end - right_start == left_end - left_start
+                        or (
+                            left_start.day == 1
+                            and left_end.day == 1
+                            and right_start.day == 1
+                            and right_end.day == 1
+                            and comparison_alignment.get("current_was_clipped") is False
+                            and right_end == _shift_calendar_year(left_end, -1)
+                        )
+                    )
                 )
             except (ValueError, OverflowError):
                 aligned = False
@@ -993,7 +1098,17 @@ def _year_over_year_matched_elapsed_ranges(
         raise QueryFailure("INVALID_PLAN", "同比当前期间尚未开始。")
     try:
         prior_start = _shift_calendar_year(start_date, -1)
-        prior_end = _shift_calendar_year(effective_end, -1)
+        if (
+            effective_end == end_date
+            and start_date.day == 1
+            and end_date.day == 1
+        ):
+            # Calendar-month requests retain their month boundary semantics;
+            # elapsed-day windows (including clipped/partial leap-year windows)
+            # derive the comparison end from the effective current duration.
+            prior_end = _shift_calendar_year(effective_end, -1)
+        else:
+            prior_end = prior_start + (effective_end - start_date)
     except (ValueError, OverflowError) as exc:
         raise QueryFailure("INVALID_PLAN", "同比期间超出支持的日期边界。") from exc
     current = {"start": start_date.isoformat(), "end": effective_end.isoformat()}
@@ -1072,7 +1187,7 @@ def _validate_request(
             path=field_path("request_id"),
             hint="Use a unique non-blank request_id of at most 64 characters.",
         )
-    if domain not in _DOMAINS:
+    if not isinstance(domain, str) or domain not in _DOMAINS:
         raise QueryFailure(
             "INVALID_INPUT",
             "业务域不受支持。",
@@ -2928,7 +3043,13 @@ def _build_comparison_metric_query(
         raise QueryFailure("INVALID_PLAN", "比较排序定义无效。")
     field = order_by.get("field")
     direction = str(order_by.get("direction", "desc")).upper()
-    if field not in {"metric_value", "comparison_value", "delta_value", "change_rate"} or direction not in {"ASC", "DESC"}:
+    if field not in {
+        "metric_value",
+        "comparison_value",
+        "delta_value",
+        "change_rate",
+        *dimensions,
+    } or direction not in {"ASC", "DESC"}:
         raise QueryFailure("INVALID_PLAN", "比较排序字段不受支持。")
     if dimensions:
         sql += f" ORDER BY {_quote_identifier(str(field))} {direction}"
@@ -3081,6 +3202,7 @@ def _build_metric_query(
             "order_by": {**order_by, "field": "metric_value"},
         }
     _ensure_metric_available(metric)
+    _ensure_metric_tree_available(metric_code, semantics)
     requested_dimensions = request.get("dimensions") or []
     if (
         not isinstance(requested_dimensions, list)
@@ -3203,6 +3325,7 @@ def _build_composite_metric_core(
         component_metric = metrics.get(component_code)
         if not isinstance(component_metric, dict) or component_metric.get("components") is not None:
             raise QueryFailure("CONTRACT_UNAVAILABLE", "复合指标引用了无效或嵌套指标。")
+        _ensure_metric_available(component_metric)
         component_metric = dict(component_metric)
         inherited_overrides = metric.get("dimension_overrides") or {}
         if not isinstance(inherited_overrides, dict):
@@ -3314,6 +3437,8 @@ def _build_ratio_metric_core(
         or denominator_metric.get("ratio") is not None
     ):
         raise QueryFailure("CONTRACT_UNAVAILABLE", "比例指标只能引用两个基础指标。")
+    _ensure_metric_available(numerator_metric)
+    _ensure_metric_available(denominator_metric)
     inherited_overrides = metric.get("dimension_overrides") or {}
     if not isinstance(inherited_overrides, dict):
         raise QueryFailure("CONTRACT_UNAVAILABLE", "比例指标维度覆盖定义无效。")
@@ -4468,6 +4593,11 @@ def _target_status_is_coherent(
             and completion is None
             and metric_value is None
         )
+    if str(states.get("actual_data_state") or "").casefold() not in {
+        "reported",
+        "set",
+    }:
+        return False
     if target_state == "missing":
         return (
             completion is None
@@ -5876,6 +6006,7 @@ def _target_gap_claim_amounts(
         or "target_status" not in relations
         or claim.get("source_truncated") is True
         or states.get("target_data_state") not in {"set", "zero"}
+        or states.get("actual_data_state") not in {"reported", "set"}
         or states.get("period_state") in {"not_started", "includes_future"}
         or not _target_status_is_coherent(facts, states)
     ):
@@ -5951,6 +6082,7 @@ def _target_gap_failure_reason(
         not isinstance(claim.get("states"), Mapping)
         or claim["states"].get("target_data_state")
         not in contract.valid_target_data_states
+        or claim["states"].get("actual_data_state") not in {"reported", "set"}
         or claim["states"].get("period_state")
         in {"not_started", "includes_future"}
         for claim in all_claims

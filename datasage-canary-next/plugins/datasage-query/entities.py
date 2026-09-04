@@ -1001,6 +1001,23 @@ def datasage_entity_resolve(args: dict[str, Any], **_kwargs: Any) -> str:
                 semantics,
                 attribution_mode=attribution_mode,
             )
+            if entity_types is not None:
+                unsupported_types = [
+                    entity_type
+                    for entity_type in sorted(entity_types)
+                    if not _roles_for(
+                        entity_type,
+                        domain,
+                        metric=metric,
+                        attribution_mode=attribution_mode,
+                        semantics=semantics,
+                    )
+                ]
+                if unsupported_types:
+                    raise EntityFailure(
+                        "UNSUPPORTED_ENTITY_ROLE",
+                        "该实体类型不能用于所选指标，请调整实体类型、业务域或指标。",
+                    )
         exact = _known_matches(token, entity_types=entity_types)
         if exact and entity_types is not None:
             candidates = [
@@ -1239,6 +1256,23 @@ def canonicalize_metric_request(
 
     for input_role, raw_value in raw_filters.items():
         role = str(input_role)
+        # A role can be listed in the entity registry as a convenient alias
+        # (notably department/warehouse_department) while the selected domain
+        # still declares its values as source_exact.  Read that contract before
+        # routing to a master-data resolver: source-exact values must pass
+        # through byte-for-byte unless every supplied value is an explicitly
+        # registered alias.  This keeps controlled department expansions while
+        # preventing an unregistered fact value from becoming ENTITY_NOT_FOUND.
+        definition = dimensions.get(role)
+        value_contract = (
+            definition.get("value_contract")
+            if isinstance(definition, Mapping)
+            else None
+        )
+        source_exact_role = (
+            isinstance(value_contract, Mapping)
+            and value_contract.get("kind") == "source_exact"
+        )
         entity_type = _entity_type_for_filter_role(role)
         values = raw_value if isinstance(raw_value, list) else [raw_value]
         resolved_values: list[str] = []
@@ -1294,6 +1328,12 @@ def canonicalize_metric_request(
                     "lookup_db_call_count": 0,
                 }
             )
+        elif source_exact_role:
+            # Source values are already the governed filter vocabulary.  A
+            # source-exact role may share an input alias with an entity type,
+            # but it has no master identity to resolve.  Do not call the
+            # database and do not normalize/expand a partial value list.
+            output_value = raw_value
         elif entity_type is not None and exact_lookup is not None:
             if not values or any(not isinstance(value, str) for value in values):
                 raise EntityFailure("INVALID_INPUT", "实体筛选值必须是名称或编码字符串。")

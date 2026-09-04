@@ -379,7 +379,31 @@ class GitGovernedSkillTests(unittest.TestCase):
             PLUGIN_ROOT,
             package_name="datasage_deepseek_schema_registration",
         )
-        forbidden = set(schemas._MODEL_SCHEMA_OMIT_KEYS) | {"oneOf"}
+        # Keep this compatibility contract independent from the implementation
+        # constant.  A projection could otherwise remove a keyword from its
+        # own omit set and make this test pass by construction.
+        forbidden = {
+            "$schema",
+            "allOf",
+            "contains",
+            "dependencies",
+            "dependentRequired",
+            "else",
+            "if",
+            "maxItems",
+            "maxLength",
+            "maxProperties",
+            "minItems",
+            "minLength",
+            "minProperties",
+            "not",
+            "oneOf",
+            "patternProperties",
+            "prefixItems",
+            "propertyNames",
+            "then",
+            "uniqueItems",
+        }
 
         def keys(value):
             if isinstance(value, dict):
@@ -2184,6 +2208,7 @@ class DistributionBoundaryTests(unittest.TestCase):
             "plugins/datasage-query/tools.py",
             "plugins/datasage-query/vendor/pymysql/__init__.py",
             "plugins/datasage-query/vendor/pymysql-1.2.0.dist-info/METADATA",
+            "skills/business-analytics/datasage/references/delivery-analysis.md",
         }
         source_only_assets = source_only_evaluation_assets | {
             "plugins/datasage-query/contracts/entity-rules-maintainer.md",

@@ -188,6 +188,7 @@ class ExpertArchitectureTests(unittest.TestCase):
         self.assertEqual(
             {
                 "answer-boundary.md",
+                "delivery-analysis.md",
                 "entity-guidance.md",
                 "query-rules.md",
             },

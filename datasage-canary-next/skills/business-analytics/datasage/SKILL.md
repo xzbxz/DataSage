@@ -1,7 +1,7 @@
 ---
 name: datasage
 description: Governed DataSage company facts; not public/user-provided.
-version: 0.15.0-rc12
+version: 0.15.0-rc13
 author: datasage
 platforms: [windows]
 metadata:
@@ -27,45 +27,43 @@ metadata:
 
 Use this skill only when the answer needs new internal company facts; ordinary
 conversation, public research, user-provided data, and writing remain normal
-Hermes work. Answer with the smallest sufficient governed evidence. Choose the
-route adaptively; this is not a mandatory call sequence.
+Hermes work. Use the smallest sufficient governed evidence. Choose the route
+adaptively; this is not a mandatory call sequence.
 
 ## When to Use
 
-- Use it for questions requiring new governed DataSage facts, metrics,
-  comparisons, rankings, or operating-performance evidence.
-- Domains are delivery, receipt, receivable, target, customer_risk, and inventory.
+- Use it for new governed facts, metrics, comparisons, rankings, or operating-
+  performance evidence in delivery, receipt, receivable, target, customer_risk,
+  or inventory.
 - Do not use it for ordinary conversation, public research, user-provided data,
-  writing, or internal policy/HR/document questions that do not require new
-  governed operating facts.
+  writing, or internal policy/HR/document questions without governed metrics.
 
 ## Prerequisites
 
-- The `datasage-query` toolset and its `datasage_catalog`,
-  `datasage_entity_resolve`, and `datasage_query` tools must be available.
-- Live catalog, schema, and tool results are authoritative for metrics, request
-  fields, capabilities, and returned evidence.
+- The `datasage-query` toolset and `datasage_catalog`,
+  `datasage_entity_resolve`, and `datasage_query` must be available.
+- Live catalog, schema, and tool results are authoritative for metrics, fields,
+  capabilities, and returned evidence.
 
 ## How to Run
 
 On restricted WeCom, use only SOUL, public tool schemas, and returned evidence;
 references are never a query prerequisite. On a skill-enabled CLI or maintenance
-surface, optionally load a reference with
-`skill_view(name="datasage", file_path="references/<file>.md")`; otherwise continue
-with the public schema and tool evidence.
+surface, optionally load a reference with `skill_view(name="datasage", file_path="references/<file>.md")`.
 
 ## Quick Reference
 
 - [`datasage.query-rules/v1`](references/query-rules.md) owns request construction;
-  optionally load it on skill-enabled CLI/maintenance, never as a WeCom precondition.
-- [`datasage.entity-guidance/v1`](references/entity-guidance.md) solely owns
-  entity resolution, confirmation, and turn boundaries; optionally load it on
-  skill-enabled CLI/maintenance for an ambiguous entity, geography, or alias.
-- [`datasage.answer-boundary/v1`](references/answer-boundary.md) solely owns
-  detailed interpretation and final-answer policy. On skill-enabled CLI/maintenance,
-  optionally load `references/answer-boundary.md` before a nontrivial comparison,
-  ranking, target, decomposition, causal discussion, multi-row calculation, or
-  zero, empty, undefined, truncated, partial, failed, or timeout evidence.
+  load it only on skill-enabled surfaces, never as a WeCom precondition.
+- [`datasage.entity-guidance/v1`](references/entity-guidance.md) owns entity
+  resolution, confirmation, and turn boundaries; load it when ambiguity matters.
+- [`datasage.answer-boundary/v1`](references/answer-boundary.md) owns detailed
+  interpretation and final-answer policy; optionally load
+  `references/answer-boundary.md` before comparisons, rankings, targets,
+  decompositions, causal discussion, multi-row calculation, or
+  zero/empty/undefined/truncated/partial/failed/timeout evidence.
+- [`datasage.delivery-analysis/v1`](references/delivery-analysis.md) is optional
+  supplemental guidance for L3 delivery, not a fixed planner recipe or WeCom query prerequisite.
 
 ## Procedure
 

@@ -32,6 +32,11 @@ practical next actions when the evidence supports them.
   not replace external database authorization. Database execution remains
   SELECT-only and governed by the query contract, read-only limits, and evidence
   boundary.
+- In WeCom, complex delivery analysis follows: semantic lock → compatible
+  baseline/benchmark → relevant structure → falsifiable hypotheses → advice
+  bound to owner role, trigger, risk, and verification metric; related cuts or
+  decomposition are not causal proof. Detailed delivery guidance is optional
+  on permitted skill surfaces and never a query prerequisite.
 - Advice has three risk levels: descriptive monitoring (facts and trends),
   diagnostic interpretation (comparisons, reconciliations, and clearly marked
   hypotheses), and high-impact recommendations (credit, customer-loss,

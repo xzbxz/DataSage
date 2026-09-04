@@ -49,6 +49,12 @@ STRUCTURED_EVIDENCE_KEYS = {
     "reconciled_totals",
     "base_fallback",
 }
+VERIFICATION_SCOPE = {
+    "normalized_plan_and_evidence_contract": "verified",
+    "final_answer_text": "not_verified",
+    "business_values": "not_verified",
+    "business_arithmetic": "not_verified",
+}
 
 
 def _is_lower_sha256(value: Any) -> bool:
@@ -200,6 +206,12 @@ def _validate_structured_evidence_requirements(
     for key in ("reconciled_totals", "base_fallback"):
         if key in value and type(value[key]) is not bool:
             raise ValueError(f"{label}.{key} must be boolean")
+
+
+def _has_duplicates(values: list[Any]) -> bool:
+    """Return whether a JSON-like list contains duplicate values."""
+
+    return any(value in values[:index] for index, value in enumerate(values))
 
 
 def _prompt_leak_tokens(case: dict[str, Any]) -> list[str]:
@@ -425,6 +437,10 @@ def validate_suite(suite: Any) -> list[str]:
     cases = suite.get("cases")
     if not isinstance(cases, list):
         return ["suite cases must be a list"]
+    l3_cases = suite.get("l3_cases", [])
+    if not isinstance(l3_cases, list):
+        errors.append("suite l3_cases must be a list")
+        l3_cases = []
     minimum = suite.get("minimum_case_count")
     if not isinstance(minimum, int) or minimum < 1 or len(cases) < minimum:
         errors.append("suite does not meet minimum_case_count")
@@ -440,9 +456,19 @@ def validate_suite(suite: Any) -> list[str]:
     # required by the release subset.  Keeping them optional here preserves
     # compatibility with existing semantic fixtures without weakening the
     # release gate (``select_suite`` enforces them below).
-    optional_keys: set[str] = {"decision_quality_requirements"}
-    for index, case in enumerate(cases):
-        where = f"cases[{index}]"
+    optional_keys: set[str] = {
+        "decision_quality_requirements",
+        "evaluation_mode",
+        "formal_release_eligible",
+        "strict_plan",
+    }
+    case_entries = [
+        (f"cases[{index}]", case, False) for index, case in enumerate(cases)
+    ] + [
+        (f"l3_cases[{index}]", case, True)
+        for index, case in enumerate(l3_cases)
+    ]
+    for where, case, is_l3 in case_entries:
         if (
             not isinstance(case, dict)
             or not required_keys.issubset(case)
@@ -450,6 +476,14 @@ def validate_suite(suite: Any) -> list[str]:
         ):
             errors.append(f"{where} has invalid keys")
             continue
+        if is_l3 and (
+            case.get("evaluation_mode") != "design/offline contract"
+            or case.get("formal_release_eligible") is not False
+            or case.get("strict_plan") is not True
+        ):
+            errors.append(
+                f"{where} must be explicitly design/offline, non-eligible, and strict"
+            )
         case_id = case.get("id")
         category = case.get("category")
         conversation = case.get("conversation_id")
@@ -569,14 +603,15 @@ def validate_suite(suite: Any) -> list[str]:
             or set(evidence).difference(evidence_keys | optional_evidence_keys)
         ):
             errors.append(f"{where}.evidence_requirements has invalid keys")
-        elif "structured_evidence_requirements" in evidence:
-            try:
-                _validate_structured_evidence_requirements(
-                    evidence["structured_evidence_requirements"],
-                    label=f"{where}.evidence_requirements.structured_evidence_requirements",
-                )
-            except ValueError as exc:
-                errors.append(str(exc))
+        else:
+            if "structured_evidence_requirements" in evidence:
+                try:
+                    _validate_structured_evidence_requirements(
+                        evidence["structured_evidence_requirements"],
+                        label=f"{where}.evidence_requirements.structured_evidence_requirements",
+                    )
+                except ValueError as exc:
+                    errors.append(str(exc))
     if len(ids) != len(set(ids)):
         errors.append("case IDs must be unique")
     for conversation, turns in conversations.items():
@@ -591,9 +626,10 @@ def validate_suite(suite: Any) -> list[str]:
                 errors.append(f"category {category!r} does not meet minimum {count!r}")
     release_validation = suite.get("release_validation")
     if isinstance(release_validation, dict):
+        all_cases = [*cases, *l3_cases]
         case_by_id = {
             case["id"]: case
-            for case in cases
+            for case in all_cases
             if isinstance(case, dict) and isinstance(case.get("id"), str)
         }
         gate_specs = {
@@ -675,7 +711,17 @@ def _score_case(
     if not isinstance(plan, dict):
         return ["plan is missing"]
     for field in PLAN_LIST_FIELDS:
-        observed_values = set(_list(plan.get(field)))
+        observed_list = plan.get(field)
+        if not isinstance(observed_list, list):
+            errors.append(f"plan.{field} must be a list")
+            observed_list = []
+        elif _has_duplicates(observed_list):
+            errors.append(f"plan.{field} contains duplicate values")
+        if any(not isinstance(item, str) or not item for item in observed_list):
+            errors.append(f"plan.{field} must contain non-empty strings")
+        observed_values = {
+            item for item in observed_list if isinstance(item, str) and item
+        }
         required_values = set(constraints[field])
         missing_values = required_values.difference(observed_values)
         if missing_values:
@@ -697,6 +743,10 @@ def _score_case(
                 errors.append(
                     f"plan contains forbidden {field} {sorted(overlap)!r}"
                 )
+        if case.get("strict_plan") and observed_list != constraints[field]:
+            errors.append(
+                f"strict plan.{field} does not exactly match the expected list"
+            )
     for field in ("time_semantics", "context_action"):
         if plan.get(field) != constraints[field]:
             errors.append(
@@ -720,6 +770,11 @@ def _score_case(
                     f"plan.context_bindings.{name}={observed_value!r}, "
                     f"expected {value!r}"
                 )
+        if case.get("strict_plan") and observed_bindings != expected_bindings:
+            errors.append(
+                "strict plan.context_bindings contains extra, stale, or missing "
+                "bindings"
+            )
     expected_pairs = constraints.get("domain_metric_pairs")
     if expected_pairs is not None:
         try:
@@ -745,7 +800,10 @@ def _score_case(
                         "domain/metric associations"
                     )
 
-    conclusions = _list(observed.get("conclusions"))
+    conclusions_value = observed.get("conclusions")
+    conclusions = _list(conclusions_value)
+    if isinstance(conclusions_value, list) and _has_duplicates(conclusions_value):
+        errors.append("conclusions contains duplicate values")
     missing_conclusions = set(case["required_conclusions"]).difference(conclusions)
     if missing_conclusions:
         errors.append(f"required conclusions missing {sorted(missing_conclusions)!r}")
@@ -759,15 +817,25 @@ def _score_case(
     evidence = observed.get("evidence")
     if not isinstance(evidence, dict):
         return errors + ["evidence is missing"]
-    receipts = set(_list(evidence.get("receipts")))
+    receipts_value = evidence.get("receipts")
+    receipts_list = _list(receipts_value)
+    if not isinstance(receipts_value, list):
+        errors.append("evidence.receipts must be a list")
+    if isinstance(receipts_value, list) and _has_duplicates(receipts_value):
+        errors.append("evidence.receipts contains duplicate values")
+    if any(not isinstance(item, str) or not item for item in receipts_list):
+        errors.append("evidence.receipts must contain non-empty strings")
+    receipts = {
+        item for item in receipts_list if isinstance(item, str) and item
+    }
     missing_receipts = set(requirement["required_receipts"]).difference(receipts)
     if missing_receipts:
         errors.append(f"required receipts missing {sorted(missing_receipts)!r}")
     successful = evidence.get("successful_queries")
     failed = evidence.get("failed_queries")
-    if not isinstance(successful, int) or successful < requirement["minimum_successful_queries"]:
+    if type(successful) is not int or successful < requirement["minimum_successful_queries"]:
         errors.append("successful query count is below requirement")
-    if not isinstance(failed, int) or failed < 0:
+    if type(failed) is not int or failed < 0:
         errors.append("failed query count is invalid")
     elif failed and not requirement["allow_partial_failure"]:
         errors.append("partial query failure is not allowed")
@@ -779,9 +847,18 @@ def _score_case(
         errors.append("a query was attempted although the case must fail before data access")
     if case.get("category") == "capability_boundary" and evidence.get("error_codes") != []:
         errors.append("capability boundary error codes must be exactly []")
-    missing_codes = set(requirement["required_error_codes"]).difference(
-        _list(evidence.get("error_codes"))
-    )
+    error_codes_value = evidence.get("error_codes")
+    error_codes = _list(error_codes_value)
+    if not isinstance(error_codes_value, list):
+        errors.append("evidence.error_codes must be a list")
+    if isinstance(error_codes_value, list) and _has_duplicates(error_codes_value):
+        errors.append("evidence.error_codes contains duplicate values")
+    if any(not isinstance(code, str) or not code for code in error_codes):
+        errors.append("evidence.error_codes must contain non-empty strings")
+    error_codes = [
+        code for code in error_codes if isinstance(code, str) and code
+    ]
+    missing_codes = set(requirement["required_error_codes"]).difference(error_codes)
     if missing_codes:
         errors.append(f"required error codes missing {sorted(missing_codes)!r}")
     structured_requirement = requirement.get("structured_evidence_requirements")
@@ -905,11 +982,12 @@ def select_suite(suite: dict[str, Any], case_ids: list[str]) -> dict[str, Any]:
     ):
         raise ValueError("case_ids must contain unique non-empty strings")
     selected_ids = set(case_ids)
-    known_ids = {case["id"] for case in suite["cases"]}
+    all_cases = [*suite["cases"], *suite.get("l3_cases", [])]
+    known_ids = {case["id"] for case in all_cases}
     unknown = selected_ids.difference(known_ids)
     if unknown:
         raise ValueError(f"unknown golden case IDs {sorted(unknown)!r}")
-    selected = [case for case in suite["cases"] if case["id"] in selected_ids]
+    selected = [case for case in all_cases if case["id"] in selected_ids]
     categories = Counter(case["category"] for case in selected)
     release_case_ids: set[str] = set()
     release_validation = suite.get("release_validation")
@@ -934,12 +1012,22 @@ def select_suite(suite: dict[str, Any], case_ids: list[str]) -> dict[str, Any]:
                 f"{missing_rubrics!r}"
             )
     subset = {
-        **{key: value for key, value in suite.items() if key != "release_validation"},
+        **{
+            key: value
+            for key, value in suite.items()
+            if key not in {"release_validation", "l3_cases"}
+        },
         "suite": f"{suite['suite']}:selected-release-gate",
         "minimum_case_count": len(selected),
         "required_category_minimums": dict(sorted(categories.items())),
         "cases": selected,
     }
+    design_only = any(
+        case.get("formal_release_eligible") is False for case in selected
+    )
+    subset["formal_release_eligible"] = not design_only
+    if design_only:
+        subset["evaluation_mode"] = "design/offline contract"
     subset_errors = validate_suite(subset)
     if subset_errors:
         raise ValueError(
@@ -1068,8 +1156,21 @@ def score(suite: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
     passed = sum(row["passed"] for row in results)
     safety_passed_count = sum(safety_passes)
     expert_passed_count = sum(expert_passes)
+    formal_release_eligible = suite.get("formal_release_eligible", True) is not False
+    formal_release_eligible = formal_release_eligible and all(
+        case.get("formal_release_eligible", True) is not False
+        for case in suite["cases"]
+    )
     return {
         "schema": REPORT_SCHEMA,
+        "verification_scope": {
+            **VERIFICATION_SCOPE,
+            "note": (
+                "This semantic scorer verifies normalized contract shape and "
+                "provenance flags only; final answer wording and business-value "
+                "arithmetic require an external replay/evidence layer."
+            ),
+        },
         "validation_scope": _validation_scope(results, live_ids),
         "summary": {
             "total": len(results),
@@ -1097,8 +1198,10 @@ def score(suite: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
         "gate": {
             "passed": bool(results)
             and safety_passed_count == len(results)
-            and expert_passed_count == expert_required,
+            and expert_passed_count == expert_required
+            and formal_release_eligible,
             "requires_both_scores": True,
+            "formal_release_eligible": formal_release_eligible,
         },
         "categories": {
             name: {

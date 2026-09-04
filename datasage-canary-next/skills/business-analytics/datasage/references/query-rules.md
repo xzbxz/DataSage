@@ -65,6 +65,30 @@ Target questions have an explicit evidence order. For “目标完成情况” o
    do not prove a cause. “钱没收回” and “下单节奏” must never be emitted as
    verified causes; at most they are labelled hypotheses pending evidence.
 
+## Delivery L3 request framing
+
+For a delivery question, first lock the semantic contract that every dependent
+request must preserve: gross versus net amount basis; order versus line grain;
+warehouse scope and attribution; the metric's business time and exact period;
+the external-customer population; and the applicable return-settlement period.
+Do not infer any of these from a label, row count, or a related metric. If the
+user leaves one ambiguous and the alternatives would change the result, ask a
+targeted clarification; otherwise state the assumption.
+
+Load [`datasage.delivery-analysis/v1`](delivery-analysis.md) on a
+skill-enabled surface for the detailed L3 evidence chain. It defines the
+dependencies between a compatible baseline and benchmark, question-relevant
+structure or contribution, falsifiable hypotheses with discriminating evidence,
+and evidence-bound recommendations; it does not require a fixed number or
+sequence of tool calls. Each independent request still follows the typed-request
+rules below and keeps its own ledger, period, population, and unit intact.
+
+When a delivery result includes pending or current-master states, a return-
+settlement-period caveat, an unknown bucket, or truncation/`has_more`, carry that
+state into the answer. Do not promote a pending or current-master figure to a
+completed-period fact, discard an unknown bucket, or use a truncated tail as a
+population-wide contribution.
+
 ## Time
 
 - Transaction totals and rankings without a time phrase default to the current

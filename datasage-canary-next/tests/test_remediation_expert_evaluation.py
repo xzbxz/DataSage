@@ -7,6 +7,8 @@ Golden scorer contract and the transcript adapter's reviewer payload shape.
 from __future__ import annotations
 
 import copy
+from decimal import Decimal
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -227,6 +229,288 @@ class GoldenExpertGateTests(unittest.TestCase):
             database_ref_sha="2" * 64,
         )
         self.assertEqual(quality, assertion["decision_quality"])
+
+    def _l3_case(self, case_id):
+        return next(case for case in SUITE["l3_cases"] if case["id"] == case_id)
+
+    def _passing_l3_observed(self, case):
+        constraints = case["plan_constraints"]
+        requirement = case["evidence_requirements"]
+        evidence = {
+            "receipts": list(requirement["required_receipts"]),
+            "successful_queries": requirement["minimum_successful_queries"],
+            "failed_queries": 0,
+            "truncated": False,
+            "reconciled": requirement["require_reconciled_decomposition"],
+            "query_attempted": not requirement["must_not_query"],
+            "error_codes": list(requirement["required_error_codes"]),
+        }
+        return {
+            "plan": {
+                key: copy.deepcopy(value)
+                for key, value in constraints.items()
+                if not key.startswith("must_not_")
+            },
+            "conclusions": list(case["required_conclusions"]),
+            "evidence": evidence,
+        }
+
+    def test_l3_extension_has_eight_cases_and_is_selectable_without_changing_the_58_case_base(self):
+        self.assertEqual(58, len(SUITE["cases"]))
+        self.assertEqual(8, len(SUITE["l3_cases"]))
+        canonical = json.dumps(
+            SUITE["cases"],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        self.assertEqual(
+            "e3eafdcfb76f4fde7e44e6ef572189f158dbd39548c45e6dbaaaaf76d66bd744",
+            hashlib.sha256(canonical).hexdigest(),
+        )
+        self.assertEqual([], SCORER.validate_suite(SUITE))
+        ids = [case["id"] for case in SUITE["l3_cases"]]
+        selected = SCORER.select_suite(SUITE, ids)
+        self.assertEqual(ids, [case["id"] for case in selected["cases"]])
+        self.assertEqual([], SCORER.validate_suite(selected))
+
+    def test_l3_gross_return_net_and_order_cases_are_contracts_not_value_claims(self):
+        reconciliation = self._l3_case(
+            "l3_01_delivery_gross_return_net_reconciliation"
+        )
+        observed = self._passing_l3_observed(reconciliation)
+        self.assertEqual([], SCORER._score_case(reconciliation, observed))
+        gross = Decimal("125.50")
+        returned = Decimal("25.50")
+        net = gross - returned
+        self.assertEqual(Decimal("100.00"), net)
+
+        order = self._l3_case("l3_02_delivery_order_amount_positive")
+        self.assertIn("order_amount", order["plan_constraints"]["metrics"])
+        self.assertNotIn(
+            "order_amount", order["plan_constraints"]["must_not_metrics"]
+        )
+        self.assertEqual([], SCORER._score_case(order, self._passing_l3_observed(order)))
+        self.assertEqual(
+            "not_verified", SCORER.VERIFICATION_SCOPE["business_values"]
+        )
+        self.assertEqual(
+            "not_verified", SCORER.VERIFICATION_SCOPE["business_arithmetic"]
+        )
+
+    def test_l3_quantity_pending_and_internal_scope_require_safe_conclusions(self):
+        quantity = self._l3_case("l3_03_delivery_quantity_pending_no_substitution")
+        observed = self._passing_l3_observed(quantity)
+        self.assertEqual([], SCORER._score_case(quantity, observed))
+        queried = copy.deepcopy(observed)
+        queried["evidence"]["query_attempted"] = True
+        self.assertTrue(
+            any(
+                "query was attempted" in error
+                for error in SCORER._score_case(quantity, queried)
+            )
+        )
+        substituted = copy.deepcopy(observed)
+        substituted["conclusions"].append("substitute_delivery_amount")
+        self.assertTrue(
+            any(
+                "substitute_delivery_amount" in error
+                for error in SCORER._score_case(quantity, substituted)
+            )
+        )
+
+        scope = self._l3_case("l3_04_delivery_internal_customer_scope")
+        self.assertEqual([], SCORER._score_case(scope, self._passing_l3_observed(scope)))
+        wrong_scope = copy.deepcopy(self._passing_l3_observed(scope))
+        wrong_scope["conclusions"].append("claim_internal_customers_included")
+        self.assertTrue(
+            any(
+                "claim_internal_customers_included" in error
+                for error in SCORER._score_case(scope, wrong_scope)
+            )
+        )
+
+    def test_l3_salesperson_organization_and_top5_cases_preserve_identity_and_scope(self):
+        identity = self._l3_case("l3_05_delivery_salesperson_organization_attribution")
+        observed = self._passing_l3_observed(identity)
+        self.assertEqual([], SCORER._score_case(identity, observed))
+        missing_scope = copy.deepcopy(observed)
+        missing_scope["conclusions"].remove(
+            "report_source_specific_organization_attribution"
+        )
+        self.assertTrue(
+            any(
+                "report_source_specific_organization_attribution" in error
+                for error in SCORER._score_case(identity, missing_scope)
+            )
+        )
+
+        top5 = self._l3_case("l3_06_delivery_top5_ties_population_scope")
+        self.assertEqual([], SCORER._score_case(top5, self._passing_l3_observed(top5)))
+        rows = [
+            ("p1", Decimal("50.00")),
+            ("p2", Decimal("40.00")),
+            ("p3", Decimal("40.00")),
+            ("p4", Decimal("30.00")),
+            ("p5", Decimal("20.00")),
+            ("p6", Decimal("10.00")),
+        ]
+        displayed = rows[:5]
+        self.assertEqual(
+            ["p1", "p2", "p3", "p4", "p5"],
+            [entity for entity, _value in displayed],
+        )
+        self.assertEqual(Decimal("180.00"), sum(value for _entity, value in displayed))
+        self.assertEqual(Decimal("190.00"), sum(value for _entity, value in rows))
+        bad_scope = copy.deepcopy(self._passing_l3_observed(top5))
+        bad_scope["conclusions"].append("equate_top_n_total_with_full_total")
+        self.assertTrue(
+            any(
+                "equate_top_n_total_with_full_total" in error
+                for error in SCORER._score_case(top5, bad_scope)
+            )
+        )
+
+    def test_l3_open_diagnosis_requires_boundary_labels_and_quality_shape(self):
+        case = self._l3_case("l3_08_delivery_open_diagnosis")
+        observed = self._passing_l3_observed(case)
+        observed["decision_quality"] = {
+            dimension: 1 for dimension in SCORER.DECISION_QUALITY_DIMENSIONS
+        }
+        self.assertEqual([], SCORER._score_case(case, observed))
+        quality, errors = SCORER._score_decision_quality(case, observed)
+        self.assertEqual([], errors)
+        self.assertTrue(quality["passed"])
+        for label in (
+            "report_benchmark",
+            "report_reconciled_structure",
+            "propose_falsifiable_hypotheses",
+            "state_evidence_insufficient",
+            "recommend_validation_action",
+            "define_review_metric",
+        ):
+            self.assertIn(label, case["required_conclusions"])
+        forbidden = copy.deepcopy(observed)
+        forbidden["conclusions"].append("claim_causal_driver")
+        self.assertTrue(
+            any(
+                "claim_causal_driver" in error
+                for error in SCORER._score_case(case, forbidden)
+            )
+        )
+
+    def test_replacement_turn_rejects_extra_stale_bindings_and_old_dimensions(self):
+        case = copy.deepcopy(self._l3_case("l3_06_delivery_top5_ties_population_scope"))
+        case["plan_constraints"]["context_action"] = "replace"
+        case["plan_constraints"]["context_bindings"] = {
+            "department": "example_region_b",
+            "limit": 5,
+        }
+        observed = self._passing_l3_observed(case)
+        self.assertEqual([], SCORER._score_case(case, observed))
+
+        extra_binding = copy.deepcopy(observed)
+        extra_binding["plan"]["context_bindings"]["old_department"] = (
+            "example_region_a"
+        )
+        self.assertTrue(
+            any(
+                "strict plan.context_bindings" in error
+                for error in SCORER._score_case(case, extra_binding)
+            )
+        )
+
+        stale_binding = copy.deepcopy(observed)
+        stale_binding["plan"]["context_bindings"]["department"] = (
+            "example_region_a"
+        )
+        self.assertTrue(
+            any(
+                "expected" in error
+                for error in SCORER._score_case(case, stale_binding)
+            )
+        )
+
+        stale_dimension = copy.deepcopy(observed)
+        stale_dimension["plan"]["dimensions"] = ["customer", "product"]
+        self.assertTrue(
+            any(
+                "strict plan.dimensions" in error
+                for error in SCORER._score_case(case, stale_dimension)
+            )
+        )
+
+    def test_observed_plan_conclusion_and_evidence_lists_reject_duplicates(self):
+        case = self._l3_case("l3_06_delivery_top5_ties_population_scope")
+        baseline = self._passing_l3_observed(case)
+        for mutate, text in (
+            (
+                lambda value: value["plan"]["domains"].append("delivery"),
+                "plan.domains",
+            ),
+            (
+                lambda value: value["plan"]["metrics"].append("delivery_amount"),
+                "plan.metrics",
+            ),
+            (
+                lambda value: value["plan"]["dimensions"].append("product"),
+                "plan.dimensions",
+            ),
+            (
+                lambda value: value["plan"]["operations"].append("top_n"),
+                "plan.operations",
+            ),
+            (
+                lambda value: value["conclusions"].append("report_top_n"),
+                "conclusions",
+            ),
+            (
+                lambda value: value["evidence"]["receipts"].append("query"),
+                "evidence.receipts",
+            ),
+            (
+                lambda value: value["evidence"]["error_codes"].extend(["E", "E"]),
+                "evidence.error_codes",
+            ),
+        ):
+            with self.subTest(field=text):
+                mutated = copy.deepcopy(baseline)
+                mutate(mutated)
+                self.assertTrue(
+                    any(
+                        "duplicate" in error
+                        for error in SCORER._score_case(case, mutated)
+                    )
+                )
+
+    def test_malformed_observed_lists_and_query_counts_return_structured_errors(self):
+        case = self._l3_case("l3_06_delivery_top5_ties_population_scope")
+        baseline = self._passing_l3_observed(case)
+        mutations = (
+            ("plan.domains", lambda value: value["plan"].__setitem__("domains", None)),
+            ("conclusions", lambda value: value.__setitem__("conclusions", {})),
+            ("receipts", lambda value: value["evidence"].__setitem__("receipts", {})),
+            (
+                "successful_queries",
+                lambda value: value["evidence"].__setitem__("successful_queries", []),
+            ),
+            (
+                "failed_queries",
+                lambda value: value["evidence"].__setitem__("failed_queries", {}),
+            ),
+            (
+                "error_codes",
+                lambda value: value["evidence"].__setitem__("error_codes", {}),
+            ),
+        )
+        for label, mutate in mutations:
+            with self.subTest(field=label):
+                observed = copy.deepcopy(baseline)
+                mutate(observed)
+                errors = SCORER._score_case(case, observed)
+                self.assertTrue(errors)
+                self.assertTrue(all(isinstance(error, str) for error in errors))
 
 
 if __name__ == "__main__":

@@ -10,7 +10,8 @@ an explicit reviewer assertion or remain ``unreviewed``.
 from __future__ import annotations
 
 import argparse
-from datetime import date, datetime
+import calendar
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
@@ -32,6 +33,9 @@ WATERMARK_SCHEMA = "datasage-replay-watermark/v2"
 LIVE_WATERMARK_SCHEMA = "datasage-replay-watermark/v3-live-fixture"
 OFFICIAL_EXPORT_FORMAT = "hermes_sessions_export_jsonl"
 CONTEXT_FINGERPRINT_SCHEMA = "datasage-context-binding-fingerprint/v1"
+_BUSINESS_TIME_ZONE = timezone(timedelta(hours=8))
+_STRICT_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_STRICT_MONTH_PATTERN = re.compile(r"^\d{4}-\d{2}$")
 MODEL_SOURCE_REFERENCE_SCHEMA = "datasage-query-model-source-reference/v1"
 LEGACY_SOURCE_EVIDENCE_SCHEMA = "datasage-query-source-evidence/v1"
 DECISION_QUALITY_DIMENSIONS = (
@@ -73,6 +77,14 @@ PUBLIC_TOOLS = {
     "datasage_query",
 }
 _PERFORMANCE_SCORECARD_FIRST = "performance_scorecard_first"
+_PERIOD_ONLY_OPERATIONS = frozenset(
+    {
+        "previous_period",
+        "year_over_year",
+        "snapshot_months_before",
+        "monthly_trend",
+    }
+)
 MAX_JSON_CHARS = 2_000_000
 _HOST_TOOL_GUARDRAIL_SUFFIX = re.compile(
     r"\n\n\[(?:Tool loop warning|Tool loop hard stop): "
@@ -552,72 +564,348 @@ def _is_canonical_entity_ambiguity(
     return len(identities) == len(set(identities))
 
 
+def _strict_date_text(value: Any) -> date | None:
+    if not isinstance(value, str) or _STRICT_DATE_PATTERN.fullmatch(value) is None:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _strict_month_text(value: Any) -> date | None:
+    if not isinstance(value, str) or _STRICT_MONTH_PATTERN.fullmatch(value) is None:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m").date()
+    except ValueError:
+        return None
+
+
+def _next_month_start(value: date) -> date:
+    return date(value.year + (value.month == 12), 1 if value.month == 12 else value.month + 1, 1)
+
+
+def _shift_months(value: date, months: int) -> date:
+    month_index = value.year * 12 + value.month - 1 + months
+    year, month_zero = divmod(month_index, 12)
+    month = month_zero + 1
+    return date(year, month, min(value.day, calendar.monthrange(year, month)[1]))
+
+
+def _shift_calendar_year(value: date, years: int) -> date:
+    target_year = value.year + years
+    return value.replace(
+        year=target_year,
+        day=min(value.day, calendar.monthrange(target_year, value.month)[1]),
+    )
+
+
+def _expected_flow_bounds(
+    request: dict[str, Any], observed_on: date
+) -> tuple[date, date, str] | None:
+    has_time_range = "time_range" in request
+    has_calendar_month = "calendar_month" in request
+    if has_time_range and has_calendar_month:
+        return None
+    if has_time_range:
+        value = request.get("time_range")
+        if not isinstance(value, dict) or set(value) != {"start", "end"}:
+            return None
+        start = _strict_date_text(value.get("start"))
+        end = _strict_date_text(value.get("end"))
+        source = "explicit"
+    elif has_calendar_month:
+        start = _strict_month_text(request.get("calendar_month"))
+        if start is None:
+            return None
+        try:
+            end = _next_month_start(start)
+        except (ValueError, OverflowError):
+            return None
+        source = "explicit"
+    else:
+        start = observed_on.replace(day=1)
+        try:
+            end = _next_month_start(start)
+        except (ValueError, OverflowError):
+            return None
+        source = "default_current_month"
+    if start is None or end is None or start >= end:
+        return None
+    return start, end, source
+
+
+def _flow_period_state(start: date, end: date, observed_on: date) -> str:
+    if end <= observed_on:
+        return "completed"
+    if start > observed_on:
+        return "not_started"
+    return "in_progress"
+
+
+def _flow_period_matches(
+    value: Any,
+    start: date,
+    end: date,
+    source: str,
+    observed_on: date,
+) -> bool:
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"start", "end", "source", "calendar_evidence"}
+        or value.get("start") != start.isoformat()
+        or value.get("end") != end.isoformat()
+        or value.get("source") != source
+    ):
+        return False
+    evidence = value.get("calendar_evidence")
+    return (
+        isinstance(evidence, dict)
+        and set(evidence)
+        == {
+            "version",
+            "observed_on",
+            "observation_basis",
+            "period_state",
+            "source_freshness",
+        }
+        and evidence.get("version") == "calendar-period-evidence/v2"
+        and evidence.get("observed_on") == observed_on.isoformat()
+        and _strict_date_text(evidence.get("observed_on")) == observed_on
+        and evidence.get("observation_basis") == "business_clock_query_observation"
+        and evidence.get("period_state") == _flow_period_state(start, end, observed_on)
+        and evidence.get("source_freshness") == "not_proven"
+    )
+
+
+def _comparison_request_shape(
+    request: dict[str, Any]
+) -> tuple[str, int | None] | None:
+    if "comparison" not in request:
+        return "", None
+    value = request.get("comparison")
+    if not isinstance(value, dict):
+        return None
+    kind = value.get("kind")
+    if kind == "previous_period":
+        return (kind, None) if set(value) == {"kind"} else None
+    if kind == "year_over_year":
+        return (
+            (kind, None)
+            if set(value) == {"kind", "coverage"}
+            and value.get("coverage") == "matched_elapsed"
+            else None
+        )
+    if kind == "snapshot_months_before":
+        months = value.get("months")
+        return (
+            (kind, months)
+            if set(value) == {"kind", "months"}
+            and type(months) is int
+            and 1 <= months <= 24
+            else None
+        )
+    return None
+
+
+def _previous_period_bounds(start: date, end: date) -> tuple[date, date]:
+    if start.day == 1 and end.day == 1:
+        months = (end.year - start.year) * 12 + end.month - start.month
+        if months > 0:
+            return _shift_months(start, -months), start
+    duration = end - start
+    return start - duration, start
+
+
+def _snapshot_matches(value: Any, observed_on: date) -> bool:
+    if not isinstance(value, dict):
+        return False
+    source = value.get("source")
+    if source == "current_snapshot":
+        return (
+            _strict_date_text(value.get("as_of_date")) == observed_on
+            and value.get("resolution_state") == "resolved"
+        )
+    if source in {"latest_snapshot", "latest_non_null_snapshot", "latest_snapshot_offset"}:
+        month = _strict_month_text(value.get("snapshot_month"))
+        return (
+            month is not None
+            and month <= observed_on.replace(day=1)
+            and value.get("resolution_state") == "resolved"
+        )
+    return False
+
+
+def _snapshot_comparison_matches(
+    value: Any, months: int, observed_on: date
+) -> bool:
+    if (
+        not isinstance(value, dict)
+        or set(value).difference({"current", "comparison", "comparison_compatibility"})
+    ):
+        return False
+    current = value.get("current")
+    comparison = value.get("comparison")
+    if not isinstance(current, dict) or not isinstance(comparison, dict):
+        return False
+    if (
+        set(current).difference({"source", "snapshot_month", "resolution_state"})
+        or set(comparison).difference(
+            {"source", "snapshot_month", "months_before", "resolution_state"}
+        )
+        or current.get("source") != "latest_snapshot"
+        or comparison.get("source") != "latest_snapshot_offset"
+        or type(comparison.get("months_before")) is not int
+        or comparison.get("months_before") != months
+        or current.get("resolution_state") != "resolved"
+        or comparison.get("resolution_state") != "resolved"
+    ):
+        return False
+    current_month = _strict_month_text(current.get("snapshot_month"))
+    comparison_month = _strict_month_text(comparison.get("snapshot_month"))
+    if current_month is None or comparison_month is None:
+        return False
+    try:
+        expected_comparison_month = _shift_months(current_month, -months)
+    except (ValueError, OverflowError):
+        return False
+    return (
+        current_month <= observed_on.replace(day=1)
+        and comparison_month == expected_comparison_month
+    )
+
+
 def _applied_time_matches_live_request(
     value: Any,
     request: dict[str, Any],
     expected_observed_on: date,
 ) -> bool:
-    if not isinstance(value, dict) or not value:
+    if not isinstance(value, dict) or not value or not isinstance(request, dict):
         return False
-    requested = request.get("time_range")
-    candidates = [value]
-    current = value.get("current")
-    if isinstance(current, dict):
-        candidates.append(current)
-    if isinstance(requested, dict):
-        matching = [
-            candidate
-            for candidate in candidates
-            if candidate.get("start") == requested.get("start")
-            and candidate.get("end") == requested.get("end")
-            and candidate.get("source") == "explicit"
-        ]
-        if not matching:
-            return False
-        calendar = matching[0].get("calendar_evidence")
-        try:
-            start_date = date.fromisoformat(str(requested.get("start")))
-            end_date = date.fromisoformat(str(requested.get("end")))
-        except ValueError:
-            return False
-        expected_period_state = (
-            "completed"
-            if end_date <= expected_observed_on
-            else "not_started"
-            if start_date > expected_observed_on
-            else "in_progress"
-        )
+    has_time_form = "time_range" in request or "calendar_month" in request
+    flow_bounds = _expected_flow_bounds(request, expected_observed_on)
+    if has_time_form and flow_bounds is None:
+        # Invalid/ambiguous flow forms must not fall through to snapshot checks.
+        return False
+    comparison = _comparison_request_shape(request)
+    if comparison is None:
+        return False
+    kind, months = comparison
+
+    if kind == "snapshot_months_before":
         return (
-            start_date < end_date
-            and isinstance(calendar, dict)
-            and calendar.get("version") == "calendar-period-evidence/v2"
-            and calendar.get("observation_basis")
-            == "business_clock_query_observation"
-            and calendar.get("observed_on") == expected_observed_on.isoformat()
-            and calendar.get("period_state") == expected_period_state
-            and calendar.get("source_freshness") == "not_proven"
+            not has_time_form
+            and isinstance(months, int)
+            and _snapshot_comparison_matches(value, months, expected_observed_on)
         )
-    source = value.get("source")
-    if source == "current_snapshot":
+
+    if kind in {"previous_period", "year_over_year"}:
+        if not has_time_form or flow_bounds is None:
+            return False
+        requested_start, requested_end, _source = flow_bounds
+        allowed_outer = {"current", "comparison", "comparison_compatibility"}
+        if kind == "previous_period":
+            if set(value).difference(allowed_outer):
+                return False
+            try:
+                prior_start, prior_end = _previous_period_bounds(
+                    requested_start, requested_end
+                )
+            except (ValueError, OverflowError):
+                return False
+            return (
+                _flow_period_matches(
+                    value.get("current"),
+                    requested_start,
+                    requested_end,
+                    "explicit",
+                    expected_observed_on,
+                )
+                and _flow_period_matches(
+                    value.get("comparison"),
+                    prior_start,
+                    prior_end,
+                    "explicit",
+                    expected_observed_on,
+                )
+            )
+
+        if set(value).difference({*allowed_outer, "comparison_alignment"}):
+            return False
+        alignment = value.get("comparison_alignment")
+        alignment_fields = {
+            "version",
+            "kind",
+            "coverage",
+            "observed_on",
+            "requested_current_start",
+            "requested_current_end",
+            "effective_current_end",
+            "current_was_clipped",
+        }
+        if not isinstance(alignment, dict) or set(alignment) != alignment_fields:
+            return False
+        alignment_start = _strict_date_text(alignment.get("requested_current_start"))
+        alignment_end = _strict_date_text(alignment.get("requested_current_end"))
+        effective_end = _strict_date_text(alignment.get("effective_current_end"))
+        if (
+            alignment.get("version") != "matched-elapsed-comparison/v1"
+            or alignment.get("kind") != "year_over_year"
+            or alignment.get("coverage") != "matched_elapsed"
+            or _strict_date_text(alignment.get("observed_on"))
+            != expected_observed_on
+            or alignment_start != requested_start
+            or alignment_end != requested_end
+            or effective_end is None
+            or type(alignment.get("current_was_clipped")) is not bool
+            or not requested_start < effective_end <= requested_end
+            or effective_end > expected_observed_on + timedelta(days=1)
+            or effective_end
+            != min(requested_end, expected_observed_on + timedelta(days=1))
+            or alignment.get("current_was_clipped") != (effective_end < requested_end)
+        ):
+            return False
+        clipped = alignment["current_was_clipped"]
         try:
-            as_of_date = date.fromisoformat(str(value.get("as_of_date")))
-        except ValueError:
+            prior_start = _shift_calendar_year(requested_start, -1)
+            if clipped or not (
+                requested_start.day == 1 and requested_end.day == 1
+            ):
+                prior_end = prior_start + (effective_end - requested_start)
+            else:
+                prior_end = _shift_calendar_year(effective_end, -1)
+        except (ValueError, OverflowError):
             return False
         return (
-            as_of_date == expected_observed_on
-            and value.get("resolution_state") == "resolved"
+            _flow_period_matches(
+                value.get("current"),
+                requested_start,
+                effective_end,
+                "explicit",
+                expected_observed_on,
+            )
+            and _flow_period_matches(
+                value.get("comparison"),
+                prior_start,
+                prior_end,
+                "explicit",
+                expected_observed_on,
+            )
         )
-    if source in {"latest_snapshot", "latest_non_null_snapshot", "latest_snapshot_offset"}:
-        snapshot_month = value.get("snapshot_month")
-        try:
-            snapshot_date = date.fromisoformat(f"{snapshot_month}-01")
-        except ValueError:
-            return False
-        return (
-            snapshot_date <= expected_observed_on.replace(day=1)
-            and value.get("resolution_state") == "resolved"
+
+    if kind:
+        return False
+    if "current" in value or "comparison" in value or "comparison_alignment" in value:
+        return False
+    if flow_bounds is not None and (
+        has_time_form or "start" in value or "end" in value
+    ):
+        start, end, source = flow_bounds
+        return _flow_period_matches(
+            value, start, end, source, expected_observed_on
         )
-    return False
+    return _snapshot_matches(value, expected_observed_on)
 
 
 def _has_finite_business_fact(facts: dict[str, Any]) -> bool:
@@ -1480,6 +1768,65 @@ def _plan_trace(value: Any) -> dict[str, Any] | None:
     return result
 
 
+def _period_insensitive_plan_signature(plan: dict[str, Any]) -> str:
+    """Fingerprint context while ignoring only temporal plan changes.
+
+    ``context_action`` describes conversation continuity, not whether the
+    next query has a different time window.  Keep entity/filter/dimension
+    scope in this fingerprint so a missing or changed filter cannot be
+    treated as a harmless period-only follow-up.  Temporal comparison and
+    trend operations are removed because they are another representation of
+    the period change itself.
+    """
+
+    stable = {
+        key: value
+        for key, value in plan.items()
+        if key not in {"context_action", "time_semantics"}
+    }
+    operations = stable.get("operations")
+    if isinstance(operations, list):
+        stable["operations"] = [
+            operation
+            for operation in operations
+            if operation not in _PERIOD_ONLY_OPERATIONS
+        ]
+    return _sha256(stable)
+
+
+def _plan_filter_signature(plan: dict[str, Any]) -> str:
+    """Return the stable identity of the plan's filter bindings."""
+
+    bindings = plan.get("context_bindings")
+    if not isinstance(bindings, dict):
+        return _sha256({})
+    # ``limit`` is presentation state, while every other binding is part of
+    # the retained population/entity scope.  Keep both the normalized live
+    # fingerprint map and legacy/reviewer entity keys so ambiguity continuation
+    # cannot preserve a prior filter when the new resolver turn omitted it.
+    relevant = {
+        key: value for key, value in bindings.items() if key != "limit"
+    }
+    return _sha256(relevant)
+
+
+def _ambiguity_context_compatible(
+    plan: dict[str, Any],
+    prior_dimensions: frozenset[str],
+    prior_filter_signature: str,
+) -> bool:
+    """Require role/dimension/filter continuity before preserving ambiguity."""
+
+    dimensions = frozenset(
+        item for item in plan.get("dimensions", []) if isinstance(item, str)
+    )
+    return (
+        bool(dimensions)
+        and dimensions == prior_dimensions
+        and _plan_filter_signature(plan) == prior_filter_signature
+    )
+
+
 def _validate_performance_scorecard_trace(
     persisted_plan: dict[str, Any],
     review_trace: dict[str, Any],
@@ -1602,6 +1949,20 @@ def _review(
     return (list(labels), reviewed, trace)
 
 
+def _captured_business_date(captured_at: str) -> date:
+    """Convert a timezone-aware capture timestamp to the business date."""
+
+    try:
+        captured_timestamp = datetime.fromisoformat(
+            captured_at.replace("Z", "+00:00")
+        )
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError("live bindings captured_at must be an ISO-8601 timestamp") from exc
+    if captured_timestamp.tzinfo is None or captured_timestamp.utcoffset() is None:
+        raise ValueError("live bindings captured_at must include a timezone offset")
+    return captured_timestamp.astimezone(_BUSINESS_TIME_ZONE).date()
+
+
 def _turn_messages(
     session: dict[str, Any],
     messages: list[dict[str, Any]],
@@ -1714,15 +2075,7 @@ def adapt(
         raise ValueError("bindings captured_at and non-empty turns are required")
     captured_observed_on: date | None = None
     if live_fixture:
-        try:
-            captured_timestamp = datetime.fromisoformat(
-                captured_at.replace("Z", "+00:00")
-            )
-        except ValueError as exc:
-            raise ValueError("live bindings captured_at must be an ISO-8601 timestamp") from exc
-        if captured_timestamp.tzinfo is None:
-            raise ValueError("live bindings captured_at must include a timezone offset")
-        captured_observed_on = captured_timestamp.date()
+        captured_observed_on = _captured_business_date(captured_at)
     if any(not isinstance(turn, dict) for turn in turns):
         raise ValueError("turn bindings must be objects")
     test_ids = [turn.get("test_id") for turn in turns]
@@ -1733,7 +2086,16 @@ def adapt(
     receipt_turns: list[dict[str, Any]] = []
     previous: dict[
         str,
-        tuple[str, str, bool, frozenset[str], frozenset[str]],
+        tuple[
+            str,
+            str,
+            bool,
+            frozenset[str],
+            frozenset[str],
+            str,
+            frozenset[str],
+            str,
+        ],
     ] = {}
     for binding in sorted(turns, key=lambda item: (str(item.get("conversation_id")), int(item.get("turn", 0)))):
         required_keys = {
@@ -1804,6 +2166,11 @@ def adapt(
             require_result_status_consistency=strict_live_integrity,
         )
         signature = _sha256({key: value for key, value in plan.items() if key != "context_action"})
+        period_insensitive_signature = _period_insensitive_plan_signature(plan)
+        filter_signature = _plan_filter_signature(plan)
+        dimensions = frozenset(
+            item for item in plan.get("dimensions", []) if isinstance(item, str)
+        )
         prior = previous.get(conversation)
         ambiguity_preserve = (
             prior is not None
@@ -1813,6 +2180,7 @@ def adapt(
             and bool(plan["metrics"])
             and set(plan["domains"]).issubset(prior[3])
             and set(plan["metrics"]).issubset(prior[4])
+            and _ambiguity_context_compatible(plan, prior[6], prior[7])
         )
         final_answer_sha256 = _sha256(final_row["content"])
         conclusions, review, trace = _review(
@@ -1882,13 +2250,25 @@ def adapt(
                     raise ValueError("reset plan_trace did not create a new session lineage")
                 if action in {"preserve", "replace"} and not same_lineage:
                     raise ValueError("context transition is not backed by session lineage")
-                if action == "new":
+            if action == "new":
                     raise ValueError("non-initial turn cannot use context_action=new")
+            signature = _sha256(
+                {key: value for key, value in plan.items() if key != "context_action"}
+            )
+            period_insensitive_signature = _period_insensitive_plan_signature(plan)
+            filter_signature = _plan_filter_signature(plan)
+            dimensions = frozenset(
+                item for item in plan.get("dimensions", []) if isinstance(item, str)
+            )
         elif prior is None:
             plan["context_action"] = "new"
         elif prior[0] != binding["session_id"]:
             plan["context_action"] = "reset"
-        elif ambiguity_preserve or prior[1] == signature:
+        elif (
+            ambiguity_preserve
+            or prior[1] == signature
+            or prior[5] == period_insensitive_signature
+        ):
             plan["context_action"] = "preserve"
         else:
             plan["context_action"] = "replace"
@@ -1906,6 +2286,9 @@ def adapt(
             "catalog" in evidence["receipts"],
             frozenset(plan["domains"]),
             frozenset(plan["metrics"]),
+            period_insensitive_signature,
+            dimensions,
+            filter_signature,
         )
         transcript_projection = [
             {

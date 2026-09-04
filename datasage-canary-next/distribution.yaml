@@ -1,5 +1,5 @@
 name: datasage-canary-next
-version: 0.15.0-rc12
+version: 0.15.0-rc13
 description: Hermes-native governed operating-data expert for delivery, collections,
   receivables, targets, inventory, and customer-risk analysis with evidence-bounded
   recommendations.
@@ -90,5 +90,6 @@ distribution_owned:
   - plugins/datasage-query/wire.py
   - skills/business-analytics/datasage/SKILL.md
   - skills/business-analytics/datasage/references/answer-boundary.md
+  - skills/business-analytics/datasage/references/delivery-analysis.md
   - skills/business-analytics/datasage/references/entity-guidance.md
   - skills/business-analytics/datasage/references/query-rules.md

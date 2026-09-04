@@ -20,7 +20,7 @@
   },
   "release_validation": {
     "schema": "datasage-live-replay-manifest/v2",
-    "release_target": "0.15.0-rc12",
+    "release_target": "0.15.0-rc13",
     "source_release": "0.15.0-rc5",
     "transcript_source": "wecom",
     "semantic_fixture_status": "reviewed_failure_frozen",
@@ -625,6 +625,81 @@
       "allowed_conclusions": ["report_future_target_only", "disclose_data_limits", "state_split_authority", "state_no_base_fallback", "disclose_undefined_rate"],
       "forbidden_conclusions": ["report_future_actual", "report_future_completion", "report_future_gap", "report_target_gap", "infer_missing_value", "invent_result", "use_transaction_detail_base"],
       "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": [], "structured_evidence_requirements": {"source_authority": "split_tables", "identity_bindings": {"salesperson": "sales_id"}, "source_receipts": ["target"], "base_fallback": false}}
+    }
+  ],
+  "l3_cases": [
+    {
+      "id": "l3_01_delivery_gross_return_net_reconciliation", "category": "change_diagnosis", "conversation_id": "l3_delivery_gross_return_net", "turn": 1, "evaluation_mode": "design/offline contract", "formal_release_eligible": false, "strict_plan": true,
+      "prompt": "比较同一期间同一客户范围的毛出库、退货和净出库，先给毛额与退货，再核对净额；只报告已对账结构，不把结构当原因。",
+      "plan_constraints": {"domains": ["delivery"], "metrics": ["gross_delivery_amount", "return_amount", "delivery_amount"], "dimensions": ["customer"], "operations": ["previous_period", "complete_change_decomposition"], "time_semantics": "resolved_period_vs_previous_period", "context_action": "new", "must_not_metrics": [], "domain_metric_pairs": [{"domain": "delivery", "metric": "gross_delivery_amount"}, {"domain": "delivery", "metric": "return_amount"}, {"domain": "delivery", "metric": "delivery_amount"}]},
+      "required_conclusions": ["report_gross_return_net_reconciliation", "report_reconciled_structure", "state_noncausal"],
+      "allowed_conclusions": ["report_gross_return_net_reconciliation", "report_reconciled_structure", "state_noncausal", "disclose_data_limits"],
+      "forbidden_conclusions": ["report_net_as_gross", "report_return_as_net", "claim_causal_driver", "claim_unreconciled_contribution", "invent_result"],
+      "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage", "decomposition"], "minimum_successful_queries": 3, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": true, "must_not_query": false, "required_error_codes": []}
+    },
+    {
+      "id": "l3_02_delivery_order_amount_positive", "category": "change_diagnosis", "conversation_id": "l3_delivery_order_amount", "turn": 1, "evaluation_mode": "design/offline contract", "formal_release_eligible": false, "strict_plan": true,
+      "prompt": "查询指定下单期间的订单金额，并按订单发生口径说明范围；不要把订单金额改成出库或收款金额。",
+      "plan_constraints": {"domains": ["delivery"], "metrics": ["order_amount"], "dimensions": [], "operations": [], "time_semantics": "resolved_order_period", "context_action": "new", "must_not_metrics": ["delivery_amount", "receipt_amount"], "domain_metric_pairs": [{"domain": "delivery", "metric": "order_amount"}]},
+      "required_conclusions": ["report_order_amount", "disclose_order_time_semantics", "state_no_metric_substitution"],
+      "allowed_conclusions": ["report_order_amount", "disclose_order_time_semantics", "state_no_metric_substitution", "disclose_data_limits"],
+      "forbidden_conclusions": ["report_delivery_as_order", "report_receipt_as_order", "invent_result"],
+      "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
+    },
+    {
+      "id": "l3_03_delivery_quantity_pending_no_substitution", "category": "capability_boundary", "conversation_id": "l3_delivery_quantity_pending", "turn": 1, "evaluation_mode": "design/offline contract", "formal_release_eligible": false, "strict_plan": true,
+      "prompt": "查询本月出库数量；该数量口径若仍在待验证状态，明确拒绝并说明不能用金额或其他数量替代，且不要访问业务数据。",
+      "plan_constraints": {"domains": ["delivery"], "metrics": ["delivery_quantity"], "dimensions": [], "operations": [], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": ["gross_delivery_quantity", "return_quantity", "order_quantity", "delivery_amount"], "domain_metric_pairs": []},
+      "required_conclusions": ["refuse_pending_capability", "disclose_pending_validation", "state_no_substitution"],
+      "allowed_conclusions": ["refuse_pending_capability", "disclose_pending_validation", "state_no_substitution", "disclose_data_limits"],
+      "forbidden_conclusions": ["report_quantity", "substitute_delivery_amount", "substitute_order_quantity", "invent_result"],
+      "evidence_requirements": {"required_receipts": ["catalog", "metric_detail"], "minimum_successful_queries": 0, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": true, "required_error_codes": []}
+    },
+    {
+      "id": "l3_04_delivery_internal_customer_scope", "category": "causal_boundary", "conversation_id": "l3_delivery_internal_scope", "turn": 1, "evaluation_mode": "design/offline contract", "formal_release_eligible": false, "strict_plan": true,
+      "prompt": "按客户查看本月净出库，并明确内部客户是否纳入；范围说明必须来自返回的治理证据，不要把收款域的范围说明套到出库域。",
+      "plan_constraints": {"domains": ["delivery"], "metrics": ["delivery_amount"], "dimensions": ["customer"], "operations": [], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": [], "domain_metric_pairs": [{"domain": "delivery", "metric": "delivery_amount"}]},
+      "required_conclusions": ["report_delivery_scope", "disclose_internal_customer_exclusion", "state_scope_evidence_bound"],
+      "allowed_conclusions": ["report_delivery_scope", "disclose_internal_customer_exclusion", "state_scope_evidence_bound", "disclose_data_limits"],
+      "forbidden_conclusions": ["claim_internal_customers_included", "reuse_receipt_scope", "invent_scope", "invent_result"],
+      "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
+    },
+    {
+      "id": "l3_05_delivery_salesperson_organization_attribution", "category": "ambiguity", "conversation_id": "l3_delivery_salesperson_organization", "turn": 1, "evaluation_mode": "design/offline contract", "formal_release_eligible": false, "strict_plan": true,
+      "prompt": "分别按各自事实查看本月毛出库和退货，并按业务员与组织说明来源归属；不要把两侧合并成净出库，也不要只靠显示名称拼接身份。",
+      "plan_constraints": {"domains": ["delivery"], "metrics": ["gross_delivery_amount", "return_amount"], "dimensions": ["salesperson", "organization"], "operations": [], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": [], "domain_metric_pairs": [{"domain": "delivery", "metric": "gross_delivery_amount"}, {"domain": "delivery", "metric": "return_amount"}]},
+      "required_conclusions": ["report_source_specific_organization_attribution", "state_no_cross_fact_merge", "state_identity_evidence_needed"],
+      "allowed_conclusions": ["report_source_specific_organization_attribution", "state_no_cross_fact_merge", "state_identity_evidence_needed", "disclose_data_limits"],
+      "forbidden_conclusions": ["merge_gross_and_return_by_unproven_scope", "claim_organization_id_binding", "merge_same_name_entities", "invent_result"],
+      "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage"], "minimum_successful_queries": 1, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
+    },
+    {
+      "id": "l3_06_delivery_top5_ties_population_scope", "category": "top_n", "conversation_id": "l3_delivery_top5_scope", "turn": 1, "evaluation_mode": "design/offline contract", "formal_release_eligible": false, "strict_plan": true,
+      "prompt": "列出本月净出库额前五个产品；并列时说明处理方式，区分展示的前五与全量总体，不要把前五合计当成全量。",
+      "plan_constraints": {"domains": ["delivery"], "metrics": ["delivery_amount"], "dimensions": ["product"], "operations": ["top_n"], "time_semantics": "current_calendar_month", "context_action": "new", "context_bindings": {"limit": 5}, "must_not_metrics": [], "domain_metric_pairs": [{"domain": "delivery", "metric": "delivery_amount"}]},
+      "required_conclusions": ["report_top_n", "disclose_tie_handling", "separate_displayed_scope_from_full_population", "disclose_ranking_scope"],
+      "allowed_conclusions": ["report_top_n", "disclose_tie_handling", "separate_displayed_scope_from_full_population", "disclose_ranking_scope", "disclose_data_limits"],
+      "forbidden_conclusions": ["claim_full_population", "equate_top_n_total_with_full_total", "drop_ties_silently", "claim_causal_driver", "invent_result"],
+      "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage"], "minimum_successful_queries": 2, "allow_partial_failure": false, "require_untruncated": false, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": []}
+    },
+    {
+      "id": "l3_07_delivery_partial_truncation_boundary", "category": "partial_failure", "conversation_id": "l3_delivery_partial_truncation", "turn": 1, "evaluation_mode": "design/offline contract", "formal_release_eligible": false, "strict_plan": true,
+      "prompt": "同时核对净出库和净收款；收款源若失败且结果被截断，只报告有证据的出库并明确收款缺口，不要编造失败结果。",
+      "plan_constraints": {"domains": ["delivery", "receipt"], "metrics": ["delivery_amount", "net_receipt_amount"], "dimensions": ["department"], "operations": ["parallel_evidence"], "time_semantics": "current_calendar_month", "context_action": "new", "must_not_metrics": [], "domain_metric_pairs": [{"domain": "delivery", "metric": "delivery_amount"}, {"domain": "receipt", "metric": "net_receipt_amount"}]},
+      "required_conclusions": ["report_available_evidence", "disclose_partial_failure"],
+      "allowed_conclusions": ["report_available_evidence", "disclose_partial_failure", "disclose_data_limits"],
+      "forbidden_conclusions": ["claim_all_evidence_complete", "invent_failed_result", "infer_missing_value"],
+      "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage", "partial_failure"], "minimum_successful_queries": 1, "allow_partial_failure": true, "require_untruncated": false, "require_reconciled_decomposition": false, "must_not_query": false, "required_error_codes": ["SOURCE_UNAVAILABLE", "SOURCE_TRUNCATED"]}
+    },
+    {
+      "id": "l3_08_delivery_open_diagnosis", "category": "causal_boundary", "conversation_id": "l3_delivery_open_diagnosis", "turn": 1, "evaluation_mode": "design/offline contract", "formal_release_eligible": false, "strict_plan": true,
+      "prompt": "本月净出库比上月下降，请先给可核对的基准和变化，再按客户与产品给出可对账结构；只提出可证伪假设，证据不足要说清，并给出具体但不越权的复核动作和指标。",
+      "plan_constraints": {"domains": ["delivery"], "metrics": ["delivery_amount"], "dimensions": ["customer", "product"], "operations": ["previous_period", "complete_change_decomposition"], "time_semantics": "resolved_current_vs_previous_period", "context_action": "new", "must_not_metrics": [], "domain_metric_pairs": [{"domain": "delivery", "metric": "delivery_amount"}]},
+      "decision_quality_requirements": {"required_dimensions": ["conclusion_clarity", "decision_relevance", "actionability", "evidence_basis", "assumptions", "material_risks", "validation_steps"], "minimum_score": 1},
+      "required_conclusions": ["report_benchmark", "report_observed_change", "report_reconciled_structure", "propose_falsifiable_hypotheses", "state_evidence_insufficient", "state_noncausal", "recommend_validation_action", "define_review_metric"],
+      "allowed_conclusions": ["report_benchmark", "report_observed_change", "report_reconciled_structure", "propose_falsifiable_hypotheses", "state_evidence_insufficient", "state_noncausal", "recommend_validation_action", "define_review_metric", "disclose_data_limits", "request_independent_evidence"],
+      "forbidden_conclusions": ["claim_causal_driver", "claim_mechanism_proven", "recommend_punitive_action", "invent_result", "claim_unreconciled_contribution"],
+      "evidence_requirements": {"required_receipts": ["catalog", "query", "coverage", "decomposition"], "minimum_successful_queries": 2, "allow_partial_failure": false, "require_untruncated": true, "require_reconciled_decomposition": true, "must_not_query": false, "required_error_codes": []}
     }
   ]
 }

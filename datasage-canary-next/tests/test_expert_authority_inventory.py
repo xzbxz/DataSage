@@ -28,6 +28,7 @@ DATASAGE_REFERENCE_OWNERS = {
     "datasage.query-rules/v1": "references/query-rules.md",
     "datasage.entity-guidance/v1": "references/entity-guidance.md",
     "datasage.answer-boundary/v1": "references/answer-boundary.md",
+    "datasage.delivery-analysis/v1": "references/delivery-analysis.md",
 }
 DATASAGE_ARCHITECTURE_ROWS = {
     "datasage.query-rules/v1": (
@@ -44,6 +45,11 @@ DATASAGE_ARCHITECTURE_ROWS = {
         "Profile Skill",
         "CLI/维护面（可选）",
         "解释提示；插件不注册 prompt 副本",
+    ),
+    "datasage.delivery-analysis/v1": (
+        "Profile Skill",
+        "CLI/维护面（可选）",
+        "出库 L3 分析提示；不能替代工具证据",
     ),
 }
 
@@ -135,6 +141,7 @@ class ExpertAuthorityInventoryTests(unittest.TestCase):
                 ("SKILL.md", "datasage.query-rules/v1"),
                 ("SKILL.md", "datasage.answer-boundary/v1"),
                 ("SKILL.md", "datasage.entity-guidance/v1"),
+                ("SKILL.md", "datasage.delivery-analysis/v1"),
                 ("query-rules.md", "datasage.answer-boundary/v1"),
                 ("query-rules.md", "datasage.entity-guidance/v1"),
             }.issubset(linked_edges)

@@ -1298,6 +1298,8 @@ def _allocated_amount_query(
     source_path = metric.get("source_path")
     metrics = semantics.get("metrics") or {}
     source_metric = metrics.get(source_code) if isinstance(metrics, dict) else None
+    if isinstance(source_metric, dict):
+        _ensure_available(source_metric)
     paths = source_metric.get("paths") if isinstance(source_metric, dict) else None
     path = paths.get(source_path) if isinstance(paths, dict) else None
     if not isinstance(path, dict) or path.get("ledger") != "salesperson_allocation":
@@ -1638,17 +1640,17 @@ def _target_completion_query(
     )
     actual_output = (
         f"CASE WHEN {period_state} IN ('not_started', 'includes_future') "
-        f"OR {actual_nulls} > 0 THEN NULL ELSE {actual_value} END"
+        f"OR {actual_rows} = 0 OR {actual_nulls} > 0 THEN NULL ELSE {actual_value} END"
     )
     completion = (
         f"CASE WHEN {period_state} IN ('not_started', 'includes_future') "
-        f"OR {target_rows} = 0 OR {target_nulls} > 0 OR {actual_nulls} > 0 "
+        f"OR {target_rows} = 0 OR {actual_rows} = 0 OR {target_nulls} > 0 OR {actual_nulls} > 0 "
         f"OR {target_value} = 0 THEN NULL "
         f"ELSE {actual_value} / {target_value} END"
     )
     gap = (
         f"CASE WHEN {period_state} IN ('not_started', 'includes_future') "
-        f"OR {target_rows} = 0 OR {target_nulls} > 0 OR {actual_nulls} > 0 "
+        f"OR {target_rows} = 0 OR {actual_rows} = 0 OR {target_nulls} > 0 OR {actual_nulls} > 0 "
         f"THEN NULL ELSE {target_value} - {actual_value} END"
     )
     select = [

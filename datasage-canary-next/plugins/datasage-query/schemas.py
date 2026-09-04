@@ -1,5 +1,7 @@
 """JSON schema exposed by the DataSage Expert query plugin."""
 
+import copy
+
 from .capability_contract import (
     ATTRIBUTION_MODES,
     DELIVERY_SCOPES,
@@ -845,10 +847,135 @@ def _add_model_target_gap_operation_guard(projected_schema: dict) -> None:
     ]
 
 
+def _model_catalog_item_variants(item_schema: dict) -> list[dict]:
+    """Build DeepSeek-safe mutually exclusive catalog request shapes."""
+
+    properties = item_schema.get("properties")
+    if not isinstance(properties, dict):
+        return []
+
+    def branch(allowed_keys: tuple[str, ...], required: list[str]) -> dict:
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                key: properties[key] for key in allowed_keys if key in properties
+            },
+            "required": required,
+        }
+
+    ordinary_without_view = branch(
+        ("domain", "metric"),
+        ["domain"],
+    )
+    ordinary_with_view = branch(
+        ("domain", "view"),
+        ["domain", "view"],
+    )
+    scorecard = branch(
+        ("view",),
+        ["view"],
+    )
+    ordinary_with_view["properties"]["view"] = {
+        "type": "string",
+        "enum": ["expert_index", "full", "audit"],
+    }
+    scorecard["properties"]["view"] = {
+        "type": "string",
+        "enum": ["performance_scorecard"],
+    }
+    return [ordinary_without_view, ordinary_with_view, scorecard]
+
+
+def _add_model_catalog_operation_guard(projected_schema: dict) -> None:
+    """Keep catalog scorecard exclusivity and six-request cap model-visible.
+
+    DeepSeek's accepted subset omits most conditionals and array bounds. Keep
+    only the mutually exclusive scorecard/ordinary alternatives here; the
+    canonical/runtime layers continue to enforce one-to-six requests.
+    """
+
+    try:
+        requests_schema = projected_schema["parameters"]["properties"][
+            "requests"
+        ]
+        item_schema = requests_schema["items"]
+    except (KeyError, TypeError):
+        return
+    if not isinstance(requests_schema, dict) or not isinstance(item_schema, dict):
+        return
+
+    variants = _model_catalog_item_variants(item_schema)
+    if len(variants) != 3:
+        return
+    ordinary_item = copy.deepcopy(item_schema)
+    ordinary_item["anyOf"] = [copy.deepcopy(item) for item in variants[:2]]
+    scorecard_item = copy.deepcopy(item_schema)
+    scorecard_item["anyOf"] = [copy.deepcopy(variants[2])]
+
+    ordinary_array = {"type": "array", "items": ordinary_item}
+    scorecard_array = {"type": "array", "items": scorecard_item}
+    requests_schema.pop("items", None)
+    requests_schema["anyOf"] = [ordinary_array, scorecard_array]
+
+
+def _add_model_delivery_scope_guard(projected_schema: dict) -> None:
+    """Retain the static delivery_scope ownership rule after projection."""
+
+    try:
+        request_schema = projected_schema["parameters"]["properties"]["requests"][
+            "items"
+        ]
+        branches = request_schema.get("anyOf")
+    except (KeyError, TypeError):
+        return
+    if not isinstance(branches, list) or not branches:
+        return
+
+    for branch in branches:
+        if not isinstance(branch, dict):
+            continue
+        branch_properties = branch.get("properties")
+        if not isinstance(branch_properties, dict):
+            continue
+        without_scope = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                key: value
+                for key, value in branch_properties.items()
+                if key != "delivery_scope"
+            },
+        }
+        with_scope_properties = copy.deepcopy(branch_properties)
+        if "delivery_scope" in with_scope_properties:
+            with_scope_properties["delivery_scope"] = {
+                "type": "string",
+                "enum": list(DELIVERY_SCOPES),
+            }
+            domain_schema = with_scope_properties.get("domain")
+            if isinstance(domain_schema, dict):
+                with_scope_properties["domain"] = {
+                    **domain_schema,
+                    "enum": ["delivery"],
+                }
+        with_scope = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": with_scope_properties,
+            "required": ["delivery_scope"],
+        }
+        branch["anyOf"] = [without_scope, with_scope]
+
+
 def model_tool_schema(canonical_tool_schema: dict) -> dict:
     """Return a DeepSeek-compatible model schema without weakening runtime guards."""
 
+    name = canonical_tool_schema.get("name")
     projected = _model_schema_node(canonical_tool_schema)
-    if canonical_tool_schema.get("name") == "datasage_query":
+    if name == "datasage_catalog":
+        _add_model_catalog_operation_guard(projected)
+    elif name == "datasage_query":
         _add_model_target_gap_operation_guard(projected)
+        _add_model_delivery_scope_guard(projected)
     return projected

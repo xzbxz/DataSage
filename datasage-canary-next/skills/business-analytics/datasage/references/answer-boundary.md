@@ -75,9 +75,22 @@ Those phrases are permitted only as explicitly labelled, evidence-neutral
 hypotheses, together with the evidence needed to test them. A caveat placed
 later cannot repair an earlier unsupported causal assertion.
 
-Hermes may organize and explain these elements naturally. The plugin returns
-evidence and typed states; it does not require the model to emit a private JSON
-answer envelope or surrender control of normal conversation.
+## Delivery L3 owner boundary
+
+Detailed delivery guidance is owned solely by
+[`datasage.delivery-analysis/v1`](delivery-analysis.md). This final-answer
+policy authorizes only claims bound to a compatible returned metric, scope,
+typed state, and relationship. Keep description, structural contribution,
+diagnosis, and causal conclusion distinct; related cuts, arithmetic, trends, or
+decomposition are not causal proof.
+
+For delivery claims, preserve pending/current-master, return-settlement period,
+unknown bucket, truncation/`has_more`, and empty/failed states. A recommendation
+must bind the finding, owner role, trigger, risk, and verification metric. If a
+branch is missing or fails, retain valid evidence, disclose the local gap, and
+name the next discriminating check. The linked delivery reference owns the
+detailed semantic lock and evidence chain; this section remains the final-answer
+authorization boundary.
 
 ## Product boundary
 

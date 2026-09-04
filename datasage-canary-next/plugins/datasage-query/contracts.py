@@ -642,6 +642,182 @@ def _is_unavailable(definition: Mapping[str, Any]) -> bool:
     return status != "available"
 
 
+def _delivery_runtime_scope_policy(metric_code: str) -> dict[str, Any]:
+    """Project the delivery scope behavior from the execution validator.
+
+    Delivery scope is intentionally owned by the query runtime.  The catalog
+    must not grow a second hand-maintained list of gross/alignment metrics, so
+    this adapter asks the runtime validator which public enum values it accepts
+    for the exact metric code.  The import is lazy because tools imports this
+    module as part of its own initialization.
+    """
+
+    try:
+        from . import tools as query_tools
+    except Exception as exc:  # pragma: no cover - only reached on broken install
+        raise ContractFailure(
+            "CONTRACT_UNAVAILABLE",
+            "delivery scope runtime authority is unavailable",
+        ) from exc
+
+    validator = getattr(query_tools, "_validate_delivery_metric_scope", None)
+    if not callable(validator):
+        raise ContractFailure(
+            "CONTRACT_UNAVAILABLE",
+            "delivery scope runtime authority is unavailable",
+        )
+
+    accepted: list[str] = []
+    omitted_is_accepted = False
+    for scope in (None, *capability_contract.DELIVERY_SCOPES):
+        request: dict[str, Any] = {
+            "domain": "delivery",
+            "mode": "metric",
+            "metric": metric_code,
+        }
+        if scope is not None:
+            request["delivery_scope"] = scope
+        try:
+            validator(request)
+        except Exception:
+            continue
+        if scope is None:
+            omitted_is_accepted = True
+        else:
+            accepted.append(scope)
+
+    if not accepted and not omitted_is_accepted:
+        raise ContractFailure(
+            "CONTRACT_UNAVAILABLE",
+            f"delivery metric {metric_code} has no valid scope contract",
+        )
+
+    if omitted_is_accepted and "default_net" not in accepted:
+        accepted.insert(0, "default_net")
+    return {
+        "allowed_scopes": accepted,
+        "required": not omitted_is_accepted,
+        "default": "default_net" if omitted_is_accepted else None,
+    }
+
+
+def _delivery_scope_flags(
+    metric_code: str,
+    definition: Mapping[str, Any],
+    semantics: Mapping[str, Any],
+) -> dict[str, bool]:
+    """Return conservative business-scope flags without physical fields."""
+
+    default_disclosures = semantics.get("default_disclosures")
+    inherited = (
+        default_disclosures
+        if isinstance(default_disclosures, (list, tuple))
+        else ()
+    )
+    external_customers_only = any(
+        isinstance(item, Mapping)
+        and item.get("id") == "delivery.external-customer.scope"
+        and item.get("mode") == "required_always"
+        for item in inherited
+    )
+
+    completed_returns_only = (
+        definition.get("time_field") == "statement_time"
+        and not isinstance(definition.get("ratio"), Mapping)
+    )
+    return {
+        "external_customers_only": external_customers_only,
+        "completed_returns_only": completed_returns_only,
+    }
+
+
+def _delivery_answer_boundary_summary(
+    definition: Mapping[str, Any],
+    semantics: Mapping[str, Any],
+    physical_identifiers: set[str],
+) -> list[str]:
+    """Project only safe required disclosure prose for planning context."""
+
+    candidates: list[Any] = []
+    inherited = semantics.get("default_disclosures")
+    if isinstance(inherited, (list, tuple)):
+        candidates.extend(inherited)
+    declared = definition.get("disclosures")
+    if isinstance(declared, (list, tuple)):
+        candidates.extend(declared)
+
+    summary: list[str] = []
+    for raw in candidates:
+        if not isinstance(raw, Mapping) or raw.get("mode") != "required_always":
+            continue
+        text = _safe_business_text(raw.get("text"), physical_identifiers)
+        if text is not None and text not in summary:
+            summary.append(text)
+
+    return summary
+
+
+def _pending_capability_projection(
+    domain: str,
+    metric_code: str,
+    definition: Mapping[str, Any],
+    semantics: Mapping[str, Any],
+    physical_identifiers: set[str],
+) -> dict[str, Any]:
+    """Expose a blocked capability without authorizing it for execution."""
+
+    availability = definition.get("availability")
+    if not isinstance(availability, Mapping):
+        raise ContractFailure(
+            "CONTRACT_UNAVAILABLE",
+            f"metric {metric_code} has an invalid availability contract",
+        )
+    status = availability.get("status")
+    error_code = availability.get("error_code")
+    raw_reason = availability.get("message")
+    if (
+        not isinstance(status, str)
+        or not status
+        or not isinstance(error_code, str)
+        or not error_code
+    ):
+        raise ContractFailure(
+            "CONTRACT_UNAVAILABLE",
+            f"metric {metric_code} has an invalid availability contract",
+        )
+    label = _safe_business_text(definition.get("label"), physical_identifiers)
+    reason = _safe_business_text(raw_reason, physical_identifiers)
+    if label is None:
+        label = metric_code
+    if reason is None:
+        reason = "This governed capability is pending validation."
+    error = {"code": error_code, "message": reason}
+    result: dict[str, Any] = {
+        "code": metric_code,
+        "label": label,
+        "status": status,
+        "reason": reason,
+        "error": error,
+        "selectable": False,
+        "operation_summary": [],
+        "supports_dimensions": False,
+        "supports_change_decomposition": False,
+        "delivery_scope_policy": _delivery_runtime_scope_policy(metric_code),
+        "scope_flags": _delivery_scope_flags(metric_code, definition, semantics),
+    }
+    activation_gate = availability.get("activation_gate")
+    if isinstance(activation_gate, Mapping):
+        state = activation_gate.get("state")
+        if isinstance(state, str) and state:
+            result["activation_gate"] = state
+    answer_boundary_summary = _delivery_answer_boundary_summary(
+        definition, semantics, physical_identifiers
+    )
+    if answer_boundary_summary:
+        result["answer_boundary_summary"] = answer_boundary_summary
+    return result
+
+
 def _currency_policy_projection(value: Any) -> Any:
     if not isinstance(value, Mapping):
         return value
@@ -750,6 +926,7 @@ def _model_semantic_projection(
     )
     related_metric_refs = _related_metric_refs_projection(domain, semantics)
     projected_metrics: list[dict[str, Any]] = []
+    pending_capabilities: list[dict[str, Any]] = []
     known_dimensions = {str(code) for code in dimensions}
     for raw_code in sorted(metrics, key=str):
         code = str(raw_code)
@@ -757,8 +934,20 @@ def _model_semantic_projection(
         if not isinstance(definition, Mapping):
             raise ContractFailure("CONTRACT_UNAVAILABLE", f"metric {code} is invalid")
         # Unverified data paths are absent from model authorization. The query
-        # executor independently enforces the same availability contract.
+        # executor independently enforces the same availability contract. Keep
+        # a separate non-executable capability index for delivery so Hermes can
+        # distinguish a known pending quantity from an unknown metric.
         if _is_unavailable(definition):
+            if domain == "delivery":
+                pending_capabilities.append(
+                    _pending_capability_projection(
+                        domain,
+                        code,
+                        definition,
+                        semantics,
+                        physical_identifiers,
+                    )
+                )
             continue
         allowed_dimensions, by_attribution = _metric_dimension_contract(
             definition, metrics
@@ -928,6 +1117,16 @@ def _model_semantic_projection(
             item["available_inventory_scopes"] = sorted(str(scope) for scope in scopes)
         if isinstance(definition.get("default_inventory_scope"), str):
             item["default_inventory_scope"] = definition["default_inventory_scope"]
+        if domain == "delivery":
+            item["delivery_scope_policy"] = _delivery_runtime_scope_policy(code)
+            item["scope_flags"] = _delivery_scope_flags(
+                code, definition, semantics
+            )
+            answer_boundary_summary = _delivery_answer_boundary_summary(
+                definition, semantics, physical_identifiers
+            )
+            if answer_boundary_summary:
+                item["answer_boundary_summary"] = answer_boundary_summary
         projected_metrics.append(item)
 
     executable_dimension_codes = {
@@ -1001,6 +1200,8 @@ def _model_semantic_projection(
         "allowed_dimension_sets": allowed_dimension_sets,
         "dimensions": projected_dimensions,
     }
+    if pending_capabilities:
+        projection["pending_capabilities"] = pending_capabilities
     if related_metric_refs:
         projection["related_metric_refs"] = related_metric_refs
     _assert_business_safe_tree(
@@ -1095,6 +1296,13 @@ def _capability_affordances(
         target_gap = selected_metric.get("target_gap_decomposition")
         if isinstance(target_gap, Mapping):
             metric_facts["target_gap_decomposition"] = _copy_guidance(target_gap)
+        for key in (
+            "delivery_scope_policy",
+            "scope_flags",
+            "answer_boundary_summary",
+        ):
+            if selected_metric.get(key) is not None:
+                metric_facts[key] = _copy_guidance(selected_metric.get(key))
         affordances["selected_metric_capabilities"] = metric_facts
 
     try:
@@ -1140,6 +1348,9 @@ def _catalog_summary(domain: str, planner: Mapping[str, Any]) -> dict[str, Any]:
                 "available_inventory_scopes",
                 "default_inventory_scope",
                 "max_group_dimensions",
+                "delivery_scope_policy",
+                "scope_flags",
+                "answer_boundary_summary",
             )
             if raw.get(key) is not None
         }
@@ -1164,6 +1375,9 @@ def _catalog_summary(domain: str, planner: Mapping[str, Any]) -> dict[str, Any]:
     related_metric_refs = planner.get("related_metric_refs")
     if isinstance(related_metric_refs, list):
         result["related_metric_refs"] = _copy_guidance(related_metric_refs)
+    pending_capabilities = planner.get("pending_capabilities")
+    if isinstance(pending_capabilities, list):
+        result["pending_capabilities"] = _copy_guidance(pending_capabilities)
     return result
 
 
@@ -1205,6 +1419,9 @@ def _catalog_expert_index(domain: str, planner: Mapping[str, Any]) -> dict[str, 
                 "operation_summary",
                 "operation_summary_by_attribution_mode",
                 "target_gap_decomposition",
+                "delivery_scope_policy",
+                "scope_flags",
+                "answer_boundary_summary",
             )
             if raw.get(key) is not None
         }
@@ -1234,6 +1451,9 @@ def _catalog_expert_index(domain: str, planner: Mapping[str, Any]) -> dict[str, 
     related_metric_refs = planner.get("related_metric_refs")
     if isinstance(related_metric_refs, list):
         result["related_metric_refs"] = _copy_guidance(related_metric_refs)
+    pending_capabilities = planner.get("pending_capabilities")
+    if isinstance(pending_capabilities, list):
+        result["pending_capabilities"] = _copy_guidance(pending_capabilities)
     return result
 
 
@@ -1253,6 +1473,31 @@ def _catalog_metric_detail(
         or not isinstance(raw_dimensions, list)
     ):
         raise ContractFailure("CONTRACT_UNAVAILABLE", "指标详细目录格式无效。")
+
+    pending_capabilities = planner.get("pending_capabilities")
+    if isinstance(pending_capabilities, list):
+        pending = next(
+            (
+                dict(item)
+                for item in pending_capabilities
+                if isinstance(item, Mapping)
+                and item.get("code") == metric_code
+            ),
+            None,
+        )
+        if pending is not None:
+            # Preserve one structured reason in the exact-detail response and
+            # keep it explicitly non-selectable.  The compact wire knows how
+            # to retain this pending metric shape without inventing operations.
+            pending["pending"] = True
+            return {
+                "domain": domain,
+                "level": "metric",
+                "source_versions": _copy_guidance(planner.get("source_versions")),
+                "metric": pending,
+                "dimensions": [],
+                "pending_capability": _copy_guidance(pending),
+            }
     metric = next(
         (
             dict(raw)

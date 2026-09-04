@@ -33,6 +33,15 @@ _CATALOG_METRIC_FIELDS = (
     "operation_summary",
     "operation_summary_by_attribution_mode",
     "requires_metric_detail",
+    "delivery_scope_policy",
+    "scope_flags",
+    "answer_boundary_summary",
+    "status",
+    "reason",
+    "error",
+    "selectable",
+    "activation_gate",
+    "pending",
 )
 
 
@@ -108,7 +117,10 @@ def _compact_metric_detail(
         for key in _CATALOG_METRIC_FIELDS
         if key in metric
     }
-    compact_metric["operation_summary"] = _metric_operation_summary(metric)
+    is_pending = metric.get("selectable") is False or metric.get("pending") is True
+    compact_metric["operation_summary"] = (
+        [] if is_pending else _metric_operation_summary(metric)
+    )
     for key in (
         "allowed_dimensions",
         "change_decomposition_dimensions",
@@ -131,6 +143,13 @@ def _compact_metric_detail(
     }
     if limitations:
         compact["limitations"] = limitations
+    pending_capability = detail.get("pending_capability")
+    if isinstance(pending_capability, Mapping):
+        compact["pending_capability"] = {
+            key: pending_capability[key]
+            for key in _CATALOG_METRIC_FIELDS
+            if key in pending_capability
+        }
     return compact
 
 
@@ -202,6 +221,7 @@ def _compact_catalog_result(
             "level": level,
             "metric_count": result.get("metric_count", len(metrics)),
             "metrics": metrics,
+            "pending_capabilities": result.get("pending_capabilities"),
         }.items()
         if value is not None
     }
