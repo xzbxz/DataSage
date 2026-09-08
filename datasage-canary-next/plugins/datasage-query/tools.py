@@ -4633,7 +4633,7 @@ def _target_status_is_coherent(
     period_state = str(states.get("period_state") or "").casefold()
     if period_state in {"not_started", "includes_future", "future"}:
         return (
-            target is not None
+            (target is not None or target_state in {"missing", "incomplete", "not_set_for_future"})
             and actual is None
             and gap is None
             and completion is None

@@ -198,6 +198,9 @@ class RemainingCaseTests(unittest.TestCase):
         self.assertEqual(2,len(result['rows']))
         states={row['states']['target_data_state'] for row in result['rows']}
         self.assertEqual({'missing','zero'},states)
+        by_name={row['dimensions'][0]['value']:row for row in result['rows']}
+        self.assertIsNone(by_name['甲']['facts']['target_amount_rmb'])
+        self.assertEqual(0,by_name['乙']['facts']['target_amount_rmb'])
         self.assertTrue(all(row['facts'].get('completion_rate') is None for row in result['rows']))
         self.save('B11','public_SQL_final_evidence',result['rows'],['Model distinction between unset and zero target; no unjustified performance grade'])
 

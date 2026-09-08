@@ -1651,6 +1651,10 @@ def _target_completion_query(
         f"WHEN {actual_rows} = 0 THEN 'missing' "
         f"WHEN {actual_nulls} > 0 THEN 'incomplete' ELSE 'reported' END"
     )
+    target_output = (
+        f"CASE WHEN {target_rows} = 0 OR {target_nulls} > 0 "
+        f"THEN NULL ELSE {target_value} END"
+    )
     actual_output = (
         f"CASE WHEN {period_state} IN ('not_started', 'includes_future') "
         f"OR {actual_rows} = 0 OR {actual_nulls} > 0 THEN NULL ELSE {actual_value} END"
@@ -1670,7 +1674,7 @@ def _target_completion_query(
         *output_dimensions,
         f"{completion} AS metric_value",
         f"{completion} AS completion_rate",
-        f"{target_value} AS target_amount_rmb",
+        f"{target_output} AS target_amount_rmb",
         f"{actual_output} AS actual_amount_rmb",
         f"{gap} AS gap_amount_rmb",
         f"{target_state} AS target_data_state",
