@@ -32,3 +32,17 @@ Rule ID: `datasage.entity-guidance/v1`
   names in the answer.
 - Historical analysis must retain departed employees; current-employment status
   applies only to an explicit current-employee question.
+
+- `resolution_scope` describes only the considered entity types and sources.
+  An unsearched type is not proved absent. A single customer candidate plus an
+  unsearched department type does not justify a type-neutral business binding;
+  clarify the intended type without inventing a department candidate.
+- Department discovery covers registered aliases only; unregistered department
+  literals can exist in fact data. After the user explicitly selects a
+  `source_exact` department, send its exact supplied value in the complete query's
+  department filter. Query validation preserves that literal and does not reuse
+  a same-named customer's identity. Do not repeat an unsupported department
+  resolver lookup merely to confirm the already supplied literal.
+- The plugin is stateless with respect to user confirmation. Correct structured
+  role selection is still Hermes's responsibility; a prior ambiguous result or
+  a later successful query is not proof that the user confirmed that role.

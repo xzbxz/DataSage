@@ -1019,7 +1019,38 @@ def datasage_entity_resolve(args: dict[str, Any], **_kwargs: Any) -> str:
                         "该实体类型不能用于所选指标，请调整实体类型、业务域或指标。",
                     )
         exact = _known_matches(token, entity_types=entity_types)
-        if exact and entity_types is not None:
+        registered_types = {str(item["entity_type"]) for item in exact}
+        considered_types = set(entity_types) if entity_types is not None else {
+            str(kind) for kind in _registry()["entity_types"]
+            if domain is None or _roles_for(
+                str(kind), domain, metric=metric,
+                attribution_mode=attribution_mode, semantics=semantics,
+            )
+        }
+        searched_types: set[str] = set()
+
+        def with_resolution_scope(payload):
+            # A unique match among searchable masters cannot rule out a
+            # considered source-exact type that has no discovery source.
+            unsearched = considered_types - registered_types - searched_types
+            payload["resolution_scope"] = {
+                "considered_entity_types": sorted(considered_types),
+                "registered_exact_entity_types": sorted(registered_types),
+                "master_searched_entity_types": sorted(searched_types),
+                "unsearched_entity_types": sorted(unsearched),
+                "complete": not unsearched,
+            }
+            if unsearched:
+                payload["candidate_count_is_lower_bound"] = True
+                if payload["status"] == "resolved":
+                    payload["status"] = "ambiguous"
+                    payload["must_clarify"] = True
+                    payload["must_stop_business_query"] = True
+            return payload
+
+        # An explicit list of several types is still a search across types,
+        # not a choice of the first registered match.
+        if exact and entity_types is not None and len(entity_types) == 1:
             candidates = [
                 _with_roles(
                     item,
@@ -1098,7 +1129,7 @@ def datasage_entity_resolve(args: dict[str, Any], **_kwargs: Any) -> str:
                         "truncated": False,
                     }
                 payload["elapsed_ms"] = int((time.monotonic() - started) * 1000)
-                return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                return json.dumps(with_resolution_scope(payload), ensure_ascii=False, separators=(",", ":"))
             fuzzy_allowed = _fuzzy_search_allowed(token)
             sql, params = _build_candidate_query(
                 token,
@@ -1110,6 +1141,7 @@ def datasage_entity_resolve(args: dict[str, Any], **_kwargs: Any) -> str:
                 raise EntityFailure("BATCH_DEADLINE_EXCEEDED", "实体解析已超过调用总时限。")
             execution_kwargs = {"deadline_at": deadline_at} if deadline_at is not None else {}
             rows, truncated = db_runtime.execute(sql, params, 50, **execution_kwargs)
+            searched_types.update(source_types)
             candidates = _candidate_rows(
                 rows,
                 domain,
@@ -1168,6 +1200,7 @@ def datasage_entity_resolve(args: dict[str, Any], **_kwargs: Any) -> str:
                 ),
                 "fuzzy_search_skipped": not fuzzy_allowed,
             }
+        payload = with_resolution_scope(payload)
     except EntityFailure as failure:
         payload = {
             "status": "failed",
