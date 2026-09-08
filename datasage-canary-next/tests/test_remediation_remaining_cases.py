@@ -48,6 +48,21 @@ def facts(result):
     return [row.get('facts', {}) for row in result.get('rows', [])]
 
 
+def first_of_month_add(value, months):
+    if value is None: return None
+    day=date.fromisoformat(value[:10])
+    if day.day != 1: raise ValueError("adapter only supports compiled first-of-month arithmetic")
+    ordinal=day.year*12+day.month-1+months
+    return date(ordinal//12,ordinal%12+1,1).isoformat()
+
+
+def first_of_month_diff(start, end):
+    if start is None or end is None: return None
+    a,b=date.fromisoformat(start[:10]),date.fromisoformat(end[:10])
+    if a.day != 1 or b.day != 1: raise ValueError("adapter only supports first-of-month differences")
+    return (b.year-a.year)*12+b.month-a.month
+
+
 class RemainingCaseTests(unittest.TestCase):
     def setUp(self):
         self.started = time.perf_counter()
@@ -64,16 +79,22 @@ class RemainingCaseTests(unittest.TestCase):
             ALTER TABLE vk_dwd.delivery_return_detail_dwd ADD COLUMN sales_id TEXT;
             ALTER TABLE vk_dwd.sale_bill_split_dwd ADD COLUMN sales_id TEXT;
             ALTER TABLE vk_dwd.delivery_target_split_dwd ADD COLUMN sales_id TEXT;
+            CREATE TABLE vk_dw.goods_turnover_basic_data_dw(cost_amount_rmb REAL,ddp_amount_rmb REAL,pur_delivery_rmb REAL,bill_date TEXT);
             CREATE TABLE vk_dw.customer_debt_bymonth_dw(debt_amount_rmb REAL,bill_date TEXT,is_inner_cus TEXT);
             CREATE TABLE vk_dwd.inventory_cost_dwd(cost_amount_rmb REAL,bill_date TEXT);
             CREATE TABLE vk_dw.inventory_barcode_detail_dw(ddp_amount_rmb REAL,status INTEGER);
             CREATE TABLE vk_dwd.customer_dwd(customer_id TEXT,customer_no TEXT,customer_name TEXT,is_delete TEXT,is_void TEXT);
         ''')
         self.conn.create_function('CURDATE', 0, lambda: OBSERVED.isoformat())
-        self.conn.create_function('DATE_FORMAT', 2, lambda day, fmt: date.fromisoformat(day[:10]).strftime(fmt))
+        self.conn.create_function('DATE_FORMAT', 2, lambda day, fmt: None if day is None else date.fromisoformat(day[:10]).strftime(fmt))
         self.conn.create_function('DATE_ADD_DAY', 2, lambda day, days: None if day is None or days is None else (date.fromisoformat(day[:10])+timedelta(days=days)).isoformat())
         self.conn.create_function('DATEDIFF', 2, lambda end,start: None if end is None or start is None else (date.fromisoformat(end[:10])-date.fromisoformat(start[:10])).days)
         self.conn.create_function('GREATEST', -1, lambda *v: None if None in v else max(v))
+        self.conn.create_function('CONCAT', -1, lambda *v: None if None in v else ''.join(map(str,v)))
+        self.conn.create_function('STR_TO_DATE', 2, lambda value,fmt: None if value is None else date.fromisoformat(value).isoformat())
+        self.conn.create_function('DATE_ADD_MONTH', 2, first_of_month_add)
+        self.conn.create_function('DATE_SUB_MONTH', 2, lambda value,n: first_of_month_add(value,-n))
+        self.conn.create_function('MONTH_DIFF', 2, first_of_month_diff)
         self.conn.create_function('CHAR_LENGTH', 1, lambda v: len(v) if v is not None else None)
         self.conn.create_function('LEFT_TEXT', 2, lambda value,n: value[:n])
         self.conn.create_function('LOCATE', 2, lambda needle,value: value.find(needle)+1)
@@ -115,6 +136,9 @@ class RemainingCaseTests(unittest.TestCase):
             trace['injected_io_error']='BATCH_DEADLINE_EXCEEDED'
             raise plugin.tools.QueryFailure('BATCH_DEADLINE_EXCEEDED','Synthetic receipt I/O timeout',timeout=True,stage='business_sql')
         adapted = sqlite_sql(sql).replace('<=>','IS').replace('%%','%').replace('LEFT(', 'LEFT_TEXT(')
+        adapted=re.sub(r'TIMESTAMPDIFF\(\s*MONTH\s*,','MONTH_DIFF(',adapted)
+        adapted=adapted.replace('DATE_ADD(', 'DATE_ADD_MONTH(').replace('DATE_SUB(', 'DATE_SUB_MONTH(')
+        adapted=re.sub(r',\s*INTERVAL\s+(\d+)\s+MONTH\)',r', \1)',adapted)
         trace['sqlite_sql'] = adapted
         rows=[dict(row) for row in self.conn.execute(adapted, params)]
         trace['database_rows']=rows
@@ -189,7 +213,14 @@ class RemainingCaseTests(unittest.TestCase):
         self.insert('vk_dw.inventory_barcode_detail_dw','ddp_amount_rmb,status',[(100000,1),(50000,2),(900000,9)])
         result=self.result(self.query(metric('current_inventory_amount_rmb','inventory',month=None)))
         self.assertEqual(150000,facts(result)[0]['metric_value'])
-        self.save('B09','partial_current_balance_SQL',{'current_inventory_rmb':150000},['Turnover missing-period SQL is not exercised: current adapter does not cover its recursive MySQL calendar. Requires a disposable MySQL fixture or separately verified calendar adapter.','Model refusal to grade efficiency from current balance alone'])
+        unavailable=[]
+        for partial_cost_row in (False,True):
+            if partial_cost_row:self.insert('vk_dw.goods_turnover_basic_data_dw','cost_amount_rmb,ddp_amount_rmb,pur_delivery_rmb,bill_date',[(None,150000,None,'2026-08')])
+            turnover=self.result(self.query(metric('inventory_turnover_days','inventory',month=None)))
+            self.assertIn(turnover['data_state'], {'empty','undefined'})
+            self.assertTrue(all(row.get('metric_value') is None for row in facts(turnover)))
+            unavailable.append({'partial_cost_row':partial_cost_row,'result':turnover})
+        self.save('B09','public_SQL_current_balance_and_missing_turnover_inputs',{'current_inventory_rmb':150000,'turnover_controls':unavailable},['Model refusal to grade efficiency from current balance alone; no full positive turnover-formula acceptance or real MySQL calendar/DECIMAL validation'])
 
     def test_B11_missing_and_zero_target(self):
         self.insert('vk_dwd.delivery_target_split_dwd','detail_target_rmb,is_inner_cus,year_month,sales_name,sales_id',[(0,'n','2026-08','乙','B')])
@@ -274,6 +305,13 @@ class RemainingCaseTests(unittest.TestCase):
         payload=self.query({'request_id':'freeze','domain':'customer_risk','mode':'action','metric':'freeze_customer'})
         self.assertEqual('failed',payload['status']);self.assertFalse(self.sql_trace)
         self.save('B18','public_unsupported_action_rejected',payload,['Model refusal to claim execution, human approval, credit advice, causal caution and material-risk discussion'])
+
+    def test_calendar_adapter_is_limited_and_checked(self):
+        self.assertEqual('2025-12-01',first_of_month_add('2026-01-01',-1))
+        self.assertEqual('2024-03-01',first_of_month_add('2024-02-01',1))
+        self.assertEqual(11,first_of_month_diff('2025-09-01','2026-08-01'))
+        self.assertIsNone(first_of_month_add(None,1))
+        with self.assertRaises(ValueError): first_of_month_add('2026-01-31',1)
 
     def test_unbound_caller_cannot_reach_sql(self):
         payload=self.invoke('datasage_query',{'requests':[metric('actual_receipt_amount','receipt')]},bound=False)

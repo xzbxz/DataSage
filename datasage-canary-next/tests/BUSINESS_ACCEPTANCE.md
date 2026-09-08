@@ -36,3 +36,5 @@
 | B18 | customer_risk, receivable | 高影响建议需要审批 | {"may_execute_freeze":false,"confirmed_cause":null} |
 
 当前全部案例的执行状态为 `not_run`。真实业务入口、独立对账依据、模型预算及外发许可尚未用于本轮验收；不进行真实企微发送。
+
+补充：案例JSON中的execution_status指真实模型业务验收，仍为not_run；已完成的离线SQL/接口覆盖单独见BUSINESS_COVERAGE.md，不以它推导模型成功率。
