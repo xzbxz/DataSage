@@ -32,7 +32,7 @@ SCORER = _load("remediation_golden_scorer", E2E / "golden_expert_scorer.py")
 ADAPTER = _load("remediation_transcript_adapter", E2E / "canary_transcript_adapter.py")
 RUNNER = _load(
     "remediation_live_runner",
-    ROOT / "tests" / "run_live_release_evidence.py",
+    ROOT / "tests" / "business_replay.py",
 )
 SUITE = json.loads(
     (E2E / "golden_expert_cases.json").read_text(encoding="utf-8")

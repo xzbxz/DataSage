@@ -24,8 +24,8 @@ SCORECARD_LENSES: tuple[dict[str, Any], ...] = (
         ),
     },
     {
-        "lens": "cash",
-        "business_question": "How did period cash collection change?",
+        "lens": "collections",
+        "business_question": "How did period registered net collections change? This is not cash flow or liquidity.",
         "time_semantics": "period_flow",
         "candidates": (
             {"domain": "receipt", "metric": "net_receipt_amount"},
@@ -67,15 +67,6 @@ SCORECARD_LENSES: tuple[dict[str, Any], ...] = (
         ),
         "candidates": (),
     },
-)
-
-
-# Internal entitlement compatibility inventory only.  This is not a bundle,
-# ordering contract, or requirement that Hermes query every listed metric.
-SCORECARD_METRICS: tuple[dict[str, str], ...] = tuple(
-    {"domain": candidate["domain"], "metric": candidate["metric"]}
-    for lens in SCORECARD_LENSES
-    for candidate in lens["candidates"]
 )
 
 

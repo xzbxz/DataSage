@@ -1,7 +1,7 @@
 # DataSage Expert 0.15 架构
 
 版本：`0.15.0-rc14`
-运行基线：Hermes `0.20.5`
+运行基线：Hermes `0.21.1`
 
 ## 唯一目标
 
@@ -164,7 +164,7 @@ Memory 永远不是查询语法、指标/实体 ID、别名、地域映射、cat
 重新以 live schema/catalog、实体 registry 或用户当前明确输入为准。清理已有
 持久内容属于用户数据变更，必须另获用户明确授权，不能由架构迁移静默完成。
 
-Hermes `0.20.5` 在读取配置失败时会让自动 background review fail-open，同时
+Hermes `0.21.1` 在读取配置失败时会让自动 background review fail-open，同时
 write-approval gate 也可能回落为关闭。本 Profile 因而显式关闭自动 background
 review，只保留由用户主动触发的 `/refine`；Memory 和 Skill 写入继续通过现有
 write-approval gate 进入待审批区。每次重启前的门禁必须验证 `config.yaml` 可解析，
@@ -182,28 +182,9 @@ fixture，要求压缩后保留用户纠正、当前 period/scope/entity/metric 
 
 ### Hermes 内建 Skill 选择约束
 
-删除 `.no-bundled-skills`，由 Hermes 官方同步机制提供内建 Skill。Hermes
-`0.20.5` 的 `skills.disabled` 是全局排除列表，`skills.platform_disabled` 会与
-全局列表按平台取并集；宿主没有持久 allowlist。因此本 Profile 在精确锁定
-`hermes_requires: ==0.20.5` 的同时，用完整 denylist 模拟保守 allowlist，只启用：
+Hermes 官方同步内建 Skill；本 Profile 不修改官方内容。当前 core 为60个，启用办公文件能力 `docx`、`xlsx`、`pdf`、`powerpoint`，同时接受宿主不可禁用的 essential `hermes-agent`。`skills.disabled` 关闭其余当前及遗留入口；这不会扩大企微四工具面。`ocr-and-documents` 已不属于当前 core，不声明为启用能力。
 
-- `docx`、`xlsx`、`pdf`、`powerpoint`、`ocr-and-documents`：处理常见办公文件，
-  包括提取、生成、编辑与验证；
-
-只保留了 `metadata.hermes.related_skills` 在启用集合内闭合的办公文件
-Skill。`document-to-action-items`、`meeting-action-items`、`grounded-citations` 和
-`weekly-review-planning` 会将流程引向当前禁用的外部账号型或专项 Skill，
-因而不作为可见入口。`hermes-agent` 仍禁用；Profile 不为满足宿主的
-自助提示而扩大自修改权限。
-
-未启用外部账号型、代码开发型、桌面控制型、社交媒体型、创意媒体型和功能重叠
-但边界更窄的 Skill（例如 `nano-pdf`）。内建 Skill 仍由 Hermes 拥有，本 Profile
-不复制或修改其内容。
-
-每次 Hermes 升级都必须先运行测试，将宿主 bundled Skill 名称与
-`skills.disabled` 做完整快照差异审查。新增、删除或重命名任一内建 Skill都会使测试
-失败；只有人工审查并更新 denylist 后才允许升级。`platform_disabled` 仅在某个
-渠道需要比全局集合更窄时使用，不能用来暗中扩大能力。
+每次宿主升级做完整快照差异审查；新增、删除或重命名必须更新 `tests/fixtures/reviewed_host_skills.json` 与 denylist，并检查 `metadata.hermes.related_skills`。Profile 显式关闭独立的 `curator.enabled` 和 background review，使调试中的能力集合由 Git 维护。普通 CLI 用于源码维护，业务调用仍受现有 WeCom/trusted replay 授权约束。
 
 ## 期间比较合同
 
@@ -217,21 +198,10 @@ Catalog 的 metric detail 与 domain view 在公开 schema 和运行时都机械
 避免模型得到“schema 可表达、运行时却拒绝”的伪能力。上述合同同样贯通完整
 变化分解的 overall 与 partition 分支，并保留既有逐分支 partial-success 语义。
 
-## 发布与维护边界
+## Git 维护与验收边界
 
-Git commit/tag 负责源码身份，`distribution.yaml` 只描述运行载荷；Profile 不实现
-安装器、版本解析器或回滚器。`build_release_receipt.py`、离线测试、Host/E2E 检查
-和 candidate receipt 都是源码质量工具，不进入 runtime，也不拥有业务结论。
-`distribution_owned` 只包含运行文件；测试、eval、release/pending 产物和历史文档
-留在源码仓库。运行时事实来自当前 semantics、typed contracts、实体 registry 和
-工具返回 evidence；本架构不保存测试结果、会话结论或发布状态。
+Git commit/tag 负责源码身份和回退，运行时按官方 `plugin.yaml` 加载这个唯一 Profile。不再维护自建发布链、receipt 晋级或 distribution 安装载荷。业务收款（receipt/collections）、coverage receipt、target-gap receipt 和查询 evidence 都属于业务合同，继续保留，不能因名称相似而删除。
 
-所有 CLI/维护命令必须显式使用 `-p datasage-canary-next`；不得依赖默认 Profile、
-当前目录或 `HERMES_HOME` 推断。代码冻结、candidate receipt 和 Git tag 只表示
-canary 载荷已固定并可审查，不等于 production-ready 或生产安全证明。生产声明还须
-满足本节的发布边界和“验收门槛（唯一量化真源）”；owner 仅指 Profile 维护/发布
-责任角色，具体责任人和 SLA 由发布记录填写，不在 Profile 文档中虚构。
+测试保留查询、证据、权限、并发、取消和官方宿主集成；纯会话配对验证迁移到 `tests/business_replay.py`。测试结果、会话结论及业务验收成绩不成为模型提示中的事实。离线通过不等于 production-ready，也不证明达到上文“验收门槛（唯一量化真源）”。
 
-维护检查只确认 schema/contract、只读执行和宿主兼容性；不改变 WeCom 身份面、
-查询边界或 Hermes 的判断权。运行目录中的 `.env`、state、sessions、logs 和
-Memory 不由发行或回滚覆盖。
+Hermes CLI 维护显式使用 `-p datasage-canary-next`。普通 CLI 身份不能直接进行业务查询，不通过环境变量或本机文件可读性推导业务授权。维护不修改官方源码、企微权限、数据库授权或生产模式，不覆盖 `.env`、认证、state、sessions、logs 和 Memory。

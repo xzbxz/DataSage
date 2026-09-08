@@ -120,7 +120,7 @@ population-wide contribution.
 - A follow-up may reuse context understood by Hermes, but every new
   `datasage_query` call must carry a complete request. No plugin-private
   conversation state may be required.
-- Before calling `datasage_entity_resolve` for entity ambiguity, load
+- In a Skill-enabled CLI/maintenance session, consult as needed
   [`datasage.entity-guidance/v1`](entity-guidance.md), which owns when to resolve
   and when another resolution attempt is justified, plus confirmation and
   turn-boundary behavior. Empty-result interpretation follows
@@ -133,7 +133,7 @@ population-wide contribution.
 - Construct comparisons, decompositions, groups, subtotals, shares, driver
   counts, and residual attribution only through capabilities exposed by the
   exact metric contract.
-- Before interpreting any such result, load
+- In a Skill-enabled CLI/maintenance session, consult as needed
   [`datasage.answer-boundary/v1`](answer-boundary.md). It solely owns whether a
   returned comparison, contribution, decomposition, or truncation authorizes a
   structural, evaluative, or causal statement.

@@ -1,4 +1,4 @@
-_config_version: 35
+_config_version: 41
 timezone: Asia/Shanghai
 model:
   provider: deepseek
@@ -69,7 +69,7 @@ memory:
 skills:
   # Git is authoritative; tracked expert guidance requires operator approval.
   write_approval: true
-  # Hermes 0.20.5 has a denylist rather than a persistent bundled-skill
+  # Hermes 0.21.1 has a denylist rather than a persistent bundled-skill
   # allowlist. Keep only the reviewed local document, spreadsheet, and
   # presentation capabilities active. The architecture test
   # compares this list with the pinned host inventory so an upgrade cannot
@@ -94,13 +94,14 @@ skills:
     - competitor-news-monitor
     - computer-use
     - design-md
-    - dogfood
     - document-to-action-items
+    - dogfood
     - email-inbox-triage
     - evaluating-llms-harness
     - excalidraw
     - findmy
     - gif-search
+    - github
     - github-auth
     - github-code-review
     - github-issue-to-pr
@@ -109,7 +110,6 @@ skills:
     - github-repo-management
     - google-workspace
     - grounded-citations
-    - hermes-agent
     - hermes-agent-skill-authoring
     - himalaya
     - huggingface-hub
@@ -126,6 +126,7 @@ skills:
     - node-inspect-debugger
     - notion
     - obsidian
+    - ocr-and-documents
     - opencode
     - openhue
     - p5js
@@ -134,8 +135,10 @@ skills:
     - pretext
     - product-price-monitor
     - python-debugpy
+    - reddit-reading
     - requesting-code-review
     - research-paper-writing
+    - rss-feeds
     - sdlc-review
     - serving-llms-vllm
     - session-librarian
@@ -148,8 +151,8 @@ skills:
     - teams-meeting-pipeline
     - test-driven-development
     - touchdesigner-mcp
-    - weights-and-biases
     - weekly-review-planning
+    - weights-and-biases
     - xurl
     - youtube-content
 platforms:
@@ -181,3 +184,13 @@ platforms:
       user_id: "wo8gxKDAAA0e36LXk9vXJ_nmbnmE2gzg"
 approvals:
   destructive_slash_confirm: false
+
+# Keep the Git-managed capability surface stable while debugging.
+curator:
+  enabled: false
+
+# Use the official Windows npm shim; the old staged Unix wrapper is invalid here.
+lsp:
+  servers:
+    pyright:
+      command: ["C:/Users/10192/AppData/Local/hermes/profiles/datasage-canary-next/lsp/node_modules/.bin/pyright-langserver.cmd", "--stdio"]

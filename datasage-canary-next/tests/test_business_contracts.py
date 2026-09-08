@@ -5979,10 +5979,7 @@ class BusinessContractTests(unittest.TestCase):
             )
             self.assertEqual("业务组织", labels["organization"])
 
-    def test_distribution_and_component_versions_are_content_consistent(self) -> None:
-        distribution = yaml.safe_load(
-            (PROFILE_ROOT / "distribution.yaml").read_text(encoding="utf-8")
-        )
+    def test_plugin_skill_and_host_versions_are_documented_consistently(self) -> None:
         plugin_manifest = yaml.safe_load(
             (PLUGIN_ROOT / "plugin.yaml").read_text(encoding="utf-8")
         )
@@ -5991,8 +5988,8 @@ class BusinessContractTests(unittest.TestCase):
         )
         main_skill = _main_skill()
 
-        version = str(distribution["version"])
-        hermes_version = str(distribution["hermes_requires"]).removeprefix("==")
+        version = str(plugin_manifest["version"])
+        hermes_version = "0.21.1"
         self.assertEqual(version, str(plugin_manifest["version"]))
         self.assertIn(f"version: {version}", main_skill)
         self.assertIn(f"`{version}`", architecture)

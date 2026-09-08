@@ -662,91 +662,8 @@ class IntelligenceBoundaryAcceptanceTests(unittest.TestCase):
         )
 
 
-class ReleaseAndHostBoundaryAcceptanceTests(unittest.TestCase):
-    def test_release_identity_is_computed_from_candidate_content(self):
-        distribution = yaml.safe_load(
-            (PROFILE_ROOT / "distribution.yaml").read_text(encoding="utf-8")
-        )
-        config = yaml.safe_load(
-            (PROFILE_ROOT / "config.yaml").read_text(encoding="utf-8")
-        )
-        plugin = yaml.safe_load(
-            (PLUGIN_ROOT / "plugin.yaml").read_text(encoding="utf-8")
-        )
-        skill_text = (
-            PROFILE_ROOT
-            / "skills"
-            / "business-analytics"
-            / "datasage"
-            / "SKILL.md"
-        ).read_text(
-            encoding="utf-8"
-        )
-        _, skill_frontmatter, _ = skill_text.split("---", 2)
-        skill = yaml.safe_load(skill_frontmatter)
-        self.assertEqual(str(distribution["version"]), str(plugin["version"]))
-        self.assertEqual(str(distribution["version"]), str(skill["version"]))
-        self.assertEqual("source" in distribution, "installed_at" in distribution)
-        if "source" in distribution:
-            self.assertTrue(str(distribution["source"]).strip())
-            self.assertTrue(str(distribution["installed_at"]).strip())
+class HostBoundaryAcceptanceTests(unittest.TestCase):
 
-        identity_inputs = {
-            "profile_version": str(distribution["version"]),
-            "hermes_requires": distribution["hermes_requires"],
-            "model_provider": config["model"]["provider"],
-            "model_default": config["model"]["default"],
-            "reasoning_effort": config["agent"]["reasoning_effort"],
-            "capability_contract_sha256": hashlib.sha256(
-                (PLUGIN_ROOT / "capability_contract.py").read_bytes()
-            ).hexdigest(),
-            "schema_sha256": hashlib.sha256(
-                (PLUGIN_ROOT / "schemas.py").read_bytes()
-            ).hexdigest(),
-            "golden_suite_sha256": hashlib.sha256(
-                (PLUGIN_ROOT / "e2e" / "golden_expert_cases.json").read_bytes()
-            ).hexdigest(),
-        }
-        release_identity = hashlib.sha256(
-            json.dumps(
-                identity_inputs,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
-        self.assertRegex(release_identity, r"^[0-9a-f]{64}$")
-
-    def test_release_receipt_normalizes_hermes_install_metadata(self):
-        builder_path = PROFILE_ROOT / "build_release_receipt.py"
-        spec = importlib.util.spec_from_file_location(
-            "datasage_release_receipt_builder", builder_path
-        )
-        self.assertIsNotNone(spec)
-        self.assertIsNotNone(spec.loader)
-        builder = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(builder)
-
-        distribution = yaml.safe_load(
-            (PROFILE_ROOT / "distribution.yaml").read_text(encoding="utf-8")
-        )
-        installed = dict(distribution)
-        installed.update(
-            {
-                "name": "isolated-install-name",
-                "source": "C:/isolated/source",
-                "installed_at": "2026-08-24T00:00:00+00:00",
-            }
-        )
-        source = {
-            key: value
-            for key, value in distribution.items()
-            if key not in builder.INSTALLER_MANIFEST_FIELDS
-        }
-        self.assertEqual(
-            builder._canonical_manifest_bytes(source),
-            builder._canonical_manifest_bytes(installed),
-        )
 
     def test_compaction_fixture_is_an_explicit_host_contract(self):
         fixture = json.loads(
@@ -761,8 +678,8 @@ class ReleaseAndHostBoundaryAcceptanceTests(unittest.TestCase):
         self.assertTrue(fixture["profile_must_not_patch"])
         self.assertEqual(
             {
-                "hermes_version": "0.20.5",
-                "hermes_git_commit": "fcbd1076a93841fa88855acce810e342a5b78101",
+                "hermes_version": "0.21.1",
+                "hermes_git_commit": "2237be355906fbe6065ce1815711eee52b2d646e",
             },
             fixture["pinned_host"],
         )

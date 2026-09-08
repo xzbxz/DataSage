@@ -43,54 +43,19 @@ rc14 落实本轮出库事实口径：8 项数量指标恢复查询，必须按�
 假设、负责审批的人、重大风险和复核点；证据歧义、不可用、过期或不完整时，
 升级给相应指标/域负责人或人工审批人。
 
-## Hermes 原生专家能力
+## 当前 Git 原地维护与 Hermes 原生能力
 
-本 Profile 不再使用 `.no-bundled-skills` 退出 Hermes 内建 Skill 同步。针对精确
-锁定的 Hermes `0.20.5`，`config.yaml` 用完整 `skills.disabled` denylist 只保留
-经过审查的文档、表格、PDF、演示文稿和 OCR 能力。内建 Skill 由 Hermes 在下一次
-`hermes update` 时同步；需要立即同步时运行
-`hermes -p datasage-canary-next skills opt-in --sync`。本仓库不复制或修改这些宿主资产。
+当前宿主为官方稳定版 `0.21.1`。维护只在当前 Git Profile 内进行：修改、离线测试、审查、提交，再通过官方 Hermes 重新加载。Git commit/tag 是版本与回退依据；不再维护 distribution manifest、自建发布 receipt、晋级脚本或第二个安装实例。运行时继续保留 `plugin.yaml` 等官方加载元数据。
 
-升级 Hermes 前必须先运行离线测试。测试会比较新宿主的完整 bundled Skill
-名称集合和当前 denylist；任何新增、删除或重命名都会阻断升级，直到维护者完成
-快照差异审查。不要只因为新 Skill 看起来相关就默认启用，也不要手工维护一份
-Profile 内的内建 Skill 副本。
+内建 Skill 由 Hermes 官方同步。当前启用 `docx`、`xlsx`、`pdf`、`powerpoint`，并接受宿主必需的 `hermes-agent`；其他当前与遗留内建入口通过 `skills.disabled` 关闭。`ocr-and-documents` 已不在当前 core 集合，不再声明为可用原生能力。升级时检查 `tests/fixtures/reviewed_host_skills.json` 的快照差异和 `related_skills`，再有选择地更新。调试期间显式关闭 `curator.enabled`，避免自动改变能力集合；background review 也保持关闭。
 
-## 权威边界
+普通 CLI 可以编辑和测试源码，但普通 CLI 身份不能直接调用业务查询；业务入口仍要求已绑定的 WeCom 身份或合法 trusted replay。工具可见性不等于业务授权，本次没有扩展任何权限。
 
-- Git commit/tag 是源码版本身份；`distribution.yaml` 是 Hermes 安装载荷与版本声明。
-- `hermes profile install/update/info` 仅用于未来独立发布的 Profile Distribution，
-  不是当前 Git 同址工作区的维护或重启步骤。
-- `build_release_receipt.py` 只是源码仓库中的 DataSage 质量门禁：它把真实 replay、
-  compaction、交付和性能证据绑定到一个经过审查的运行载荷。它不是安装器、
-  版本系统或回滚系统，也不随运行 Profile 发行。
-- `distribution_owned` 只列运行所需文件。测试、E2E scorer、构建脚本和历史重构
-  文档留在源码仓库，不进入干净安装实例。
+所有 Hermes 维护命令显式使用 `-p datasage-canary-next`。离线检查使用现有官方宿主 Python，在本目录运行 `python -B -m unittest discover -s tests -p "test_*.py" -v`。测试保留 SQL、数值完整性、证据、授权、并发、时限、宿主装配和会话配对验证，不再验证已删除的发布系统。
 
-## 源码质量工具（不进入 runtime）
+`tests/business_replay.py` 只解析已有会话导出并验证工具配对和结束边界，不读取会话数据库、不调用模型、不发送消息，也不授予上线资格。真实业务验收独立于源码回归；量化目标仍见 `ARCHITECTURE.md`，不得把计划门槛写成已达到的成绩。
 
-`build_release_receipt.py`、离线测试、Host compaction/performance evidence 与 candidate receipt
-仅用于源码审查，绑定当前 Git 载荷并阻断错配；它们不进入 `distribution_owned`。
-这些工具不改变 Profile 的查询、身份或结论边界，也不是安装器、版本系统、回滚器或 SLA。
-量化验收门槛唯一以 `ARCHITECTURE.md` 的“验收门槛（唯一量化真源）”为准，本文件不重复阈值。
-正式版本身份仍由 Git commit/tag 和 `distribution.yaml` 管理；运行时不读取 receipt。
-测试、E2E scorer、release/pending 产物与历史文档均留在源码仓库。
-
-代码冻结、candidate receipt 和 Git tag 只表示 canary 载荷已固定并可审查，
-不等于 production-ready 或生产安全证明。生产声明还须满足 `ARCHITECTURE.md` 的生产边界
-和唯一量化验收门槛；owner 仅指 Profile 维护/发布责任角色，具体责任人和 SLA 由发布记录填写，
-不在 Profile 文档中虚构。
-
-## 当前 Git 原地维护
-
-所有 CLI/维护命令必须显式使用 `-p datasage-canary-next`；不得依赖默认 Profile、
-当前目录或 `HERMES_HOME` 推断。
-所有源码变更留在当前活动分支。重启前必须确认 `git status --short` 只包含本次
-已审查改动，完整离线测试和候选门禁通过，再提交并记录可回滚的 commit/tag。
-Git 操作不得覆盖 `.env`、`state.db`、sessions、logs、Memory、企微或数据库配置。
-
-未来如需对外发布独立 Profile Distribution，再按 Hermes 官方要求建立根目录含
-`distribution.yaml` 的独立发行源；不得复制第二份可编辑源码或自建安装器。
+LSP 使用 Profile 中官方 npm 的 Windows `.cmd` 入口。Git 操作和维护不得覆盖 `.env`、认证、state、sessions、logs、Memory 或更改企微与数据库权限。
 
 DataSage 当前没有有 owner 的定时任务，因此不向 Hermes `cron` toolset 暴露
 `datasage-query`，本候选版本不声明 L4 主动管理能力。未来新增主动巡检时，必须同时定义任务 owner、调度身份与权限、

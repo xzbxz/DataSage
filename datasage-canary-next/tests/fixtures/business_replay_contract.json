@@ -1,0 +1,17 @@
+{
+  "schema": "datasage-business-replay-policy/v1",
+  "turn_completion_policy": [
+    {
+      "case_id": "ambiguity_10_rc5_vietnam_scorecard",
+      "turn": 1,
+      "assistant_completion": "ordinary_text",
+      "maximum_blocking_clarify_calls": 0
+    },
+    {
+      "case_id": "multiturn_08_rc5_thailand_followup",
+      "turn": 2,
+      "assistant_completion": "ordinary_text",
+      "maximum_blocking_clarify_calls": 0
+    }
+  ]
+}

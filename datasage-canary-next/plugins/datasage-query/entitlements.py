@@ -43,7 +43,7 @@ _AUDIT_DOMAIN = b"datasage-entitlement-principal/v2\x00"
 def _session_value(name: str) -> str:
     """Read a strictly bound Hermes request identity; never use ``os.environ``.
 
-    Hermes 0.20.5 exposes the bound values through its private ContextVar map;
+    The supported Hermes host exposes the bound values through its private ContextVar map;
     newer hosts may expose ``get_bound_session_env``.  Both branches are
     intentionally fail-closed when the session layer is absent or changes.
     """

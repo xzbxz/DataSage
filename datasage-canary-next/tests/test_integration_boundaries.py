@@ -249,7 +249,7 @@ class StrictSessionIdentityTests(unittest.TestCase):
     def test_official_plugin_entry_denies_before_business_validation(
         self,
     ):
-        manager = PluginManager()
+        manager = PluginManager(scope_key=str(PROFILE_ROOT))
         isolated_registry = ToolRegistry()
 
         with tempfile.TemporaryDirectory() as raw_root:
@@ -318,6 +318,7 @@ class StrictSessionIdentityTests(unittest.TestCase):
                             }
                         ]
                     },
+                    scope=str(PROFILE_ROOT),
                 )
             )
 
@@ -440,7 +441,7 @@ class GitGovernedSkillTests(unittest.TestCase):
         self.assertNotIn("DATA_ENTITLEMENT_DENIED", normalized)
 
     def test_official_plugin_manager_keeps_skill_guidance_on_demand(self):
-        manager = PluginManager()
+        manager = PluginManager(scope_key=str(PROFILE_ROOT))
         isolated_registry = ToolRegistry()
 
         with tempfile.TemporaryDirectory() as raw_root:
@@ -539,14 +540,14 @@ class GitGovernedSkillTests(unittest.TestCase):
             )
             search_result = json.loads(
                 hermes_tool_search.dispatch_tool_search(
-                    {"query": "datasage catalog"},
+                    {"queries": ["datasage catalog"]},
                     current_tool_defs=tool_defs,
                     config=config,
                 )
             )
             catalog_description = json.loads(
                 hermes_tool_search.dispatch_tool_describe(
-                    {"name": "datasage_catalog"},
+                    {"names": ["datasage_catalog"]},
                     current_tool_defs=tool_defs,
                 )
             )
@@ -562,9 +563,10 @@ class GitGovernedSkillTests(unittest.TestCase):
         )
         self.assertIn(
             "datasage_catalog",
-            {match["name"] for match in search_result["matches"]},
+            set(search_result["results"][0]["matches"]),
         )
-        self.assertEqual("datasage_catalog", catalog_description["name"])
+        self.assertIn("datasage_catalog", catalog_description["tools"])
+        catalog_description = catalog_description["tools"]["datasage_catalog"]
         self.assertIn("governed", catalog_description["description"].casefold())
         domain_description = catalog_description["parameters"]["properties"][
             "requests"
@@ -2185,195 +2187,20 @@ class DistributionBoundaryTests(unittest.TestCase):
             compact_query_evidence["error_codes"],
         )
 
-    def test_distribution_excludes_private_replay_topology(self):
-        distribution = yaml.safe_load(
-            (PROFILE_ROOT / "distribution.yaml").read_text(encoding="utf-8")
-        )
-        owned = set(distribution["distribution_owned"])
-        source_only_evaluation_assets = {
-            "plugins/datasage-query/e2e/canary_transcript_adapter.py",
-            "plugins/datasage-query/e2e/golden_expert_cases.json",
-            "plugins/datasage-query/e2e/golden_expert_scorer.py",
-        }
-        private_replay_assets = {
-            "plugins/datasage-query/e2e/hermes_replay_driver.py",
-            "plugins/datasage-query/e2e/live_fixture_materializer.py",
-            "plugins/datasage-query/e2e/trusted_replay_runner.py",
-        }
 
-        required_runtime_assets = {
-            "plugins/datasage-query/plugin.yaml",
-            "plugins/datasage-query/__init__.py",
-            "plugins/datasage-query/db_executor.py",
-            "plugins/datasage-query/tools.py",
-            "plugins/datasage-query/vendor/pymysql/__init__.py",
-            "plugins/datasage-query/vendor/pymysql-1.2.0.dist-info/METADATA",
-            "skills/business-analytics/datasage/references/delivery-analysis.md",
-        }
-        source_only_assets = source_only_evaluation_assets | {
-            "plugins/datasage-query/contracts/entity-rules-maintainer.md",
-            "build_release_receipt.py",
-            "tests",
-            "ARCHITECTURE.md",
-            "docs/history",
-            "plugins/datasage-query/vendor/pymysql/__pycache__",
-            "plugins/datasage-query/vendor/pymysql/constants/__pycache__",
-        }
 
-        def is_distributed(relative):
-            return any(
-                relative == entry or relative.startswith(entry.rstrip("/") + "/")
-                for entry in owned
-            )
-
-        self.assertTrue(required_runtime_assets.issubset(owned))
-        self.assertNotIn("plugins/datasage-query", owned)
-        self.assertTrue(all(not is_distributed(item) for item in source_only_assets))
-        self.assertFalse(any(item.startswith("tests/") for item in owned))
-        self.assertTrue(private_replay_assets.isdisjoint(owned))
-        for relative in source_only_evaluation_assets:
-            self.assertTrue((PROFILE_ROOT / relative).is_file(), relative)
-        for relative in private_replay_assets:
-            self.assertFalse((PROFILE_ROOT / relative).exists(), relative)
-        for relative in owned:
-            path_parts = set(relative.split("/"))
-            self.assertTrue({"dsrt", ".release"}.isdisjoint(path_parts), relative)
-
-    def test_official_distribution_materializer_produces_runtime_only_payload(self):
-        from hermes_cli.profile_distribution import _copy_dist_payload, read_manifest
-
-        manifest = read_manifest(PROFILE_ROOT)
+    def test_current_git_plugin_parses_registers_and_denies_unbound_business_calls(self):
+        from hermes_cli.plugins_manifest import parse_manifest_file
+        manifest = parse_manifest_file(PLUGIN_ROOT / "plugin.yaml", PLUGIN_ROOT, "user", "")
         self.assertIsNotNone(manifest)
-        with tempfile.TemporaryDirectory() as temporary:
-            installed = Path(temporary) / "installed"
-            _copy_dist_payload(
-                PROFILE_ROOT,
-                installed,
-                manifest,
-                preserve_config=False,
-            )
-            required = {
-                "distribution.yaml",
-                "SOUL.md",
-                "config.yaml",
-                "profile.yaml",
-                "plugins/datasage-query/plugin.yaml",
-                "plugins/datasage-query/db_executor.py",
-                "plugins/datasage-query/tools.py",
-                "plugins/datasage-query/vendor/pymysql/__init__.py",
-                "skills/business-analytics/datasage/SKILL.md",
-            }
-            source_only = {
-                "ARCHITECTURE.md",
-                "build_release_receipt.py",
-                "tests",
-                "docs/history",
-                "plugins/datasage-query/e2e",
-                "plugins/datasage-query/contracts/entity-rules-maintainer.md",
-            }
-            self.assertEqual(
-                set(),
-                {relative for relative in required if not (installed / relative).exists()},
-            )
-            self.assertEqual(
-                set(),
-                {relative for relative in source_only if (installed / relative).exists()},
-            )
-            self.assertEqual([], list(installed.rglob("*.pyc")))
+        module, registration = probe_registration(PLUGIN_ROOT, package_name="datasage_current_git_compatibility")
+        self.assertEqual({"datasage_catalog", "datasage_entity_resolve", "datasage_query"},
+                         {item["name"] for item in registration.tools})
+        self.assertTrue(Path(module.tools.db_executor.__file__).resolve().is_relative_to(PLUGIN_ROOT.resolve()))
+        response = json.loads(module.tools.entitlement_guarded_datasage_query({"requests": [
+            {"request_id": "unbound", "domain": "delivery", "metric": "delivery_amount", "dimensions": []}]}))
+        self.assertEqual("DATA_ENTITLEMENT_DENIED", response["error"]["code"])
 
-    def test_materialized_plugin_loads_registers_and_runs_database_free_preflight(self):
-        import hermes_cli.plugins as plugins_module
-        from hermes_cli.profile_distribution import _copy_dist_payload, read_manifest
-
-        package_prefix = "hermes_plugins.datasage_query"
-        prior_modules = {
-            name: module
-            for name, module in sys.modules.items()
-            if name == package_prefix or name.startswith(package_prefix + ".")
-        }
-        prior_bare_scope = dict(plugins_module._BARE_MODULE_SCOPE)
-        for name in prior_modules:
-            sys.modules.pop(name, None)
-
-        try:
-            with tempfile.TemporaryDirectory() as temporary:
-                installed = Path(temporary) / "installed"
-                manifest_data = read_manifest(PROFILE_ROOT)
-                self.assertIsNotNone(manifest_data)
-                _copy_dist_payload(
-                    PROFILE_ROOT,
-                    installed,
-                    manifest_data,
-                    preserve_config=False,
-                )
-
-                with mock.patch.dict(
-                    os.environ,
-                    {"HERMES_HOME": str(installed)},
-                    clear=False,
-                ):
-                    plugin_root = installed / "plugins" / "datasage-query"
-                    manager = PluginManager(scope_key=str(installed))
-                    manifest = manager._parse_manifest(
-                        plugin_root / "plugin.yaml",
-                        plugin_root,
-                        "user",
-                        "",
-                    )
-                    self.assertIsNotNone(manifest)
-                    module = manager._load_directory_module(manifest)
-                    registration = RegistrationProbe()
-                    module.register(registration)
-
-                    self.assertEqual(
-                        {
-                            "datasage_catalog",
-                            "datasage_entity_resolve",
-                            "datasage_query",
-                        },
-                        {item["name"] for item in registration.tools},
-                    )
-                    for imported in (module.tools.db_executor,):
-                        self.assertTrue(
-                            Path(imported.__file__).resolve().is_relative_to(
-                                installed.resolve()
-                            )
-                        )
-
-                    response = json.loads(
-                        module.tools.entitlement_guarded_datasage_query(
-                            {
-                                "requests": [
-                                    {
-                                        "request_id": "installed_preflight",
-                                        "domain": "delivery",
-                                        "metric": "delivery_amount",
-                                        "dimensions": [],
-                                    }
-                                ]
-                            }
-                        )
-                    )
-                    self.assertEqual(
-                        "DATA_ENTITLEMENT_DENIED",
-                        response["error"]["code"],
-                    )
-        finally:
-            for name in list(sys.modules):
-                if name == package_prefix or name.startswith(package_prefix + "."):
-                    sys.modules.pop(name, None)
-            sys.modules.update(prior_modules)
-            plugins_module._BARE_MODULE_SCOPE.clear()
-            plugins_module._BARE_MODULE_SCOPE.update(prior_bare_scope)
-
-    def test_distribution_allows_reviewed_bundled_skill_sync(self):
-        distribution = (PROFILE_ROOT / "distribution.yaml").read_text(
-            encoding="utf-8"
-        )
-        self.assertNotIn("- .no-bundled-skills", distribution)
-        self.assertNotIn("- .release", distribution)
-        marker = PROFILE_ROOT / ".no-bundled-skills"
-        self.assertFalse(marker.exists())
 
     def test_wecom_uses_minimal_datasage_surface(self):
         config = (PROFILE_ROOT / "config.yaml").read_text(encoding="utf-8")
@@ -2465,10 +2292,10 @@ class DistributionBoundaryTests(unittest.TestCase):
                 hermes_skill_provenance.reset_current_write_origin(origin_token)
 
 
-class LiveReleaseEvidenceBoundaryTests(unittest.TestCase):
+class BusinessReplayBoundaryTests(unittest.TestCase):
     @staticmethod
     def _runner_module():
-        path = PROFILE_ROOT / "tests" / "run_live_release_evidence.py"
+        path = PROFILE_ROOT / "tests" / "business_replay.py"
         spec = importlib.util.spec_from_file_location(
             "_datasage_live_release_evidence_test", path
         )
@@ -2478,508 +2305,15 @@ class LiveReleaseEvidenceBoundaryTests(unittest.TestCase):
         spec.loader.exec_module(module)
         return module
 
-    def test_live_contract_is_fixed_to_official_wecom_inbound_and_two_by_three_plan(self):
-        contract = json.loads(
-            (PROFILE_ROOT / "tests" / "fixtures" / "live_release_contract.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        self.assertEqual("datasage-live-release-contract/v6", contract["schema"])
-        self.assertEqual(2, contract["case_plan"]["turns_per_session"])
-        self.assertEqual(2, len(contract["case_plan"]["case_ids"]))
-        self.assertEqual(3, contract["case_plan"]["runs"])
-        self.assertEqual(
-            contract["case_plan"]["case_ids"],
-            [item["case_id"] for item in contract["turn_completion_policy"]],
-        )
-        self.assertEqual(
-            [1, 2],
-            [item["turn"] for item in contract["turn_completion_policy"]],
-        )
-        self.assertEqual(
-            ["ordinary_text", "ordinary_text"],
-            [item["assistant_completion"] for item in contract["turn_completion_policy"]],
-        )
-        self.assertEqual(
-            [0, 0],
-            [
-                item["maximum_blocking_clarify_calls"]
-                for item in contract["turn_completion_policy"]
-            ],
-        )
-        shapes = contract["execution"]["command_shapes"]
-        prefix = ["{python}", "-B", "-m", "hermes_cli.main"]
-        self.assertEqual({"session_export", "adapter", "scorer"}, set(shapes))
-        self.assertEqual(prefix + ["sessions", "export"], shapes["session_export"][:6])
-        self.assertIn("--session-id", shapes["session_export"])
-        self.assertEqual(["{python}", "-B", "{adapter}"], shapes["adapter"][:3])
-        self.assertEqual(["{python}", "-B", "{scorer}"], shapes["scorer"][:3])
-        rendered = json.dumps(shapes, sort_keys=True)
-        for forbidden in ('"latest"', '"-c"', '"--continue"', '"-z"', '"--oneshot"'):
-            self.assertNotIn(forbidden, rendered)
-        self.assertEqual("wecom", contract["inbound"]["platform"])
-        self.assertEqual("dm", contract["inbound"]["chat_type"])
-        self.assertEqual("sha256_only", contract["inbound"]["identity_storage"])
-        self.assertEqual(
-            "canonical_jsonl_raw_retained_endpoint_ignores_only_carrier_free_exact_session_meta_unknown_roles_fail_closed",
-            contract["inbound"]["endpoint_projection_policy"],
-        )
-        self.assertEqual(
-            "4d497bc168a1782eeaffb82b3cfa1f9ae212e86d9fa6dea721fe34712a3179e7",
-            contract["inbound"]["expected_user_id_sha256"],
-        )
-        self.assertEqual(
-            contract["inbound"]["expected_user_id_sha256"],
-            contract["inbound"]["expected_chat_id_sha256"],
-        )
-        self.assertEqual("forbidden_in_finalize", contract["outbound"]["collection"])
-        self.assertEqual("not_verified", contract["outbound"]["status"])
-        self.assertEqual(2, contract["review_policy"]["reviews_per_run_case"])
-        self.assertEqual(2, len(set(contract["review_policy"]["trusted_reviewer_id_sha256"])))
-        self.assertEqual(
-            "trusted_human_review_not_mechanically_proven",
-            contract["review_policy"]["semantic_assurance"],
-        )
-        self.assertEqual(
-            "sha256_sidecar_bound_to_both_trusted_reviews",
-            contract["capture_integrity_policy"]["manifest_digest"],
-        )
-        self.assertEqual(
-            "effective_path_pth_and_customization_content_sha256",
-            contract["python_provenance_policy"]["site_packages"],
-        )
-        self.assertEqual(
-            "hermes_cli_main_session_export_from_pinned_checkout",
-            contract["python_provenance_policy"]["import_origins"],
-        )
-        self.assertFalse(contract["runtime_readiness_policy"]["configuration_values_recorded"])
-        self.assertEqual(
-            "external_gate_not_auto_passed",
-            contract["runtime_readiness_policy"]["database_account"],
-        )
-        self.assertEqual(
-            "external_gate_not_auto_passed",
-            contract["runtime_readiness_policy"]["database_tls"],
-        )
 
-    def test_live_runner_contains_no_private_agent_or_replay_engine(self):
-        forbidden_roots = {
-            "run_agent",
-            "planner",
-            "trusted_replay_runner",
-            "hermes_replay_driver",
-        }
-        imported: list[str] = []
-        real_import = builtins.__import__
 
-        def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
-            imported.append(name)
-            if (
-                name.split(".", 1)[0] in forbidden_roots
-                or "AIAgent" in (fromlist or ())
-            ):
-                raise AssertionError(f"private runtime dependency imported: {name}")
-            return real_import(name, globals, locals, fromlist, level)
 
-        import_guard = mock.patch("builtins.__import__", side_effect=guarded_import)
-        import_guard.start()
-        self.addCleanup(import_guard.stop)
-        runner = self._runner_module()
-        self.assertTrue(imported)
-        self.assertTrue(forbidden_roots.isdisjoint(name.split(".", 1)[0] for name in imported))
-        for private_name in (*sorted(forbidden_roots), "AIAgent"):
-            self.assertFalse(hasattr(runner, private_name))
-
-        builder = runner._BUILDER
-        self.assertIs(runner._export, builder._export_session)
-        self.assertIs(
-            runner._turn_completion_policies,
-            builder._live_turn_completion_policies,
-        )
-        self.assertIs(runner._endpoints, builder._live_endpoints)
-        adapter = runner._load_module("_datasage_live_adapter_behavior", runner.ADAPTER_PATH)
-        scorer = runner._load_module("_datasage_live_scorer_behavior", runner.SCORER_PATH)
-        self.assertTrue(callable(adapter.adapt))
-        self.assertTrue(callable(scorer.score))
-
-        contract = runner._read_json(runner.CONTRACT_PATH)
-        builder._validate_live_contract(contract)
-        shape = contract["execution"]["command_shapes"]["session_export"]
-        bindings = {"python": "python", "exact_session_id": "session-1"}
-        expanded = runner._expand(shape, bindings)
-        self.assertEqual(len(shape), len(expanded))
-        self.assertEqual("session-1", expanded[shape.index("{exact_session_id}")])
-        with self.assertRaisesRegex(RuntimeError, "missing command binding"):
-            runner._expand(shape, {"python": "python"})
-        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(
-            runner.subprocess, "run"
-        ) as subprocess_run:
-            with self.assertRaisesRegex(RuntimeError, "argv length"):
-                runner._run(
-                    [*expanded, "unexpected"],
-                    shape,
-                    cwd=PROFILE_ROOT,
-                    env={},
-                    timeout=1,
-                    stream_dir=Path(temporary),
-                    stream_prefix="not-created",
-                )
-        subprocess_run.assert_not_called()
-
-        with tempfile.TemporaryDirectory() as temporary:
-            environment = runner._environment(Path(temporary))
-        self.assertEqual("1", environment["PYTHONNOUSERSITE"])
-        self.assertEqual("1", environment["PYTHONDONTWRITEBYTECODE"])
-        self.assertEqual(str(PROFILE_ROOT), environment["HERMES_HOME"])
-
-        contract = runner._read_json(runner.CONTRACT_PATH)
-        golden = runner._read_json(runner.GOLDEN_PATH)
-        case_ids = contract["case_plan"]["case_ids"]
-        cases_by_id = {case["id"]: case for case in golden["cases"]}
-        cases = [cases_by_id[case_id] for case_id in case_ids]
-        commit = "c" * 40
-        hermes_commit = contract["host"]["hermes_git_commit"]
-        commit_timestamp = datetime.fromisoformat("2026-08-30T00:00:00+00:00")
-        session_ids = [f"synthetic-run-{index}" for index in range(1, 4)]
-        reviewer_ids = ("synthetic-reviewer-one", "synthetic-reviewer-two")
-        reviewer_hashes = dict(
-            zip(reviewer_ids, contract["review_policy"]["trusted_reviewer_id_sha256"])
-        )
-        real_sha = runner._sha
-
-        def guarded_sha(value):
-            if isinstance(value, str) and value in reviewer_hashes:
-                return reviewer_hashes[value]
-            return real_sha(value)
-
-        def official_export(session_id, run_index):
-            messages = []
-            for turn, case in enumerate(cases, 1):
-                user_id = turn * 2 - 1
-                messages.extend(
-                    [
-                        {
-                            "id": user_id,
-                            "session_id": session_id,
-                            "active": 1,
-                            "role": "user",
-                            "content": case["prompt"],
-                            "tool_call_id": None,
-                            "tool_calls": None,
-                            "tool_name": None,
-                            "platform_message_id": f"user-{run_index}-{turn}",
-                        },
-                        {
-                            "id": user_id + 1,
-                            "session_id": session_id,
-                            "active": 1,
-                            "role": "assistant",
-                            "content": f"synthetic final {turn}",
-                            "tool_call_id": None,
-                            "tool_calls": None,
-                            "tool_name": None,
-                            "platform_message_id": f"assistant-{run_index}-{turn}",
-                        },
-                    ]
-                )
-            exported = {
-                "id": session_id,
-                "source": "wecom",
-                "profile_name": "datasage-canary-next",
-                "user_id": "synthetic-user",
-                "chat_id": "synthetic-chat",
-                "chat_type": "dm",
-                "title": f"datasage-live-{commit[:12]}-run-{run_index}",
-                "started_at": commit_timestamp.isoformat(),
-                "fresh_run_nonce": f"{run_index:032x}",
-                "provider": "deepseek",
-                "model": "deepseek-v4-flash",
-                "model_fingerprint_sha256": "b" * 64,
-                "system_prompt_sha256": "c" * 64,
-                "profile_content_sha256": "d" * 64,
-                "messages": messages,
-            }
-            return (json.dumps(exported, ensure_ascii=False) + "\n").encode("utf-8")
-
-        exports = {
-            session_id: official_export(session_id, run_index)
-            for run_index, session_id in enumerate(session_ids, 1)
-        }
-
-        def synthetic_origin(
-            session,
-            *,
-            contract,
-            commit,
-            run_index,
-            commit_timestamp,
-        ):
-            return {
-                "source": contract["inbound"]["platform"],
-                "chat_type": contract["inbound"]["chat_type"],
-                "user_id_sha256": contract["inbound"]["expected_user_id_sha256"],
-                "chat_id_sha256": contract["inbound"]["expected_chat_id_sha256"],
-                "title": f"datasage-live-{commit[:12]}-run-{run_index}",
-                "started_at": commit_timestamp.isoformat(),
-                "session_id": session["id"],
-            }
-
-        def synthetic_process(command, **_kwargs):
-            if "sessions" in command:
-                session_id = command[command.index("--session-id") + 1]
-                stdout = exports[session_id]
-            elif "--session-export" in command:
-                Path(command[command.index("--output") + 1]).write_text(
-                    '{"synthetic":"candidate"}\n', encoding="utf-8"
-                )
-                stdout = b"synthetic adapter complete\n"
-            elif "--cases" in command:
-                Path(command[command.index("--output") + 1]).write_text(
-                    '{"synthetic":"score"}\n', encoding="utf-8"
-                )
-                stdout = b"synthetic scorer complete\n"
-            else:
-                raise AssertionError(f"unexpected external command: {command}")
-            return runner.subprocess.CompletedProcess(command, 0, stdout, b"")
-
-        def validated_reviews(review_set, **_kwargs):
-            return {
-                case_id: [
-                    review
-                    for review in review_set["reviews"]
-                    if review["case_id"] == case_id
-                ]
-                for case_id in case_ids
-            }
-
-        builder = runner._BUILDER
-        receipt = {
-            "name": contract["subject"]["name"],
-            "version": contract["subject"]["version"],
-            "content_sha256": "d" * 64,
-        }
-        with tempfile.TemporaryDirectory() as temporary:
-            temporary_root = Path(temporary)
-            evidence_dir = temporary_root / "evidence"
-            hermes_root = temporary_root / "hermes"
-            hermes_python = hermes_root / "venv" / "Scripts" / "python.exe"
-            hermes_python.parent.mkdir(parents=True)
-            hermes_python.touch()
-            reviews_path = temporary_root / "reviews.json"
-            try:
-                with ExitStack() as stack:
-                    stack.enter_context(
-                        mock.patch.object(runner, "EVIDENCE_DIR", evidence_dir)
-                    )
-                    runtime_probe = stack.enter_context(
-                        mock.patch.object(
-                            runner,
-                            "_runtime",
-                            return_value=(
-                                hermes_root,
-                                hermes_python,
-                                commit,
-                                hermes_commit,
-                            ),
-                        )
-                    )
-                    stack.enter_context(
-                        mock.patch.object(
-                            runner,
-                            "_python_provenance",
-                            return_value={"schema": "synthetic-python-provenance"},
-                        )
-                    )
-                    stack.enter_context(
-                        mock.patch.object(
-                            runner,
-                            "_source",
-                            side_effect=lambda _commit, path: {
-                                "path": path,
-                                "sha256": real_sha(path),
-                            },
-                        )
-                    )
-                    stack.enter_context(
-                        mock.patch.object(
-                            runner,
-                            "_commit_timestamp",
-                            return_value=commit_timestamp,
-                        )
-                    )
-                    stack.enter_context(
-                        mock.patch.object(
-                            runner, "_session_origin", side_effect=synthetic_origin
-                        )
-                    )
-                    stack.enter_context(
-                        mock.patch.object(runner, "_sha", side_effect=guarded_sha)
-                    )
-                    process_probe = stack.enter_context(
-                        mock.patch.object(
-                            runner.subprocess,
-                            "run",
-                            side_effect=synthetic_process,
-                        )
-                    )
-                    for patcher in (
-                        mock.patch.object(builder, "_validate_live_contract"),
-                        mock.patch.object(
-                            builder, "build_receipt", return_value=receipt
-                        ),
-                        mock.patch.object(builder, "_live_capture_artifact"),
-                        mock.patch.object(builder, "_live_artifact"),
-                        mock.patch.object(builder, "_validate_process_record"),
-                        mock.patch.object(
-                            builder,
-                            "_validate_python_provenance",
-                            side_effect=lambda proof, *_args: proof,
-                        ),
-                        mock.patch.object(
-                            builder,
-                            "_validate_live_reviews",
-                            side_effect=validated_reviews,
-                        ),
-                        mock.patch.object(
-                            builder, "_reject_internal_conclusion_codes"
-                        ),
-                        mock.patch.object(builder, "_validate_review_evidence"),
-                        mock.patch.object(
-                            builder,
-                            "_review_consensus_id",
-                            return_value="synthetic-consensus",
-                        ),
-                    ):
-                        stack.enter_context(patcher)
-
-                    common = [
-                        "--hermes-python",
-                        str(hermes_python),
-                        "--hermes-root",
-                        str(hermes_root),
-                    ]
-                    capture_arguments = ["capture", *common]
-                    for session_id in session_ids:
-                        capture_arguments.extend(["--session-id", session_id])
-                    self.assertEqual(0, runner.main(capture_arguments))
-
-                    capture_path = evidence_dir / "private" / commit / "capture.json"
-                    capture = runner._read_json(capture_path)
-                    capture_sha = runner._artifact(capture_path)["sha256"]
-                    reviews = []
-                    for run in capture["runs"]:
-                        run_index = run["run_index"]
-                        session_id = session_ids[run_index - 1]
-                        for case, final_sha in zip(
-                            cases, run["session"]["final_answer_sha256"]
-                        ):
-                            for reviewer_id in reviewer_ids:
-                                reviews.append(
-                                    {
-                                        "run_index": run_index,
-                                        "case_id": case["id"],
-                                        "session_id_sha256": real_sha(session_id),
-                                        "final_answer_sha256": final_sha,
-                                        "capture_sha256": capture_sha,
-                                        "reviewer_id": reviewer_id,
-                                        "labels": [],
-                                        "decision_quality": {
-                                            dimension: 1
-                                            for dimension in builder.DECISION_QUALITY_DIMENSIONS
-                                        },
-                                        "evidence": [],
-                                        "reviewed_at": commit_timestamp.isoformat(),
-                                    }
-                                )
-                    runner._write_json(
-                        reviews_path,
-                        {
-                            "schema": "datasage-live-review-batch/v1",
-                            "reviews": reviews,
-                        },
-                    )
-                    self.assertEqual(
-                        0,
-                        runner.main(
-                            [
-                                "finalize",
-                                *common,
-                                "--reviews",
-                                str(reviews_path),
-                                "--fixture-attestation-sha256",
-                                "e" * 64,
-                                "--business-database-ref-sha256",
-                                "f" * 64,
-                            ]
-                        ),
-                    )
-
-                self.assertEqual(4, runtime_probe.call_count)
-                self.assertEqual(9, process_probe.call_count)
-                self.assertTrue((evidence_dir / f"live-release-{commit}.json").is_file())
-                self.assertTrue(
-                    forbidden_roots.isdisjoint(
-                        name.split(".", 1)[0] for name in imported
-                    )
-                )
-            finally:
-                for path in evidence_dir.rglob("*") if evidence_dir.exists() else []:
-                    if path.is_file():
-                        path.chmod(0o600)
-
-    def test_wecom_capture_requires_exact_three_unique_session_ids_before_runtime(self):
-        runner = self._runner_module()
-        contract = json.loads(
-            (PROFILE_ROOT / "tests" / "fixtures" / "live_release_contract.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        args = types.SimpleNamespace(session_ids=["one", "one", "three"])
-        with mock.patch.object(runner, "_runtime") as runtime:
-            with self.assertRaisesRegex(RuntimeError, "three unique ordered"):
-                with mock.patch.object(runner, "_require_capture_caller_readiness"):
-                    runner._capture(args, contract, {}, object())
-        runtime.assert_not_called()
-
-    def test_wecom_session_origin_requires_dm_hash_title_and_commit_time(self):
-        runner = self._runner_module()
-        contract = json.loads(
-            (PROFILE_ROOT / "tests" / "fixtures" / "live_release_contract.json").read_text(encoding="utf-8")
-        )
-        identity = "synthetic-self"
-        digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
-        contract["inbound"]["expected_user_id_sha256"] = digest
-        contract["inbound"]["expected_chat_id_sha256"] = digest
-        session = {
-            "id": "complete-session",
-            "source": "wecom",
-            "chat_type": "dm",
-            "user_id": identity,
-            "chat_id": identity,
-            "title": "datasage-live-111111111111-run-1",
-            "started_at": "2026-08-30T00:00:01+00:00",
-        }
-        origin = runner._session_origin(
-            session,
-            contract=contract,
-            commit="1" * 40,
-            run_index=1,
-            commit_timestamp=datetime.fromisoformat("2026-08-30T00:00:00+00:00"),
-        )
-        self.assertEqual(digest, origin["user_id_sha256"])
-        self.assertEqual(digest, origin["chat_id_sha256"])
-        for key, value in (("source", "cli"), ("chat_type", "group"), ("title", "wrong")):
-            with self.subTest(key=key), self.assertRaises(RuntimeError):
-                runner._session_origin(
-                    {**session, key: value}, contract=contract, commit="1" * 40,
-                    run_index=1, commit_timestamp=datetime.fromisoformat("2026-08-30T00:00:00+00:00"),
-                )
 
     def test_terminal_assistant_requires_zero_blocking_clarify_and_closed_tools(self):
         runner = self._runner_module()
         prompts = ["first", "second"]
         contract = json.loads(
-            (PROFILE_ROOT / "tests" / "fixtures" / "live_release_contract.json").read_text(
+            (PROFILE_ROOT / "tests" / "fixtures" / "business_replay_contract.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -3045,7 +2379,7 @@ class LiveReleaseEvidenceBoundaryTests(unittest.TestCase):
         ):
             runner._endpoints(blocking_clarify, prompts, policy)
 
-        builder_path = PROFILE_ROOT / "build_release_receipt.py"
+        builder_path = PROFILE_ROOT / "tests" / "business_replay.py"
         spec = importlib.util.spec_from_file_location(
             "_datasage_live_release_builder_test", builder_path
         )
@@ -3061,7 +2395,7 @@ class LiveReleaseEvidenceBoundaryTests(unittest.TestCase):
 
     def test_synthetic_three_turn_confirmation_reuses_endpoints_without_live_evidence(self):
         runner = self._runner_module()
-        builder = runner._BUILDER
+        builder = runner
         prompts = [
             "越南今年的经营情况",
             "泰国呢",
@@ -3167,25 +2501,12 @@ class LiveReleaseEvidenceBoundaryTests(unittest.TestCase):
         self.assertEqual(expected, runner._endpoints(transcript, prompts, policy))
         self.assertEqual(expected, builder._live_endpoints(transcript, prompts, policy))
 
-        tracked_contract = json.loads(
-            (PROFILE_ROOT / "tests" / "fixtures" / "live_release_contract.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        synthetic_contract = copy.deepcopy(tracked_contract)
-        synthetic_contract["case_plan"]["case_ids"] = [
-            item["case_id"] for item in policy
-        ]
-        synthetic_contract["case_plan"]["turns_per_session"] = 3
-        synthetic_contract["turn_completion_policy"] = policy
-        with self.assertRaisesRegex(ValueError, "exactly two unique case IDs"):
-            builder._validate_live_contract(synthetic_contract)
 
     def test_legacy_function_call_and_pending_interposition_fail_closed(self):
         runner = self._runner_module()
         prompts = ["first", "second"]
         contract = json.loads(
-            (PROFILE_ROOT / "tests" / "fixtures" / "live_release_contract.json").read_text(
+            (PROFILE_ROOT / "tests" / "fixtures" / "business_replay_contract.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -3261,7 +2582,7 @@ class LiveReleaseEvidenceBoundaryTests(unittest.TestCase):
         runner = self._runner_module()
         prompts = ["first", "second"]
         contract = json.loads(
-            (PROFILE_ROOT / "tests" / "fixtures" / "live_release_contract.json").read_text(
+            (PROFILE_ROOT / "tests" / "fixtures" / "business_replay_contract.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -3320,7 +2641,7 @@ class LiveReleaseEvidenceBoundaryTests(unittest.TestCase):
         runner = self._runner_module()
         prompts = ["first", "second"]
         contract = json.loads(
-            (PROFILE_ROOT / "tests" / "fixtures" / "live_release_contract.json").read_text(
+            (PROFILE_ROOT / "tests" / "fixtures" / "business_replay_contract.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -3427,7 +2748,7 @@ class LiveReleaseEvidenceBoundaryTests(unittest.TestCase):
     def test_turn_completion_policy_is_zero_clarify_and_single_owned(self):
         runner = self._runner_module()
         contract = json.loads(
-            (PROFILE_ROOT / "tests" / "fixtures" / "live_release_contract.json").read_text(
+            (PROFILE_ROOT / "tests" / "fixtures" / "business_replay_contract.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -3448,7 +2769,7 @@ class LiveReleaseEvidenceBoundaryTests(unittest.TestCase):
         ):
             runner._turn_completion_policies(invalid, 2)
 
-        builder = runner._BUILDER
+        builder = runner
         self.assertIs(runner._export, builder._export_session)
         self.assertIs(
             runner._turn_completion_policies,
@@ -3457,7 +2778,7 @@ class LiveReleaseEvidenceBoundaryTests(unittest.TestCase):
         self.assertIs(runner._endpoints, builder._live_endpoints)
         self.assertFalse(hasattr(builder, "_live_evidence_producer"))
 
-        builder_path = PROFILE_ROOT / "build_release_receipt.py"
+        builder_path = PROFILE_ROOT / "tests" / "business_replay.py"
         spec = importlib.util.spec_from_file_location(
             "_datasage_live_policy_owner_direct_test", builder_path
         )
@@ -3473,91 +2794,6 @@ class LiveReleaseEvidenceBoundaryTests(unittest.TestCase):
         self.assertTrue(callable(direct_builder._live_endpoints))
         self.assertFalse(hasattr(direct_builder, "_live_evidence_producer"))
 
-        contract_document = {"turn_completion_policy": policy}
-        golden_document = {"cases": []}
-        with (
-            mock.patch.object(
-                runner, "_read_json", side_effect=[contract_document, golden_document]
-            ),
-            mock.patch.object(runner, "_load_module", side_effect=AssertionError),
-            mock.patch.object(builder, "_validate_live_contract") as validate,
-            mock.patch.object(runner, "_capture", return_value=0) as capture,
-        ):
-            exit_code = runner.main(
-                [
-                    "capture",
-                    "--hermes-python",
-                    "python",
-                    "--hermes-root",
-                    ".",
-                    "--session-id",
-                    "run-1",
-                    "--session-id",
-                    "run-2",
-                    "--session-id",
-                    "run-3",
-                ]
-            )
-        self.assertEqual(0, exit_code)
-        validate.assert_called_once_with(contract_document)
-        capture.assert_called_once()
-
-    def test_inbound_capture_rejects_push_and_tool_name_entitlement_bypass(self):
-        runner = self._runner_module()
-        prompts = ["first", "second"]
-        contract = json.loads(
-            (PROFILE_ROOT / "tests" / "fixtures" / "live_release_contract.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        policy = contract["turn_completion_policy"]
-
-        def transcript(function_name, tool_name, content):
-            return [
-                {"id": 1, "role": "user", "content": "first"},
-                {
-                    "id": 2,
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [{"id": "call-1", "function": {"name": function_name}}],
-                },
-                {"id": 3, "role": "tool", "tool_call_id": "call-1", "tool_name": tool_name, "content": content},
-                {"id": 4, "role": "assistant", "content": "final one", "tool_calls": None},
-                {"id": 5, "role": "user", "content": "second"},
-                {"id": 6, "role": "assistant", "content": "final two", "tool_calls": None},
-            ]
-
-        with self.assertRaisesRegex(RuntimeError, "datasage_push is forbidden"):
-            runner._endpoints(
-                transcript("datasage_push", "datasage_push", "{}"),
-                prompts,
-                policy,
-            )
-
-        denial = json.dumps({"error": {"code": "DATA_ENTITLEMENT_DENIED"}})
-        for tool_name in ("datasage_catalog", ""):
-            with self.subTest(tool_name=tool_name), self.assertRaisesRegex(RuntimeError, "name does not match"):
-                runner._endpoints(
-                    transcript("datasage_query", tool_name, denial), prompts, policy
-                )
-
-    def test_capture_stage_cleanup_is_scoped_to_exact_private_root(self):
-        runner = self._runner_module()
-        commit = "1" * 40
-        with tempfile.TemporaryDirectory() as temporary:
-            evidence = Path(temporary) / "evidence"
-            private = evidence / "private"
-            stage = private / f".capture-stage-{commit}-{'a' * 32}"
-            stage.mkdir(parents=True)
-            (stage / "partial").write_text("partial", encoding="utf-8")
-            with mock.patch.object(runner, "EVIDENCE_DIR", evidence):
-                runner._cleanup_capture_stage(stage, commit)
-                self.assertFalse(stage.exists())
-                outside = evidence / f".capture-stage-{commit}-{'b' * 32}"
-                outside.mkdir()
-                with self.assertRaisesRegex(RuntimeError, "unscoped"):
-                    runner._cleanup_capture_stage(outside, commit)
-                self.assertTrue(outside.exists())
 
     def test_nonretryable_entitlement_is_detected_from_structured_tool_result(self):
         runner = self._runner_module()
@@ -3584,32 +2820,6 @@ class LiveReleaseEvidenceBoundaryTests(unittest.TestCase):
             ]
         )
 
-    def test_live_contract_reuses_the_tracked_golden_cases_without_legacy_ids(self):
-        suite = json.loads(
-            (PLUGIN_ROOT / "e2e" / "golden_expert_cases.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        release = suite["release_validation"]
-        contract = json.loads(
-            (PROFILE_ROOT / "tests" / "fixtures" / "live_release_contract.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        self.assertEqual(
-            contract["case_plan"]["case_ids"],
-            release["trusted_replay_gate"]["case_ids"],
-        )
-        selected = [
-            case for case in suite["cases"]
-            if case["id"] in contract["case_plan"]["case_ids"]
-        ]
-        self.assertEqual([1, 2], [case["turn"] for case in selected])
-        self.assertEqual(1, len({case["conversation_id"] for case in selected}))
-        self.assertEqual([5, 2], [len(case["required_conclusions"]) for case in selected])
-        self.assertEqual("no_query", selected[1]["plan_constraints"]["time_semantics"])
-        self.assertNotIn("session_id", contract)
-        self.assertNotIn("message_id", json.dumps(contract, sort_keys=True))
 
 
 if __name__ == "__main__":

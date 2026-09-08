@@ -48,11 +48,11 @@ test and is never hidden from the result.
 
 This contract is grounded in the pinned official host implementation:
 
-- [`AIAgent` and `run_conversation`](https://github.com/NousResearch/hermes-agent/blob/fcbd1076a93841fa88855acce810e342a5b78101/run_agent.py#L412-L435)
-- [turn-start prompt assembly and preflight compression](https://github.com/NousResearch/hermes-agent/blob/fcbd1076a93841fa88855acce810e342a5b78101/agent/turn_context.py#L431-L1017)
-- [`ContextCompressor.compress`](https://github.com/NousResearch/hermes-agent/blob/fcbd1076a93841fa88855acce810e342a5b78101/agent/context_compressor.py#L7045)
-- [official compaction authority prefix](https://github.com/NousResearch/hermes-agent/blob/fcbd1076a93841fa88855acce810e342a5b78101/agent/context_compressor.py#L114-L148)
-- [final non-streaming transport seam](https://github.com/NousResearch/hermes-agent/blob/fcbd1076a93841fa88855acce810e342a5b78101/agent/chat_completion_helpers.py#L3336-L3346)
+- [`AIAgent` and `run_conversation`](https://github.com/NousResearch/hermes-agent/blob/2237be355906fbe6065ce1815711eee52b2d646e/run_agent.py#L412-L435)
+- [turn-start prompt assembly and preflight compression](https://github.com/NousResearch/hermes-agent/blob/2237be355906fbe6065ce1815711eee52b2d646e/agent/turn_context.py#L431-L1017)
+- [`ContextCompressor.compress`](https://github.com/NousResearch/hermes-agent/blob/2237be355906fbe6065ce1815711eee52b2d646e/agent/context_compressor.py#L7045)
+- [official compaction authority prefix](https://github.com/NousResearch/hermes-agent/blob/2237be355906fbe6065ce1815711eee52b2d646e/agent/context_compressor.py#L114-L148)
+- [final non-streaming transport seam](https://github.com/NousResearch/hermes-agent/blob/2237be355906fbe6065ce1815711eee52b2d646e/agent/chat_completion_helpers.py#L3336-L3346)
 
 ## Assertion boundary
 
@@ -125,3 +125,9 @@ connection, zero real compressions, no final transport capture, non-canonical
 request data, or an invalid output path fails closed. Fixture assertions remain
 local test self-checks and never enter the raw report. The producer does not
 copy host logic or downgrade a failure into synthetic evidence.
+
+Hermes 0.21.1 defers an unanchored rough estimate until provider usage arrives.
+The pressure fixture therefore supplies a synthetic prior provider response via
+`ContextCompressor.update_from_response` before resuming the long history. It
+does not mock the compression predicate or compress implementation, and does
+not claim this fixture usage is a real model measurement.

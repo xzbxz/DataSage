@@ -42,17 +42,13 @@ def _frontmatter(path: Path) -> dict[str, object]:
 
 
 class ExpertArchitectureTests(unittest.TestCase):
-    def test_release_identity_and_reviewed_host_capabilities_are_consistent(self):
+    def test_plugin_skill_versions_and_reviewed_capabilities_are_consistent(self):
         config = yaml.safe_load((PROFILE_ROOT / "config.yaml").read_text(encoding="utf-8"))
-        distribution = yaml.safe_load(
-            (PROFILE_ROOT / "distribution.yaml").read_text(encoding="utf-8")
-        )
         plugin = yaml.safe_load(
             (PLUGIN_ROOT / "plugin.yaml").read_text(encoding="utf-8")
         )
         skill = _frontmatter(SKILL_PATH)
-        self.assertEqual(str(distribution["version"]), str(plugin["version"]))
-        self.assertEqual(str(distribution["version"]), str(skill["version"]))
+        self.assertEqual(str(plugin["version"]), str(skill["version"]))
         self.assertRegex(config["model"]["default"], r"^[a-z0-9][a-z0-9._-]+$")
         self.assertEqual("off", config["tools"]["tool_search"]["enabled"])
         self.assertTrue(config["skills"]["disabled"])

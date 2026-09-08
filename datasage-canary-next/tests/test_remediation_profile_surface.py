@@ -320,7 +320,10 @@ class RemediationProfileSurfaceTests(unittest.TestCase):
 
         readme = (PROFILE_ROOT / "README.md").read_text(encoding="utf-8")
         self.assertNotIn("引用、会议/文档行动项和周度计划", readme)
-        self.assertIn("文档、表格、PDF、演示文稿和 OCR", readme)
+        for name in ("docx", "xlsx", "pdf", "powerpoint", "hermes-agent"):
+            self.assertIn(f"`{name}`", readme)
+        self.assertIn("ocr-and-documents", disabled)
+        self.assertIn("已不在当前 core 集合", readme)
 
     def test_env_example_lists_current_keys_with_blank_values(self):
         expected = {

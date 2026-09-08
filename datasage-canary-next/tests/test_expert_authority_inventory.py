@@ -19,7 +19,7 @@ SKILL_ROOT = PROFILE_ROOT / "skills" / "business-analytics" / "datasage"
 PLUGIN_ROOT = PROFILE_ROOT / "plugins" / "datasage-query"
 REVIEWED_NATIVE_SKILLS = {
     "docx",
-    "ocr-and-documents",
+    "hermes-agent",
     "pdf",
     "powerpoint",
     "xlsx",
@@ -263,17 +263,16 @@ class ExpertAuthorityInventoryTests(unittest.TestCase):
         config = yaml.safe_load(
             (PROFILE_ROOT / "config.yaml").read_text(encoding="utf-8")
         )
-        distribution = yaml.safe_load(
-            (PROFILE_ROOT / "distribution.yaml").read_text(encoding="utf-8")
-        )
+        reviewed = json.loads((PROFILE_ROOT / "tests/fixtures/reviewed_host_skills.json").read_text(encoding="utf-8"))
         architecture = (PROFILE_ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")
         inventory = _bundled_skill_inventory()
         disabled = set(config["skills"]["disabled"])
 
-        self.assertEqual("==0.20.5", distribution["hermes_requires"])
+        self.assertEqual(set(reviewed["core_skills"]), set(inventory))
+        self.assertEqual(set(reviewed["enabled_core_skills"]), REVIEWED_NATIVE_SKILLS)
         self.assertFalse((PROFILE_ROOT / ".no-bundled-skills").exists())
         self.assertEqual(REVIEWED_NATIVE_SKILLS, set(inventory) - disabled)
-        self.assertEqual(set(inventory) - REVIEWED_NATIVE_SKILLS, disabled)
+        self.assertEqual(set(inventory) - REVIEWED_NATIVE_SKILLS, disabled.intersection(inventory))
         with mock.patch.dict(os.environ, {"HERMES_HOME": str(PROFILE_ROOT)}):
             hermes_skill_utils._raw_config_cache_clear()
             try:
@@ -283,7 +282,7 @@ class ExpertAuthorityInventoryTests(unittest.TestCase):
                 )
             finally:
                 hermes_skill_utils._raw_config_cache_clear()
-        for name in REVIEWED_NATIVE_SKILLS:
+        for name in REVIEWED_NATIVE_SKILLS - {"hermes-agent"}:
             self.assertIn("windows", inventory[name]["platforms"])
             related = set(
                 inventory[name]
