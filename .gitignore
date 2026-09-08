@@ -110,3 +110,4 @@ datasage-canary-next/*
 !datasage-canary-next/tests/fixtures/reviewed_host_skills.json
 !datasage-canary-next/tests/fixtures/business_acceptance_cases.json
 !datasage-canary-next/tests/BUSINESS_ACCEPTANCE.md
+!datasage-canary-next/tests/BUSINESS_PILOT_FIVE.md
