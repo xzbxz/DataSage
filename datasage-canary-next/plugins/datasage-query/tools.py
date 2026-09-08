@@ -9481,6 +9481,28 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
+def datasage_entity_resolve(args: dict[str, Any], **kwargs: Any) -> str:
+    """Public entity calls share query capacity; internal prefetch keeps its lease."""
+    deadline_at = time.monotonic() + _bounded_int("call_timeout_seconds", 60, 1, 300)
+    if not _try_acquire_query_slot():
+        return json.dumps({
+            "status": "failed", "must_stop_business_query": True,
+            "error": {"code": "QUERY_CONCURRENCY_LIMIT", "retryable": True,
+                      "message": "当前并行业务查询已达到安全上限，请稍后重试。"},
+        }, ensure_ascii=False, separators=(",", ":"))
+    try:
+        result = entities.datasage_entity_resolve(args, **{**kwargs, "deadline_at": deadline_at})
+        if time.monotonic() >= deadline_at:
+            return json.dumps({
+                "status": "failed", "must_stop_business_query": True,
+                "error": {"code": "BATCH_DEADLINE_EXCEEDED", "retryable": True,
+                          "message": "实体解析已超过调用总时限。"},
+            }, ensure_ascii=False, separators=(",", ":"))
+        return result
+    finally:
+        _release_query_slot()
+
+
 def datasage_query(args: dict[str, Any], **kwargs: Any) -> str:
     """Execute a bounded query call, failing fast when capacity is exhausted."""
 

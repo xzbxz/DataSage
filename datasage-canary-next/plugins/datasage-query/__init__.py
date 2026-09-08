@@ -33,7 +33,7 @@ def register(ctx) -> None:
             "datasage_entity_resolve",
             wire.bounded_json_handler(
                 "datasage_entity_resolve",
-                entities.datasage_entity_resolve,
+                tools.datasage_entity_resolve,
             ),
         ),
         description=schemas.DATASAGE_ENTITY_RESOLVE["description"],

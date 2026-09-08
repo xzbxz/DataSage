@@ -1105,7 +1105,11 @@ def datasage_entity_resolve(args: dict[str, Any], **_kwargs: Any) -> str:
                 source_types,
                 exact_only=bool(exact) or not fuzzy_allowed,
             )
-            rows, truncated = db_runtime.execute(sql, params, 50)
+            deadline_at = _kwargs.get("deadline_at")
+            if deadline_at is not None and time.monotonic() >= deadline_at:
+                raise EntityFailure("BATCH_DEADLINE_EXCEEDED", "实体解析已超过调用总时限。")
+            execution_kwargs = {"deadline_at": deadline_at} if deadline_at is not None else {}
+            rows, truncated = db_runtime.execute(sql, params, 50, **execution_kwargs)
             candidates = _candidate_rows(
                 rows,
                 domain,
