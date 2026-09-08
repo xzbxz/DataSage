@@ -14,13 +14,14 @@ import logging
 import ssl
 import stat
 import sys
+import time
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Sequence
 
 from agent.secret_scope import get_secret
 
-from . import contract_store, settings
+from . import contract_store, settings, db_executor
 from .db_security import (
     DatabaseSecurityError,
     mysql_tls_kwargs,
@@ -314,7 +315,15 @@ def connect(
         connect_timeout = min(connect_timeout, connect_timeout_seconds)
     if read_timeout_seconds is not None:
         query_timeout = read_timeout_seconds
+    deadline_at = db_executor.current_deadline()
+    if deadline_at is not None:
+        remaining = deadline_at - time.monotonic()
+        if remaining <= 0:
+            raise db_executor.DeadlineExceeded("deadline exceeded before connection setup")
+        connect_timeout = min(connect_timeout, remaining)
+        query_timeout = min(query_timeout, remaining)
     connection = None
+    watchdog = None
     try:
         port = connection_port()
         active_profile_root = contract_store.profile_root()
@@ -345,8 +354,14 @@ def connect(
             read_timeout=query_timeout,
             write_timeout=query_timeout,
             cursorclass=pymysql.cursors.SSDictCursor,
+            **({"defer_connect": True} if deadline_at is not None else {}),
             **tls_kwargs,
         )
+        if deadline_at is not None:
+            watchdog = db_executor.SocketDeadline(connection, deadline_at)
+            watchdog.check()
+            connection.connect()
+            watchdog.check()
         tls_evidence = (
             verify_mysql_tls(connection, policy=tls_policy)
             if tls_policy is not None
@@ -392,6 +407,8 @@ def connect(
                 )
             ),
         )
+        if watchdog is not None:
+            watchdog.check()
         return connection
     except DatabaseSecurityError as exc:
         if connection is not None:
@@ -426,4 +443,9 @@ def connect(
                 "database server did not complete required TLS negotiation",
                 stage="database_security",
             ) from exc
+        if (watchdog is not None and watchdog.expired.is_set()) or (deadline_at is not None and time.monotonic() >= deadline_at):
+            raise db_executor.DeadlineExceeded("deadline exceeded during connection security") from exc
         raise
+    finally:
+        if watchdog is not None:
+            watchdog.stop()

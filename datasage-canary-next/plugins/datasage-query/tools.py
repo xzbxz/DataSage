@@ -8671,6 +8671,7 @@ def _run_one(
             applied_time_range["as_of_basis"] = (
                 _DATABASE_QUERY_DATE_OBSERVATION
             )
+        _check_call_deadline(deadline_at)
         current_stage = "business_sql"
         business_sql_attempted_count = 1
         executor = execute_query or _execute_with_source
@@ -8694,6 +8695,7 @@ def _run_one(
                 )
             except QueryFailure as proof_failure:
                 complete_partition_proof_failure = proof_failure.code
+        _check_call_deadline(deadline_at)
         current_stage = "result_validation"
         public_rows, data_state = _evidence_rows_and_state(rows, truncated)
         applied_time_range, data_state = _resolve_snapshot_time_evidence(
@@ -8717,6 +8719,7 @@ def _run_one(
             period_observed_on or _business_today(),
         )
         elapsed_ms = int((time.monotonic() - started) * 1000)
+        _check_call_deadline(deadline_at)
         metric_ref = _business_metric_ref(request)
         metric_label = _business_metric_label(scope, semantics)
         metric_context = _business_metric_context(scope, semantics, datasets)
@@ -8840,6 +8843,12 @@ def _run_one(
         }
         if isinstance(snapshot_group_marker, str) and snapshot_group_marker:
             result["_snapshot_group_marker"] = snapshot_group_marker
+        _check_call_deadline(deadline_at)
+        if deadline_at is not None:
+            _seal_claim_ids([result])
+            fallback = copy.deepcopy(_model_wire_result(result, request=request))
+            _check_call_deadline(deadline_at)
+            result["_deadline_fallback"] = fallback
     except QueryFailure as failure:
         source_evidence_ref = _consistent_source_evidence_ref(
             [
@@ -8934,9 +8943,47 @@ def _run_one(
     return result
 
 
+def _call_deadline(candidate=None):
+    deadline_at = time.monotonic() + _bounded_int("call_timeout_seconds", 60, 1, 300)
+    for value in (candidate, db_executor.current_deadline()):
+        if value is not None:
+            deadline_at = min(deadline_at, value)
+    return deadline_at
+
+
+def _check_call_deadline(deadline_at):
+    if deadline_at is not None and time.monotonic() >= deadline_at:
+        raise QueryFailure("BATCH_DEADLINE_EXCEEDED", "本次查询已达到调用总时限。", timeout=True, stage="batch_deadline")
+
+
+def _deadline_payload(args, results=()):
+    """Retain immutable pre-expiry evidence and explicit outcomes for every input."""
+    requests = args.get("requests") if isinstance(args, Mapping) else None
+    requests = requests if isinstance(requests, list) else []
+    public_ids = [str(item.get("request_id")) for item in requests if isinstance(item, Mapping)]
+    by_id = {str(result.get("request_id")): result for result in results if isinstance(result, Mapping)}
+    error = {"code": "BATCH_DEADLINE_EXCEEDED", "message": "本次查询已达到总时限；仅保留期限内已验证的独立证据，其余分支与计算未完成。", "retryable": True}
+    public_results = []
+    for request_id in public_ids:
+        result = by_id.get(request_id, {})
+        fallback = result.get("_deadline_fallback")
+        if isinstance(fallback, dict):
+            public_results.append(fallback)
+        else:
+            branch_error = result.get("error") if result.get("status") == "failed" else None
+            public_results.append({"request_id": request_id, "status": "failed", "rows": [],
+                "claim_ledger": [], "error": branch_error or error})
+    return {
+        "status": "partial" if any(result.get("status") == "success" for result in public_results) else "failed",
+        "request_count": len(public_ids), "metric_contexts": [], "results": public_results, "error": error,
+    }
+
+
 def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
     """Validate, execute, and return structured evidence for one to ten requests."""
     batch_started = time.monotonic()
+    deadline_at = _call_deadline(_kwargs.pop("_deadline_at", None))
+    results = []
     period_observed_on = _kwargs.pop("_period_observed_on", None)
     if not isinstance(period_observed_on, date):
         period_observed_on = _business_today()
@@ -8968,8 +9015,7 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
                 reserved_request_ids=[str(request_id) for request_id in request_ids],
             )
         )
-        call_timeout = _bounded_int("call_timeout_seconds", 60, 1, 300)
-        deadline_at = batch_started + call_timeout
+        _check_call_deadline(deadline_at)
         audit_context = {
             "session_ref": _audit_ref(_kwargs.get("session_id")),
             "task_ref": _audit_ref(_kwargs.get("task_id")),
@@ -9357,18 +9403,23 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
                         period_observed_on=period_observed_on,
                     )
                 )
+        _check_call_deadline(deadline_at)
         _authorize_change_decompositions(prepared_contexts, results)
+        _check_call_deadline(deadline_at)
         _tag_complete_decomposition_reconciliations(
             results,
             operation_partitions,
         )
+        _check_call_deadline(deadline_at)
         _seal_claim_ids(results)
         _seal_change_reconciliations(results)
+        _check_call_deadline(deadline_at)
         _finalize_complete_decomposition_outcomes(
             results,
             operation_partitions,
             prepared_contexts,
         )
+        _check_call_deadline(deadline_at)
         _finalize_target_gap_decompositions(
             prepared_contexts,
             results,
@@ -9383,6 +9434,7 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
             target_gap_partitions,
             elapsed_ms=int((time.monotonic() - batch_started) * 1000),
         )
+        _check_call_deadline(deadline_at)
         calculation_results = _build_governed_calculations(
             calculations,
             results,
@@ -9427,11 +9479,18 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
                 overall_result=overall_result,
             )
 
-        public_results = [project_result(result) for result in results]
+        public_results = []
+        for result in results:
+            _check_call_deadline(deadline_at)
+            projected = project_result(result)
+            _check_call_deadline(deadline_at)
+            public_results.append(projected)
+        _check_call_deadline(deadline_at)
         public_calculation_results = _model_wire_calculations(
             calculation_results,
             public_results,
         )
+        _check_call_deadline(deadline_at)
         evidence_results = _model_wire_evidence_bundle_results(
             results,
             public_results,
@@ -9447,12 +9506,15 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
             ),
             "results": public_results,
         }
+        _check_call_deadline(deadline_at)
         _attach_batch_source_evidence(payload, results)
         if calculations:
             payload["calculation_count"] = len(public_calculation_results)
             payload["calculations"] = public_calculation_results
         _audit_batch_capabilities(args, requests, results)
     except QueryFailure as failure:
+        if failure.code == "BATCH_DEADLINE_EXCEEDED":
+            return json.dumps(_deadline_payload(args, results), ensure_ascii=False, separators=(",", ":"))
         payload = {
             "status": "failed",
             "request_count": 0,
@@ -9478,12 +9540,15 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
                 **_caller_retry_metadata(failure),
             },
         }
-    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    rendered = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    if time.monotonic() >= deadline_at:
+        return json.dumps(_deadline_payload(args, results), ensure_ascii=False, separators=(",", ":"))
+    return rendered
 
 
 def datasage_entity_resolve(args: dict[str, Any], **kwargs: Any) -> str:
     """Public entity calls share query capacity; internal prefetch keeps its lease."""
-    deadline_at = time.monotonic() + _bounded_int("call_timeout_seconds", 60, 1, 300)
+    deadline_at = _call_deadline(kwargs.get("_deadline_at"))
     if not _try_acquire_query_slot():
         return json.dumps({
             "status": "failed", "must_stop_business_query": True,
@@ -9506,6 +9571,7 @@ def datasage_entity_resolve(args: dict[str, Any], **kwargs: Any) -> str:
 def datasage_query(args: dict[str, Any], **kwargs: Any) -> str:
     """Execute a bounded query call, failing fast when capacity is exhausted."""
 
+    kwargs["_deadline_at"] = _call_deadline(kwargs.get("_deadline_at"))
     if not _try_acquire_query_slot():
         failure = QueryFailure(
             "QUERY_CONCURRENCY_LIMIT",
@@ -9567,6 +9633,8 @@ def entitlement_guarded_datasage_query(
     # scope; the normalized row/metric authorization is repeated below.
     from . import entitlements
 
+    kwargs["_deadline_at"] = _call_deadline(kwargs.get("_deadline_at"))
+
     if not entitlements.coarse_authorized("datasage_query", args):
         return entitlements.denied_response()
 
@@ -9576,6 +9644,7 @@ def entitlement_guarded_datasage_query(
             args,
             observed_on=observed_on,
         )
+        _check_call_deadline(kwargs["_deadline_at"])
     except QueryFailure as failure:
         return json.dumps(
             {
@@ -9610,6 +9679,7 @@ def runtime_guarded_datasage_query(
     """Official runtime facade: keep the schema visible, then fail closed."""
 
     started = time.monotonic()
+    kwargs["_deadline_at"] = _call_deadline(kwargs.get("_deadline_at"))
     period_observed_on = kwargs.pop("_period_observed_on", None)
     if not isinstance(period_observed_on, date):
         period_observed_on = _business_today()
@@ -9632,7 +9702,9 @@ def runtime_guarded_datasage_query(
         ]
         from . import runtime_health
 
+        _check_call_deadline(kwargs["_deadline_at"])
         readiness = runtime_health.query_readiness_status()
+        _check_call_deadline(kwargs["_deadline_at"])
         if readiness.get("ready"):
             return datasage_query(
                 args,

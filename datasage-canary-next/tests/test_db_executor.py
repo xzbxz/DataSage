@@ -323,19 +323,20 @@ class ReadOnlyDbExecutorTests(unittest.TestCase):
         )
         with self.assertRaises(db_executor.DeadlineExceeded):
             executor.execute("SELECT 1", (), 1)
-        self.assertEqual(1, after_connect.rollback_count)
+        # Expired connections close directly; no new network rollback is started.
+        self.assertEqual(0, after_connect.rollback_count)
         self.assertEqual(1, after_connect.close_count)
 
         after_fetch = FakeConnection([{"value": 1}])
         executor, _factory = self._single(
             after_fetch,
             deadline_at=5.0,
-            clock=SequenceClock(0.0, 0.0, 0.0, 6.0),
+            clock=lambda: 6.0 if after_fetch.fetch_sizes else 0.0,
         )
         with self.assertRaises(db_executor.DeadlineExceeded):
             executor.execute("SELECT 1", (), 1)
         self.assertEqual([2], after_fetch.fetch_sizes)
-        self.assertEqual(1, after_fetch.rollback_count)
+        self.assertEqual(0, after_fetch.rollback_count)
         self.assertEqual(1, after_fetch.close_count)
 
     def test_snapshot_deadline_override_poison_keeps_source_and_closes(self):
@@ -358,7 +359,7 @@ class ReadOnlyDbExecutorTests(unittest.TestCase):
 
         self.assertNotIn(("SELECT late", ()), connection.executions)
         self.assertNotIn(("SELECT later", ()), connection.executions)
-        self.assertEqual(1, connection.rollback_count)
+        self.assertEqual(0, connection.rollback_count)
         self.assertEqual(1, connection.close_count)
 
     def test_snapshot_setup_failure_closes_connection(self):

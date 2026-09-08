@@ -29,12 +29,9 @@ def register(ctx) -> None:
         name="datasage_entity_resolve",
         toolset="datasage-query",
         schema=schemas.model_tool_schema(schemas.DATASAGE_ENTITY_RESOLVE),
-        handler=entitlements.guard(
+        handler=wire.bounded_json_handler(
             "datasage_entity_resolve",
-            wire.bounded_json_handler(
-                "datasage_entity_resolve",
-                tools.datasage_entity_resolve,
-            ),
+            entitlements.guard("datasage_entity_resolve", tools.datasage_entity_resolve),
         ),
         description=schemas.DATASAGE_ENTITY_RESOLVE["description"],
     )

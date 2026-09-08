@@ -8,7 +8,11 @@ security exceptions are allowed to cross this boundary unchanged.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 import logging
+import socket
+import threading
 import math
 import time
 import uuid
@@ -144,6 +148,69 @@ class DeadlineExceeded(TimeoutError):
     """Internal deadline signal for the caller to map into its public taxonomy."""
 
 
+_CALL_DEADLINE: ContextVar[float | None] = ContextVar("datasage_call_deadline", default=None)
+
+
+def current_deadline() -> float | None:
+    return _CALL_DEADLINE.get()
+
+
+@contextmanager
+def deadline_scope(deadline_at):
+    inherited = current_deadline()
+    effective = inherited if deadline_at is None else deadline_at
+    if inherited is not None and effective is not None:
+        effective = min(inherited, effective)
+    token = _CALL_DEADLINE.set(effective)
+    try:
+        yield effective
+    finally:
+        _CALL_DEADLINE.reset(token)
+
+
+class SocketDeadline:
+    """Interrupt this connection's blocking I/O; never leave a query future running."""
+    def __init__(self, connection, deadline_at, *, clock=None):
+        self.connection = connection
+        self.deadline_at = deadline_at
+        self.clock = clock or time.monotonic
+        self.expired = threading.Event()
+        self.timer = None
+        if deadline_at is not None:
+            remaining = deadline_at - self.clock()
+            if remaining <= 0:
+                self.abort()
+            else:
+                self.timer = threading.Timer(remaining, self.abort)
+                self.timer.daemon = True
+                self.timer.start()
+
+    def abort(self):
+        self.expired.set()
+        sock = getattr(self.connection, "_sock", None)
+        if sock is not None:
+            # Do not close the buffered file here: its read lock belongs to
+            # the query thread. Shutdown wakes that reader so it can unwind.
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+    def check(self):
+        if self.deadline_at is not None and (self.expired.is_set() or self.clock() >= self.deadline_at):
+            self.abort()
+            raise DeadlineExceeded("database execution deadline exceeded")
+
+    def stop(self):
+        if self.timer is not None:
+            self.timer.cancel()
+            self.timer.join()
+
+
 class StatementResult(NamedTuple):
     rows: list[dict[str, Any]]
     truncated: bool
@@ -186,6 +253,8 @@ class ReadOnlyDbExecutor:
         self._clock = clock
         self._row_mapper = row_mapper
 
+        self._watchdog = None
+        self._effective_deadline = deadline_at
         self._connection: Any = None
         self._opened = False
         self._closed = False
@@ -224,12 +293,16 @@ class ReadOnlyDbExecutor:
                     "database execution deadline exceeded before connect"
                 )
             connect_budget = self._timeout_budget(remaining)
-            self._connection = self._connection_factory(
-                connect_timeout_seconds=connect_budget,
-                read_timeout_seconds=connect_budget,
-            )
+            self._effective_deadline = deadline_at
+            with deadline_scope(deadline_at):
+                self._connection = self._connection_factory(
+                    connect_timeout_seconds=connect_budget,
+                    read_timeout_seconds=connect_budget,
+                )
+            self._watchdog = SocketDeadline(self._connection, deadline_at, clock=self._clock)
+            self._watchdog.check()
             remaining = self._remaining(deadline_at)
-            if remaining is not None and remaining <= 1:
+            if remaining is not None and remaining <= 0:
                 raise DeadlineExceeded(
                     "database execution deadline exceeded after connect"
                 )
@@ -252,12 +325,16 @@ class ReadOnlyDbExecutor:
                     )
 
             evidence = self._confirm_read_only_transaction(self._connection)
+            self._watchdog.check()
             self._source_evidence_ref = dict(evidence)
             if self.mode == "consistent_snapshot":
                 self.marker = f"snapshot_group_{uuid.uuid4().hex}"
             self._opened = True
-        except Exception:
+        except Exception as exc:
+            expired = (self._watchdog is not None and self._watchdog.expired.is_set()) or (deadline_at is not None and self._clock() >= deadline_at)
             self.close()
+            if expired:
+                raise DeadlineExceeded("database execution deadline exceeded during connect") from exc
             raise
 
     def execute(
@@ -271,9 +348,14 @@ class ReadOnlyDbExecutor:
         # Validate before opening a connection so an invalid statement or
         # unbounded fetch cannot cause any database I/O.
         _validate_read_only_statement(sql, limit)
-        effective_deadline = (
-            deadline_at if deadline_at is not None else self.deadline_at
-        )
+        candidates = [value for value in (deadline_at, self.deadline_at, self._effective_deadline, current_deadline()) if value is not None]
+        effective_deadline = min(candidates) if candidates else None
+        if (self.mode == "consistent_snapshot" and self._opened and not self._closed
+                and self._poisoned_error is None and effective_deadline != self._effective_deadline):
+            self._effective_deadline = effective_deadline
+            if self._watchdog is not None:
+                self._watchdog.stop()
+            self._watchdog = SocketDeadline(self._connection, effective_deadline, clock=self._clock)
         if self.mode == "single_statement":
             self._open(deadline_at=effective_deadline)
             try:
@@ -284,8 +366,14 @@ class ReadOnlyDbExecutor:
                     deadline_at=effective_deadline,
                     set_statement_timeout=False,
                 )
+            except Exception as exc:
+                if (self._watchdog is not None and self._watchdog.expired.is_set()) or (effective_deadline is not None and self._clock() >= effective_deadline):
+                    raise DeadlineExceeded("database execution deadline exceeded during statement") from exc
+                raise
             finally:
                 self.close()
+                if (self._watchdog is not None and self._watchdog.expired.is_set()) or (effective_deadline is not None and self._clock() >= effective_deadline):
+                    raise DeadlineExceeded("database execution deadline exceeded during cleanup")
 
         if self._poisoned_error is not None:
             raise self._poisoned_error
@@ -302,8 +390,10 @@ class ReadOnlyDbExecutor:
                 set_statement_timeout=True,
             )
         except Exception as exc:
+            if (self._watchdog is not None and self._watchdog.expired.is_set()) or (effective_deadline is not None and self._clock() >= effective_deadline):
+                exc = DeadlineExceeded("database execution deadline exceeded during snapshot")
             self._poisoned_error = exc
-            raise
+            raise exc
 
     def _execute_open_statement(
         self,
@@ -329,13 +419,19 @@ class ReadOnlyDbExecutor:
             cursor.execute(sql, tuple(params))
             raw_rows = cursor.fetchmany(limit + 1)
 
-        if deadline_at is not None and self._clock() > deadline_at:
+        if deadline_at is not None and self._clock() >= deadline_at:
             raise DeadlineExceeded("database execution deadline exceeded after statement")
         if self._source_evidence_ref is None:
             raise RuntimeError("read-only source evidence is unavailable")
 
         truncated = len(raw_rows) > limit
-        rows = [self._row_mapper(row) for row in raw_rows[:limit]]
+        rows = []
+        for row in raw_rows[:limit]:
+            if self._watchdog is not None:
+                self._watchdog.check()
+            rows.append(self._row_mapper(row))
+        if self._watchdog is not None:
+            self._watchdog.check()
         return StatementResult(rows, truncated, dict(self._source_evidence_ref))
 
     def close(self) -> None:
@@ -343,24 +439,24 @@ class ReadOnlyDbExecutor:
             return
         self._closed = True
         connection = self._connection
-        if connection is None:
-            return
         try:
-            connection.rollback()
-        except Exception as exc:
-            logger.warning(
-                "datasage_db_executor rollback_failed mode=%s error_type=%s",
-                self.mode,
-                type(exc).__name__,
-            )
-        try:
-            connection.close()
-        except Exception as exc:
-            logger.warning(
-                "datasage_db_executor connection_close_failed mode=%s error_type=%s",
-                self.mode,
-                type(exc).__name__,
-            )
+            if connection is None:
+                return
+            expired = (self._watchdog is not None and self._watchdog.expired.is_set()) or (self._effective_deadline is not None and self._clock() >= self._effective_deadline)
+            if expired and self._watchdog is not None:
+                self._watchdog.abort()
+            if not expired:
+                try:
+                    connection.rollback()
+                except Exception as exc:
+                    logger.warning("datasage_db_executor rollback_failed mode=%s error_type=%s", self.mode, type(exc).__name__)
+            try:
+                connection.close()
+            except Exception as exc:
+                logger.warning("datasage_db_executor connection_close_failed mode=%s error_type=%s", self.mode, type(exc).__name__)
+        finally:
+            if self._watchdog is not None:
+                self._watchdog.stop()
 
     def __enter__(self) -> "ReadOnlyDbExecutor":
         if self.mode != "consistent_snapshot":
@@ -372,3 +468,5 @@ class ReadOnlyDbExecutor:
 
     def __exit__(self, *_args: Any) -> None:
         self.close()
+        if self._poisoned_error is None and self._effective_deadline is not None and self._clock() >= self._effective_deadline:
+            raise DeadlineExceeded("database execution deadline exceeded during cleanup")

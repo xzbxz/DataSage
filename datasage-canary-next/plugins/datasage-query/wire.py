@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from functools import wraps
 import json
+import time
+from . import db_executor, settings
 from typing import Any, Callable, Mapping
 
 def _compact_json(payload: dict[str, Any]) -> str:
@@ -446,6 +448,31 @@ def bounded_json_handler(tool_name: str, handler: Callable[..., Any]):
 
     @wraps(handler)
     def invoke(args: dict[str, Any], **kwargs: Any) -> str:
-        return enforce_tool_result_budget(tool_name, handler(args, **kwargs))
+        if tool_name not in {"datasage_query", "datasage_entity_resolve"}:
+            return enforce_tool_result_budget(tool_name, handler(args, **kwargs))
+        deadline_at = time.monotonic() + settings.get_int("call_timeout_seconds", 60, 1, 300)
+        with db_executor.deadline_scope(deadline_at) as deadline_at:
+            raw = handler(args, **kwargs)
+            if time.monotonic() >= deadline_at:
+                # The query producer keeps only pre-expiry verified branches.
+                try:
+                    decoded = json.loads(raw) if isinstance(raw, str) else raw
+                except (TypeError, ValueError):
+                    decoded = None
+                error = decoded.get("error") if isinstance(decoded, dict) else None
+                if isinstance(error, Mapping) and error.get("code") == "BATCH_DEADLINE_EXCEEDED":
+                    return raw
+                return _compact_json({"status": "failed", "results": [],
+                    "must_stop_business_query": True,
+                    "error": {"code": "BATCH_DEADLINE_EXCEEDED", "message": "调用总时限已到。", "retryable": True}})
+            rendered = enforce_tool_result_budget(tool_name, raw)
+            if time.monotonic() >= deadline_at:
+                # Raw was already validated before compaction started. Keep it
+                # rather than publish a partially processed wire object.
+                decoded = json.loads(raw)
+                decoded["status"] = "partial" if decoded.get("results") else "failed"
+                decoded["error"] = {"code": "BATCH_DEADLINE_EXCEEDED", "message": "输出整理超过总时限；保留期限内完成的结果。", "retryable": True}
+                return _compact_json(decoded)
+            return rendered
 
     return invoke

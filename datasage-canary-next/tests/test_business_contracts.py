@@ -3376,7 +3376,13 @@ class BusinessContractTests(unittest.TestCase):
             side_effect=capture_dso_raw,
         ):
             dso_result, dso_calls = run_query(dso_request, dso_rows)
-        self.assertEqual(1, len(captured_dso_raw))
+        # One safe checkpoint before expiry, then the final batch projection.
+        # Both must preserve the same validated facts and disclosure seals.
+        self.assertEqual(2, len(captured_dso_raw))
+        self.assertEqual(captured_dso_raw[0]["rows"], captured_dso_raw[1]["rows"])
+        for checkpoint in captured_dso_raw:
+            assert_disclosure_seals(checkpoint)
+            assert_attestation_and_claim_seals(checkpoint)
         dso_raw = captured_dso_raw[0]
         self.assertIn("rows", dso_raw)
         self.assertEqual(
@@ -3852,7 +3858,7 @@ class BusinessContractTests(unittest.TestCase):
             assert_disclosure_seals(result)
             self.assertEqual(result, tools._model_wire_result(result), case_name)
             if case_name == "effective_months_incomplete":
-                self.assertEqual(1, len(captured_undefined_raw))
+                self.assertEqual(2, len(captured_undefined_raw))
                 raw_result = captured_undefined_raw[0]
                 raw_facts = raw_result["claim_ledger"][0]["facts"]
                 self.assertIn("metric_value", raw_facts)
