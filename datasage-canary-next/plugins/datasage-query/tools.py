@@ -2251,6 +2251,47 @@ def _metric_aggregation_sql(
     raise QueryFailure("CONTRACT_UNAVAILABLE", "指标聚合方式不受支持。")
 
 
+def _metric_missing_input_sql(metric, dataset, datasets_contract, alias, *, joined_alias=None, joined_dataset=None):
+    """Count incomplete source rows, never infer a rate or amount from NULL."""
+    aggregation = metric.get("aggregation")
+    columns = []
+    if aggregation in {"sum_product", "sum_product_many"}:
+        columns.extend(metric.get("measure_columns") or [])
+        if aggregation == "sum_product_many":
+            columns.append(metric.get("multiplier"))
+    elif aggregation in {"sum", "sum_positive", "sum_positive_difference", "sum_positive_difference_product"}:
+        columns.append(metric.get("measure"))
+        if aggregation == "sum_positive_difference_product":
+            columns.append(metric.get("multiplier"))
+    if metric.get("completeness_measure") is not None:
+        columns.append(metric["completeness_measure"])
+    allowed = set(dataset.get("allowed_columns") or [])
+    blocked = _blocked_columns(datasets_contract, dataset)
+    expressions = [
+        _qualified_identifier(alias, _approved_column(column, allowed, blocked))
+        for column in dict.fromkeys(columns)
+    ]
+    if aggregation in {"sum_positive_difference", "sum_positive_difference_product"}:
+        if joined_alias is None or not isinstance(joined_dataset, Mapping):
+            raise QueryFailure("CONTRACT_UNAVAILABLE", "派生指标缺少受控关联。")
+        expressions.append(_qualified_identifier(joined_alias, _approved_column(
+            metric.get("subtract_measure"), set(joined_dataset.get("allowed_columns") or []),
+            _blocked_columns(datasets_contract, joined_dataset))))
+    # COUNT DISTINCT intentionally ignores NULL identifiers; that is not a
+    # missing amount. Other non-additive aggregations retain their own policy.
+    return " OR ".join(f"{expression} IS NULL" for expression in expressions) or "1 = 0"
+
+
+def _integrity_columns(value_sql, missing, known):
+    return [
+        f"CASE WHEN {missing} > 0 THEN NULL ELSE {value_sql} END AS metric_value",
+        f"{missing} AS missing_value_count",
+        f"{known} AS known_value_count",
+        f"CASE WHEN ({missing}) + ({known}) > 0 THEN 1.0 * ({known}) / (({missing}) + ({known})) ELSE NULL END AS value_coverage_rate",
+        f"CASE WHEN ({missing}) + ({known}) = 0 THEN 'missing' WHEN {missing} = 0 THEN 'complete' WHEN {known} = 0 THEN 'missing' ELSE 'incomplete' END AS metric_data_state",
+    ]
+
+
 def _metric_dimension_definition(
     dimensions: Mapping[str, Any], metric: Mapping[str, Any], code: str
 ) -> Mapping[str, Any]:
@@ -2697,8 +2738,14 @@ def _build_metric_core(
             }
         )
 
+    missing_input = _metric_missing_input_sql(
+        metric, dataset, datasets_contract, "f",
+        joined_alias=metric_join_alias, joined_dataset=metric_join_dataset,
+    )
+    missing = f"COALESCE(SUM(CASE WHEN {missing_input} THEN 1 ELSE 0 END), 0)"
+    known = f"COUNT(*) - ({missing})"
     evidence_columns = [
-        f"{metric_sql} AS metric_value",
+        *_integrity_columns(metric_sql, missing, known),
         f"COUNT(*) AS {_quote_identifier(_INTERNAL_MATCH_COUNT)}",
     ]
     if (
@@ -2722,20 +2769,6 @@ def _build_metric_core(
         evidence_columns.append(
             f"CURDATE() AS {_quote_identifier(_INTERNAL_AS_OF_DATE)}"
         )
-    completeness_measure = metric.get("completeness_measure")
-    if completeness_measure is not None:
-        completeness_measure = _approved_column(completeness_measure, base_allowed, base_blocked)
-        completeness = _qualified_identifier("f", completeness_measure)
-        missing = f"SUM(CASE WHEN {completeness} IS NULL THEN 1 ELSE 0 END)"
-        known = f"SUM(CASE WHEN {completeness} IS NOT NULL THEN 1 ELSE 0 END)"
-        evidence_columns.extend([
-            f"{missing} AS missing_value_count",
-            f"{known} AS known_value_count",
-            f"CASE WHEN COUNT(*) > 0 THEN {known} / COUNT(*) ELSE NULL END AS value_coverage_rate",
-            "CASE WHEN COUNT(*) = 0 THEN 'missing' "
-            f"WHEN {missing} = 0 THEN 'complete' "
-            f"WHEN {known} = 0 THEN 'missing' ELSE 'incomplete' END AS metric_data_state",
-        ])
     select_sql = ", ".join(select_columns + evidence_columns)
     sql = f"SELECT {select_sql} FROM {_quote_table(table)} AS {_quote_identifier('f')}"
     join_params: list[Any] = []
@@ -2957,10 +2990,10 @@ def _build_comparison_metric_query(
         ]
     else:
         comparison_values = [
-            "COALESCE(c.metric_value, 0) AS metric_value",
-            "COALESCE(p.metric_value, 0) AS comparison_value",
-            "COALESCE(c.metric_value, 0) - COALESCE(p.metric_value, 0) AS delta_value",
-            "CASE WHEN COALESCE(p.metric_value, 0) > 0 THEN "
+            "CASE WHEN COALESCE(c.missing_value_count, 0) > 0 THEN NULL ELSE COALESCE(c.metric_value, 0) END AS metric_value",
+            "CASE WHEN COALESCE(p.missing_value_count, 0) > 0 THEN NULL ELSE COALESCE(p.metric_value, 0) END AS comparison_value",
+            "CASE WHEN COALESCE(c.missing_value_count, 0) + COALESCE(p.missing_value_count, 0) > 0 THEN NULL ELSE COALESCE(c.metric_value, 0) - COALESCE(p.metric_value, 0) END AS delta_value",
+            "CASE WHEN COALESCE(c.missing_value_count, 0) + COALESCE(p.missing_value_count, 0) = 0 AND COALESCE(p.metric_value, 0) > 0 THEN "
             "(COALESCE(c.metric_value, 0) - p.metric_value) / p.metric_value ELSE NULL END AS change_rate",
         ]
     select = [
@@ -2969,10 +3002,13 @@ def _build_comparison_metric_query(
         f"COALESCE(c.{_INTERNAL_MATCH_COUNT}, 0) + COALESCE(p.{_INTERNAL_MATCH_COUNT}, 0) "
         f"AS {_quote_identifier(_INTERNAL_MATCH_COUNT)}",
     ]
+    select.extend(_integrity_columns(
+        "NULL", "COALESCE(c.missing_value_count, 0) + COALESCE(p.missing_value_count, 0)",
+        "COALESCE(c.known_value_count, 0) + COALESCE(p.known_value_count, 0)",
+    )[1:])
     change_decomposition = metric.get("change_decomposition")
     requires_completeness_proof = (
-        isinstance(metric.get("completeness_measure"), str)
-        and isinstance(change_decomposition, Mapping)
+        isinstance(change_decomposition, Mapping)
         and change_decomposition.get("mode") == "additive_partition"
     )
     if requires_completeness_proof:
@@ -3365,7 +3401,11 @@ def _build_composite_metric_core(
     select_sql = ", ".join(
         outer_dimensions
         + [
-            f"COALESCE(SUM({_qualified_identifier('u', 'metric_value')}), 0) AS metric_value",
+            *_integrity_columns(
+                f"COALESCE(SUM({_qualified_identifier('u', 'metric_value')}), 0)",
+                "COALESCE(SUM(u.missing_value_count), 0)",
+                "COALESCE(SUM(u.known_value_count), 0)",
+            ),
             f"COALESCE(SUM({_qualified_identifier('u', _INTERNAL_MATCH_COUNT)}), 0) "
             f"AS {_quote_identifier(_INTERNAL_MATCH_COUNT)}",
         ]
@@ -3497,11 +3537,15 @@ def _build_ratio_metric_core(
         from_sql = "SELECT {select} FROM numerator AS n CROSS JOIN denominator AS d"
         ctes = f"WITH numerator AS ({numerator_sql}), denominator AS ({denominator_sql}) "
 
-    numerator_value = "COALESCE(n.metric_value, 0)"
-    denominator_value = "COALESCE(d.metric_value, 0)"
+    numerator_value = "CASE WHEN COALESCE(n.missing_value_count, 0) > 0 THEN NULL ELSE COALESCE(n.metric_value, 0) END"
+    denominator_value = "CASE WHEN COALESCE(d.missing_value_count, 0) > 0 THEN NULL ELSE COALESCE(d.metric_value, 0) END"
     select = [
         *output_dimensions,
-        f"CASE WHEN {denominator_value} > 0 THEN {numerator_value} / d.metric_value ELSE NULL END AS metric_value",
+        *_integrity_columns(
+            f"CASE WHEN ({denominator_value}) > 0 THEN ({numerator_value}) / d.metric_value ELSE NULL END",
+            "COALESCE(n.missing_value_count, 0) + COALESCE(d.missing_value_count, 0)",
+            "COALESCE(n.known_value_count, 0) + COALESCE(d.known_value_count, 0)",
+        ),
         f"{numerator_value} AS numerator_value",
         f"{denominator_value} AS denominator_value",
         f"COALESCE(n.{_INTERNAL_MATCH_COUNT}, 0) + COALESCE(d.{_INTERNAL_MATCH_COUNT}, 0) "
@@ -3658,6 +3702,8 @@ def _evidence_rows_and_state(
             return public_rows, "incomplete"
         if all(state == "missing" for state in metric_states):
             return public_rows, "undefined"
+        if any(state == "missing" for state in metric_states):
+            return public_rows, "incomplete"
     if len(rows) == 1:
         if "metric_value" in rows[0] and rows[0]["metric_value"] is None:
             return public_rows, "undefined"
@@ -5330,8 +5376,7 @@ def _decomposition_context(
         "dimensions": list(dimensions) if isinstance(dimensions, list) else [],
         "capability": dict(capability),
         "requires_completeness_proof": (
-            isinstance(metric.get("completeness_measure"), str)
-            and isinstance(capability, Mapping)
+            isinstance(capability, Mapping)
             and capability.get("mode") == "additive_partition"
         ),
     }

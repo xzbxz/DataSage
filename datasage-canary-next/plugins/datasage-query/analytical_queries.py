@@ -1325,7 +1325,20 @@ def _allocated_amount_query(
         "metric_value",
         time_bucket,
         bindings,
+        include_null_count=True,
     )
+    missing = "COALESCE(__actual_null_count, 0)"
+    known = f"__matched_row_count - ({missing})"
+    projection = [*[_quote_column(alias) for _, alias in [*_keys, *outputs]],
+        f"CASE WHEN {missing} > 0 THEN NULL ELSE metric_value END AS metric_value",
+        "__matched_row_count",
+        f"{missing} AS missing_value_count", f"{known} AS known_value_count",
+        f"CASE WHEN __matched_row_count > 0 THEN 1.0 * ({known}) / __matched_row_count ELSE NULL END AS value_coverage_rate",
+        f"CASE WHEN __matched_row_count = 0 THEN 'missing' WHEN {missing} = 0 THEN 'complete' WHEN {known} = 0 THEN 'missing' ELSE 'incomplete' END AS metric_data_state",
+    ]
+    # Keys and display outputs can share an alias; expose each only once.
+    projection = list(dict.fromkeys(projection))
+    sql = f"SELECT {', '.join(projection)} FROM ({sql}) AS allocated"
     output_aliases = (["period"] if time_bucket == "month" else []) + [alias for _, alias in outputs]
     sql += _order_clause(
         request,
