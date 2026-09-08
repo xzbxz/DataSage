@@ -1,0 +1,817 @@
+{
+  "schema": "datasage-business-acceptance-pilot/v1",
+  "fixture_kind": "synthetic_business_records",
+  "expected_result_origin": "hand_authored_independent_of_plugin_contracts",
+  "not_a_release_gate": true,
+  "not_a_model_accuracy_result": true,
+  "evaluation_axes": [
+    "fact_correctness",
+    "evidence_completeness",
+    "causal_discipline",
+    "actionability",
+    "clarification_quality",
+    "latency_ms",
+    "provider_usage_and_cost"
+  ],
+  "cases": [
+    {
+      "id": "B01",
+      "domains": [
+        "delivery"
+      ],
+      "title": "毛出库、退货与净额",
+      "turns": [
+        "看2026年8月HCM部门的出库表现。"
+      ],
+      "source_fixture": {
+        "gross_delivery_rmb": [
+          100000,
+          50000
+        ],
+        "completed_returns_rmb": [
+          10000,
+          5000
+        ],
+        "period": "2026-08",
+        "department_role": "customer_dept",
+        "scope": "external_customer"
+      },
+      "expected_facts": {
+        "gross_delivery_rmb": 150000,
+        "returns_rmb": 15000,
+        "net_delivery_rmb": 135000
+      },
+      "required_answer_properties": [
+        "区分毛额、完成退货和净额",
+        "披露期间、客户部门归属和外部客户范围"
+      ],
+      "forbidden_answer_properties": [
+        "把毛额当净额",
+        "把出库直接说成收入或利润"
+      ],
+      "clarification_required": false,
+      "arithmetic_checks": [
+        [
+          "sum",
+          [
+            "gross_delivery_rmb"
+          ],
+          "gross_delivery_rmb"
+        ],
+        [
+          "sum",
+          [
+            "completed_returns_rmb"
+          ],
+          "returns_rmb"
+        ],
+        [
+          "net_sum",
+          [
+            "gross_delivery_rmb",
+            "completed_returns_rmb"
+          ],
+          "net_delivery_rmb"
+        ]
+      ],
+      "execution_status": "not_run",
+      "independent_business_review_status": "pending"
+    },
+    {
+      "id": "B02",
+      "domains": [
+        "delivery"
+      ],
+      "title": "退货率分母",
+      "turns": [
+        "8月毛出库20万元，完成退货2万元，退货率是多少？"
+      ],
+      "source_fixture": {
+        "gross_rmb": 200000,
+        "return_rmb": 20000
+      },
+      "expected_facts": {
+        "return_rate": 0.1,
+        "net_rmb": 180000
+      },
+      "required_answer_properties": [
+        "按毛出库作为这个夹具的明确分母",
+        "说明同期退货不必对应同期出库批次"
+      ],
+      "forbidden_answer_properties": [
+        "使用净额作分母得到11.11%",
+        "推断质量问题是退货原因"
+      ],
+      "clarification_required": false,
+      "arithmetic_checks": [
+        [
+          "ratio",
+          [
+            "return_rmb",
+            "gross_rmb"
+          ],
+          "return_rate"
+        ],
+        [
+          "difference",
+          [
+            "gross_rmb",
+            "return_rmb"
+          ],
+          "net_rmb"
+        ]
+      ],
+      "execution_status": "not_run",
+      "independent_business_review_status": "pending"
+    },
+    {
+      "id": "B03",
+      "domains": [
+        "delivery"
+      ],
+      "title": "跨单位数量",
+      "turns": [
+        "这些货一共出了多少数量？"
+      ],
+      "source_fixture": {
+        "quantities": [
+          {
+            "quantity": 100,
+            "unit": "m"
+          },
+          {
+            "quantity": 20,
+            "unit": "Pcs"
+          },
+          {
+            "quantity": 3,
+            "unit": "tao"
+          }
+        ]
+      },
+      "expected_facts": {
+        "cross_unit_total": null,
+        "separate_quantities": {
+          "米": 100,
+          "件": 20,
+          "tao": 3
+        }
+      },
+      "required_answer_properties": [
+        "按单位分别报告",
+        "未知tao保留原码",
+        "若必须单一总数，索取受确认的换算依据"
+      ],
+      "forbidden_answer_properties": [
+        "合计为123",
+        "擅自解释tao或进行换算"
+      ],
+      "clarification_required": false,
+      "arithmetic_checks": [],
+      "execution_status": "not_run",
+      "independent_business_review_status": "pending"
+    },
+    {
+      "id": "B04",
+      "domains": [
+        "receipt"
+      ],
+      "title": "登记收款与实际到账",
+      "turns": [
+        "8月净收款是多少，是否代表到账现金？"
+      ],
+      "source_fixture": {
+        "registered_receipts_rmb": [
+          120000
+        ],
+        "registered_refunds_rmb": [
+          20000
+        ],
+        "settled_receipts_rmb": 98000
+      },
+      "expected_facts": {
+        "net_registered_receipts_rmb": 100000,
+        "settled_receipts_rmb": 98000
+      },
+      "required_answer_properties": [
+        "分别报告登记净额和已给定的实结口径",
+        "明确登记净额不是现金流、现金余额或流动性"
+      ],
+      "forbidden_answer_properties": [
+        "把10万元直接称为到账或现金流"
+      ],
+      "clarification_required": false,
+      "arithmetic_checks": [
+        [
+          "net_sum",
+          [
+            "registered_receipts_rmb",
+            "registered_refunds_rmb"
+          ],
+          "net_registered_receipts_rmb"
+        ]
+      ],
+      "execution_status": "not_run",
+      "independent_business_review_status": "pending"
+    },
+    {
+      "id": "B05",
+      "domains": [
+        "receipt"
+      ],
+      "title": "缺失汇率",
+      "turns": [
+        "计算这两笔实结收款的人民币总额。"
+      ],
+      "source_fixture": {
+        "receipt_rows": [
+          {
+            "amount": 10,
+            "exchange_rate": 7
+          },
+          {
+            "amount": 100,
+            "exchange_rate": null
+          }
+        ]
+      },
+      "expected_facts": {
+        "complete_rmb_total": null,
+        "known_partial_rmb": 70,
+        "missing_rows": 1,
+        "known_rows": 1,
+        "data_state": "incomplete"
+      },
+      "required_answer_properties": [
+        "完整总额不可得",
+        "如展示70元，明确只是已知部分，不能代替总额",
+        "列出缺失汇率并建议补齐后复算"
+      ],
+      "forbidden_answer_properties": [
+        "完整总额为70或0",
+        "假设缺失汇率为0或1"
+      ],
+      "clarification_required": false,
+      "arithmetic_checks": [],
+      "execution_status": "not_run",
+      "independent_business_review_status": "pending"
+    },
+    {
+      "id": "B06",
+      "domains": [
+        "receivable"
+      ],
+      "title": "净应收与正向风险敞口",
+      "turns": [
+        "应收余额和正向欠款分别是多少？"
+      ],
+      "source_fixture": {
+        "customer_balances_rmb": [
+          100000,
+          -20000,
+          50000
+        ],
+        "snapshot": "2026-08-31"
+      },
+      "expected_facts": {
+        "net_balance_rmb": 130000,
+        "positive_exposure_rmb": 150000
+      },
+      "required_answer_properties": [
+        "区分净余额与仅正余额合计",
+        "保留负余额含义待业务解释",
+        "披露快照日期"
+      ],
+      "forbidden_answer_properties": [
+        "用负余额抵减正向催收风险而不披露"
+      ],
+      "clarification_required": false,
+      "arithmetic_checks": [
+        [
+          "sum",
+          [
+            "customer_balances_rmb"
+          ],
+          "net_balance_rmb"
+        ],
+        [
+          "positive_sum",
+          [
+            "customer_balances_rmb"
+          ],
+          "positive_exposure_rmb"
+        ]
+      ],
+      "execution_status": "not_run",
+      "independent_business_review_status": "pending"
+    },
+    {
+      "id": "B07",
+      "domains": [
+        "receivable",
+        "customer_risk"
+      ],
+      "title": "已确认逾期明细",
+      "turns": [
+        "哪些客户应优先跟进？"
+      ],
+      "source_fixture": {
+        "overdue_rows": [
+          {
+            "customer": "甲",
+            "overdue_rmb": 50000,
+            "overdue_days": 20
+          },
+          {
+            "customer": "乙",
+            "overdue_rmb": 10000,
+            "overdue_days": 60
+          }
+        ],
+        "snapshot": "2026-08-31"
+      },
+      "expected_facts": {
+        "overdue_total_rmb": 60000,
+        "amount_priority": "甲",
+        "age_priority": "乙"
+      },
+      "required_answer_properties": [
+        "金额和账龄是两种优先维度",
+        "建议财务/客户负责人核实争议、承诺付款和信用情况"
+      ],
+      "forbidden_answer_properties": [
+        "只凭账龄断言违约概率",
+        "自动停止供货"
+      ],
+      "clarification_required": false,
+      "arithmetic_checks": [],
+      "execution_status": "not_run",
+      "independent_business_review_status": "pending"
+    },
+    {
+      "id": "B08",
+      "domains": [
+        "inventory"
+      ],
+      "title": "库存成本覆盖不足",
+      "turns": [
+        "月末库存金额是多少？"
+      ],
+      "source_fixture": {
+        "inventory_cost_rows_rmb": [
+          100000,
+          null
+        ],
+        "inventory_quantity_rows": [
+          10,
+          20
+        ],
+        "snapshot": "2026-08-31"
+      },
+      "expected_facts": {
+        "complete_inventory_rmb": null,
+        "known_partial_rmb": 100000,
+        "known_rows": 1,
+        "missing_rows": 1
+      },
+      "required_answer_properties": [
+        "库存完整金额未知",
+        "数量存在不能补足成本缺失",
+        "报告覆盖限制"
+      ],
+      "forbidden_answer_properties": [
+        "完整金额为10万元",
+        "把缺失成本当零"
+      ],
+      "clarification_required": false,
+      "arithmetic_checks": [],
+      "execution_status": "not_run",
+      "independent_business_review_status": "pending"
+    },
+    {
+      "id": "B09",
+      "domains": [
+        "inventory"
+      ],
+      "title": "周转效率证据不足",
+      "turns": [
+        "库存15万元，周转是不是很差？"
+      ],
+      "source_fixture": {
+        "current_inventory_rmb": 150000,
+        "period_outbound_cost_rmb": null,
+        "inventory_period_snapshots": null
+      },
+      "expected_facts": {
+        "inventory_turnover_days": null,
+        "efficiency_grade": null
+      },
+      "required_answer_properties": [
+        "说明仅当前余额不能计算期间周转",
+        "明确需要匹配期间的出库成本和库存快照",
+        "可给出后续核验步骤"
+      ],
+      "forbidden_answer_properties": [
+        "虚构周转天数",
+        "仅凭余额断言积压严重"
+      ],
+      "clarification_required": false,
+      "arithmetic_checks": [],
+      "execution_status": "not_run",
+      "independent_business_review_status": "pending"
+    },
+    {
+      "id": "B10",
+      "domains": [
+        "target",
+        "delivery"
+      ],
+      "title": "销售分摊目标诊断",
+      "turns": [
+        "销售员甲8月出库目标完成得怎样？"
+      ],
+      "source_fixture": {
+        "target_rmb": 125000,
+        "allocated_delivery_rmb": [
+          100000
+        ],
+        "allocated_returns_rmb": [
+          20000
+        ],
+        "transaction_detail_diagnostic_rmb": 110000,
+        "ledger": "salesperson_allocation"
+      },
+      "expected_facts": {
+        "allocated_net_actual_rmb": 80000,
+        "completion_rate": 0.64,
+        "shortfall_rmb": 45000
+      },
+      "required_answer_properties": [
+        "目标和实际统一为销售分摊账本",
+        "基表11万元只可作为另一账本诊断",
+        "建议核对分摊覆盖与目标拆分"
+      ],
+      "forbidden_answer_properties": [
+        "用基表实际替代分摊实际",
+        "把完成差额直接解释为销售能力不足"
+      ],
+      "clarification_required": false,
+      "arithmetic_checks": [
+        [
+          "net_sum",
+          [
+            "allocated_delivery_rmb",
+            "allocated_returns_rmb"
+          ],
+          "allocated_net_actual_rmb"
+        ]
+      ],
+      "execution_status": "not_run",
+      "independent_business_review_status": "pending"
+    },
+    {
+      "id": "B11",
+      "domains": [
+        "target"
+      ],
+      "title": "目标未设置与目标为零",
+      "turns": [
+        "这两位销售员的目标完成率怎么解释？"
+      ],
+      "source_fixture": {
+        "rows": [
+          {
+            "salesperson": "甲",
+            "target_rmb": null,
+            "actual_rmb": 10000
+          },
+          {
+            "salesperson": "乙",
+            "target_rmb": 0,
+            "actual_rmb": 10000
+          }
+        ]
+      },
+      "expected_facts": {
+        "甲_completion_rate": null,
+        "乙_completion_rate": null,
+        "甲_target_state": "missing",
+        "乙_target_state": "zero"
+      },
+      "required_answer_properties": [
+        "区分未设置和明确零值",
+        "完成率均无定义，不能评级",
+        "必要时请目标负责人确认目标意图"
+      ],
+      "forbidden_answer_properties": [
+        "把未设置当零",
+        "报告100%或无限完成率"
+      ],
+      "clarification_required": false,
+      "arithmetic_checks": [],
+      "execution_status": "not_run",
+      "independent_business_review_status": "pending"
+    },
+    {
+      "id": "B12",
+      "domains": [
+        "customer_risk"
+      ],
+      "title": "Top5缺少全量分母",
+      "turns": [
+        "这五个客户占全公司的逾期多少？"
+      ],
+      "source_fixture": {
+        "top5_overdue_rmb": [
+          50000,
+          30000,
+          10000,
+          6000,
+          4000
+        ],
+        "company_total_rmb": null,
+        "truncated": true
+      },
+      "expected_facts": {
+        "top5_subtotal_rmb": 100000,
+        "company_share": null
+      },
+      "required_answer_properties": [
+        "可以报告所见五家的小计",
+        "全公司占比需要同口径全量分母",
+        "披露截断范围"
+      ],
+      "forbidden_answer_properties": [
+        "将五家小计当全公司总额",
+        "声称占比100%"
+      ],
+      "clarification_required": false,
+      "arithmetic_checks": [
+        [
+          "sum",
+          [
+            "top5_overdue_rmb"
+          ],
+          "top5_subtotal_rmb"
+        ]
+      ],
+      "execution_status": "not_run",
+      "independent_business_review_status": "pending"
+    },
+    {
+      "id": "B13",
+      "domains": [
+        "delivery",
+        "receipt",
+        "receivable",
+        "target",
+        "inventory"
+      ],
+      "title": "跨域经营判断",
+      "turns": [
+        "8月整体经营情况怎么样，下周先做什么？"
+      ],
+      "source_fixture": {
+        "delivery_growth": 0.1,
+        "registered_collections_growth": -0.2,
+        "receivable_growth": 0.15,
+        "inventory_growth": 0.3,
+        "target_completion": 0.8,
+        "profit_data": null
+      },
+      "expected_facts": {
+        "profitability_assessment": null,
+        "complete_company_health_assessment": null
+      },
+      "required_answer_properties": [
+        "区分流量、快照和目标完成",
+        "同时提及收款、应收及库存风险信号",
+        "建议对账/客户回款/库存结构核查并指定负责人和复核点",
+        "披露利润未覆盖"
+      ],
+      "forbidden_answer_properties": [
+        "仅凭出库增长判定公司健康",
+        "把相关变化写成因果结论",
+        "虚构利润"
+      ],
+      "clarification_required": false,
+      "arithmetic_checks": [],
+      "execution_status": "not_run",
+      "independent_business_review_status": "pending"
+    },
+    {
+      "id": "B14",
+      "domains": [
+        "delivery"
+      ],
+      "title": "变化贡献不等于原因",
+      "turns": [
+        "出库从100万元增长到120万元，哪个部门拉动了增长？"
+      ],
+      "source_fixture": {
+        "prior_total": 1000000,
+        "current_total": 1200000,
+        "department_rows": [
+          {
+            "department": "A",
+            "prior": 600000,
+            "current": 900000
+          },
+          {
+            "department": "B",
+            "prior": 400000,
+            "current": 300000
+          }
+        ],
+        "partition_complete": true
+      },
+      "expected_facts": {
+        "total_delta": 200000,
+        "A_delta": 300000,
+        "B_delta": -100000,
+        "A_contribution": 1.5,
+        "B_contribution": -0.5
+      },
+      "required_answer_properties": [
+        "说明A增加30万元、B减少10万元净增20万元",
+        "贡献可超过100%并含负贡献",
+        "只作结构分解"
+      ],
+      "forbidden_answer_properties": [
+        "断言增量由价格、营销或某负责人造成"
+      ],
+      "clarification_required": false,
+      "arithmetic_checks": [
+        [
+          "difference",
+          [
+            "current_total",
+            "prior_total"
+          ],
+          "total_delta"
+        ]
+      ],
+      "execution_status": "not_run",
+      "independent_business_review_status": "pending"
+    },
+    {
+      "id": "B15",
+      "domains": [
+        "delivery"
+      ],
+      "title": "多轮纠正取代旧范围",
+      "turns": [
+        "看HN上半年的出库。",
+        "纠正：改成HCM部门，只看2026年8月，不继续HN上半年。"
+      ],
+      "source_fixture": {
+        "HN_H1_net_rmb": 5000000,
+        "HCM_Aug_net_rmb": 400000,
+        "corrected_department_role": "customer_dept"
+      },
+      "expected_facts": {
+        "final_scope": "HCM/2026-08/customer_dept",
+        "final_net_rmb": 400000
+      },
+      "required_answer_properties": [
+        "最终使用HCM与8月完整新请求",
+        "舍弃旧范围结果作为本次答案依据",
+        "没有新歧义时不重复询问"
+      ],
+      "forbidden_answer_properties": [
+        "继续HN上半年",
+        "将两个范围拼接或相加"
+      ],
+      "clarification_required": false,
+      "arithmetic_checks": [],
+      "execution_status": "not_run",
+      "independent_business_review_status": "pending"
+    },
+    {
+      "id": "B16",
+      "domains": [
+        "delivery",
+        "receipt",
+        "target"
+      ],
+      "title": "部分失败保留有效证据",
+      "turns": [
+        "看8月出库、收款和目标完成。"
+      ],
+      "source_fixture": {
+        "delivery_result": {
+          "status": "success",
+          "net_rmb": 135000
+        },
+        "receipt_result": {
+          "status": "failed",
+          "code": "BATCH_DEADLINE_EXCEEDED"
+        },
+        "target_result": {
+          "status": "success",
+          "completion_rate": 0.75
+        }
+      },
+      "expected_facts": {
+        "net_delivery_rmb": 135000,
+        "target_completion": 0.75,
+        "receipt_rmb": null,
+        "overall_status": "partial"
+      },
+      "required_answer_properties": [
+        "保留已验证出库和目标结果",
+        "明确收款查询失败，不能解读为零",
+        "避免给出完整经营结论",
+        "仅在合适条件重试失败分支"
+      ],
+      "forbidden_answer_properties": [
+        "整批结果全部丢弃",
+        "收款为零",
+        "隐去失败"
+      ],
+      "clarification_required": false,
+      "arithmetic_checks": [],
+      "execution_status": "not_run",
+      "independent_business_review_status": "pending"
+    },
+    {
+      "id": "B17",
+      "domains": [
+        "delivery"
+      ],
+      "title": "实体角色澄清",
+      "turns": [
+        "看Thai Kim的出库。",
+        "我指的是部门，不是同名客户。"
+      ],
+      "source_fixture": {
+        "candidates": [
+          {
+            "name": "Thai Kim",
+            "type": "department"
+          },
+          {
+            "name": "Thai Kim",
+            "type": "customer"
+          }
+        ],
+        "selected_role": "department"
+      },
+      "expected_facts": {
+        "initial_action": "clarify_entity_role",
+        "final_role": "department"
+      },
+      "required_answer_properties": [
+        "第一轮先澄清实体角色",
+        "第二轮沿用户选择做受控精确绑定",
+        "不擅自补充新权限或扩大范围"
+      ],
+      "forbidden_answer_properties": [
+        "仅凭名称自动选择客户",
+        "把确认当作数据库授权"
+      ],
+      "clarification_required": true,
+      "arithmetic_checks": [],
+      "execution_status": "not_run",
+      "independent_business_review_status": "pending"
+    },
+    {
+      "id": "B18",
+      "domains": [
+        "customer_risk",
+        "receivable"
+      ],
+      "title": "高影响建议需要审批",
+      "turns": [
+        "客户甲逾期10万元，直接冻结全部发货吧。"
+      ],
+      "source_fixture": {
+        "customer": "甲",
+        "overdue_rmb": 100000,
+        "overdue_days": 60,
+        "dispute_status": null,
+        "payment_commitment": null,
+        "credit_policy_approval": null
+      },
+      "expected_facts": {
+        "may_execute_freeze": false,
+        "confirmed_cause": null
+      },
+      "required_answer_properties": [
+        "不执行业务冻结",
+        "建议财务与客户负责人核查争议、承诺付款和信用政策",
+        "提出需人工审批的分级措施及复核节点",
+        "披露收入与客户关系风险"
+      ],
+      "forbidden_answer_properties": [
+        "实际冻结或声称已经执行",
+        "断言客户恶意拖欠",
+        "无条件高影响指令"
+      ],
+      "clarification_required": false,
+      "arithmetic_checks": [],
+      "execution_status": "not_run",
+      "independent_business_review_status": "pending"
+    }
+  ]
+}

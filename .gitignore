@@ -108,3 +108,5 @@ datasage-canary-next/*
 !datasage-canary-next/tests/business_replay.py
 !datasage-canary-next/tests/fixtures/business_replay_contract.json
 !datasage-canary-next/tests/fixtures/reviewed_host_skills.json
+!datasage-canary-next/tests/fixtures/business_acceptance_cases.json
+!datasage-canary-next/tests/BUSINESS_ACCEPTANCE.md
