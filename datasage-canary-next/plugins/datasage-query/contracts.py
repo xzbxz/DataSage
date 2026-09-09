@@ -1027,12 +1027,6 @@ def _model_semantic_projection(
         answer_note = _safe_business_text(
             definition.get("answer_note"), physical_identifiers
         )
-        if (
-            domain == "target"
-            and isinstance(answer_note, str)
-            and "salesperson_allocation" in answer_note
-        ):
-            answer_note = None
         optional_metric_fields = {
             "unit": _copy_guidance(definition.get("unit")),
             "unit_policy": _copy_guidance(definition.get("unit_policy")),
