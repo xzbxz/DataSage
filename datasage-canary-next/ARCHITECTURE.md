@@ -188,7 +188,7 @@ fixture，要求压缩后保留用户纠正、当前 period/scope/entity/metric 
 
 ### Hermes 内建 Skill 选择约束
 
-Hermes 官方同步内建 Skill；本 Profile 不修改官方内容。当前 core 为60个，启用办公文件能力 `docx`、`xlsx`、`pdf`、`powerpoint`，同时接受宿主不可禁用的 essential `hermes-agent`。`skills.disabled` 关闭其余当前及遗留入口；这不会扩大企微四工具面。`ocr-and-documents` 已不属于当前 core，不声明为启用能力。
+Hermes 官方同步内建 Skill；本 Profile 不修改官方内容。当前 core 为60个，启用办公文件能力 `docx`、`xlsx`、`pdf`、`powerpoint`，同时接受宿主不可禁用的 essential `hermes-agent`。`skills.disabled` 关闭其余当前及遗留入口；这不会额外改变企微已配置的五个直接可见工具（`clarify`、三个 DataSage 工具和 `execute_code`）；本机 Python 的权限边界见上文。`ocr-and-documents` 已不属于当前 core，不声明为启用能力。
 
 每次宿主升级做完整快照差异审查；新增、删除或重命名必须更新 `tests/fixtures/reviewed_host_skills.json` 与 denylist，并检查 `metadata.hermes.related_skills`。Profile 显式关闭独立的 `curator.enabled` 和 background review，使调试中的能力集合由 Git 维护。普通 CLI 用于源码维护，业务调用仍受现有 WeCom/trusted replay 授权约束。
 
