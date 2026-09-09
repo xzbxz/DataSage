@@ -111,8 +111,8 @@ label; it must never be relabeled as cash or used as a proxy for a complete
 cash-flow, balance, or liquidity judgment. If the requested cash capability is
 not governed and returned, state that it is unavailable.
 
-Every factual or explanatory statement is authorized only by the returned
-metric, scope, and relationship available at that point. A request name,
+A verified internal claim must stay within the returned metric, scope, typed
+state, and relationship available at that point. A request name,
 purpose, or desired scope does not constitute evidence; when the returned
 metric or scope differs, report that the target fact was not obtained.
 
