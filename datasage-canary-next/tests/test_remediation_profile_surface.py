@@ -77,14 +77,14 @@ class RemediationProfileSurfaceTests(unittest.TestCase):
             platform_toolsets["cli"],
         )
         self.assertEqual(
-            ["clarify", "datasage-query"],
+            ["clarify", "datasage-query", "code_execution"],
             platform_toolsets["wecom"],
         )
         self.assertNotIn("skills", platform_toolsets["wecom"])
         self.assertNotIn("hermes-wecom", platform_toolsets["wecom"])
 
-    def test_resolved_wecom_tools_exclude_system_and_mutation_tools(self):
-        """Resolve the final host tool surface and enforce the deny boundary."""
+    def test_resolved_wecom_tools_include_official_code_without_extra_bundles(self):
+        """Check visible tools; execute_code itself has local file authority."""
 
         os.environ.setdefault("HERMES_HOME", str(PROFILE_ROOT))
         try:
@@ -104,6 +104,8 @@ class RemediationProfileSurfaceTests(unittest.TestCase):
             expanded = resolve_toolset(toolset)
             resolved_tools.update(expanded or [toolset])
 
+        self.assertIn("execute_code", resolved_tools)
+
         forbidden_exact = {
             "terminal",
             "process",
@@ -114,7 +116,6 @@ class RemediationProfileSurfaceTests(unittest.TestCase):
             "patch",
             "search_files",
             "code",
-            "execute_code",
             "delegate",
             "delegate_task",
             "cron",

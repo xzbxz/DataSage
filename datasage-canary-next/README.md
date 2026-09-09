@@ -17,10 +17,16 @@ customer_risk 六个经营域。它提供受治理证据的事实、诊断和分
 公共研究、普通写作、用户文件分析器，也不批准或执行业务决策。
 当前候选目标成熟度为 L3 数据专家；本候选版本不声明 L4 主动管理或主动巡检能力。
 
-WeCom 入口仅声明 `clarify` 和 `datasage-query` 两个 toolset，所有已认证企微成员
+WeCom 入口声明 `clarify`、`datasage-query` 和官方 `code_execution` 三个 toolset，所有已认证企微成员
 均可私聊和群聊，并共享六个经营域同一完整的 DataSage 查询面。Profile 不施加
 用户、群组、部门、实体、行或领域过滤；这不替代外部数据库授权。数据库执行仍为
 SELECT-only，并由治理查询合同、只读执行限制和 evidence 边界约束。
+
+官方 `execute_code` 用于处理已取得的业务结果，沿用 Hermes 原生执行和审批机制，
+不另建恢复工具或分页协议。当前本机 Python 可以读取和修改进程权限内的文件；
+这不是仅限查询结果的文件隔离环境。DataSage 查询工具的 SELECT-only 约束不限制
+Python 的文件访问。原生审批是否再次提示取决于已有审批状态，当前配置也未将审批
+限定为机器所有者。
 
 业务员个人目标、分摊实际和完成率使用 `salesperson_allocation` 的 split 账本作为
 独立权威来源；transaction-detail 基表仅用于诊断，不决定销售分摊覆盖，也不得在

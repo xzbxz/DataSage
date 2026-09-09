@@ -24,13 +24,14 @@ platform_toolsets:
   cli:
     - hermes-cli
     - datasage-query
-  # WeCom exposes only clarification and governed business evidence. Every
+  # WeCom exposes clarification, governed evidence and official code processing. Every
   # host-authenticated member with a non-empty identity is intentionally
   # admitted in both DM and group chats; this Profile adds no per-user,
   # group, department, entity, row, domain, or metric filter.
   wecom:
     - clarify
     - datasage-query
+    - code_execution
 privacy:
   redact_pii: true
 security:

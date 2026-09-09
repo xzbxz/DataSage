@@ -2206,7 +2206,7 @@ class DistributionBoundaryTests(unittest.TestCase):
         parsed_config = yaml.safe_load(config)
         wecom_toolsets = parsed_config["platform_toolsets"]["wecom"]
         self.assertEqual(
-            ["clarify", "datasage-query"],
+            ["clarify", "datasage-query", "code_execution"],
             wecom_toolsets,
         )
         resolved = set(
@@ -2218,6 +2218,7 @@ class DistributionBoundaryTests(unittest.TestCase):
         )
         self.assertIn("datasage-query", resolved)
         self.assertIn("clarify", resolved)
+        self.assertIn("code_execution", resolved)
         self.assertTrue(
             {"terminal", "file", "web", "memory"}.isdisjoint(resolved)
         )

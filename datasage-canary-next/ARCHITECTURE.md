@@ -27,11 +27,17 @@ target、inventory 和 customer_risk。它提供事实、诊断和证据约束�
 过期、不可用或歧义无法消除时，升级到相应的指标/域负责人或人工审批人，
 不得自动批准、承诺或执行。
 
-WeCom 的 Profile toolset 仅声明 `clarify` 和 `datasage-query`；所有已认证企微
+WeCom 的 Profile toolset 声明 `clarify`、`datasage-query` 和官方 `code_execution`；所有已认证企微
 成员均可私聊和群聊，并共享六个经营域同一完整的 DataSage 查询面。Profile 不施加
 用户、群组、部门、实体、行或领域过滤；这不替代外部数据库授权。数据库执行仍为
 SELECT-only，并由治理查询合同、只读执行限制和 evidence 边界约束。Hermes 原生
 Skill 管理面不向 WeCom 暴露。
+
+官方 `execute_code` 用于处理已取得的业务结果，沿用 Hermes 原生执行和审批机制，
+不另建恢复工具或分页协议。当前本机 Python 可以读取和修改进程权限内的文件；
+这不是仅限查询结果的文件隔离环境。DataSage 查询工具的 SELECT-only 约束不限制
+Python 的文件访问。原生审批是否再次提示取决于已有审批状态，当前配置也未将审批
+限定为机器所有者。
 本候选版本无有 owner 的 cron/主动巡检任务，因此不声明 L4 主动管理能力。
 
 业务员个人目标、分摊实际和完成率以 `salesperson_allocation` 的 split 账本为
