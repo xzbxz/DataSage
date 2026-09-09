@@ -153,7 +153,7 @@ class ExpertArchitectureTests(unittest.TestCase):
         resolver = schemas.DATASAGE_ENTITY_RESOLVE["description"]
         query = schemas.DATASAGE_QUERY["description"]
         schema_contract = " ".join((catalog, resolver, query))
-        self.assertIn("before entity resolution or query", catalog)
+        # Catalog is optional; direct-query behavior is covered by public interface tests.
         self.assertIn("after the user selects one", resolver)
         self.assertIn("Entity-only questions stop after this result", resolver)
         self.assertIn("before any database access", query)
