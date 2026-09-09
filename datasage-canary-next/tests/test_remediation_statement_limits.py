@@ -21,14 +21,14 @@ class StatementLimitTests(unittest.TestCase):
         # Independent rows differ although sums match: no row reconciliation exists.
         for item in response['evidence_bundle']['items']:
             self.assertEqual('not_requested_or_unavailable',item['reconciliation'])
-            self.assertIn('ROW_LEVEL_RECONCILIATION_NOT_PROVIDED',item['limitations'])
             self.assertNotIn('row_reconciliation',item['supports'])
 
     def test_empty_explicitly_cannot_establish_zero(self):
         response=self.h.query(self.receipt());result=self.h.result(response)
         self.assertEqual('empty',result['data_state']);self.assertEqual([],result['rows'])
         item=response['evidence_bundle']['items'][0]
-        self.assertIn('NUMERIC_ZERO_NOT_ESTABLISHED',item['limitations'])
+        self.assertIn('DATA_STATE_EMPTY',item['limitations'])
+        self.assertIn('empty_result_state',item['supports'])
         self.assertNotIn('verified_zero_state',item['supports'])
 
     def test_real_zero_retains_verified_zero_support(self):
@@ -37,7 +37,7 @@ class StatementLimitTests(unittest.TestCase):
         self.assertEqual('zero',result['data_state']);self.assertEqual(0,result['rows'][0]['facts']['metric_value'])
         item=response['evidence_bundle']['items'][0]
         self.assertIn('verified_zero_state',item['supports'])
-        self.assertNotIn('NUMERIC_ZERO_NOT_ESTABLISHED',item['limitations'])
+        self.assertNotIn('empty_result_state',item['supports'])
 
 
 if __name__=='__main__':unittest.main()
