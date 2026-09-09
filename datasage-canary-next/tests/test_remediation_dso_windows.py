@@ -28,7 +28,7 @@ class DsoWindowTests(unittest.TestCase):
         return periods
 
     def query(self, **kwargs):
-        return self.h.query(public.metric('formal_receivable_turnover_days', 'customer_risk',
+        return self.h.query(public.metric('formal_receivable_turnover_days', 'receivable',
                                          month=None, **kwargs))
 
     def assert_verified(self, response, start, end, months, days, average):
@@ -47,7 +47,7 @@ class DsoWindowTests(unittest.TestCase):
         trace=self.h.sql_trace[-1]
         self.assertIn(start,trace['params']);self.assertIn(end,trace['params'])
         coverage=next(d['text'] for d in response['disclosures']
-                      if d['disclosure_id']=='customer-risk.formal-receivable-turnover.coverage')
+                      if d['disclosure_id']=='receivable.formal-receivable-turnover.coverage')
         for fact in (start,end,f'{months}个完整自然月',f'{months+1}个月末',f'{days}个自然日'):
             self.assertIn(fact,coverage)
 
@@ -71,7 +71,7 @@ class DsoWindowTests(unittest.TestCase):
         self.assertEqual('undefined',r['data_state'],r)
         self.assertTrue(all(row['facts'].get('metric_value') is None for row in r['rows']))
         self.assertTrue(all(row['facts']['calculation_attestation']['status']=='undefined' for row in r['rows']))
-        self.assertNotIn('customer-risk.formal-receivable-turnover.formula', r.get('disclosure_refs',[]))
+        self.assertNotIn('receivable.formal-receivable-turnover.formula', r.get('disclosure_refs',[]))
 
     def test_missing_opening_middle_closing_stays_undefined(self):
         for changes in ({'missing_snapshot':0},{'missing_snapshot':3},{'missing_snapshot':6}):
@@ -145,7 +145,7 @@ class DsoWindowTests(unittest.TestCase):
                 self.assertEqual('verified',f['calculation_attestation']['status'])
                 # Delivery of metric meaning, not a claim about model compliance.
                 explanation=next(d['text'] for d in response['disclosures']
-                    if d['disclosure_id']=='customer-risk.formal-receivable-turnover.formula')
+                    if d['disclosure_id']=='receivable.formal-receivable-turnover.formula')
                 self.assertIn('不代表提前付款天数',explanation)
                 self.assertIn('正负抵消',explanation)
 

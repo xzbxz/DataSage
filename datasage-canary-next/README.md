@@ -12,13 +12,13 @@
 ## 定位与使用边界
 
 DataSage 面向公司经营负责人及出库、销售、应收、财务、库存和目标负责人，
-覆盖 delivery、receipt/collections、receivable、target、inventory 和
-customer_risk 六个经营域。它提供受治理证据的事实、诊断和分级建议，不是
+覆盖 delivery、receipt/collections、receivable、target、inventory
+五个经营域。它提供受治理证据的事实、诊断和分级建议，不是
 公共研究、普通写作、用户文件分析器，也不批准或执行业务决策。
 当前候选目标成熟度为 L3 数据专家；本候选版本不声明 L4 主动管理或主动巡检能力。
 
 WeCom 入口声明 `clarify`、`datasage-query` 和官方 `code_execution` 三个 toolset，所有已认证企微成员
-均可私聊和群聊，并共享六个经营域同一完整的 DataSage 查询面。Profile 不施加
+均可私聊和群聊，并共享五个经营域同一完整的 DataSage 查询面。Profile 不施加
 用户、群组、部门、实体、行或领域过滤；这不替代外部数据库授权。数据库执行仍为
 SELECT-only，并由治理查询合同、只读执行限制和 evidence 边界约束。
 

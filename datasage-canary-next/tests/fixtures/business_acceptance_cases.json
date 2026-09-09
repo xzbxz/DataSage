@@ -308,8 +308,7 @@
     {
       "id": "B07",
       "domains": [
-        "receivable",
-        "customer_risk"
+        "receivable"
       ],
       "title": "已确认逾期明细",
       "turns": [
@@ -515,7 +514,7 @@
     {
       "id": "B12",
       "domains": [
-        "customer_risk"
+        "receivable"
       ],
       "title": "Top5缺少全量分母",
       "turns": [
@@ -778,7 +777,6 @@
     {
       "id": "B18",
       "domains": [
-        "customer_risk",
         "receivable"
       ],
       "title": "高影响建议需要审批",

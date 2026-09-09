@@ -118,7 +118,7 @@
     {
       "id": "change_05_delivery_receipt", "category": "change_diagnosis", "conversation_id": "change_05", "turn": 1,
       "prompt": "示例C区最近三个月收款覆盖变差，核对同期净出库和净收款，只描述已验证差异。",
-      "plan_constraints": {"domains": ["customer_risk"], "metrics": ["delivery_receipt_comparison"], "dimensions": ["department"], "operations": ["paired_comparison"], "time_semantics": "latest_3_completed_months", "context_action": "new", "must_not_metrics": []},
+      "plan_constraints": {"domains": ["receipt"], "metrics": ["delivery_receipt_comparison"], "dimensions": ["department"], "operations": ["paired_comparison"], "time_semantics": "latest_3_completed_months", "context_action": "new", "must_not_metrics": []},
       "required_conclusions": ["report_observed_change", "disclose_asymmetric_scope", "state_noncausal"],
       "allowed_conclusions": ["report_observed_change", "disclose_asymmetric_scope", "state_noncausal", "disclose_data_limits"],
       "forbidden_conclusions": ["claim_collection_team_failure", "force_scope_reconciliation", "invent_mechanism"],
@@ -378,7 +378,7 @@
     {
       "id": "causal_03_customer_risk", "category": "causal_boundary", "conversation_id": "causal_03", "turn": 1,
       "prompt": "示例客户甲欠款上升且收款减少，是否证明客户会违约？",
-      "plan_constraints": {"domains": ["customer_risk"], "metrics": ["positive_debt_amount", "delivery_receipt_comparison"], "dimensions": ["customer"], "operations": ["evidence_card", "previous_period"], "time_semantics": "governed_customer_risk_periods", "context_action": "new", "must_not_metrics": []},
+      "plan_constraints": {"domains": ["receivable", "receipt"], "metrics": ["positive_debt_amount", "delivery_receipt_comparison"], "dimensions": ["customer"], "operations": ["evidence_card", "previous_period"], "time_semantics": "governed_customer_risk_periods", "context_action": "new", "must_not_metrics": []},
       "required_conclusions": ["report_observed_change", "state_noncausal", "state_no_default_prediction"],
       "allowed_conclusions": ["report_observed_change", "state_noncausal", "state_no_default_prediction", "request_independent_evidence"],
       "forbidden_conclusions": ["predict_default", "set_credit_decision", "recommend_stop_shipment"],
@@ -415,7 +415,7 @@
     {
       "id": "boundary_03_grouped_formal_turnover_undefined", "category": "capability_boundary", "conversation_id": "boundary_03", "turn": 1,
       "prompt": "按部门查看最近12个完整自然月的正式应收周转天数；月末欠款快照不足的部门必须保留为 typed undefined，不得删组、补零或自行补算。",
-      "plan_constraints": {"domains": ["customer_risk"], "metrics": ["formal_receivable_turnover_days"], "dimensions": ["department"], "operations": [], "time_semantics": "last_12_completed_months", "context_action": "new", "must_not_metrics": ["average_settlement_days"]},
+      "plan_constraints": {"domains": ["receivable"], "metrics": ["formal_receivable_turnover_days"], "dimensions": ["department"], "operations": [], "time_semantics": "last_12_completed_months", "context_action": "new", "must_not_metrics": ["average_settlement_days"]},
       "required_conclusions": ["report_available_evidence", "preserve_typed_undefined", "disclose_data_limits"],
       "allowed_conclusions": ["report_available_evidence", "preserve_typed_undefined", "disclose_data_limits"],
       "forbidden_conclusions": ["drop_undefined_group", "report_undefined_as_zero", "infer_missing_value", "invent_result"],
@@ -442,7 +442,7 @@
     {
       "id": "multiturn_07_live_balance_correction", "category": "multiturn", "conversation_id": "live_idk_20260825", "turn": 2,
       "prompt": "欠款净余额，你是怎么计算的，结果对吗",
-      "plan_constraints": {"domains": ["customer_risk"], "metrics": ["debt_balance_trend", "current_debt_amount"], "dimensions": ["department"], "operations": [], "time_semantics": "2026_ytd_series_vs_latest_snapshot", "context_action": "preserve", "must_not_metrics": []},
+      "plan_constraints": {"domains": ["receivable"], "metrics": ["debt_balance_trend", "current_debt_amount"], "dimensions": ["department"], "operations": [], "time_semantics": "2026_ytd_series_vs_latest_snapshot", "context_action": "preserve", "must_not_metrics": []},
       "required_conclusions": ["correct_prior_mislabeled_balance", "distinguish_time_series_from_current_snapshot", "report_current_snapshot_with_scope", "disclose_data_limits"],
       "allowed_conclusions": ["correct_prior_mislabeled_balance", "distinguish_time_series_from_current_snapshot", "report_current_snapshot_with_scope", "disclose_data_limits", "report_available_evidence", "state_noncausal"],
       "forbidden_conclusions": ["retain_unsupported_risk_level", "label_snapshot_as_month_end_without_proof", "claim_time_series_scalar_is_current_balance", "invent_balance_reconciliation", "infer_ungoverned_overall_health_or_strength"],

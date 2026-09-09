@@ -130,7 +130,7 @@ datasets:
       - Delivery warehouse flow may join only the barcode fact by whse_id or the return fact by in_whse_id.
 
   vk_dwd.sale_bill_goods_detail_dwd:
-    domains: [delivery, target, customer_risk]
+    domains: [delivery, target, receipt, receivable]
     kind: fact
     grain: one_sales_or_delivery_document_product_color_detail
     primary_key: [goods_detail_id]
@@ -155,7 +155,7 @@ datasets:
       - Aggregate before joining another fact to avoid multiplication; only governed many-to-one master joins are supported for metric dimensions.
 
   vk_dwd.delivery_return_detail_dwd:
-    domains: [delivery, target, customer_risk]
+    domains: [delivery, target, receipt]
     kind: fact
     grain: one_actual_returned_piece_or_barcode
     primary_key: [barcode_detail_id]
@@ -204,7 +204,7 @@ datasets:
       - Business remarks, order remarks, receiver or collaborator text, and price-detail fields are intentionally excluded.
 
   vk_dwd.receive_bill_detail_dwd:
-    domains: [receipt, target, customer_risk]
+    domains: [receipt, target]
     kind: fact
     grain: one_receipt_document_detail
     primary_key: [detail_id]
@@ -221,7 +221,7 @@ datasets:
       - Gross receipt uses detail_receive_rmb; actual receipt uses detail_deal_amount multiplied by exchange_rate.
 
   vk_dwd.receive_return_bill_detail_dwd:
-    domains: [receipt, target, customer_risk]
+    domains: [receipt, target]
     kind: fact
     grain: one_receipt_refund_document_detail
     primary_key: [detail_id]
@@ -238,7 +238,7 @@ datasets:
       - The table currently has no bill_time index; retain a bounded time range, timeout, and row limit.
 
   vk_dwd.receivable_bill_detail_dwd:
-    domains: [receivable, customer_risk]
+    domains: [receivable]
     kind: fact
     grain: one_receivable_document_detail
     primary_key: [detail_id]
@@ -258,7 +258,7 @@ datasets:
       - Credit-policy joins must use customer_id, org_name, and currency_no together.
 
   vk_dw.customer_debt_bymonth_dw:
-    domains: [receivable, customer_risk]
+    domains: [receivable]
     kind: monthly_snapshot
     grain: one_month_customer_debt_snapshot
     primary_key: [bill_date, customer_id]
@@ -278,7 +278,7 @@ datasets:
       - Debt exposure excludes internal customers by fixed business scope.
 
   vk_dwd.customer_aging_dwd:
-    domains: [receivable, customer_risk]
+    domains: [receivable]
     kind: monthly_snapshot
     grain: one_month_customer_aging_bucket_record
     primary_key: [bill_date, customer_id]
@@ -295,7 +295,7 @@ datasets:
       - Aging exposure excludes internal customers by fixed business scope.
 
   vk_dwd.customer_credit_dwd:
-    domains: [receivable, customer_risk]
+    domains: [receivable]
     kind: master_snapshot
     metric_only: true
     grain: one_customer_credit_policy_record

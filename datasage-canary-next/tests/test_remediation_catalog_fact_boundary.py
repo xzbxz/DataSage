@@ -10,7 +10,7 @@ class CatalogFactBoundaryTests(unittest.TestCase):
     def setUp(self):
         self.h=public.RemainingCaseTests();self.h.setUp();self.addCleanup(self.h.doCleanups)
     def test_registered_catalog_no_longer_orders_presentation_or_delegates_seal_checks(self):
-        metrics=[('delivery','delivery_amount'),('customer_risk','formal_receivable_turnover_days'),('inventory','current_inventory_amount_rmb')]
+        metrics=[('delivery','delivery_amount'),('receivable','formal_receivable_turnover_days'),('inventory','current_inventory_amount_rmb')]
         for domain,metric in metrics:
             for req in ({'domain':domain,'metric':metric},{'domain':domain,'view':'expert_index'}):
                 with self.subTest(request=req):
@@ -19,7 +19,7 @@ class CatalogFactBoundaryTests(unittest.TestCase):
                     for retired_directive in ('先呈现','同段或紧邻句','attestation_seal 与外层 claim_seal','清除正式周转数值、公式与推理主题'):
                         self.assertNotIn(retired_directive,text)
     def dso(self,row):
-        args=public.metric('formal_receivable_turnover_days','customer_risk',request_id='dso',month=None,time_range={'start':'2025-08-01','end':'2026-08-01'})
+        args=public.metric('formal_receivable_turnover_days','receivable',request_id='dso',month=None,time_range={'start':'2025-08-01','end':'2026-08-01'})
         with patch.object(public.plugin.tools,'_execute_with_source',return_value=([copy.deepcopy(row)],False,self.h.source)):
             return self.h.query(args)
     def test_final_DSO_numeric_attestation_and_source_are_enforced_by_code(self):
@@ -30,7 +30,7 @@ class CatalogFactBoundaryTests(unittest.TestCase):
         self.assertEqual(13,facts['calculation_attestation']['component_values']['snapshot_month_count'])
         self.assertEqual(64,len(response['source_evidence_ref']['source_ref_sha256']))
         ids={d['disclosure_id'] for d in response['disclosures']}
-        for suffix in ('coverage','external-customer.scope','formula'):self.assertIn('customer-risk.formal-receivable-turnover.'+suffix,ids)
+        for suffix in ('coverage','external-customer.scope','formula'):self.assertIn('receivable.formal-receivable-turnover.'+suffix,ids)
         for field,value in [('metric_value','999'),('average_net_debt_rmb',None),('delivery_amount_rmb','0'),('snapshot_month_count',12),('effective_month_count','13')]:
             with self.subTest(corruption=field):
                 invalid=self.dso({**row,field:value});r=self.h.result(invalid,'dso')
@@ -39,7 +39,7 @@ class CatalogFactBoundaryTests(unittest.TestCase):
                 else:
                     self.assertTrue(all(item['facts']['calculation_attestation']['status']=='undefined' for item in r['rows']))
                 self.assertTrue(all(item['facts'].get('metric_value') is None for item in r['rows']))
-                self.assertNotIn('customer-risk.formal-receivable-turnover.formula',r.get('disclosure_refs',[]))
+                self.assertNotIn('receivable.formal-receivable-turnover.formula',r.get('disclosure_refs',[]))
     def test_delivery_reconciliation_is_structural_and_scope_survives(self):
         self.h.delivery([(50,6,'n','2026-07-15','A'),(100,6,'n','2026-08-15','A')])
         response=self.h.query(public.metric('delivery_amount','delivery',request_id='change',comparison={'kind':'previous_period'},complete_change_decomposition={'dimension':'department'}))

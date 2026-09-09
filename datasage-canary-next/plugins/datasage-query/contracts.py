@@ -435,18 +435,13 @@ def _related_metric_refs_projection(
     execute a query, or create a new lens engine.
     """
 
-    if domain == "customer_risk" and "evidence_axes" in semantics:
+    if "evidence_axes" in semantics:
         raise ContractFailure(
             "CONTRACT_UNAVAILABLE",
-            "customer_risk legacy evidence_axes are not executable metadata",
+            "legacy evidence_axes are not executable metadata",
         )
     raw_refs = semantics.get("related_metric_refs")
     if raw_refs is None:
-        if domain == "customer_risk":
-            raise ContractFailure(
-                "CONTRACT_UNAVAILABLE",
-                "customer_risk related_metric_refs are missing",
-            )
         return []
     if not isinstance(raw_refs, list) or not raw_refs:
         raise ContractFailure(

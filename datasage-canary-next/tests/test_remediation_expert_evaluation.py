@@ -255,11 +255,24 @@ class GoldenExpertGateTests(unittest.TestCase):
             "evidence": evidence,
         }
 
-    def test_l3_extension_has_eight_cases_and_is_selectable_without_changing_the_58_case_base(self):
+    def test_l3_extension_and_frozen_base_except_explicit_domain_relocation(self):
         self.assertEqual(58, len(SUITE["cases"]))
         self.assertEqual(8, len(SUITE["l3_cases"]))
+        frozen_base = copy.deepcopy(SUITE["cases"])
+        relocated = {
+            "change_05_delivery_receipt": ["receipt"],
+            "causal_03_customer_risk": ["receivable", "receipt"],
+            "boundary_03_grouped_formal_turnover_undefined": ["receivable"],
+            "multiturn_07_live_balance_correction": ["receivable"],
+        }
+        for case in frozen_base:
+            if case["id"] in relocated:
+                self.assertEqual(relocated[case["id"]], case["plan_constraints"]["domains"])
+                case["plan_constraints"]["domains"] = ["customer_risk"]
+        # Keep the original digest: only the explicit namespace relocation is
+        # normalized. Prompts, conclusions and prohibitions may not drift.
         canonical = json.dumps(
-            SUITE["cases"],
+            frozen_base,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),

@@ -28,7 +28,7 @@ class AnalyticalIntegrityTests(unittest.TestCase):
             [(50, 50, 1, "C", "2026-08-15"), (None, 10, 1, "C", "2026-08-16")],
         )
         response = self.h.query(
-            public.metric("delivery_receipt_comparison", "customer_risk", month=None)
+            public.metric("delivery_receipt_comparison", "receipt", month=None)
         )
         result = self.h.result(response)
         facts = result["rows"][0]["facts"]
@@ -46,7 +46,7 @@ class AnalyticalIntegrityTests(unittest.TestCase):
             [(100, 6, "n", "2026-08-15", "HCM")],
         )
         response = self.h.query(
-            public.metric("delivery_receipt_comparison", "customer_risk", month=None)
+            public.metric("delivery_receipt_comparison", "receipt", month=None)
         )
         result = self.h.result(response)
         facts = result["rows"][0]["facts"]
@@ -75,7 +75,7 @@ class AnalyticalIntegrityTests(unittest.TestCase):
             ],
         )
         response = self.h.query(
-            public.metric("average_settlement_days", "customer_risk", month=None)
+            public.metric("average_settlement_days", "receivable", month=None)
         )
         result = self.h.result(response)
         facts = result["rows"][0]["facts"]
@@ -102,7 +102,7 @@ class AnalyticalIntegrityTests(unittest.TestCase):
             ],
         )
         response = self.h.query(
-            public.metric("average_settlement_days", "customer_risk", month=None)
+            public.metric("average_settlement_days", "receivable", month=None)
         )
         result = self.h.result(response)
         facts = result["rows"][0]["facts"]
@@ -118,7 +118,7 @@ class AnalyticalIntegrityTests(unittest.TestCase):
             "ADD COLUMN verification_complete_time TEXT"
         )
         empty = self.h.query(
-            public.metric("average_settlement_days", "customer_risk", month=None)
+            public.metric("average_settlement_days", "receivable", month=None)
         )
         self.assertEqual("empty", self.h.result(empty)["data_state"])
         self.h.insert(
@@ -127,7 +127,7 @@ class AnalyticalIntegrityTests(unittest.TestCase):
             [(0, 1, "C", "2026-08-01", "n", "a", "a", "A", "O", "CNY", "bill-zero", "2026-08-01")],
         )
         zero = self.h.query(
-            public.metric("average_settlement_days", "customer_risk", month=None)
+            public.metric("average_settlement_days", "receivable", month=None)
         )
         zero_result = self.h.result(zero)
         self.assertEqual("zero", zero_result["data_state"])
@@ -158,7 +158,7 @@ class AnalyticalIntegrityTests(unittest.TestCase):
 
     def _formal_dso_result(self):
         response = self.h.query(
-            public.metric("formal_receivable_turnover_days", "customer_risk", month=None)
+            public.metric("formal_receivable_turnover_days", "receivable", month=None)
         )
         return self.h.result(response)
 
@@ -229,7 +229,7 @@ class AnalyticalIntegrityTests(unittest.TestCase):
                 self.h.conn.execute("DELETE FROM vk_dwd.receive_bill_detail_dwd")
                 self.h.insert("vk_dwd.sale_bill_goods_detail_dwd","delivery_amount_rmb,bill_status,is_inner_cus,delivery_time",[(value,6,"n","2026-08-15")])
                 self.h.insert("vk_dwd.receive_bill_detail_dwd","detail_receive_rmb,bill_status,bill_time",[(value,"C","2026-08-15")])
-                result=self.h.result(self.h.query(public.metric("delivery_receipt_comparison","customer_risk",month=None)))
+                result=self.h.result(self.h.query(public.metric("delivery_receipt_comparison","receipt",month=None)))
                 self.assertEqual(state,result["data_state"])
                 self.assertEqual(value,result["rows"][0]["facts"]["metric_value"])
                 self.assertEqual(2 if value is None else 0,result["rows"][0]["facts"]["missing_value_count"])
@@ -239,7 +239,7 @@ class AnalyticalIntegrityTests(unittest.TestCase):
         self.h.conn.execute("ALTER TABLE vk_dwd.receivable_bill_detail_dwd ADD COLUMN verification_complete_time TEXT")
         self.h.conn.create_function("FIELD",-1,lambda value,*items: items.index(value)+1 if value in items else 0)
         self.h.insert("vk_dwd.receivable_bill_detail_dwd", "detail_unsettled_amount,bill_status,bill_time,is_inner_cus,bill_id,verification_complete_time",[(5,"C","2026-08-01","n","synthetic_open","2026-08-11")])
-        result=self.h.result(self.h.query(public.metric("settlement_days_distribution","customer_risk",month=None)))
+        result=self.h.result(self.h.query(public.metric("settlement_days_distribution","receivable",month=None)))
         self.assertEqual("undefined",result["data_state"])
         self.assertIsNone(result["rows"][0]["facts"]["metric_value"])
         self.assertIsNone(result["rows"][0]["facts"]["known_subset_value"])
@@ -250,7 +250,7 @@ class AnalyticalIntegrityTests(unittest.TestCase):
         self.h.conn.execute("ALTER TABLE vk_dwd.receivable_bill_detail_dwd ADD COLUMN bill_id TEXT")
         self.h.conn.execute("ALTER TABLE vk_dwd.receivable_bill_detail_dwd ADD COLUMN verification_complete_time TEXT")
         self.h.insert("vk_dwd.receivable_bill_detail_dwd","detail_unsettled_amount,bill_status,bill_time,is_inner_cus,bill_id,verification_complete_time",[(0,"C","2026-08-01","n","known","2026-08-11"),(None,"C","2026-08-01","n","unknown","2026-08-21")])
-        result=self.h.result(self.h.query(public.metric("average_settlement_days","customer_risk",month=None)))
+        result=self.h.result(self.h.query(public.metric("average_settlement_days","receivable",month=None)))
         facts=result["rows"][0]["facts"]
         self.assertEqual("incomplete",result["data_state"])
         self.assertIsNone(facts["metric_value"])

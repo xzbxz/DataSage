@@ -302,7 +302,7 @@ class RemainingCaseTests(unittest.TestCase):
 
     def test_B18_action_rejection_only(self):
         self.assertEqual({'datasage_catalog','datasage_entity_resolve','datasage_query'},set(self.ctx.handlers))
-        payload=self.query({'request_id':'freeze','domain':'customer_risk','mode':'action','metric':'freeze_customer'})
+        payload=self.query({'request_id':'freeze','domain':'receivable','mode':'action','metric':'freeze_customer'})
         self.assertEqual('failed',payload['status']);self.assertFalse(self.sql_trace)
         self.save('B18','public_unsupported_action_rejected',payload,['Model refusal to claim execution, human approval, credit advice, causal caution and material-risk discussion'])
 

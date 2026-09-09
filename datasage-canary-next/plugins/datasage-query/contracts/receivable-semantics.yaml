@@ -1,8 +1,9 @@
-version: datasage-mini-receivable-semantics/v8
+version: datasage-mini-receivable-semantics/v9
 domain: receivable
 contract_role: plugin_physical_execution
 
 tables:
+  - vk_dwd.sale_bill_goods_detail_dwd
   - vk_dwd.receivable_bill_detail_dwd
   - vk_dw.customer_debt_bymonth_dw
   - vk_dwd.customer_aging_dwd
@@ -81,7 +82,7 @@ dimensions:
     identity_filter: {entity_type: salesperson, value_field: canonical_id, column: sales_id}
     value_contract: *vc_entity_exact
     answer_note: 授信政策按授信表 sales_id、sales_name。
-  customer_department:
+  customer_department: &receivable_customer_department
     label: 客户部门
     columns: [customer_dept]
     filter_column: customer_dept
@@ -191,6 +192,23 @@ dimensions:
     value_contract: *vc_source_exact
     source: {type: governed_join, dataset: vk_dwd.customer_dwd, local_column: customer_id, remote_column: customer_id, cardinality: many_to_one}
     answer_note: 当前客户负责人只用于补充当前属性，不替代事实或快照中的业务员归属。
+
+  department: *receivable_customer_department
+  salesperson:
+    label: 业务员
+    columns:
+    - column: final_sales_id
+      alias: sales_id
+    - column: final_sales_name
+      alias: sales_name
+    filter_column: final_sales_name
+    identity_filter:
+      entity_type: salesperson
+      value_field: canonical_id
+      column: final_sales_id
+    value_contract:
+      kind: entity_exact
+      model_rule: 保留用户明确提供的精确实体 token；由工具做实体预检和稳定身份绑定，不得猜测。
 
 current_customer_dimensions: &current_customer_dimensions
   [current_customer_grade, current_customer_resource, current_customer_business_label, current_customer_owner]
@@ -977,3 +995,201 @@ metrics:
     metric_join: *current_customer_scope_join
     allowed_dimensions: *credit_dimensions
     answer_note: *answer_note_credit_days
+
+  average_settlement_days:
+    disclosures:
+      - id: receivable.settlement.sample-coverage
+        mode: required_always
+        text: "历史结算天数仅覆盖已完成且通过异常校验的应收单，不代表当前未结算压力。"
+      - id: receivable.average_settlement_days.legacy-note
+        mode: contract_only
+        text: &answer_note_average_settlement_days "按非重复应收单计算；排除结算天数为负以及结算完成后仍有正数未结余额的异常单据。"
+    label: 平均实际结算天数
+    business_definition: 在所选已完成结算应收单范围内，从应收发生日期到结算完成日期的自然日数平均值；未结清应收不纳入。
+    unit: 自然日
+    query_kind: settlement_days
+    dimension_overrides: &settlement_customer_projection
+      customer:
+        label: 客户
+        columns:
+        - customer_id
+        - customer_name
+        filter_column: customer_name
+        identity_filter:
+          entity_type: customer
+          value_field: canonical_id
+          column: customer_id
+        value_contract:
+          kind: entity_exact
+          model_rule: 保留用户明确提供的精确实体 token；由工具做实体预检和稳定身份绑定，不得猜测。
+    max_group_dimensions: 2
+    statistic: average
+    table: vk_dwd.receivable_bill_detail_dwd
+    document_key: bill_id
+    bill_time_field: bill_time
+    completion_time_field: verification_complete_time
+    open_amount_field: detail_unsettled_amount
+    time_policy: last_12_completed_months
+    required_filters:
+      bill_status: {op: ne, value: A}
+      is_inner_cus: {op: eq, value: n}
+    allowed_dimensions: [customer, salesperson, department, organization]
+    answer_note: *answer_note_average_settlement_days
+
+  maximum_settlement_days:
+    disclosures:
+      - id: receivable.settlement.sample-coverage
+        mode: required_always
+        text: "历史结算天数仅覆盖已完成且通过异常校验的应收单，不代表当前未结算压力。"
+      - id: receivable.maximum_settlement_days.legacy-note
+        mode: contract_only
+        text: &answer_note_maximum_settlement_days "最大值只反映已完成结算单据；不能替代当前未结算压力。"
+    label: 最大实际结算天数
+    business_definition: 在所选已完成结算应收单范围内，单笔实际结算自然日数的最大值；未结清应收不纳入。
+    unit: 自然日
+    query_kind: settlement_days
+    dimension_overrides: *settlement_customer_projection
+    max_group_dimensions: 2
+    statistic: maximum
+    table: vk_dwd.receivable_bill_detail_dwd
+    document_key: bill_id
+    bill_time_field: bill_time
+    completion_time_field: verification_complete_time
+    open_amount_field: detail_unsettled_amount
+    time_policy: last_12_completed_months
+    required_filters:
+      bill_status: {op: ne, value: A}
+      is_inner_cus: {op: eq, value: n}
+    allowed_dimensions: [customer, salesperson, department, organization]
+    answer_note: *answer_note_maximum_settlement_days
+
+  settlement_days_distribution:
+    disclosures:
+      - id: receivable.settlement.sample-coverage
+        mode: required_always
+        text: "历史结算天数仅覆盖已完成且通过异常校验的应收单，不代表当前未结算压力。"
+      - id: receivable.settlement_days_distribution.legacy-note
+        mode: contract_only
+        text: &answer_note_settlement_days_distribution "分布按应收单而不是明细行计数；未结算单据不进入历史结算分布。"
+    label: 实际结算天数分布
+    business_definition: 将所选已完成结算应收单按实际结算自然日数分档，并统计各档的非重复应收单数量。
+    unit_policy: 结算时长按自然日；各分档计数单位为应收单
+    query_kind: settlement_days
+    dimension_overrides: *settlement_customer_projection
+    max_group_dimensions: 2
+    statistic: distribution
+    table: vk_dwd.receivable_bill_detail_dwd
+    document_key: bill_id
+    bill_time_field: bill_time
+    completion_time_field: verification_complete_time
+    open_amount_field: detail_unsettled_amount
+    time_policy: last_12_completed_months
+    required_filters:
+      bill_status: {op: ne, value: A}
+      is_inner_cus: {op: eq, value: n}
+    allowed_dimensions: [customer, salesperson, department, organization]
+    answer_note: *answer_note_settlement_days_distribution
+
+  formal_receivable_turnover_days:
+    disclosures:
+      - id: receivable.formal-receivable-turnover.coverage
+        mode: required_always
+        text: &answer_note_formal_receivable_turnover_days "未指定期间时默认最近12个完整且已结束的自然月；指定月份或完整期间时按所选N个月计算，需要覆盖期初至期末的连续N+1个月末净欠款余额；真实零余额正常计入，缺失记录不自动补零。期间毛出库合计须为正，不要求每个月都有正出库。出库按范围内已记录的有效明细汇总，未证明源系统采集完整性。没有公司目标天数时，不与30天或其他假设目标比较。"
+      - id: receivable.formal-receivable-turnover.external-customer.scope
+        mode: required_always
+        text: "正式应收周转天数的月末净欠款和毛出库分母均固定排除内部客户。"
+      - id: receivable.formal-receivable-turnover.formula
+        mode: required_always
+        text: "正式应收周转天数按平均月末净欠款除以同期毛出库金额，再乘期间自然日数计算。结果表示平均净欠款相当于同期日均毛出库的多少天，可为正、零或负；负值表示净负余额的折合规模，不代表提前付款天数，具体成因需另查证据；零值可能来自零余额或正负抵消，不证明没有未收款项。"
+      - id: receivable.formal_receivable_turnover_days.legacy-note
+        mode: contract_only
+        text: *answer_note_formal_receivable_turnover_days
+    label: 正式应收周转天数
+    business_definition: 按本企业净额口径，将所选完整且已结束期间的平均净经营欠款折合为同期日均毛出库的天数，不等同逐笔付款耗时；未指定时默认最近12个月，指定单月仅计算该月。
+    answer_contract:
+      - "正式应收周转天数的有效数值与组成项以查询返回的状态为准；未定义表示当前证据不足以形成该指标，不等于查询执行失败。"
+      - "覆盖、公式及双侧外部客户范围以本次结果中的适用披露为准；目录说明本身不是已查询的经营事实。"
+    unit: 自然日
+    query_kind: formal_dso
+    max_group_dimensions: 1
+    debt_table: vk_dw.customer_debt_bymonth_dw
+    debt_time_field: bill_date
+    debt_measure: debt_amount_rmb
+    delivery_table: vk_dwd.sale_bill_goods_detail_dwd
+    delivery_time_field: delivery_time
+    delivery_measure: delivery_amount_rmb
+    time_policy: last_12_completed_months
+    debt_required_filters:
+      is_inner_cus: {op: eq, value: n}
+    delivery_required_filters:
+      bill_status: {op: eq, value: 6}
+      is_inner_cus: {op: eq, value: n}
+    allowed_dimensions: [customer, salesperson, department, organization]
+    dimension_mappings:
+      customer:
+        debt_key: customer_id
+        delivery_key: customer_id
+        debt_filter: customer_name
+        delivery_filter: customer_name
+        debt_outputs:
+          - {column: customer_id, alias: customer_id}
+          - {column: customer_name, alias: customer_name}
+        delivery_outputs: []
+      salesperson:
+        debt_key: sales_id
+        delivery_key: sales_id
+        debt_filter: sales_name
+        delivery_filter: sales_name
+        debt_outputs:
+          - {column: sales_id, alias: sales_id}
+          - {column: sales_name, alias: sales_name}
+        delivery_outputs: []
+      department:
+        debt_key: customer_dept
+        delivery_key: customer_dept
+        debt_filter: customer_dept
+        delivery_filter: customer_dept
+        debt_outputs:
+          - {column: customer_dept, alias: customer_dept}
+        delivery_outputs: []
+      organization:
+        debt_key: org_name
+        delivery_key: org_name
+        debt_filter: org_name
+        delivery_filter: org_name
+        debt_outputs:
+          - {column: org_name, alias: org_name}
+        delivery_outputs: []
+    answer_note: *answer_note_formal_receivable_turnover_days
+
+related_metric_refs:
+- domain: receivable
+  metric: positive_debt_amount
+- domain: receivable
+  metric: current_debt_amount
+- domain: receivable
+  metric: aging_over_90_amount
+- domain: receivable
+  metric: overdue_receivable_amount
+- domain: receivable
+  metric: overdue_days
+- domain: receivable
+  metric: debt_days
+- domain: receivable
+  metric: credit_amount_original
+- domain: receivable
+  metric: credit_days
+- domain: receivable
+  metric: excess_credit_amount
+- domain: receivable
+  metric: uncredited_positive_debt_amount
+- domain: receivable
+  metric: average_settlement_days
+- domain: receivable
+  metric: maximum_settlement_days
+- domain: receivable
+  metric: settlement_days_distribution
+- domain: receipt
+  metric: delivery_receipt_comparison
+- domain: receivable
+  metric: formal_receivable_turnover_days

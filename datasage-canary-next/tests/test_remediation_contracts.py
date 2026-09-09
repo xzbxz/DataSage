@@ -104,16 +104,16 @@ class ContractRemediationTests(unittest.TestCase):
                     ]["content_sha256"],
                 )
 
-    def test_customer_risk_related_metric_refs_are_explicit_and_projected(self) -> None:
+    def test_receivable_related_metric_refs_are_explicit_and_projected(self) -> None:
         expected = yaml.safe_load(
-            (CONTRACT_ROOT / "customer_risk-semantics.yaml").read_text(
+            (CONTRACT_ROOT / "receivable-semantics.yaml").read_text(
                 encoding="utf-8"
             )
         )["related_metric_refs"]
         for request in (
-            {"domain": "customer_risk"},
-            {"domain": "customer_risk", "view": "expert_index"},
-            {"domain": "customer_risk", "metric": "formal_receivable_turnover_days"},
+            {"domain": "receivable"},
+            {"domain": "receivable", "view": "expert_index"},
+            {"domain": "receivable", "metric": "formal_receivable_turnover_days"},
         ):
             with self.subTest(request=request):
                 result = self._catalog(request)["results"][0]
@@ -124,13 +124,13 @@ class ContractRemediationTests(unittest.TestCase):
 
     def test_related_metric_refs_reject_missing_or_unavailable_metrics(self) -> None:
         semantics = contracts._read_yaml(
-            capability_contract.DOMAIN_SOURCES["customer_risk"]["semantics"]
+            capability_contract.DOMAIN_SOURCES["receivable"]["semantics"]
         )
 
         legacy = copy.deepcopy(semantics)
         legacy["evidence_axes"] = {}
         with self.assertRaises(contracts.ContractFailure) as legacy_error:
-            contracts._related_metric_refs_projection("customer_risk", legacy)
+            contracts._related_metric_refs_projection("receivable", legacy)
         self.assertEqual("CONTRACT_UNAVAILABLE", legacy_error.exception.code)
 
         missing = copy.deepcopy(semantics)
@@ -139,7 +139,7 @@ class ContractRemediationTests(unittest.TestCase):
             "metric": "not_a_metric",
         }
         with self.assertRaises(contracts.ContractFailure) as missing_error:
-            contracts._related_metric_refs_projection("customer_risk", missing)
+            contracts._related_metric_refs_projection("receivable", missing)
         self.assertEqual("CONTRACT_UNAVAILABLE", missing_error.exception.code)
 
         unavailable = copy.deepcopy(semantics)
@@ -148,7 +148,7 @@ class ContractRemediationTests(unittest.TestCase):
             "metric": "receivable_quantity",
         }
         with self.assertRaises(contracts.ContractFailure) as unavailable_error:
-            contracts._related_metric_refs_projection("customer_risk", unavailable)
+            contracts._related_metric_refs_projection("receivable", unavailable)
         self.assertEqual("CONTRACT_UNAVAILABLE", unavailable_error.exception.code)
 
     def test_malformed_unavailable_metric_fails_catalog_compile(self) -> None:

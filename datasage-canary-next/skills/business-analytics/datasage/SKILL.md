@@ -14,7 +14,6 @@ metadata:
       - receipt
       - receivable
       - target
-      - customer_risk
       - inventory
     non_activation_examples:
       - ordinary conversation or writing
@@ -33,8 +32,7 @@ adaptively; this is not a mandatory call sequence.
 ## When to Use
 
 - Use it for new governed facts, metrics, comparisons, rankings, or operating-
-  performance evidence in delivery, receipt, receivable, target, customer_risk,
-  or inventory.
+  performance evidence in delivery, receipt, receivable, target, or inventory.
 - Do not use it for ordinary conversation, public research, user-provided data,
   writing, or internal policy/HR/document questions without governed metrics.
 

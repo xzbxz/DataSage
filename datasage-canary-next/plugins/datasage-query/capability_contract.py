@@ -32,9 +32,6 @@ DOMAIN_SOURCES: dict[str, dict[str, str]] = {
     "target": {
         "semantics": "plugins/datasage-query/contracts/target-semantics.yaml",
     },
-    "customer_risk": {
-        "semantics": "plugins/datasage-query/contracts/customer_risk-semantics.yaml",
-    },
     "inventory": {
         "semantics": "plugins/datasage-query/contracts/inventory-semantics.yaml",
     },

@@ -5136,13 +5136,13 @@ _FORMAL_DSO_ATTESTATION_VERSION = (
     "formal-receivable-turnover-calculation-attestation/v2"
 )
 _FORMAL_DSO_COVERAGE_DISCLOSURE = (
-    "customer-risk.formal-receivable-turnover.coverage"
+    "receivable.formal-receivable-turnover.coverage"
 )
 _FORMAL_DSO_EXTERNAL_SCOPE_DISCLOSURE = (
-    "customer-risk.formal-receivable-turnover.external-customer.scope"
+    "receivable.formal-receivable-turnover.external-customer.scope"
 )
 _FORMAL_DSO_FORMULA_DISCLOSURE = (
-    "customer-risk.formal-receivable-turnover.formula"
+    "receivable.formal-receivable-turnover.formula"
 )
 _FORMAL_DSO_GROSS_DELIVERY_FACT = "same_period_gross_delivery_rmb"
 _FORMAL_DSO_ATTESTED_FACTS = (
@@ -5311,7 +5311,7 @@ def _formal_dso_calculation_attestation(
     """Seal canonical public component values and guards for formal DSO."""
 
     if (
-        request.get("domain") != "customer_risk"
+        request.get("domain") != "receivable"
         or request.get("metric") != "formal_receivable_turnover_days"
     ):
         return None
@@ -5440,7 +5440,7 @@ def _attach_formal_dso_calculation_attestations(
     disclosure_ledger_seal: str,
 ) -> None:
     if (
-        request.get("domain") != "customer_risk"
+        request.get("domain") != "receivable"
         or request.get("metric") != "formal_receivable_turnover_days"
     ):
         return

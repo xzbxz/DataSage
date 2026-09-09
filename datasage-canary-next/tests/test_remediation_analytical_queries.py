@@ -57,7 +57,7 @@ class AnalyticalQueryRemediationTests(unittest.TestCase):
 
     def test_formal_dso_rejects_window_ending_in_current_month(self) -> None:
         datasets, metric = self._metric(
-            "customer_risk", "formal_receivable_turnover_days"
+            "receivable", "formal_receivable_turnover_days"
         )
         request = {
             "metric": "formal_receivable_turnover_days",

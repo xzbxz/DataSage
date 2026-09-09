@@ -624,7 +624,7 @@ def _settlement_query(
 
     selected_columns: list[tuple[str, str]] = []
     for code in codes:
-        definition = dimensions[code]
+        definition = (metric.get("dimension_overrides") or {}).get(code, dimensions[code])
         for column, output in _dimension_columns(definition):
             _approved(column, dataset)
             if code in selected:

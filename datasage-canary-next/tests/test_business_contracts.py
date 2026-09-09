@@ -1235,8 +1235,8 @@ class BusinessContractTests(unittest.TestCase):
 
     def test_catalog_scorecard_mixed_with_other_branch_fails_atomically(self) -> None:
         scorecard = {"view": "performance_scorecard"}
-        customer_risk = {"domain": "customer_risk", "view": "expert_index"}
-        for requests in ([scorecard, customer_risk], [customer_risk, scorecard]):
+        receivable = {"domain": "receivable", "view": "expert_index"}
+        for requests in ([scorecard, receivable], [receivable, scorecard]):
             with self.subTest(requests=requests):
                 with (
                     mock.patch.object(
@@ -1278,7 +1278,7 @@ class BusinessContractTests(unittest.TestCase):
             contracts.datasage_catalog(
                 {
                     "requests": [
-                        {"domain": "customer_risk", "view": "expert_index"},
+                        {"domain": "receivable", "view": "expert_index"},
                         {"domain": "delivery", "view": "expert_index"},
                     ]
                 }
@@ -1287,7 +1287,7 @@ class BusinessContractTests(unittest.TestCase):
         self.assertEqual("success", runtime["status"])
         self.assertEqual(2, len(runtime["results"]))
         self.assertEqual(
-            ["customer_risk", "delivery"],
+            ["receivable", "delivery"],
             [result["domain"] for result in runtime["results"]],
         )
         self.assertNotIn("failures", runtime)
@@ -1422,7 +1422,7 @@ class BusinessContractTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual("datasage-mini-receivable-semantics/v8", receivable["version"])
+        self.assertEqual("datasage-mini-receivable-semantics/v9", receivable["version"])
         for code in ("positive_debt_amount", "overdue_receivable_amount"):
             self.assertNotIn("change_decomposition", receivable["metrics"][code])
 
@@ -1885,9 +1885,9 @@ class BusinessContractTests(unittest.TestCase):
         analytical_metrics = {
             "inventory": ("inventory_turnover_days",),
             "target": ("delivery_target_completion", "receipt_target_completion"),
-            "customer_risk": (
+            "receipt": ("delivery_receipt_comparison",),
+            "receivable": (
                 "average_settlement_days",
-                "delivery_receipt_comparison",
                 "formal_receivable_turnover_days",
                 "maximum_settlement_days",
                 "settlement_days_distribution",
@@ -2408,7 +2408,7 @@ class BusinessContractTests(unittest.TestCase):
             set(disclosures),
         )
         expected_disclosure_texts = {
-            "receipt.domain.scope": "收款及退款域指标均包含内部客户并排除A状态。",
+            "receipt.domain.scope": "收款与退款金额默认包含内部客户并排除A状态；跨账本对照中其他金额侧以对应指标披露为准。",
             "receipt.net.scope": (
                 "净收款为收款人民币金额减退款人民币金额；"
                 "收款和退款范围均包含内部客户并排除A状态。"
@@ -2575,7 +2575,7 @@ class BusinessContractTests(unittest.TestCase):
                 / "receipt-semantics.yaml"
             ).read_text(encoding="utf-8")
         )
-        self.assertEqual("datasage-mini-receipt-semantics/v10", receipt_contract["version"])
+        self.assertEqual("datasage-mini-receipt-semantics/v11", receipt_contract["version"])
         self.assertNotIn("answer_contract", receipt_contract)
         receipt_disclosures = {
             item["id"]: item
@@ -3236,14 +3236,14 @@ class BusinessContractTests(unittest.TestCase):
         self.assertNotIn("`snapshot_f`.`debt_amount` > %s", resolver_sql)
 
         formal_dso_disclosure_id = (
-            "customer-risk.formal-receivable-turnover.external-customer.scope"
+            "receivable.formal-receivable-turnover.external-customer.scope"
         )
         formal_dso_coverage_id = (
-            "customer-risk.formal-receivable-turnover.coverage"
+            "receivable.formal-receivable-turnover.coverage"
         )
         formal_dso_text = "正式应收周转天数的月末净欠款和毛出库分母均固定排除内部客户。"
         formal_dso_formula_id = (
-            "customer-risk.formal-receivable-turnover.formula"
+            "receivable.formal-receivable-turnover.formula"
         )
         formal_dso_formula_text = (
             "正式应收周转天数按平均月末净欠款除以同期毛出库金额，再乘期间自然日数计算。"
@@ -3251,17 +3251,17 @@ class BusinessContractTests(unittest.TestCase):
             "负值表示净负余额的折合规模，不代表提前付款天数，具体成因需另查证据；"
             "零值可能来自零余额或正负抵消，不证明没有未收款项。"
         )
-        customer_risk_contract = yaml.safe_load(
+        receivable_contract = yaml.safe_load(
             (
                 PROFILE_ROOT
-                / "plugins/datasage-query/contracts/customer_risk-semantics.yaml"
+                / "plugins/datasage-query/contracts/receivable-semantics.yaml"
             ).read_text(encoding="utf-8")
         )
         self.assertEqual(
-            "datasage-mini-customer-risk-semantics/v10",
-            customer_risk_contract["version"],
+            "datasage-mini-receivable-semantics/v9",
+            receivable_contract["version"],
         )
-        formal_dso_declarations = customer_risk_contract["metrics"][
+        formal_dso_declarations = receivable_contract["metrics"][
             "formal_receivable_turnover_days"
         ]["disclosures"]
         self.assertIn(
@@ -3280,13 +3280,13 @@ class BusinessContractTests(unittest.TestCase):
             },
             formal_dso_declarations,
         )
-        self.assertNotIn("default_disclosures", customer_risk_contract)
+        self.assertEqual("receivable.external-customer.scope", receivable_contract["default_disclosures"][0]["id"])
         detail = json.loads(
             contracts.datasage_catalog(
                 {
                     "requests": [
                         {
-                            "domain": "customer_risk",
+                            "domain": "receivable",
                             "metric": "formal_receivable_turnover_days",
                         }
                     ]
@@ -3315,7 +3315,7 @@ class BusinessContractTests(unittest.TestCase):
         self.assertIsInstance(dso_rows[0]["effective_month_count"], str)
         dso_request = {
             "request_id": "r4_default",
-            "domain": "customer_risk",
+            "domain": "receivable",
             "mode": "metric",
             "purpose": "synthetic formal DSO disclosure test",
             "metric": "formal_receivable_turnover_days",
@@ -4039,7 +4039,7 @@ class BusinessContractTests(unittest.TestCase):
         delivery_receipt_result, _ = run_query(
             {
                 "request_id": "delivery_receipt_comparison",
-                "domain": "customer_risk",
+                "domain": "receipt",
                 "mode": "metric",
                 "purpose": "synthetic comparison scope regression",
                 "metric": "delivery_receipt_comparison",
@@ -4051,7 +4051,7 @@ class BusinessContractTests(unittest.TestCase):
             item["disclosure_id"]
             for item in delivery_receipt_result["disclosure_ledger"]
         }
-        self.assertIn("customer-risk.delivery-receipt.scope-asymmetry", delivery_receipt_ids)
+        self.assertIn("receipt.delivery-receipt.scope-asymmetry", delivery_receipt_ids)
         self.assertNotIn(formal_dso_disclosure_id, delivery_receipt_ids)
 
         main_skill = _main_skill()
@@ -4480,7 +4480,7 @@ class BusinessContractTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual("datasage-mini-receivable-semantics/v8", semantics["version"])
+        self.assertEqual("datasage-mini-receivable-semantics/v9", semantics["version"])
         current_snapshot_evidence_metrics = {
             metric_code
             for metric_code, definition in semantics["metrics"].items()
@@ -5121,7 +5121,7 @@ class BusinessContractTests(unittest.TestCase):
             "receipt",
             "receivable",
             "target",
-            "customer_risk",
+            "receivable",
             "inventory",
         ):
             summary = json.loads(
@@ -5932,7 +5932,7 @@ class BusinessContractTests(unittest.TestCase):
         )
 
     def test_shared_dimension_labels_are_business_specific(self) -> None:
-        for domain in ("delivery", "customer_risk"):
+        for domain in ("delivery", "receivable"):
             projection = contracts._domain_contract(domain, "planner")["planner"]
             labels = {
                 dimension["code"]: dimension["label"]

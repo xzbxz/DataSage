@@ -36,7 +36,7 @@ SUPPORTED_DOMAINS = {
     "receipt",
     "receivable",
     "target",
-    "customer_risk",
+    "receivable",
     "inventory",
 }
 
