@@ -1,4 +1,4 @@
-version: datasage-mini-inventory-semantics/v8
+version: datasage-mini-inventory-semantics/v9
 domain: inventory
 contract_role: plugin_physical_execution
 business_name: 库存事实、未动销与周转分析
@@ -396,18 +396,19 @@ metrics:
     disclosures:
       - id: inventory.turnover-days.calculation-and-coverage
         mode: required_always
-        text: "库存周转天数以成本口径为主并同时返回DDP指导口径，采用期初期末半权重的平均库存和期间自然天数；净出库或平均库存不大于零、或月末快照不连续时，对应结果未定义。"
+        text: "库存周转按所选完整期间以期初期末半权平均库存除以同期净出库，再乘自然日数；成本与DDP分别判断完整性。真实零参与，缺失月份和NULL不补零；净出库为零时无法相除，其他正负值保留，表示平均库存相当于同期日均净出库的天数，不等于实际存放时长；负分母及负库存成因需另查证据。默认候选期末依据最近已结束月份中至少一种库存金额非零的月份，不证明结账或源数据完整；显式期间不自动回退，表内零值的业务真实性仍需核实。"
       - id: inventory.inventory_turnover_days.legacy-note
         mode: contract_only
-        text: &answer_note_inventory_turnover_days "默认主结果为成本口径周转天数，同时返回 DDP 指导口径；使用期初期末半权重的梯形平均库存和期间自然天数。净出库不大于零、平均库存不大于零或全局月快照不连续时，对应结果不可定义。"
+        text: &answer_note_inventory_turnover_days "成本主口径与DDP指导口径均按所选完整期间计算，不按首次活跃月缩短；缺失不是零，净出库为零时未定义，正负计算值均保留并解释其组成。"
     label: 库存周转天数（成本主口径与 DDP 指导口径）
     business_definition: 完整核算期间的库存周转速度，同时返回成本主口径与 DDP 指导口径；关键证据不可用时未定义。
     unit_policy: 成本主口径周转天数与 DDP 指导口径周转天数均为自然日
+    unit: 自然日
     query_kind: inventory_turnover_days
     max_group_dimensions: 2
     table: vk_dw.goods_turnover_basic_data_dw
     time_field: bill_date
-    time_policy: latest_complete_accounting_months
+    time_policy: latest_available_accounting_months
     default_complete_months: 12
     cost_measure: cost_amount_rmb
     ddp_measure: ddp_amount_rmb

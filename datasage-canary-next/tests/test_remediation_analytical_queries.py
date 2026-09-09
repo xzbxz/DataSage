@@ -75,7 +75,7 @@ class AnalyticalQueryRemediationTests(unittest.TestCase):
             )
         self.assertEqual("INVALID_PLAN", caught.exception.code)
 
-    def test_inventory_global_months_requires_valid_cost_snapshot(self) -> None:
+    def test_inventory_coverage_is_per_group_and_default_is_only_a_candidate(self) -> None:
         datasets, semantics = contracts.execution_contracts("inventory")
         metric = semantics["metrics"]["inventory_turnover_days"]
         request = {"dimensions": [], "metric_filters": {}}
@@ -87,15 +87,15 @@ class AnalyticalQueryRemediationTests(unittest.TestCase):
             10,
             observed_on=date(2026, 8, 18),
         )
-        global_start = sql.index("global_months AS")
-        global_end = sql.index("monthly_data AS", global_start)
-        global_sql = sql[global_start:global_end]
-        self.assertIn("`cost_amount_rmb` IS NOT NULL", global_sql)
-        self.assertIn("`cost_amount_rmb` <> 0", global_sql)
-        latest_start = sql.index("latest_complete AS")
+        self.assertNotIn("global_months AS", sql)
+        self.assertIn("entity_snapshot_present", sql)
+        self.assertIn("cost_missing_value_count", sql)
+        latest_start = sql.index("latest_available AS")
         latest_end = sql.index("bounds AS", latest_start)
         latest_sql = sql[latest_start:latest_end]
         self.assertIn("`bill_date` < %s", latest_sql)
+        self.assertIn("<> 0", latest_sql)
+        self.assertIn("`ddp_amount_rmb` IS NOT NULL", latest_sql)
         self.assertEqual("2026-08", params[0])
 
     def test_target_completion_caps_actual_at_observation_day(self) -> None:

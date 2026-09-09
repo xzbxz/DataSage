@@ -4247,6 +4247,13 @@ _PUBLIC_FACT_FIELDS = {
     "comparison_known_value_count",
     "comparison_missing_value_count",
     "cost_turnover_days",
+    "effective_operating_months",
+    "expected_snapshot_count",
+    "actual_snapshot_count",
+    "entity_source_hit_count",
+    "cost_missing_value_count",
+    "ddp_missing_value_count",
+    "net_delivery_missing_value_count",
     "ddp_turnover_days",
     "avg_inventory_cost_rmb",
     "avg_inventory_ddp_rmb",
@@ -6620,7 +6627,7 @@ def _public_time_range(value: Any) -> dict[str, Any]:
     source = value.get("source")
     if source in {"current_snapshot", "latest_snapshot", "latest_non_null_snapshot"}:
         return {"source": source}
-    if source == "latest_complete_accounting_months" and isinstance(value.get("months"), int):
+    if source in {"latest_complete_accounting_months", "latest_available_accounting_months"} and isinstance(value.get("months"), int):
         return {"source": source, "months": value["months"]}
     if source == "latest_snapshot_offset" and isinstance(value.get("months_before"), int):
         return {"source": source, "months_before": value["months_before"]}
@@ -6664,6 +6671,25 @@ def _resolve_snapshot_time_evidence(
     """Bind model-visible snapshot scope to an internal same-query month."""
 
     source = value.get("source")
+    if source == "latest_available_accounting_months":
+        periods = {
+            (_normalized_snapshot_month(row["effective_start_month"]),
+             _normalized_snapshot_month(row["operating_end_month"]))
+            for row in rows
+            if row.get("effective_start_month") and row.get("operating_end_month")
+        }
+        if not periods:
+            return {**value, "resolution_state": "unavailable"}, data_state
+        if len(periods) != 1:
+            raise QueryFailure("CONTRACT_UNAVAILABLE", "库存周转期间证据不一致。", stage="result_validation")
+        start_month, end_month = next(iter(periods))
+        start = _calendar_month_time_range(start_month)["start"]
+        end = _calendar_month_time_range(end_month)["end"]
+        first, last = date.fromisoformat(start), date.fromisoformat(end)
+        months = (last.year - first.year) * 12 + last.month - first.month
+        if months != value.get("months") or any(row.get("period_natural_days") != (last-first).days for row in rows):
+            raise QueryFailure("CONTRACT_UNAVAILABLE", "库存周转月份数或自然日证据不一致。", stage="result_validation")
+        return {"start": start, "end": end, "source": source}, data_state
     if source in _SNAPSHOT_TIME_SOURCES:
         observed_field = any(evidence_field in row for row in rows)
         months: set[str] = set()
@@ -6857,7 +6883,7 @@ def _scope_texts(value: Any) -> list[str]:
         if value.get("resolution_state") == "required_value_unavailable":
             return ["最新有值业务快照不可用"]
         return ["最新有值业务快照月份证据不可用"]
-    if source == "latest_complete_accounting_months" and isinstance(value.get("months"), int):
+    if source in {"latest_complete_accounting_months", "latest_available_accounting_months"} and isinstance(value.get("months"), int):
         return [f"最近 {value['months']} 个完整会计月"]
     if source == "latest_snapshot_offset" and isinstance(value.get("months_before"), int):
         return [f"业务月度快照月份证据不可用（偏移 {value['months_before']} 个月）"]
