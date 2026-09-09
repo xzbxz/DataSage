@@ -1,4 +1,4 @@
-version: datasage-mini-customer-risk-semantics/v9
+version: datasage-mini-customer-risk-semantics/v10
 domain: customer_risk
 contract_role: plugin_physical_execution
 business_name: 客户应收风险证据分析
@@ -146,12 +146,12 @@ metrics:
         text: "正式应收周转天数的月末净欠款和毛出库分母均固定排除内部客户。"
       - id: customer-risk.formal-receivable-turnover.formula
         mode: required_always
-        text: "正式应收周转天数按平均月末净欠款除以同期毛出库金额，再乘期间自然日数计算。"
+        text: "正式应收周转天数按平均月末净欠款除以同期毛出库金额，再乘期间自然日数计算。结果表示平均净欠款相当于同期日均毛出库的多少天，可为正、零或负；负值表示净负余额的折合规模，不代表提前付款天数，具体成因需另查证据；零值可能来自零余额或正负抵消，不证明没有未收款项。"
       - id: customer-risk.formal_receivable_turnover_days.legacy-note
         mode: contract_only
         text: *answer_note_formal_receivable_turnover_days
     label: 正式应收周转天数
-    business_definition: 以所选完整且已结束自然月期间的平均净经营欠款与同期有效出库规模衡量应收周转速度，按自然日表示；未指定时默认最近12个月，指定单月仅计算该月。
+    business_definition: 按本企业净额口径，将所选完整且已结束期间的平均净经营欠款折合为同期日均毛出库的天数，不等同逐笔付款耗时；未指定时默认最近12个月，指定单月仅计算该月。
     answer_contract:
       - "正式应收周转天数的有效数值与组成项以查询返回的状态为准；未定义表示当前证据不足以形成该指标，不等于查询执行失败。"
       - "覆盖、公式及双侧外部客户范围以本次结果中的适用披露为准；目录说明本身不是已查询的经营事实。"

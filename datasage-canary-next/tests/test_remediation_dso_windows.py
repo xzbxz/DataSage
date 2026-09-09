@@ -131,6 +131,24 @@ class DsoWindowTests(unittest.TestCase):
             changed={**components,field:value};changed_facts={**facts,field:value}
             self.assertFalse(validate(changed,facts=changed_facts,applied_time_range=r['applied_time_range']))
 
+    def test_signed_and_offset_balances_keep_formula_values_and_interpretation(self):
+        # One completed 30-day month, sales 1000. Negative is not abs/zero/undefined.
+        for opening, closing, expected in [(100,100,3),(-100,-100,-3),(0,0,0),(100,-100,0)]:
+            with self.subTest(opening=opening,closing=closing):
+                self.seed('2026-06-01',1,delivery_value=1000)
+                self.h.conn.execute("UPDATE vk_dw.customer_debt_bymonth_dw SET debt_amount_rmb=? WHERE bill_date='2026-05'",(opening,))
+                self.h.conn.execute("UPDATE vk_dw.customer_debt_bymonth_dw SET debt_amount_rmb=? WHERE bill_date='2026-06'",(closing,))
+                response=self.query(calendar_month='2026-06');r=self.h.result(response);f=r['rows'][0]['facts']
+                self.assertEqual('zero' if expected == 0 else 'rows',r['data_state'])
+                self.assertEqual(expected,f['metric_value'])
+                self.assertEqual((opening+closing)/2,f['average_net_debt_rmb'])
+                self.assertEqual('verified',f['calculation_attestation']['status'])
+                # Delivery of metric meaning, not a claim about model compliance.
+                explanation=next(d['text'] for d in response['disclosures']
+                    if d['disclosure_id']=='customer-risk.formal-receivable-turnover.formula')
+                self.assertIn('不代表提前付款天数',explanation)
+                self.assertIn('正负抵消',explanation)
+
     def test_current_future_partial_and_conflicting_months_rejected_before_SQL(self):
         for kwargs in ({'calendar_month':'2026-09'},{'calendar_month':'2027-01'},
                        {'time_range':{'start':'2024-02-02','end':'2024-03-01'}},

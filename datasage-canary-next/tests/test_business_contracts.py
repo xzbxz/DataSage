@@ -3247,6 +3247,9 @@ class BusinessContractTests(unittest.TestCase):
         )
         formal_dso_formula_text = (
             "正式应收周转天数按平均月末净欠款除以同期毛出库金额，再乘期间自然日数计算。"
+            "结果表示平均净欠款相当于同期日均毛出库的多少天，可为正、零或负；"
+            "负值表示净负余额的折合规模，不代表提前付款天数，具体成因需另查证据；"
+            "零值可能来自零余额或正负抵消，不证明没有未收款项。"
         )
         customer_risk_contract = yaml.safe_load(
             (
@@ -3255,7 +3258,7 @@ class BusinessContractTests(unittest.TestCase):
             ).read_text(encoding="utf-8")
         )
         self.assertEqual(
-            "datasage-mini-customer-risk-semantics/v9",
+            "datasage-mini-customer-risk-semantics/v10",
             customer_risk_contract["version"],
         )
         formal_dso_declarations = customer_risk_contract["metrics"][
