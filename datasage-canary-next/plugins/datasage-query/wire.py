@@ -461,15 +461,15 @@ def bounded_json_handler(tool_name: str, handler: Callable[..., Any]):
                     decoded = None
                 error = decoded.get("error") if isinstance(decoded, dict) else None
                 if isinstance(error, Mapping) and error.get("code") == "BATCH_DEADLINE_EXCEEDED":
-                    return raw
+                    return enforce_tool_result_budget(tool_name, decoded)
                 return _compact_json({"status": "failed", "results": [],
                     "must_stop_business_query": True,
                     "error": {"code": "BATCH_DEADLINE_EXCEEDED", "message": "调用总时限已到。", "retryable": True}})
             rendered = enforce_tool_result_budget(tool_name, raw)
             if time.monotonic() >= deadline_at:
-                # Raw was already validated before compaction started. Keep it
-                # rather than publish a partially processed wire object.
-                decoded = json.loads(raw)
+                # Preserve completed facts in the same public projection as
+                # normal replies; expiry does not authorize an internal payload.
+                decoded = json.loads(rendered)
                 decoded["status"] = "partial" if decoded.get("results") else "failed"
                 decoded["error"] = {"code": "BATCH_DEADLINE_EXCEEDED", "message": "输出整理超过总时限；保留期限内完成的结果。", "retryable": True}
                 return _compact_json(decoded)
