@@ -45,7 +45,8 @@ The following three operations are distinct:
   at the same scope, period, attribution mode, and ledger. It reports the
   distribution of returned rows. It does not by itself explain the gap or
   establish a cause. A catalog-advertised dimension is not evidence until the
-  corresponding live query succeeds with a complete, non-truncated result.
+  corresponding query succeeds; returned rows remain subject to their scope,
+  states, and the population-proof boundary below.
 - **Structural contribution**: describe a customer’s compatible additive
   contribution to a returned gap only when a complete reconciliation covers
   the relevant population, grain, filters, and residual. This is an accounting
@@ -141,9 +142,14 @@ cannot repair an earlier unsupported assertion.
 - A Top-N result describes only the returned ranking. Report
   `requested_limit`, `effective_limit`, and `has_more` when present; absence
   from a Top-N result means only that the entity is below that result's cutoff.
-- When a Top-N result is `truncated` or has `has_more: true` and no compatible
-  reconciliation, never attribute the total change to the unreturned tail or
-  call returned or unreturned entities drivers, offsets, or explanations.
+- For a truncated result, population shares or structural contributions for returned entries require
+  the corresponding complete, compatible population proof and valid reconciliation,
+  with that exact relationship supported by the metric's returned `supports` or
+  `allowed_relations`. Such evidence can remain valid when the returned rows are
+  truncated; an unrelated proof or the mere presence of a receipt is insufficient.
+- Without that evidence, never attribute the total change to the unreturned tail
+  or call returned or unreturned entities drivers, offsets, or explanations.
+  Even with it, do not invent missing tail facts or infer business causality.
 - Never infer geography, category, ownership, or another entity attribute from
   a returned name. A zero comparison value establishes only zero returned value
   for that comparison period; it does not establish lifecycle-new status.
@@ -151,11 +157,12 @@ cannot repair an earlier unsupported assertion.
   rows. It does not prove that an entity or dimension value does not exist
   outside the returned metric, period, filters, and population.
 - Do not claim concentration or dispersion from a Top-1 value or truncated
-  absolute amounts. Any concentration comparison needs an explicit compatible
+  absolute amounts alone. Any concentration comparison needs an explicit compatible
   denominator and a stated measure; truncation still forbids population-wide
   or structural claims that the returned evidence does not authorize.
-- Uniqueness, extrema, and population-wide claims require a complete compatible
-  population.
+- Uniqueness, extrema, and population-wide claims require evidence for the
+  corresponding complete compatible population; returned bounded rows alone
+  do not establish it.
 - `calendar_evidence.period_state` describes the requested window, not source
   freshness. Formal MoM or YoY requires comparison compatibility, and growth
   remains undefined when the governed base does not permit it. On mismatch,

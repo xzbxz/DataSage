@@ -17,7 +17,9 @@ Rule ID: `datasage.query-rules/v1`
 - For a data request whose metric is unknown, inspect the smallest relevant
   `datasage_catalog` surface. A compact domain request discovers candidate
   metrics. An exact metric detail request is optional planning help; query
-  execution reloads the current contract and validates its capabilities itself.
+  execution validates capabilities against the process contract snapshot pinned
+  when the plugin registers. File edits take effect after the affected Hermes
+  process restarts and registers the plugin again, not by querying repeatedly.
 - Select an exact registered metric from business meaning. Never invent or
   substitute a metric, dimension, entity, period, unit, or currency, including
   a related amount, count, quantity, rate, average, extreme, or total.
@@ -50,11 +52,12 @@ returned evidence, not completed-period or population-wide proof.
 
 ## Time
 
-- Transaction totals and rankings without a time phrase default to the current
-  natural month.
-- “最近” without a unit means the latest 30 natural days.
-- Current balance, aging, and month-end inventory use the latest available
-  snapshot unless the user names a period.
+- Resolve omitted or imprecise time wording using the selected metric's published
+  time policy, default, and legal windows. “最近” without a duration does not by
+  itself establish a 30-day window.
+- Preserve explicit user scope. If it is not expressible under that contract,
+  explain the limitation rather than silently shifting the period; a rolling-day
+  interval cannot override a complete-month or completed-period requirement.
 - Use the metric's governed business time. Never substitute record-creation time
   for a documented transaction or snapshot time.
 - Start boundaries are inclusive and end boundaries are exclusive.

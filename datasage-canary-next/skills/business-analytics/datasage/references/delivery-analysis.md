@@ -59,10 +59,10 @@ unattributed. Independent marginal cuts do not prove overlap, correspondence,
 or one combined business block.
 
 For Top-N or bounded results, report `requested_limit`, `effective_limit`, and
-`has_more` when returned. `truncated: true` or `has_more: true` authorizes only
-the returned ranking or distribution. It never authorizes a population-wide
-share, driver, offset, concentration, or contribution, and the unreturned tail
-must not be assigned a value.
+`has_more` when returned. Truncation alone supplies no population-wide or
+structural proof. Apply the population-proof and authorized-relationship boundary
+in [`datasage.answer-boundary/v1`](answer-boundary.md); do not treat truncation
+as invalidating a relationship that the exact metric's returned evidence supports.
 
 ### Hypotheses and causal evidence
 
@@ -75,8 +75,9 @@ applicable mechanism exposed by the current catalog. A trend, co-movement,
 ratio, denominator, target design, arithmetic, or ordinary breakdown is not
 discriminating evidence by itself.
 
-If the requested driver query fails, is unsupported, ambiguous, stale, partial,
-pending, current-master, or truncated, preserve the valid baseline, name the
+If the requested evidence cannot support the requested relationship because it
+is failed, unsupported, ambiguous, stale, partial, pending, current-master, or
+truncated without the required proof, preserve the valid baseline, name the
 local evidence gap, and state the next discriminating check. Do not silently
 replace a failed customer or order check with a department, month trend, or
 related amount metric.

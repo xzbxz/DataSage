@@ -7210,7 +7210,7 @@ def _formal_dso_attestation_state(
     result: Mapping[str, Any],
     sealed_disclosure_ids: set[str],
 ) -> str:
-    """Return verified/undefined only for a complete sealed v1 statement."""
+    """Return verified/undefined only for a complete sealed v2 statement."""
 
     if (
         not isinstance(attestation, Mapping)
