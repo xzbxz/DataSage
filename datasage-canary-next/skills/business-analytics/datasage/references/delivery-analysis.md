@@ -116,4 +116,3 @@ Keep each disclosure next to the claim it limits:
 
 Never use a later caveat to repair an earlier unsupported claim. A limitation in
 one branch is local to that branch; valid independent evidence remains usable.
-
