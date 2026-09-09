@@ -257,7 +257,6 @@ def _inventory_turnover_period(
     default_months: int,
     *,
     valid_measure: str = "cost_amount_rmb",
-    alternative_measure: str | None = None,
     observed_on: date | None = None,
 ) -> tuple[str, list[Any], dict[str, Any]]:
     supplied = request.get("time_range")
@@ -265,8 +264,6 @@ def _inventory_turnover_period(
         observed_month = (observed_on or _business_today()).replace(day=1)
         cutoff_month = observed_month.strftime("%Y-%m")
         inventory_present = f"({_quote_column(valid_measure)} IS NOT NULL AND {_quote_column(valid_measure)} <> 0)"
-        if alternative_measure is not None:
-            inventory_present += f" OR ({_quote_column(alternative_measure)} IS NOT NULL AND {_quote_column(alternative_measure)} <> 0)"
         bounds_sql = (
             "latest_available AS ("
             f"SELECT MAX(CASE WHEN ({inventory_present}) "
@@ -399,7 +396,6 @@ def _inventory_turnover_query(
         request,
         default_months,
         valid_measure=cost_measure,
-        alternative_measure=ddp_measure,
         observed_on=observed_on,
     )
     quoted_table = _quote_table(table)
@@ -439,6 +435,13 @@ expected_months AS (
   FROM expected_months CROSS JOIN bounds
   WHERE `snapshot_month` < `operating_end_month`
 ),
+accounted_months AS (
+  SELECT DISTINCT s.{_quote_column(period_measure)} AS `snapshot_month`
+  FROM {quoted_table} AS s CROSS JOIN bounds AS b
+  WHERE s.{_quote_column(period_measure)} BETWEEN b.`opening_month` AND b.`operating_end_month`
+    AND s.{_quote_column(cost_measure)} IS NOT NULL
+    AND s.{_quote_column(cost_measure)} <> 0
+),
 monthly_data AS (
   SELECT {dimension_prefix}s.{_quote_column(period_measure)} AS `snapshot_month`,
          SUM(s.{_quote_column(cost_measure)}) AS `inventory_cost_rmb`,
@@ -469,10 +472,12 @@ matrix AS (
          COALESCE(md.`cost_nulls`, 0) AS `cost_nulls`,
          COALESCE(md.`ddp_nulls`, 0) AS `ddp_nulls`,
          COALESCE(md.`net_nulls`, 0) AS `net_nulls`,
-         CASE WHEN md.`source_rows` IS NULL THEN 0 ELSE 1 END AS `entity_snapshot_present`
+         CASE WHEN md.`source_rows` IS NULL THEN 0 ELSE 1 END AS `entity_snapshot_present`,
+         CASE WHEN am.`snapshot_month` IS NULL THEN 0 ELSE 1 END AS `accounting_ready`
   FROM entity_bounds AS eb
   JOIN expected_months AS em ON em.`snapshot_month` BETWEEN eb.`effective_opening_month` AND eb.`operating_end_month`
   LEFT JOIN monthly_data AS md ON md.`snapshot_month` = em.`snapshot_month`{dimension_join}
+  LEFT JOIN accounted_months AS am ON am.`snapshot_month` = em.`snapshot_month`
 ),
 summary_raw AS (
   SELECT {summary_prefix}MIN(m.`effective_start_month`) AS `effective_start_month`,
@@ -486,6 +491,8 @@ summary_raw AS (
            STR_TO_DATE(CONCAT(MIN(m.`effective_start_month`), '-01'), '{day_format}')) AS `period_natural_days`,
          COUNT(*) AS `expected_snapshot_count`,
          SUM(m.`entity_snapshot_present`) AS `actual_snapshot_count`,
+         SUM(CASE WHEN m.`accounting_ready` = 0 THEN 1 ELSE 0 END) AS `unready_accounting_month_count`,
+         GROUP_CONCAT(CASE WHEN m.`accounting_ready` = 0 THEN m.`snapshot_month` END) AS `unready_accounting_months`,
          SUM(m.`source_rows`) AS `entity_source_hit_count`,
          SUM(m.`cost_nulls`) AS `cost_missing_value_count`,
          SUM(m.`ddp_nulls`) AS `ddp_missing_value_count`,
@@ -500,9 +507,9 @@ summary_raw AS (
 ),
 summary AS (
   SELECT *,
-         CASE WHEN `actual_snapshot_count` < `expected_snapshot_count` OR `cost_missing_value_count` > 0
+         CASE WHEN `unready_accounting_month_count` > 0 OR `actual_snapshot_count` < `expected_snapshot_count` OR `cost_missing_value_count` > 0
               THEN NULL ELSE `weighted_cost` / `effective_operating_months` END AS `avg_inventory_cost_rmb`,
-         CASE WHEN `actual_snapshot_count` < `expected_snapshot_count` OR `ddp_missing_value_count` > 0
+         CASE WHEN `unready_accounting_month_count` > 0 OR `actual_snapshot_count` < `expected_snapshot_count` OR `ddp_missing_value_count` > 0
               THEN NULL ELSE `weighted_ddp` / `effective_operating_months` END AS `avg_inventory_ddp_rmb`,
          CASE WHEN `missing_flow_months` > 0 OR `net_delivery_missing_value_count` > 0
               THEN NULL ELSE `recorded_net_delivery` END AS `net_delivery_rmb`
@@ -519,14 +526,17 @@ turnover_values AS (
 SELECT {final_prefix}`cost_turnover_days` AS `metric_value`, `cost_turnover_days`, `ddp_turnover_days`,
        `avg_inventory_cost_rmb`, `avg_inventory_ddp_rmb`, `net_delivery_rmb`, `period_natural_days`,
        `effective_operating_months`, `expected_snapshot_count`, `actual_snapshot_count`,
+       `unready_accounting_month_count`, `unready_accounting_months`,
        `cost_missing_value_count`, `ddp_missing_value_count`, `net_delivery_missing_value_count`,
        `entity_source_hit_count`, `effective_opening_month`, `effective_start_month`, `operating_end_month`,
-       CASE WHEN `actual_snapshot_count` < `expected_snapshot_count` THEN 'missing_entity_snapshot'
+       CASE WHEN `unready_accounting_month_count` > 0 THEN 'inventory_cost_accounting_not_ready'
+            WHEN `actual_snapshot_count` < `expected_snapshot_count` THEN 'missing_entity_snapshot'
             WHEN `cost_missing_value_count` > 0 THEN 'missing_cost_value'
             WHEN `net_delivery_rmb` IS NULL THEN 'missing_net_delivery_value'
             WHEN `net_delivery_rmb` = 0 THEN 'zero_net_delivery'
             ELSE 'available' END AS `cost_turnover_state`,
-       CASE WHEN `actual_snapshot_count` < `expected_snapshot_count` THEN 'missing_entity_snapshot'
+       CASE WHEN `unready_accounting_month_count` > 0 THEN 'inventory_cost_accounting_not_ready'
+            WHEN `actual_snapshot_count` < `expected_snapshot_count` THEN 'missing_entity_snapshot'
             WHEN `ddp_missing_value_count` > 0 THEN 'missing_ddp_value'
             WHEN `net_delivery_rmb` IS NULL THEN 'missing_net_delivery_value'
             WHEN `net_delivery_rmb` = 0 THEN 'zero_net_delivery'

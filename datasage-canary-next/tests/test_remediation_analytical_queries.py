@@ -95,7 +95,7 @@ class AnalyticalQueryRemediationTests(unittest.TestCase):
         latest_sql = sql[latest_start:latest_end]
         self.assertIn("`bill_date` < %s", latest_sql)
         self.assertIn("<> 0", latest_sql)
-        self.assertIn("`ddp_amount_rmb` IS NOT NULL", latest_sql)
+        self.assertNotIn("`ddp_amount_rmb`", latest_sql)
         self.assertEqual("2026-08", params[0])
 
     def test_target_completion_caps_actual_at_observation_day(self) -> None:

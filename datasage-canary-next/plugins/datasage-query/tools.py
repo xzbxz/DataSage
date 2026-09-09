@@ -4250,6 +4250,8 @@ _PUBLIC_FACT_FIELDS = {
     "effective_operating_months",
     "expected_snapshot_count",
     "actual_snapshot_count",
+    "unready_accounting_month_count",
+    "unready_accounting_months",
     "entity_source_hit_count",
     "cost_missing_value_count",
     "ddp_missing_value_count",

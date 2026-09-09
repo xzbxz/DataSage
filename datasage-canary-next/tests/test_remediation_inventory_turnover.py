@@ -62,4 +62,46 @@ class InventoryTurnoverTests(unittest.TestCase):
         by_name={r['dimensions'][0]['value']:r['facts'] for r in result['rows']}
         self.assertEqual(61,by_name['A']['cost_turnover_days']);self.assertIsNone(by_name['MISSING']['cost_turnover_days'])
 
+    def test_global_zero_cost_blocks_both_even_with_nonzero_ddp(self):
+        self.seed(self.base())
+        self.h.conn.execute("UPDATE vk_dw.goods_turnover_basic_data_dw SET cost_amount_rmb=0 WHERE bill_date='2026-07'")
+        response=self.query(metric_filters={'department':'A'});f=self.facts(response)
+        self.assertIsNone(f['cost_turnover_days']);self.assertIsNone(f['ddp_turnover_days'])
+        self.assertIsNone(f['avg_inventory_cost_rmb']);self.assertIsNone(f['avg_inventory_ddp_rmb'])
+        self.assertEqual(1,f['unready_accounting_month_count'])
+        self.assertEqual('2026-07',f['unready_accounting_months'])
+        self.assertEqual(61,f['period_natural_days'])
+        self.assertEqual('2026-08-01',self.h.result(response)['applied_time_range']['end'])
+        # Readiness is global: another group's nonzero cost permits A's true zero.
+        self.h.conn.execute("UPDATE vk_dw.goods_turnover_basic_data_dw SET cost_amount_rmb=10 WHERE bill_date='2026-07' AND dept_name='OTHER'")
+        f=self.facts(self.query(metric_filters={'department':'A'}))
+        self.assertEqual(0,f['unready_accounting_month_count'])
+        self.assertEqual(45.75,f['cost_turnover_days']);self.assertEqual(122,f['ddp_turnover_days'])
+
+    def test_default_cannot_use_ddp_to_bypass_cost_accounting(self):
+        rows=[(100,200,50,f'2025-{m:02d}','A') for m in range(7,13)]+[(100,200,50,f'2026-{m:02d}','A') for m in range(1,8)]+[(0,999,50,'2026-08','A')]
+        self.seed(rows)
+        response=self.h.query(public.metric('inventory_turnover_days','inventory',month=None,metric_filters={'department':'A'}))
+        r=self.h.result(response)
+        self.assertEqual('2025-08-01',r['applied_time_range']['start'])
+        self.assertEqual('2026-08-01',r['applied_time_range']['end'])
+        self.assertEqual(0,r['rows'][0]['facts']['unready_accounting_month_count'])
+
+    def test_opening_or_middle_unaccounted_month_is_not_skipped(self):
+        for month in ('2026-05','2026-06'):
+            with self.subTest(month=month):
+                self.seed(self.base())
+                self.h.conn.execute('UPDATE vk_dw.goods_turnover_basic_data_dw SET cost_amount_rmb=0 WHERE bill_date=?',(month,))
+                f=self.facts(self.query(metric_filters={'department':'A'}))
+                self.assertIsNone(f['cost_turnover_days']);self.assertIsNone(f['ddp_turnover_days'])
+                self.assertEqual(month,f['unready_accounting_months'])
+                self.assertEqual(2,f['effective_operating_months'])
+
+    def test_global_net_zero_is_not_all_rows_zero(self):
+        self.seed(self.base())
+        self.h.conn.execute("UPDATE vk_dw.goods_turnover_basic_data_dw SET cost_amount_rmb=-100 WHERE dept_name='OTHER'")
+        f=self.facts(self.query(metric_filters={'department':'A'}))
+        self.assertEqual(0,f['unready_accounting_month_count'])
+        self.assertEqual(61,f['cost_turnover_days'])
+
 if __name__=='__main__':unittest.main()
