@@ -1,4 +1,4 @@
-version: datasage-mini-customer-risk-semantics/v7
+version: datasage-mini-customer-risk-semantics/v8
 domain: customer_risk
 contract_role: plugin_physical_execution
 business_name: 客户应收风险证据分析
@@ -153,9 +153,8 @@ metrics:
     label: 正式应收周转天数
     business_definition: 在指定完整期间内，以平均净经营欠款与有效出库规模衡量的正式应收周转速度，结果按自然日表示。
     answer_contract:
-      - "先呈现正式应收周转天数；若治理结果未定义，则忠实写为未定义而不是错误，不得自行补算。"
-      - "同时呈现同一已验证密封 claim 返回的平均月末净经营欠款、同期毛出库额、期间自然日数、月末欠款快照月数和有效出库月份数；只有同一次 datasage_query 返回的 formal-receivable-turnover-calculation-attestation/v1 状态为 verified、attestation_seal 与外层 claim_seal 均有效，上述组成项均存在、有效、密封且与本次范围绑定，并且公式披露与双侧客户范围披露均适用且密封有效时，才可呈现正式周转数值、称组成项完整并忠实呈现同一查询已密封的正式公式披露；任一组成项缺失、NULL、非有限、同期毛出库额非正、被移除或完整性校验失败，或者 attestation 缺失、无效或状态为 undefined 时，必须保持 typed undefined，清除正式周转数值、公式与推理主题，不得依据本 catalog 合同直接陈述这些内容。"
-      - "月末净欠款与毛出库分母排除内部客户的双侧范围，只能按返回、适用且密封有效的披露说明。"
+      - "正式应收周转天数的有效数值与组成项以查询返回的状态为准；未定义表示当前证据不足以形成该指标，不等于查询执行失败。"
+      - "覆盖、公式及双侧外部客户范围以本次结果中的适用披露为准；目录说明本身不是已查询的经营事实。"
     unit: 自然日
     query_kind: formal_dso
     max_group_dimensions: 1

@@ -1,4 +1,4 @@
-version: datasage-mini-delivery-semantics/v20
+version: datasage-mini-delivery-semantics/v21
 domain: delivery
 contract_role: plugin_physical_execution
 
@@ -1444,7 +1444,7 @@ metrics:
     dimension_overrides: *current_attribute_overrides
     answer_note: *answer_note_delivery_amount
     answer_contract:
-      - "仅当返回的是完整变化分解且状态已对账时，才可称为结构贡献；凡实际报告结构贡献，必须在同段或紧邻句明确说明：这是净变化的结构分解，不代表业务原因或驱动。除该否定边界外，不得用原因、驱动或导致命名任何分区。"
+      - "完整且已对账的变化分解支持结构贡献；这是净变化的结构分解，不代表业务原因或驱动。"
   delivery_amount_original:
     delivery_scope_policy: *delivery_scope_contract_2
     disclosures:
