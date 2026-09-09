@@ -1,4 +1,4 @@
-version: datasage-mini-receipt-semantics/v9
+version: datasage-mini-receipt-semantics/v10
 domain: receipt
 contract_role: plugin_physical_execution
 
@@ -225,6 +225,9 @@ metrics:
     answer_note: *answer_note_receipt_amount
   actual_receipt_amount:
     disclosures:
+      - id: receipt.actual_receipt_amount.detail-conversion
+        mode: required_always
+        text: "实收金额逐笔按各明细的治理汇率折人民币后汇总。"
       - id: receipt.actual_receipt_amount.legacy-note
         mode: contract_only
         text: &answer_note_actual_receipt_amount "实收按 detail_deal_amount × exchange_rate 逐明细换算人民币后汇总。"
@@ -320,6 +323,9 @@ metrics:
     answer_note: *answer_note_refund_amount
   actual_refund_amount:
     disclosures:
+      - id: receipt.actual_refund_amount.detail-conversion
+        mode: required_always
+        text: "实退金额逐笔按各明细的治理汇率折人民币后汇总。"
       - id: receipt.actual_refund_amount.legacy-note
         mode: contract_only
         text: &answer_note_actual_refund_amount "实退按退款明细 detail_deal_amount × exchange_rate 逐明细换算人民币后汇总。"

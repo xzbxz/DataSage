@@ -1,4 +1,4 @@
-version: datasage-mini-receivable-semantics/v7
+version: datasage-mini-receivable-semantics/v8
 domain: receivable
 contract_role: plugin_physical_execution
 
@@ -335,6 +335,9 @@ metrics:
 
   open_receivable_amount:
     disclosures:
+      - id: receivable.open_receivable.scope
+        mode: required_always
+        text: "未结清的判定依据是正数未结余额，不是核销状态。"
       - id: receivable.open_receivable_amount.legacy-note
         mode: contract_only
         text: &answer_note_open_receivable_amount "未结清按 detail_unsettled_amount > 0 判定，不使用核销状态；该指标不是当前欠款余额。"

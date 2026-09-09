@@ -1,4 +1,4 @@
-version: datasage-mini-target-semantics/v14
+version: datasage-mini-target-semantics/v15
 domain: target
 contract_role: plugin_physical_execution
 target_gap_decomposition_contract: contracts/target-gap-decomposition.yaml
@@ -114,6 +114,9 @@ metrics:
     required_attribution_mode: transaction_detail
   allocated_net_delivery_amount:
     disclosures:
+      - id: target.allocated_net_delivery_amount.attribution
+        mode: required_always
+        text: "退货按退货事实记载的业务员直接归属扣减，本查询不按出库协作比例再次分摊退货金额。"
       - id: target.allocated_net_delivery_amount.legacy-note
         mode: contract_only
         text: &answer_note_allocated_net_delivery_amount "分摊净出库为拆分毛出库减退货事实金额；退货按退货事实业务员100%归属，排除内部客户。"

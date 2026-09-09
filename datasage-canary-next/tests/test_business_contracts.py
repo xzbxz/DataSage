@@ -1422,7 +1422,7 @@ class BusinessContractTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual("datasage-mini-receivable-semantics/v7", receivable["version"])
+        self.assertEqual("datasage-mini-receivable-semantics/v8", receivable["version"])
         for code in ("positive_debt_amount", "overdue_receivable_amount"):
             self.assertNotIn("change_decomposition", receivable["metrics"][code])
 
@@ -2575,7 +2575,7 @@ class BusinessContractTests(unittest.TestCase):
                 / "receipt-semantics.yaml"
             ).read_text(encoding="utf-8")
         )
-        self.assertEqual("datasage-mini-receipt-semantics/v9", receipt_contract["version"])
+        self.assertEqual("datasage-mini-receipt-semantics/v10", receipt_contract["version"])
         self.assertNotIn("answer_contract", receipt_contract)
         receipt_disclosures = {
             item["id"]: item
@@ -4510,7 +4510,7 @@ class BusinessContractTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual("datasage-mini-receivable-semantics/v7", semantics["version"])
+        self.assertEqual("datasage-mini-receivable-semantics/v8", semantics["version"])
         current_snapshot_evidence_metrics = {
             metric_code
             for metric_code, definition in semantics["metrics"].items()
