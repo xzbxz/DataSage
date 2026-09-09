@@ -96,14 +96,6 @@ _METRIC_REQUEST_FIELDS = _COMMON_REQUEST_FIELDS | {
     "delivery_scope",
     "inventory_scope",
 }
-_GROSS_DELIVERY_SCOPES = {"explicit_gross", "order_delivery_alignment"}
-_ORDER_DELIVERY_ALIGNMENT_METRICS = {
-    "order_amount",
-    "order_quantity",
-    "order_roll_count",
-    "placed_order_count",
-    "delivery_order_count",
-}
 _SNAPSHOT_TIME_SOURCES = {
     "latest_snapshot",
     "latest_non_null_snapshot",
@@ -1879,26 +1871,32 @@ def _validate_target_gap_decomposition_capability(
         )
 
 
-def _validate_delivery_metric_scope(request: Mapping[str, Any]) -> dict[str, Any]:
-    """Validate explicit delivery scope fields without re-reading natural language."""
-
+def _validate_delivery_metric_scope(
+    request: Mapping[str, Any], semantics: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Validate the selected metric's declared scope without reading natural language."""
     normalized = dict(request)
-    scope = normalized.get("delivery_scope")
     if normalized.get("domain") != "delivery" or normalized.get("mode") != "metric":
         return normalized
-
-    metric = str(normalized.get("metric") or "")
-    if "gross_delivery" in metric:
-        if scope not in _GROSS_DELIVERY_SCOPES:
-            raise QueryFailure(
-                "GROSS_SCOPE_REQUIRES_EXPLICIT_REQUEST",
-                "毛出库指标必须通过结构化字段确认用户明确要求毛口径或下单出库对照。",
-            )
-    elif scope == "order_delivery_alignment" and metric in _ORDER_DELIVERY_ALIGNMENT_METRICS:
-        pass
-    elif scope not in {None, "default_net"}:
+    if semantics is None:
+        _datasets, semantics = _contracts("delivery")
+    metrics = semantics.get("metrics")
+    definition = metrics.get(normalized.get("metric")) if isinstance(metrics, Mapping) else None
+    if not isinstance(definition, Mapping):
+        raise QueryFailure("UNSUPPORTED_METRIC", "该指标尚未进入受控指标定义。")
+    try:
+        policy = contracts.delivery_scope_policy(definition)
+    except contracts.ContractFailure as exc:
+        raise QueryFailure(exc.code, exc.message) from exc
+    scope = normalized.get("delivery_scope")
+    valid = (scope is None and not policy["required"]) or scope in policy["allowed_scopes"]
+    if not valid:
+        # Registered error classes are retained; selection follows policy,
+        # not the spelling of the metric identifier.
+        if policy["required"]:
+            raise QueryFailure("GROSS_SCOPE_REQUIRES_EXPLICIT_REQUEST",
+                "毛出库指标必须通过结构化字段确认用户明确要求毛口径或下单出库对照。")
         raise QueryFailure("INVALID_INPUT", "当前指标与 delivery_scope 不一致。")
-
     filters = normalized.get("metric_filters") or {}
     if isinstance(filters, dict) and "ready_goods" in filters:
         value = filters["ready_goods"]
@@ -4489,7 +4487,11 @@ def _scope_fingerprints(
         if str(key) not in _SCOPE_PRESENTATION_KEYS
     }
     if request.get("domain") == "delivery" and request.get("mode") == "metric":
-        applied_request["delivery_scope"] = request.get("delivery_scope") or "default_net"
+        try:
+            default_scope = contracts.delivery_scope_policy(metric_definition)["default"]
+        except contracts.ContractFailure as exc:
+            raise QueryFailure(exc.code, exc.message) from exc
+        applied_request["delivery_scope"] = request.get("delivery_scope") or default_scope
     if request.get("domain") == "inventory" and request.get("mode") == "metric":
         applied_inventory_scope = scope.get("inventory_scope")
         if isinstance(applied_inventory_scope, str) and applied_inventory_scope:
@@ -8519,9 +8521,7 @@ def _validate_request_plan_without_entities(
 
     try:
         request = _validate_inventory_metric_scope(
-            _validate_delivery_metric_scope(
-                _validate_request(raw_request, request_path=request_path)
-            )
+            _validate_request(raw_request, request_path=request_path)
         )
     except QueryFailure as exc:
         raise _at_stage(exc, "input_validation")
@@ -8530,6 +8530,7 @@ def _validate_request_plan_without_entities(
     except QueryFailure as exc:
         raise _at_stage(exc, "contract_load")
     try:
+        request = _validate_delivery_metric_scope(request, semantics)
         request = _validate_metric_contract(request, semantics)
         _validate_pre_entity_metric_plan(
             request,

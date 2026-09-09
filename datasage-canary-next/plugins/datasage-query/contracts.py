@@ -642,63 +642,24 @@ def _is_unavailable(definition: Mapping[str, Any]) -> bool:
     return status != "available"
 
 
-def _delivery_runtime_scope_policy(metric_code: str) -> dict[str, Any]:
-    """Project the delivery scope behavior from the execution validator.
-
-    Delivery scope is intentionally owned by the query runtime.  The catalog
-    must not grow a second hand-maintained list of gross/alignment metrics, so
-    this adapter asks the runtime validator which public enum values it accepts
-    for the exact metric code.  The import is lazy because tools imports this
-    module as part of its own initialization.
-    """
-
-    try:
-        from . import tools as query_tools
-    except Exception as exc:  # pragma: no cover - only reached on broken install
-        raise ContractFailure(
-            "CONTRACT_UNAVAILABLE",
-            "delivery scope runtime authority is unavailable",
-        ) from exc
-
-    validator = getattr(query_tools, "_validate_delivery_metric_scope", None)
-    if not callable(validator):
-        raise ContractFailure(
-            "CONTRACT_UNAVAILABLE",
-            "delivery scope runtime authority is unavailable",
-        )
-
-    accepted: list[str] = []
-    omitted_is_accepted = False
-    for scope in (None, *capability_contract.DELIVERY_SCOPES):
-        request: dict[str, Any] = {
-            "domain": "delivery",
-            "mode": "metric",
-            "metric": metric_code,
-        }
-        if scope is not None:
-            request["delivery_scope"] = scope
-        try:
-            validator(request)
-        except Exception:
-            continue
-        if scope is None:
-            omitted_is_accepted = True
-        else:
-            accepted.append(scope)
-
-    if not accepted and not omitted_is_accepted:
-        raise ContractFailure(
-            "CONTRACT_UNAVAILABLE",
-            f"delivery metric {metric_code} has no valid scope contract",
-        )
-
-    if omitted_is_accepted and "default_net" not in accepted:
-        accepted.insert(0, "default_net")
-    return {
-        "allowed_scopes": accepted,
-        "required": not omitted_is_accepted,
-        "default": "default_net" if omitted_is_accepted else None,
-    }
+def delivery_scope_policy(definition: Mapping[str, Any]) -> dict[str, Any]:
+    """Read the selected metric's sole scope authority; no metric-name inference."""
+    policy = definition.get("delivery_scope_policy")
+    if not isinstance(policy, Mapping) or set(policy) != {"allowed_scopes", "required", "default"}:
+        raise ContractFailure("CONTRACT_UNAVAILABLE", "交付指标范围合同缺失或格式无效。")
+    allowed = policy.get("allowed_scopes")
+    required = policy.get("required")
+    default = policy.get("default")
+    if (
+        not isinstance(allowed, (list, tuple)) or not allowed
+        or any(not isinstance(value, str) or value not in capability_contract.DELIVERY_SCOPES for value in allowed)
+        or len(set(allowed)) != len(allowed)
+        or not isinstance(required, bool)
+        or (required and default is not None)
+        or (not required and default not in allowed)
+    ):
+        raise ContractFailure("CONTRACT_UNAVAILABLE", "交付指标范围合同的允许值、必选或默认值不一致。")
+    return {"allowed_scopes": list(allowed), "required": required, "default": default}
 
 
 def _delivery_scope_flags(
@@ -802,7 +763,7 @@ def _pending_capability_projection(
         "operation_summary": [],
         "supports_dimensions": False,
         "supports_change_decomposition": False,
-        "delivery_scope_policy": _delivery_runtime_scope_policy(metric_code),
+        "delivery_scope_policy": delivery_scope_policy(definition),
         "scope_flags": _delivery_scope_flags(metric_code, definition, semantics),
     }
     activation_gate = availability.get("activation_gate")
@@ -1112,7 +1073,7 @@ def _model_semantic_projection(
         if isinstance(definition.get("default_inventory_scope"), str):
             item["default_inventory_scope"] = definition["default_inventory_scope"]
         if domain == "delivery":
-            item["delivery_scope_policy"] = _delivery_runtime_scope_policy(code)
+            item["delivery_scope_policy"] = delivery_scope_policy(definition)
             item["scope_flags"] = _delivery_scope_flags(
                 code, definition, semantics
             )

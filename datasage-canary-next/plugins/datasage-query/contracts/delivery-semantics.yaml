@@ -1,4 +1,4 @@
-version: datasage-mini-delivery-semantics/v19
+version: datasage-mini-delivery-semantics/v20
 domain: delivery
 contract_role: plugin_physical_execution
 
@@ -958,6 +958,7 @@ default_disclosures:
 
 metrics:
   warehouse_gross_delivery_amount:
+    delivery_scope_policy: &delivery_scope_contract_1 {allowed_scopes: [explicit_gross, order_delivery_alignment], required: true, default: null}
     disclosures:
       - *disclosure_gross_organization_source
       - *disclosure_final_supplier_scope
@@ -987,6 +988,7 @@ metrics:
     allowed_dimensions: *physical_delivery_analysis
     answer_note: *answer_note_warehouse_gross_delivery_amount
   warehouse_gross_delivery_quantity:
+    delivery_scope_policy: *delivery_scope_contract_1
     disclosures:
       - *disclosure_gross_organization_source
       - *disclosure_final_supplier_scope
@@ -1003,6 +1005,7 @@ metrics:
     metric_join: *barcode_sale_detail_metric_join
     allowed_dimensions: *physical_delivery_analysis
   warehouse_gross_delivery_roll_count:
+    delivery_scope_policy: *delivery_scope_contract_1
     disclosures:
       - *disclosure_gross_organization_source
       - *disclosure_final_supplier_scope
@@ -1018,6 +1021,7 @@ metrics:
     metric_join: *barcode_sale_detail_metric_join
     allowed_dimensions: *physical_delivery_analysis
   warehouse_gross_delivery_amount_original:
+    delivery_scope_policy: *delivery_scope_contract_1
     disclosures:
       - *disclosure_gross_organization_source
       - *disclosure_final_supplier_scope
@@ -1035,6 +1039,7 @@ metrics:
     currency_policy: {mode: original_currency, column: currency_no, require_filter_or_group: true, never_sum_mixed_currency: true}
 
   warehouse_return_amount:
+    delivery_scope_policy: &delivery_scope_contract_2 {allowed_scopes: [default_net], required: false, default: default_net}
     disclosures:
       - *disclosure_return_completed_period
       - *disclosure_return_organization_source
@@ -1062,6 +1067,7 @@ metrics:
     dimension_overrides: *actual_return_warehouse_overrides
     answer_note: *answer_note_warehouse_return_amount
   warehouse_return_quantity:
+    delivery_scope_policy: *delivery_scope_contract_2
     disclosures:
       - *disclosure_return_completed_period
       - *disclosure_return_organization_source
@@ -1086,6 +1092,7 @@ metrics:
     dimension_overrides: *actual_return_warehouse_overrides
     answer_note: *answer_note_warehouse_return_quantity
   warehouse_return_roll_count:
+    delivery_scope_policy: *delivery_scope_contract_2
     disclosures:
       - *disclosure_return_completed_period
       - *disclosure_return_organization_source
@@ -1109,6 +1116,7 @@ metrics:
     dimension_overrides: *actual_return_warehouse_overrides
     answer_note: *answer_note_warehouse_return_roll_count
   warehouse_return_amount_original:
+    delivery_scope_policy: *delivery_scope_contract_2
     disclosures:
       - *disclosure_return_completed_period
       - *disclosure_return_organization_source
@@ -1127,6 +1135,7 @@ metrics:
     currency_policy: {mode: original_currency, column: currency_no, require_filter_or_group: true, never_sum_mixed_currency: true}
 
   warehouse_delivery_amount:
+    delivery_scope_policy: *delivery_scope_contract_2
     disclosures:
       - *disclosure_net_period_scope
       - *disclosure_physical_actual_inbound
@@ -1148,6 +1157,7 @@ metrics:
     allowed_dimensions: *actual_warehouse_net_analysis
     answer_note: *answer_note_warehouse_delivery_amount
   warehouse_delivery_quantity:
+    delivery_scope_policy: *delivery_scope_contract_2
     disclosures:
       - *disclosure_net_period_scope
       - *disclosure_physical_actual_inbound
@@ -1170,6 +1180,7 @@ metrics:
     allowed_dimensions: *actual_warehouse_net_analysis
     answer_note: *answer_note_warehouse_delivery_quantity
   warehouse_delivery_roll_count:
+    delivery_scope_policy: *delivery_scope_contract_2
     disclosures:
       - *disclosure_net_period_scope
       - *disclosure_physical_actual_inbound
@@ -1191,6 +1202,7 @@ metrics:
     allowed_dimensions: *actual_warehouse_net_analysis
     answer_note: *answer_note_warehouse_delivery_roll_count
   warehouse_delivery_amount_original:
+    delivery_scope_policy: *delivery_scope_contract_2
     disclosures:
       - *disclosure_net_period_scope
       - *disclosure_physical_actual_inbound
@@ -1215,6 +1227,7 @@ metrics:
     answer_note: *answer_note_warehouse_delivery_amount_original
 
   gross_delivery_amount:
+    delivery_scope_policy: *delivery_scope_contract_1
     disclosures:
       - *disclosure_gross_organization_source
     label: 毛出库金额
@@ -1233,6 +1246,7 @@ metrics:
       mode: additive_partition
       dimensions: [customer, salesperson, department, business_department, organization, product]
   gross_delivery_amount_original:
+    delivery_scope_policy: *delivery_scope_contract_1
     disclosures:
       - *disclosure_gross_organization_source
     label: 原币毛出库金额
@@ -1247,6 +1261,7 @@ metrics:
     allowed_dimensions: *delivery_analysis
     currency_policy: {mode: original_currency, column: currency_no, require_filter_or_group: true, never_sum_mixed_currency: true}
   gross_delivery_quantity:
+    delivery_scope_policy: *delivery_scope_contract_1
     disclosures:
       - *disclosure_gross_organization_source
       - *disclosure_quantity_unit_scope
@@ -1261,6 +1276,7 @@ metrics:
     required_filters: *delivery_filters
     allowed_dimensions: *delivery_analysis
   gross_delivery_roll_count:
+    delivery_scope_policy: *delivery_scope_contract_1
     disclosures:
       - *disclosure_gross_organization_source
     label: 毛出库卷数
@@ -1275,6 +1291,7 @@ metrics:
     allowed_dimensions: *delivery_analysis
 
   return_amount:
+    delivery_scope_policy: *delivery_scope_contract_2
     disclosures:
       - *disclosure_return_completed_period
       - *disclosure_return_current_master_reclassification
@@ -1305,6 +1322,7 @@ metrics:
     dimension_overrides: *return_dimension_overrides
     answer_note: *answer_note_return_amount
   return_amount_original:
+    delivery_scope_policy: *delivery_scope_contract_2
     disclosures:
       - *disclosure_return_completed_period
       - *disclosure_return_current_master_reclassification
@@ -1329,6 +1347,7 @@ metrics:
     currency_policy: {mode: original_currency, column: currency_no, require_filter_or_group: true, never_sum_mixed_currency: true}
     answer_note: *answer_note_return_amount_original
   return_quantity:
+    delivery_scope_policy: *delivery_scope_contract_2
     disclosures:
       - *disclosure_return_completed_period
       - *disclosure_return_current_master_reclassification
@@ -1346,6 +1365,7 @@ metrics:
     allowed_dimensions: *net_delivery_analysis
     dimension_overrides: *return_dimension_overrides
   return_roll_count:
+    delivery_scope_policy: *delivery_scope_contract_2
     disclosures:
       - *disclosure_return_completed_period
       - *disclosure_return_current_master_reclassification
@@ -1362,6 +1382,7 @@ metrics:
     allowed_dimensions: *net_delivery_analysis
     dimension_overrides: *return_dimension_overrides
   return_document_count:
+    delivery_scope_policy: *delivery_scope_contract_2
     disclosures:
       - *disclosure_return_completed_period
       - *disclosure_return_current_master_reclassification
@@ -1378,6 +1399,7 @@ metrics:
     allowed_dimensions: *net_delivery_analysis
     dimension_overrides: *return_dimension_overrides
   returned_delivery_order_count:
+    delivery_scope_policy: *delivery_scope_contract_2
     disclosures:
       - *disclosure_return_completed_period
       - *disclosure_return_current_master_reclassification
@@ -1395,6 +1417,7 @@ metrics:
     dimension_overrides: *return_dimension_overrides
 
   delivery_amount:
+    delivery_scope_policy: *delivery_scope_contract_2
     exact_default_lookup_supported: true
     disclosures:
       - *disclosure_net_period_scope
@@ -1423,6 +1446,7 @@ metrics:
     answer_contract:
       - "仅当返回的是完整变化分解且状态已对账时，才可称为结构贡献；凡实际报告结构贡献，必须在同段或紧邻句明确说明：这是净变化的结构分解，不代表业务原因或驱动。除该否定边界外，不得用原因、驱动或导致命名任何分区。"
   delivery_amount_original:
+    delivery_scope_policy: *delivery_scope_contract_2
     disclosures:
       - *disclosure_net_period_scope
       - *disclosure_net_current_master_reclassification
@@ -1446,6 +1470,7 @@ metrics:
     currency_policy: {mode: original_currency, column: currency_no, require_filter_or_group: true, never_sum_mixed_currency: true}
     answer_note: *answer_note_delivery_amount_original
   delivery_quantity:
+    delivery_scope_policy: *delivery_scope_contract_2
     disclosures:
       - *disclosure_net_period_scope
       - *disclosure_net_current_master_reclassification
@@ -1469,6 +1494,7 @@ metrics:
     dimension_overrides: *current_attribute_overrides
     answer_note: *answer_note_delivery_quantity
   delivery_roll_count:
+    delivery_scope_policy: *delivery_scope_contract_2
     disclosures:
       - *disclosure_net_period_scope
       - *disclosure_net_current_master_reclassification
@@ -1492,6 +1518,7 @@ metrics:
     answer_note: *answer_note_delivery_roll_count
 
   return_amount_rate:
+    delivery_scope_policy: *delivery_scope_contract_2
     disclosures:
       - *disclosure_net_period_scope
       - *disclosure_net_current_master_reclassification
@@ -1512,6 +1539,7 @@ metrics:
     dimension_overrides: *current_attribute_overrides
     answer_note: *answer_note_return_amount_rate
   return_quantity_rate:
+    delivery_scope_policy: *delivery_scope_contract_2
     disclosures:
       - *disclosure_net_period_scope
       - *disclosure_net_current_master_reclassification
@@ -1534,6 +1562,7 @@ metrics:
     dimension_overrides: *current_attribute_overrides
     answer_note: *answer_note_return_quantity_rate
   return_roll_rate:
+    delivery_scope_policy: *delivery_scope_contract_2
     disclosures:
       - *disclosure_net_period_scope
       - *disclosure_net_current_master_reclassification
@@ -1555,6 +1584,7 @@ metrics:
     answer_note: *answer_note_return_roll_rate
 
   delivery_order_count:
+    delivery_scope_policy: &delivery_scope_contract_3 {allowed_scopes: [default_net, order_delivery_alignment], required: false, default: default_net}
     disclosures:
       - id: delivery.order-count.gross-scope
         mode: required_always
@@ -1574,6 +1604,7 @@ metrics:
     allowed_dimensions: *delivery_analysis
     answer_note: *answer_note_delivery_order_count
   order_amount:
+    delivery_scope_policy: *delivery_scope_contract_3
     disclosures: []
     label: 下单金额
     business_definition: 所选下单期间内订单记录的人民币金额，按订单发生口径统计。
@@ -1590,6 +1621,7 @@ metrics:
       mode: additive_partition
       dimensions: [customer, salesperson, department, business_department, organization, product]
   order_amount_original:
+    delivery_scope_policy: *delivery_scope_contract_2
     disclosures: []
     label: 原币下单金额
     business_definition: 所选下单期间内订单记录的原币金额；必须按币种筛选或分组，不得跨币种相加。
@@ -1603,6 +1635,7 @@ metrics:
     allowed_dimensions: *delivery_analysis
     currency_policy: {mode: original_currency, column: currency_no, require_filter_or_group: true, never_sum_mixed_currency: true}
   order_quantity:
+    delivery_scope_policy: *delivery_scope_contract_3
     disclosures:
       - *disclosure_quantity_unit_scope
     label: 下单数量
@@ -1616,6 +1649,7 @@ metrics:
     required_filters: *order_filters
     allowed_dimensions: *delivery_analysis
   order_roll_count:
+    delivery_scope_policy: *delivery_scope_contract_3
     disclosures: []
     label: 下单卷数
     business_definition: 所选下单期间内订单记录的卷数。
@@ -1628,6 +1662,7 @@ metrics:
     required_filters: *order_filters
     allowed_dimensions: *delivery_analysis
   placed_order_count:
+    delivery_scope_policy: *delivery_scope_contract_3
     disclosures: []
     label: 下单订单数
     business_definition: 所选下单期间内的非重复订单数量，按当前订单记录口径计数。
