@@ -58,51 +58,24 @@ surface, optionally load a reference with `skill_view(name="datasage", file_path
 - [`datasage.entity-guidance/v1`](references/entity-guidance.md) owns entity
   resolution, confirmation, and turn boundaries; load it when ambiguity matters.
 - [`datasage.answer-boundary/v1`](references/answer-boundary.md) owns detailed
-  interpretation and final-answer policy; optionally load
-  `references/answer-boundary.md` before comparisons, rankings, targets,
-  decompositions, causal discussion, multi-row calculation, or
-  zero/empty/undefined/truncated/partial/failed/timeout evidence.
+  interpretation of comparisons, targets, calculations, and typed result states.
 - [`datasage.delivery-analysis/v1`](references/delivery-analysis.md) is optional
   supplemental guidance for L3 delivery, not a fixed planner recipe or WeCom query prerequisite.
 
-## Procedure
+## Tool facts
 
-1. Frame the decision, metric meaning, period, grain, and material scope.
-2. For a broad operating-performance review, decide whether the optional
-   `performance_scorecard` operation of `datasage_catalog` materially improves
-   discovery. Use it when the user asks for that standard cross-domain view or
-   when its governed candidate lenses are the smallest useful starting point;
-   otherwise discover likely domains and metrics directly. When used, call it
-   without a preceding `expert_index` catalog operation, choose a material
-   subset, keep flows separate from snapshots, and disclose unavailable
-   profitability. Only successfully queried lenses are evidence; other material
-   lenses remain unassessed and limit the headline.
-3. Choose and query the exact governed metric with `datasage_query`; the optional
-   [`datasage.query-rules/v1`](references/query-rules.md) reference can help on
-   skill-enabled surfaces. Use
-   `datasage_catalog` only when the metric is unknown or optional planning detail
-   is needed. When entity ambiguity can change the result, use
-   `datasage_entity_resolve` and its public resolver contract. On skill-enabled
-   surfaces, the optional [`datasage.entity-guidance/v1`](references/entity-guidance.md)
-   guidance can help with resolution, confirmation, and turn boundaries. After
-   the user selects a candidate, send the selected token to `datasage_query`; the
-   query service performs exact identity validation again.
-4. Interpret the result with the returned evidence and, when available on a
-   skill-enabled surface, the optional
-   [`datasage.answer-boundary/v1`](references/answer-boundary.md). Prefer
-   decision-relevant comparisons and exceptions over restating rows; use
-   decomposition or concentration only when the returned population and
-   relationship explicitly authorize it. Multi-row arithmetic also requires an
-   available calculation tool.
-5. Before concluding a broad review, check material lens coverage once. Stop
-   when the conclusion is decision-useful or the remaining uncertainty cannot
-   be resolved with available governed operations.
+- The catalog provides registered metric and capability facts. Its scorecard
+  view contains optional candidate lenses, not a complete company-health result.
+- `datasage_query` independently validates the requested metric, scope and
+  identity; it returns facts, states and evidence relationships.
+- `datasage_entity_resolve` provides bounded identity candidates and search
+  scope. Query validation rechecks the selected identity.
+- Unqueried, unavailable or failed material lenses remain unassessed. Period
+  flows and current snapshots represent different time scopes.
 
 ## Pitfalls
 
 - For truncated Top-N evidence, do not turn an unreturned tail into a driver.
-- Do not treat the procedure as a fixed planner recipe or mandatory call
-  sequence.
 - Conversation history, not persistent memory, carries transient analysis. Do
   not save query or empty results, temporary or candidate entity mappings,
   single-turn scope, or operating status. Propose memory only for a stable
@@ -113,7 +86,5 @@ surface, optionally load a reference with `skill_view(name="datasage", file_path
 - Confirm each claim with successfully returned governed evidence and the public
   tool schema. An optional reference can guide a skill-enabled CLI/maintenance
   turn, but its absence never blocks a WeCom query or conclusion.
-- For broad reviews, confirm material lens coverage was checked once and any
-  unassessed material lens limits the headline.
 - Stop rather than loop when remaining uncertainty cannot be resolved by
   governed operations.

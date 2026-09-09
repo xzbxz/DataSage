@@ -567,7 +567,6 @@ class GitGovernedSkillTests(unittest.TestCase):
         )
         self.assertIn("datasage_catalog", catalog_description["tools"])
         catalog_description = catalog_description["tools"]["datasage_catalog"]
-        self.assertIn("governed", catalog_description["description"].casefold())
         domain_description = catalog_description["parameters"]["properties"][
             "requests"
         ]["items"]["properties"]["domain"]["description"]

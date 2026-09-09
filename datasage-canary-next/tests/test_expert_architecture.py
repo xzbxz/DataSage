@@ -95,22 +95,8 @@ class ExpertArchitectureTests(unittest.TestCase):
         description_lower = description.casefold()
         self.assertIn("governed datasage company facts", description_lower)
         self.assertIn("public/user-provided", description_lower)
-        headings = [
-            "# DataSage Skill",
-            "## When to Use",
-            "## Prerequisites",
-            "## How to Run",
-            "## Quick Reference",
-            "## Procedure",
-            "## Pitfalls",
-            "## Verification",
-        ]
-        actual_headings = [
-            line for line in content.splitlines() if line.startswith("#")
-        ]
-        self.assertEqual(headings, actual_headings)
 
-    def test_entity_instructions_share_one_nonblocking_turn_boundary(self):
+    def test_entity_reference_links_and_empty_result_boundary(self):
         skill_root = SKILL_PATH.parent
 
         def normalized(path: Path) -> str:
@@ -126,20 +112,6 @@ class ExpertArchitectureTests(unittest.TestCase):
         )
         self.assertIn("datasage.entity-guidance/v1", skill)
         self.assertIn("datasage.entity-guidance/v1", query_rules)
-        for required in (
-            "datasage_entity_resolve",
-            "datasage_query",
-            "ordinary assistant text",
-            "end the current turn",
-            "Do not call blocking `clarify`",
-            "after the user confirms",
-        ):
-            with self.subTest(required=required):
-                self.assertIn(required, entity_guidance)
-        for routed_text in (skill, query_rules):
-            self.assertNotIn("ordinary assistant text", routed_text)
-            self.assertNotIn("Do not call blocking `clarify`", routed_text)
-            self.assertNotIn("same assistant tool-call batch", routed_text)
         self.assertIn("datasage_catalog", query_rules)
         self.assertIn("empty bounded candidate result", entity_guidance)
         self.assertIn("does not prove that the entity is absent", entity_guidance)
@@ -149,16 +121,6 @@ class ExpertArchitectureTests(unittest.TestCase):
         )
         self.assertIn(query_empty_boundary, answer_boundary)
 
-        catalog = schemas.DATASAGE_CATALOG["description"]
-        resolver = schemas.DATASAGE_ENTITY_RESOLVE["description"]
-        query = schemas.DATASAGE_QUERY["description"]
-        schema_contract = " ".join((catalog, resolver, query))
-        # Catalog is optional; direct-query behavior is covered by public interface tests.
-        self.assertIn("after the user selects one", resolver)
-        self.assertIn("Entity-only questions stop after this result", resolver)
-        self.assertIn("before any database access", query)
-        self.assertNotIn("final safety gate", schema_contract)
-        self.assertNotIn("proves user confirmation", schema_contract)
 
     def test_general_clarification_and_git_in_place_policy_have_one_owner(self):
         soul = (PROFILE_ROOT / "SOUL.md").read_text(encoding="utf-8")

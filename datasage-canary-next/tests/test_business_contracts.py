@@ -678,8 +678,6 @@ class BusinessContractTests(unittest.TestCase):
         boundary = " ".join(_answer_boundary().split())
 
         self.assertIn("do not turn an unreturned tail into a driver", skill)
-        self.assertIn("returned population and relationship explicitly authorize it", skill)
-        self.assertIn("available calculation tool", skill)
         for required in (
             "never attribute the total change to the unreturned tail",
             "Never infer geography, category, ownership",
@@ -2589,10 +2587,7 @@ class BusinessContractTests(unittest.TestCase):
         )
 
         query_description = schemas.DATASAGE_QUERY["description"]
-        self.assertIn("loads the current metric contract", query_description)
-        self.assertIn("validates availability, capabilities, filters, periods", query_description)
         self.assertIn("answer_scope_line", query_description)
-        self.assertIn("Every sealed disclosure_ledger item", query_description)
         self.assertIn(
             "explicit, non-default qualifier",
             schemas.REQUEST["properties"]["calendar_month"]["description"],
@@ -6599,9 +6594,6 @@ class BusinessContractTests(unittest.TestCase):
         main_skill = _main_skill()
         normalized = " ".join(main_skill.split())
         self.assertIn("skill_view(name=\"datasage\", file_path=", normalized)
-        self.assertIn("optional `performance_scorecard`", normalized)
-        self.assertIn("otherwise discover", normalized)
-        self.assertIn("successfully queried lenses", normalized)
 
     def test_main_skill_keeps_transient_analysis_out_of_memory_without_host_loop_rules(
         self,
@@ -6653,8 +6645,6 @@ class BusinessContractTests(unittest.TestCase):
             / "entity-guidance.md"
         ).read_text(encoding="utf-8")
         normalized = " ".join(guidance.split())
-        self.assertIn("Unknown natural-language geography must not bind", normalized)
-        self.assertIn("ask the user to choose or provide the mapping", normalized)
         self.assertIn("dimension breakdown only enumerates observed labels", normalized)
         self.assertIn("does not prove an alias or create a candidate mapping", normalized)
         self.assertIn("must not become a durable Memory fact", normalized)

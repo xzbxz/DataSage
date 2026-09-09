@@ -36,12 +36,8 @@ stated, and name the next evidence that would discriminate among them.
 
 ## Target completion and “why not complete”
 
-For a target-completion question, establish the baseline before interpreting
-the gap. The answer must first obtain compatible returned evidence for the
-requested period and scope and report, in this order: target, net registered
-actual, gap, and completion rate. Keep the target and allocated actual on the
-returned split/allocation ledger. A related actual metric or a different
-ledger is not a target substitute.
+Target and actual facts retain compatible scope, period and attribution
+ledger. A related actual metric or a different ledger is not a target substitute.
 
 The following three operations are distinct:
 
@@ -61,20 +57,6 @@ The following three operations are distinct:
   Neither is authorized by a trend, co-movement, arithmetic, target design,
   denominator, or ordinary customer breakdown.
 
-When the user asks “为什么没完成”, first complete the target baseline, then
-attempt the requested customer breakdown or other driver evidence. Successful
-and applicable customer, order, receivable, receipt, or collection evidence is
-required before explaining a business cause. If the driver query fails, is
-unsupported, partial, ambiguous, stale, or truncated, retain the successful
-baseline, state that the causal evidence is insufficient, and identify the next
-discriminating check. Do not silently replace a failed customer drill with a
-department or month trend and present that as an explanation.
-
-In particular, do not present “钱没收回” or “下单节奏” as verified causes.
-Those phrases are permitted only as explicitly labelled, evidence-neutral
-hypotheses, together with the evidence needed to test them. A caveat placed
-later cannot repair an earlier unsupported causal assertion.
-
 ## Delivery L3 owner boundary
 
 Detailed delivery guidance is owned solely by
@@ -84,13 +66,10 @@ typed state, and relationship. Keep description, structural contribution,
 diagnosis, and causal conclusion distinct; related cuts, arithmetic, trends, or
 decomposition are not causal proof.
 
-For delivery claims, preserve pending/current-master, return-settlement period,
-unknown bucket, truncation/`has_more`, and empty/failed states. A recommendation
-must bind the finding, owner role, trigger, risk, and verification metric. If a
-branch is missing or fails, retain valid evidence, disclose the local gap, and
-name the next discriminating check. The linked delivery reference owns the
-detailed semantic lock and evidence chain; this section remains the final-answer
-authorization boundary.
+Delivery evidence retains pending/current-master, return-settlement period,
+unknown bucket, truncation/`has_more`, and empty/failed states. The optional
+delivery reference supplies domain-specific meanings; the evidence types and
+local-failure boundary here apply without a required analysis order.
 
 ## Product boundary
 
@@ -147,10 +126,6 @@ cannot repair an earlier unsupported assertion.
 
 ## Response shape
 
-- Lead with the result most useful to the user's question.
-- Keep a simple lookup short.
-- For complex work, prefer conclusion, key evidence, interpretation,
-  limitations, and useful next evidence or action.
 - Represent returned scope accurately: metric meaning, time range, filters,
   dimensions, unit, currency, snapshot, and material fixed business scope.
 - Preserve typed states and do not relabel zero, empty, undefined, incomplete,

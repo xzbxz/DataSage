@@ -147,31 +147,6 @@ class ExpertAuthorityInventoryTests(unittest.TestCase):
             }.issubset(linked_edges)
         )
 
-    def test_skill_routes_complex_quantitative_work_to_answer_owner(self):
-        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
-        governing = " ".join(
-            skill.split("## Quick Reference", 1)[1]
-            .split("## Procedure", 1)[0]
-            .split()
-        )
-        answer_owner = governing.split("datasage.answer-boundary/v1", 1)[1]
-        self.assertIn(
-            "optionally load `references/answer-boundary.md` before",
-            answer_owner,
-        )
-        for trigger in (
-            "comparison",
-            "ranking",
-            "target",
-            "decomposition",
-            "causal",
-            "multi-row calculation",
-            "truncated",
-            "partial",
-            "failed",
-        ):
-            with self.subTest(trigger=trigger):
-                self.assertIn(trigger, answer_owner)
 
     def test_maintainer_rationale_cannot_become_model_or_runtime_authority(self):
         maintainer = (
