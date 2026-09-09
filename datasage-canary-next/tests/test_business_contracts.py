@@ -3397,7 +3397,7 @@ class BusinessContractTests(unittest.TestCase):
         self.assertIn(
             "CASE WHEN COUNT(DISTINCT bill_month) = 13 THEN SUM(", dso_sql
         )
-        self.assertIn("ELSE NULL END AS average_net_debt_rmb", dso_sql)
+        # Missing-snapshot behavior is executed in the independent analytical integrity fixtures.
         self.assertNotIn("HAVING COUNT(DISTINCT bill_month)", dso_sql)
         self.assertIn("`d`.`is_inner_cus` = %s", dso_sql)
         self.assertIn("`s`.`bill_status` = %s", dso_sql)

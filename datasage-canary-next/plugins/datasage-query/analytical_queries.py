@@ -629,6 +629,9 @@ def _settlement_query(
         *inner_dimension_select,
         f"DATEDIFF(MIN({_qualified('f', completion_time)}), MIN({_qualified('f', bill_time)})) AS {_quote_column('settlement_days')}",
         f"MAX(CASE WHEN {_qualified('f', open_amount)} > 0 THEN 1 ELSE 0 END) AS {_quote_column('has_open_balance')}",
+        f"MAX(CASE WHEN {_qualified('f', open_amount)} IS NULL THEN 1 ELSE 0 END) AS {_quote_column('missing_balance_flag')}",
+        f"MAX(CASE WHEN {_qualified('f', bill_time)} IS NULL THEN 1 ELSE 0 END) "
+        f"AS {_quote_column('missing_bill_time_flag')}",
     ])
     per_bill = (
         f"SELECT {inner_select} FROM {_quote_table(table)} AS {_quote_column('f')}"
@@ -638,7 +641,9 @@ def _settlement_query(
     outer_dimensions = [_quote_column(output) for _, output in selected_columns]
     quality_columns = (
         "SUM(settlement_days < 0) AS excluded_negative_bill_count, "
-        "SUM(has_open_balance = 1) AS excluded_open_balance_bill_count"
+        "SUM(has_open_balance = 1) AS excluded_open_balance_bill_count, "
+        "SUM(CASE WHEN (missing_bill_time_flag = 1 OR missing_balance_flag = 1) AND has_open_balance = 0 "
+        "THEN 1 ELSE 0 END) AS missing_eligibility_count"
     )
     statistic = metric.get("statistic")
     if statistic == "average":
@@ -650,7 +655,10 @@ def _settlement_query(
     else:
         raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "结算行为统计方式无效。")
 
-    eligible = "SELECT * FROM per_bill WHERE settlement_days >= 0 AND has_open_balance = 0"
+    eligible = (
+        "SELECT * FROM per_bill WHERE settlement_days >= 0 "
+        "AND has_open_balance = 0 AND missing_bill_time_flag = 0 AND missing_balance_flag = 0"
+    )
     if outer_dimensions:
         quality = (
             f"SELECT {', '.join(outer_dimensions)}, {quality_columns} FROM per_bill "
@@ -672,24 +680,42 @@ def _settlement_query(
         )
         select_parts.append(f"{band} AS {_quote_column('settlement_band')}")
         group_parts.append(band)
+    missing_dates = f"COALESCE(q.{_quote_column('missing_eligibility_count')}, 0)"
+    known_values = "COUNT(e.document_id)"
+    matched_rows = (
+        f"({known_values} + COALESCE(q.{_quote_column('excluded_negative_bill_count')}, 0) + "
+        f"COALESCE(q.{_quote_column('excluded_open_balance_bill_count')}, 0) + {missing_dates})"
+    )
     select_parts.extend([
-        f"{value_sql} AS {_quote_column('metric_value')}",
+        f"CASE WHEN {missing_dates} > 0 OR {known_values} = 0 THEN NULL ELSE {value_sql} END AS {_quote_column('metric_value')}",
+        f"CASE WHEN {known_values} > 0 THEN {value_sql} ELSE NULL END AS {_quote_column('known_subset_value')}",
         f"COUNT(e.document_id) AS {_quote_column('sample_bill_count')}",
         f"COALESCE(q.{_quote_column('excluded_negative_bill_count')}, 0) "
         f"AS {_quote_column('excluded_negative_bill_count')}",
         f"COALESCE(q.{_quote_column('excluded_open_balance_bill_count')}, 0) "
         f"AS {_quote_column('excluded_open_balance_bill_count')}",
-        f"(COUNT(e.document_id) + "
-        f"COALESCE(q.{_quote_column('excluded_negative_bill_count')}, 0) + "
-        f"COALESCE(q.{_quote_column('excluded_open_balance_bill_count')}, 0)) "
-        f"AS {_quote_column('__matched_row_count')}",
+        f"{missing_dates} AS {_quote_column('missing_value_count')}",
+        f"{known_values} AS {_quote_column('known_value_count')}",
+        f"CASE WHEN ({known_values}) + ({missing_dates}) > 0 THEN "
+        f"1.0 * ({known_values}) / (({known_values}) + ({missing_dates})) ELSE NULL END "
+        f"AS {_quote_column('value_coverage_rate')}",
+        f"CASE WHEN {matched_rows} = 0 THEN 'missing' "
+        f"WHEN {missing_dates} > 0 THEN CASE WHEN {known_values} = 0 THEN 'missing' ELSE 'incomplete' END "
+        f"WHEN {known_values} = 0 THEN 'missing' ELSE 'complete' END "
+        f"AS {_quote_column('metric_data_state')}",
+        f"{matched_rows} AS {_quote_column('__matched_row_count')}",
     ])
     sql = (
         f"WITH per_bill AS ({per_bill}), eligible AS ({eligible}), quality AS ({quality}) "
         f"SELECT {', '.join(select_parts)} FROM {quality_from}"
     )
     if group_parts:
-        sql += " GROUP BY " + ", ".join([*group_parts, "q.excluded_negative_bill_count", "q.excluded_open_balance_bill_count"])
+        sql += " GROUP BY " + ", ".join([
+            *group_parts,
+            "q.excluded_negative_bill_count",
+            "q.excluded_open_balance_bill_count",
+            "q.missing_eligibility_count",
+        ])
     dimension_outputs = [output for _, output in selected_columns]
     if statistic == "distribution" and request.get("order_by") is None:
         sql += " ORDER BY " + (", ".join(group_parts[:-1]) + ", " if len(group_parts) > 1 else "") + (
@@ -1043,7 +1069,10 @@ def _formal_dso_query(
         *debt_key_select,
         *debt_output_select,
         f"{_qualified('d', debt_time)} AS bill_month",
-        f"SUM({_qualified('d', debt_measure)}) AS monthly_debt_rmb",
+        f"SUM({_qualified('d', debt_measure)}) AS partial_monthly_debt_rmb",
+        "COUNT(*) AS debt_source_row_count",
+        f"SUM(CASE WHEN {_qualified('d', debt_measure)} IS NULL THEN 1 ELSE 0 END) "
+        f"AS debt_null_count",
     ]
     debt_monthly = (
         f"SELECT {', '.join(debt_monthly_select)} "
@@ -1056,9 +1085,11 @@ def _formal_dso_query(
         *avg_key_select,
         *avg_output_select,
         f"CASE WHEN COUNT(DISTINCT bill_month) = {expected_snapshots} "
-        f"THEN SUM(CASE WHEN bill_month IN (%s, %s) THEN monthly_debt_rmb / 2 ELSE monthly_debt_rmb END) / {period_months} "
-        "ELSE NULL END AS average_net_debt_rmb",
+        f"THEN SUM(CASE WHEN bill_month IN (%s, %s) THEN partial_monthly_debt_rmb / 2 ELSE partial_monthly_debt_rmb END) / {period_months} "
+        "ELSE NULL END AS partial_average_net_debt_rmb",
         "COUNT(DISTINCT bill_month) AS snapshot_month_count",
+        "SUM(debt_null_count) AS debt_null_count",
+        "SUM(debt_source_row_count) AS debt_source_row_count",
     ]
     debt_avg = (
         f"SELECT {', '.join(debt_avg_select)} "
@@ -1074,7 +1105,10 @@ def _formal_dso_query(
     delivery_monthly_select = [
         *delivery_key_select,
         f"DATE_FORMAT({_qualified('s', delivery_time)}, '{_MYSQL_MONTH_FORMAT}') AS delivery_month",
-        f"SUM({_qualified('s', delivery_measure)}) AS monthly_delivery_rmb",
+        f"SUM({_qualified('s', delivery_measure)}) AS partial_monthly_delivery_rmb",
+        "COUNT(*) AS delivery_source_row_count",
+        f"SUM(CASE WHEN {_qualified('s', delivery_measure)} IS NULL THEN 1 ELSE 0 END) "
+        f"AS delivery_null_count",
     ]
     delivery_monthly = (
         f"SELECT {', '.join(delivery_monthly_select)} "
@@ -1082,7 +1116,7 @@ def _formal_dso_query(
     )
     delivery_agg_keys = [f"{_quote_column(alias)}" for _, alias in delivery_keys]
     delivery_agg = (
-        f"SELECT {', '.join([*delivery_agg_keys, 'SUM(monthly_delivery_rmb) AS delivery_amount_rmb', 'SUM(monthly_delivery_rmb > 0) AS effective_month_count'])} FROM delivery_monthly"
+        f"SELECT {', '.join([*delivery_agg_keys, 'SUM(partial_monthly_delivery_rmb) AS partial_delivery_amount_rmb', 'SUM(partial_monthly_delivery_rmb > 0) AS effective_month_count', 'SUM(delivery_null_count) AS delivery_null_count', 'SUM(delivery_source_row_count) AS delivery_source_row_count'])} FROM delivery_monthly"
         + (" GROUP BY " + ", ".join(delivery_agg_keys) if delivery_agg_keys else "")
     )
     join = " AND ".join(
@@ -1090,15 +1124,45 @@ def _formal_dso_query(
         for (_, debt_alias), (_, delivery_alias) in zip(debt_keys, delivery_keys)
     ) or "1 = 1"
     output_dimensions = [f"a.{_quote_column(alias)}" for _, alias in debt_outputs]
+    missing_inputs = (
+        "COALESCE(a.debt_null_count, 0) + COALESCE(v.delivery_null_count, 0)"
+    )
+    source_rows = (
+        "COALESCE(a.debt_source_row_count, 0) + COALESCE(v.delivery_source_row_count, 0)"
+    )
+    known_inputs = f"({source_rows} - ({missing_inputs}))"
+    partial_average = "a.partial_average_net_debt_rmb"
+    partial_delivery = "COALESCE(v.partial_delivery_amount_rmb, 0)"
+    full_average = (
+        f"CASE WHEN COALESCE(a.debt_null_count, 0) > 0 THEN NULL "
+        f"ELSE {partial_average} END"
+    )
+    full_delivery = (
+        f"CASE WHEN COALESCE(v.delivery_source_row_count, 0) = 0 OR COALESCE(v.delivery_null_count, 0) > 0 THEN NULL "
+        f"ELSE {partial_delivery} END"
+    )
+    full_metric = (
+        f"CASE WHEN ({missing_inputs}) > 0 THEN NULL "
+        f"WHEN ({full_delivery}) > 0 THEN ({full_average}) * {period_days} / ({full_delivery}) "
+        f"ELSE NULL END"
+    )
     select = [
         *output_dimensions,
-        f"CASE WHEN COALESCE(v.delivery_amount_rmb, 0) > 0 THEN a.average_net_debt_rmb * {period_days} / v.delivery_amount_rmb ELSE NULL END AS metric_value",
-        "a.average_net_debt_rmb",
-        "COALESCE(v.delivery_amount_rmb, 0) AS delivery_amount_rmb",
+        f"{full_metric} AS metric_value",
+        f"{full_average} AS average_net_debt_rmb",
+        f"{full_delivery} AS delivery_amount_rmb",
         f"{period_days} AS period_natural_days",
         "a.snapshot_month_count",
         "COALESCE(v.effective_month_count, 0) AS effective_month_count",
-        "a.snapshot_month_count + COALESCE(v.effective_month_count, 0) AS `__matched_row_count`",
+        f"({missing_inputs}) AS missing_value_count",
+        f"({known_inputs}) AS known_value_count",
+        f"CASE WHEN COALESCE(a.debt_source_row_count, 0) > 0 AND COALESCE(v.delivery_source_row_count, 0) > 0 "
+        f"THEN 1.0 * ({known_inputs}) / ({source_rows}) ELSE NULL END AS value_coverage_rate",
+        f"CASE WHEN ({source_rows}) = 0 THEN 'missing' "
+        f"WHEN ({missing_inputs}) = 0 AND ({full_metric}) IS NOT NULL THEN 'complete' "
+        f"WHEN ({full_metric}) IS NULL THEN 'missing' "
+        f"WHEN ({known_inputs}) = 0 THEN 'missing' ELSE 'incomplete' END AS metric_data_state",
+        f"{source_rows} AS `__matched_row_count`",
     ]
     output_aliases = [alias for _, alias in debt_outputs]
     sql = (
@@ -1169,6 +1233,8 @@ def _paired_amounts_query(
             *[f"MAX({_qualified(alias, column)}) AS {_quote_column(output)}" for column, output in outputs],
             f"SUM({_qualified(alias, measure)}) AS {_quote_column(value_alias)}",
             f"COUNT(*) AS {_quote_column('__matched_row_count')}",
+            f"SUM(CASE WHEN {_qualified(alias, measure)} IS NULL THEN 1 ELSE 0 END) "
+            f"AS {_quote_column('__actual_null_count')}",
         ]
         group = [_qualified(alias, column) for column, _ in keys]
         return (
@@ -1189,6 +1255,7 @@ def _paired_amounts_query(
                 datasets_contract,
                 value_alias,
                 bindings=bindings,
+                include_null_count=True,
             )
         table = source.get("table")
         dataset = _dataset(table, datasets_contract)
@@ -1238,13 +1305,44 @@ def _paired_amounts_query(
     else:
         output_aliases, output_dimensions = [], []
         from_sql = "SELECT {select} FROM left_agg AS l CROSS JOIN right_agg AS r"
+    left_rows = "COALESCE(l.__matched_row_count, 0)"
+    right_rows = "COALESCE(r.__matched_row_count, 0)"
+    left_nulls = "COALESCE(l.__actual_null_count, 0)"
+    right_nulls = "COALESCE(r.__actual_null_count, 0)"
+    total_rows = f"({left_rows} + {right_rows})"
+    unmatched_side = (
+        f"CASE WHEN {left_rows} = 0 THEN 1 ELSE 0 END + "
+        f"CASE WHEN {right_rows} = 0 THEN 1 ELSE 0 END"
+    )
+    missing_inputs = f"({left_nulls} + {right_nulls})"
+    known_inputs = f"({total_rows} - {left_nulls} - {right_nulls})"
+    left_value = (
+        f"CASE WHEN {left_rows} > 0 AND {left_nulls} = 0 "
+        f"THEN l.left_amount ELSE NULL END"
+    )
+    right_value = (
+        f"CASE WHEN {right_rows} > 0 AND {right_nulls} = 0 "
+        f"THEN r.right_amount ELSE NULL END"
+    )
+    metric_value = (
+        f"CASE WHEN {missing_inputs} > 0 OR ({unmatched_side}) > 0 THEN NULL ELSE "
+        f"COALESCE(l.left_amount, 0) - COALESCE(r.right_amount, 0) END"
+    )
     select = [
         *output_dimensions,
-        "COALESCE(l.left_amount, 0) - COALESCE(r.right_amount, 0) AS metric_value",
-        "COALESCE(l.left_amount, 0) AS net_delivery_amount_rmb",
-        "COALESCE(r.right_amount, 0) AS net_receipt_amount_rmb",
-        "CASE WHEN COALESCE(l.left_amount, 0) > 0 THEN COALESCE(r.right_amount, 0) / l.left_amount ELSE NULL END AS receipt_coverage",
-        "COALESCE(l.__matched_row_count, 0) + COALESCE(r.__matched_row_count, 0) AS `__matched_row_count`",
+        f"{metric_value} AS metric_value",
+        f"{left_value} AS net_delivery_amount_rmb",
+        f"{right_value} AS net_receipt_amount_rmb",
+        f"CASE WHEN {missing_inputs} = 0 AND ({unmatched_side}) = 0 AND COALESCE(l.left_amount, 0) > 0 "
+        f"THEN COALESCE(r.right_amount, 0) / l.left_amount ELSE NULL END AS receipt_coverage",
+        f"{missing_inputs} AS missing_value_count",
+        f"{known_inputs} AS known_value_count",
+        f"CASE WHEN ({unmatched_side}) = 0 AND ({known_inputs}) + ({missing_inputs}) > 0 THEN "
+        f"1.0 * ({known_inputs}) / (({known_inputs}) + ({missing_inputs})) ELSE NULL END AS value_coverage_rate",
+        f"CASE WHEN {total_rows} = 0 THEN 'missing' "
+        f"WHEN {missing_inputs} = 0 AND ({unmatched_side}) = 0 THEN 'complete' "
+        f"WHEN {known_inputs} = 0 THEN 'missing' ELSE 'incomplete' END AS metric_data_state",
+        f"{total_rows} AS `__matched_row_count`",
     ]
     ctes = f"WITH left_agg AS ({left_sql}), right_agg AS ({right_sql}), " if left_keys else f"WITH left_agg AS ({left_sql}), right_agg AS ({right_sql}) "
     if left_keys:
