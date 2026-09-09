@@ -2292,6 +2292,71 @@ def _integrity_columns(value_sql, missing, known):
     ]
 
 
+def _overdue_integrity_columns(metric, dataset, datasets_contract, joined_alias,
+                               joined_dataset, eligibility, missing_input, sign):
+    """Measure eligibility before filtering NULL credit/date inputs out of scope.
+
+    Full metric_value stays unknown when any scoped positive-open row cannot be
+    assessed, or an eligible row lacks a required measure. known_subset_value
+    is only the aggregate of assessable, eligible rows with known inputs.
+    """
+    predicate, missing_credit, missing_date, required_nulls = eligibility
+    unknown_input = " OR ".join([missing_credit, missing_date, *required_nulls])
+    eligible = f"COALESCE(({predicate}), FALSE)"
+    unknown = f"({unknown_input})"
+    missing_input = f"({missing_input})"
+    aggregation = metric.get("aggregation")
+
+    def base(column):
+        return _qualified_identifier("f", _approved_column(
+            column, set(dataset.get("allowed_columns") or []),
+            _blocked_columns(datasets_contract, dataset)))
+
+    if aggregation == "sum_product":
+        value = " * ".join(base(c) for c in metric["measure_columns"])
+    elif aggregation in {"sum", "count_distinct"}:
+        value = base(metric["measure"])
+        if aggregation == "count_distinct":
+            missing_input = f"({missing_input} OR {value} IS NULL)"
+    elif aggregation == "max_days_over":
+        credit = _qualified_identifier(joined_alias, _approved_column(
+            metric["subtract_measure"], set(joined_dataset.get("allowed_columns") or []),
+            _blocked_columns(datasets_contract, joined_dataset)))
+        value = f"DATEDIFF(CURDATE(), {base(metric['measure'])}) - {credit}"
+    else:
+        raise QueryFailure("CONTRACT_UNAVAILABLE", "逾期资格覆盖不支持该聚合。")
+
+    def count(condition):
+        return f"COALESCE(SUM(CASE WHEN {condition} THEN 1 ELSE 0 END), 0)"
+
+    known = count(f"{eligible} AND NOT {unknown} AND NOT {missing_input}")
+    missing = count(f"{unknown} OR ({eligible} AND {missing_input})")
+    selected = f"CASE WHEN {eligible} AND NOT {unknown} AND NOT {missing_input} THEN {value} ELSE NULL END"
+    if aggregation == "count_distinct":
+        subset = f"COUNT(DISTINCT {selected})"
+    elif aggregation == "max_days_over":
+        subset = f"MAX({selected})"
+    else:
+        subset = f"SUM({selected})"
+    if sign == -1:
+        subset = f"-({subset})"
+    subset = f"CASE WHEN ({known}) > 0 THEN {subset} ELSE NULL END"
+    unassessable = count(unknown)
+    eligible_count = count(f"{eligible} AND NOT {unknown}")
+    return [
+        *_integrity_columns(subset, missing, known),
+        f"{subset} AS known_subset_value",
+        "COUNT(*) AS scope_row_count",
+        f"{unassessable} AS unassessable_row_count",
+        f"COUNT(*) - ({unassessable}) AS assessed_row_count",
+        f"{eligible_count} AS eligible_row_count",
+        f"{count(missing_credit)} AS missing_credit_days_count",
+        f"{count(missing_date)} AS missing_bill_time_count",
+        f"CASE WHEN COUNT(*) > 0 THEN 1.0 * (COUNT(*) - ({unassessable})) / COUNT(*) ELSE NULL END AS eligibility_coverage_rate",
+        f"({eligible_count}) + ({unassessable}) AS {_quote_identifier(_INTERNAL_MATCH_COUNT)}",
+    ]
+
+
 def _metric_dimension_definition(
     dimensions: Mapping[str, Any], metric: Mapping[str, Any], code: str
 ) -> Mapping[str, Any]:
@@ -2513,6 +2578,7 @@ def _build_metric_core(
         where.append(_filter_clause(column, spec, where_params, alias="f"))
         system_filters.append(_system_filter_record(table, column, spec, "metric_required"))
 
+    eligibility_evidence = None
     if metric_join_alias is not None and metric_join_dataset is not None:
         joined_allowed = {str(item) for item in metric_join_dataset.get("allowed_columns") or []}
         joined_blocked = _blocked_columns(datasets_contract, metric_join_dataset)
@@ -2529,9 +2595,15 @@ def _build_metric_core(
                     str(metric_join.get("dataset")), column, spec, "metric_join_required"
                 )
             )
+        condition = metric_join.get("condition")
+        eligibility_nulls = []
         for column in metric_join.get("required_not_null") or []:
             column = _approved_column(column, joined_allowed, joined_blocked)
-            where.append(f"{_qualified_identifier(metric_join_alias, column)} IS NOT NULL")
+            qualified = _qualified_identifier(metric_join_alias, column)
+            if isinstance(condition, dict) and condition.get("type") == "date_plus_days_before_today":
+                eligibility_nulls.append(f"{qualified} IS NULL")
+            else:
+                where.append(f"{qualified} IS NOT NULL")
         missing_column = metric_join.get("required_missing")
         if missing_column is not None:
             missing_column = _approved_column(missing_column, joined_allowed, joined_blocked)
@@ -2542,9 +2614,12 @@ def _build_metric_core(
                 raise QueryFailure("CONTRACT_UNAVAILABLE", "指标关联条件不受支持。")
             date_column = _approved_column(condition.get("date_column"), base_allowed, base_blocked)
             days_column = _approved_column(condition.get("days_column"), joined_allowed, joined_blocked)
-            where.append(
+            eligibility_evidence = (
                 f"DATE_ADD({_qualified_identifier('f', date_column)}, "
-                f"INTERVAL {_qualified_identifier(metric_join_alias, days_column)} DAY) < CURDATE()"
+                f"INTERVAL {_qualified_identifier(metric_join_alias, days_column)} DAY) < CURDATE()",
+                f"{_qualified_identifier(metric_join_alias, days_column)} IS NULL",
+                f"{_qualified_identifier('f', date_column)} IS NULL",
+                eligibility_nulls,
             )
 
     time_policy = str(metric.get("time_policy") or "")
@@ -2748,6 +2823,10 @@ def _build_metric_core(
         *_integrity_columns(metric_sql, missing, known),
         f"COUNT(*) AS {_quote_identifier(_INTERNAL_MATCH_COUNT)}",
     ]
+    if eligibility_evidence is not None:
+        evidence_columns = _overdue_integrity_columns(
+            metric, dataset, datasets_contract, metric_join_alias,
+            metric_join_dataset, eligibility_evidence, missing_input, sign)
     if (
         isinstance(applied_time, Mapping)
         and applied_time.get("source") in _SNAPSHOT_TIME_SOURCES
@@ -2812,6 +2891,8 @@ def _build_metric_core(
         sql += " WHERE " + " AND ".join(where)
     if group_columns:
         sql += " GROUP BY " + ", ".join(group_columns)
+        if eligibility_evidence is not None:
+            sql += f" HAVING {_quote_identifier(_INTERNAL_MATCH_COUNT)} > 0"
     return sql, [*join_params, *where_params], {
         "time_range": applied_time,
         "filters": applied_filters,
@@ -4141,6 +4222,14 @@ def _business_metric_ref(request: Mapping[str, Any]) -> str | None:
 
 
 _PUBLIC_FACT_FIELDS = {
+    "known_subset_value",
+    "scope_row_count",
+    "assessed_row_count",
+    "unassessable_row_count",
+    "eligible_row_count",
+    "missing_credit_days_count",
+    "missing_bill_time_count",
+    "eligibility_coverage_rate",
     "metric_value",
     "comparison_value",
     "delta_value",
