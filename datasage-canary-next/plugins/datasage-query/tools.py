@@ -1698,11 +1698,12 @@ def _allocate_public_request_branches(
     requests: Sequence[Any],
     *,
     physical_budget: int = PHYSICAL_EXECUTION_BUDGET,
+    preflight_failures: Mapping[str, QueryFailure] | None = None,
 ) -> tuple[list[Any], dict[str, QueryFailure]]:
     """Admit public branches independently into the physical execution budget."""
 
     admitted: list[Any] = []
-    local_failures: dict[str, QueryFailure] = {}
+    local_failures: dict[str, QueryFailure] = dict(preflight_failures or {})
     remaining = physical_budget
     for raw_request in requests:
         request_id = (
@@ -1710,6 +1711,8 @@ def _allocate_public_request_branches(
             if isinstance(raw_request, Mapping)
             else ""
         )
+        if request_id in local_failures:
+            continue
         try:
             # Complete-operation expansion calls the structural validator. Do
             # the same validation per public branch first so one malformed
@@ -8547,8 +8550,9 @@ def _validate_query_dispatch(
     args: Any,
     *,
     observed_on: date,
+    branch_failures: dict[str, QueryFailure] | None = None,
 ) -> request_contract.ValidatedQueryEnvelope:
-    """Finish all database-free validation before authorization/readiness."""
+    """Validate the envelope globally; optionally retain attributable branch failures."""
 
     envelope = _validated_query_envelope(args)
     for index, raw_request in enumerate(envelope.requests):
@@ -8588,7 +8592,9 @@ def _validate_query_dispatch(
                 "UNSUPPORTED_METRIC",
             }:
                 exc.hint = "Use an exact metric code returned by datasage_catalog."
-            raise
+            if branch_failures is None:
+                raise
+            branch_failures[str(raw_request["request_id"])] = exc
     return envelope
 
 
@@ -9092,8 +9098,9 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
             dict(calculation) for calculation in validated_envelope.calculations
         ]
         public_requests = list(requests)
+        preflight_failures = _kwargs.pop("_branch_preflight_failures", {})
         requests, local_branch_failures = _allocate_public_request_branches(
-            public_requests
+            public_requests, preflight_failures=preflight_failures
         )
         requests, operation_partitions = _expand_complete_change_decompositions(
             requests,
@@ -9598,6 +9605,8 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
         }
         _check_call_deadline(deadline_at)
         _attach_batch_source_evidence(payload, results)
+        if preflight_failures and len(preflight_failures) == len(public_requests):
+            payload["error"] = _public_error(preflight_failures[request_ids[0]])
         if calculations:
             payload["calculation_count"] = len(public_calculation_results)
             payload["calculations"] = public_calculation_results
@@ -9729,10 +9738,12 @@ def entitlement_guarded_datasage_query(
         return entitlements.denied_response()
 
     observed_on = _business_today()
+    branch_failures: dict[str, QueryFailure] = {}
     try:
         validated_envelope = _validate_query_dispatch(
             args,
             observed_on=observed_on,
+            branch_failures=branch_failures,
         )
         _check_call_deadline(kwargs["_deadline_at"])
     except QueryFailure as failure:
@@ -9758,6 +9769,7 @@ def entitlement_guarded_datasage_query(
         args,
         _validated_query_envelope=validated_envelope,
         _period_observed_on=observed_on,
+        _branch_preflight_failures=branch_failures,
         **kwargs,
     )
 
@@ -9793,7 +9805,9 @@ def runtime_guarded_datasage_query(
         from . import runtime_health
 
         _check_call_deadline(kwargs["_deadline_at"])
-        readiness = runtime_health.query_readiness_status()
+        preflight_failures = kwargs.get("_branch_preflight_failures", {})
+        all_branches_invalid = bool(requests) and len(preflight_failures) == len(requests)
+        readiness = {"ready": True} if all_branches_invalid else runtime_health.query_readiness_status()
         _check_call_deadline(kwargs["_deadline_at"])
         if readiness.get("ready"):
             return datasage_query(
@@ -9828,7 +9842,9 @@ def runtime_guarded_datasage_query(
         )
         public_requests = list(requests)
         guarded_requests, local_branch_failures = (
-            _allocate_public_request_branches(public_requests)
+            _allocate_public_request_branches(
+                public_requests, preflight_failures=preflight_failures
+            )
         )
         guarded_requests, guarded_operations = (
             _expand_complete_change_decompositions(
