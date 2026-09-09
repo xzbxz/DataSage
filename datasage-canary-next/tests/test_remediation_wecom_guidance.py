@@ -29,5 +29,11 @@ class WeComGuidanceAssemblyTests(unittest.TestCase):
         self.assertIn('Confirming a dimension is not confirmation of its literal value',self.system)
 
 
+    def test_evidence_rules_reach_provider_after_host_assembly(self):
+        self.assertIn('Empty rows are not numeric zero',self.system)
+        self.assertIn('Equal aggregates do not prove row-level agreement',self.system)
+        self.assertIn('known_subset_value',self.system)
+        self.assertIn('eligibility_coverage_rate',self.system)
+
 
 if __name__=='__main__':unittest.main()

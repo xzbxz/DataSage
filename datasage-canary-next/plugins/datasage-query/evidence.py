@@ -508,6 +508,12 @@ def _limitations(
     data_state = result.get("data_state")
     if data_state in _LIMITED_STATES:
         limitations.append(f"DATA_STATE_{str(data_state).upper()}")
+    if data_state == "empty":
+        limitations.append("NUMERIC_ZERO_NOT_ESTABLISHED")
+    # Receipt metrics expose aggregates. Even a valid structural decomposition
+    # reconciles aggregate partitions, never bank entries or individual rows.
+    if request.get("domain") == "receipt" and result.get("status") == "success":
+        limitations.append("ROW_LEVEL_RECONCILIATION_NOT_PROVIDED")
     if data_state not in _COMPLETE_STATES | _LIMITED_STATES:
         limitations.append("DATA_STATE_UNRECOGNIZED")
     change_reconciliation = result.get("change_reconciliation")
