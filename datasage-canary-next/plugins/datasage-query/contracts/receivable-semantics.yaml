@@ -768,7 +768,7 @@ metrics:
     disclosures:
       - id: receivable.overdue.credit-coverage
         mode: required_always
-        text: &overdue_coverage_note "逾期逐笔按客户、组织和币种账期判断。范围计数为同一筛选下正未结记录；账期或日期缺失属于无法判断，不是未逾期。无法判断或已逾期记录缺少指标必需输入时，总体指标保持未定义；可计算子集值仅为输入齐全且已判定逾期的可计算子集，不能称作全量。资格覆盖与金额覆盖分开披露，均不证明源数据已结账或完整同步。"
+        text: &overdue_coverage_note "逾期逐笔按客户、组织和币种账期判断。范围计数为同一筛选下正未结记录；账期或日期缺失属于无法判断，不是未逾期。无法判断或已逾期记录缺少指标必需输入时，总体指标保持未定义；可计算子集值仅为输入齐全且已判定逾期的可计算子集，不能称作全量。资格覆盖统计整个正未结范围中可判定账期的记录；指标贡献候选覆盖的分母为已判定逾期及无法判定记录，不是仅有账期记录的金额覆盖。两者均不证明源数据已结账或完整同步。"
       - id: receivable.overdue_receivable_amount.legacy-note
         mode: contract_only
         text: &answer_note_overdue_receivable_amount "逾期按客户、组织、币种授信天数逐笔判断；无授信或授信天数为空的明细不计入，需说明覆盖范围。"

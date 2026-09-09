@@ -87,8 +87,10 @@ that detail differences were not tested unless applicable reconciliation
 evidence was actually returned; aggregate decomposition is not row matching.
 For overdue metrics, known_subset_value is only the calculable eligible subset.
 An unknown total remains unknown. Disclose unassessable_row_count and the
-missing-credit/date counts separately from eligible-record amount coverage;
-eligibility_coverage_rate does not establish full warehouse freshness or close.
+missing-credit/date counts. eligibility_coverage_rate covers assessment of the
+scoped positive-open population; value_coverage_rate includes unassessable rows
+in its contribution-candidate denominator, not just eligible metric inputs.
+Neither rate establishes full warehouse freshness or close.
 
 ## Target answer boundary (WeCom-critical)
 
