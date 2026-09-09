@@ -462,9 +462,15 @@ def bounded_json_handler(tool_name: str, handler: Callable[..., Any]):
                 error = decoded.get("error") if isinstance(decoded, dict) else None
                 if isinstance(error, Mapping) and error.get("code") == "BATCH_DEADLINE_EXCEEDED":
                     return enforce_tool_result_budget(tool_name, decoded)
-                return _compact_json({"status": "failed", "results": [],
-                    "must_stop_business_query": True,
-                    "error": {"code": "BATCH_DEADLINE_EXCEEDED", "message": "调用总时限已到。", "retryable": True}})
+                if tool_name != "datasage_query":
+                    return _compact_json({"status": "failed", "results": [],
+                        "must_stop_business_query": True,
+                        "error": {"code": "BATCH_DEADLINE_EXCEEDED", "message": "调用总时限已到。", "retryable": True}})
+                # The registered query producer already projected and checked
+                # its completed evidence before returning. Crossing the deadline
+                # while releasing its lease does not invalidate those facts.
+                # Use the same public compaction and timeout exit as below;
+                # never return the intermediate producer payload directly.
             rendered = enforce_tool_result_budget(tool_name, raw)
             if time.monotonic() >= deadline_at:
                 # Preserve completed facts in the same public projection as
