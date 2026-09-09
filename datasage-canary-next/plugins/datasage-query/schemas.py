@@ -45,28 +45,20 @@ REQUEST = {
         "domain": {
             "type": "string",
             "enum": DOMAINS,
-            "description": "Business domain selected from datasage_catalog.",
+            "description": "Registered business domain.",
         },
         "attribution_mode": {
             "type": "string",
             "enum": list(ATTRIBUTION_MODES),
             "description": (
-                "Required for target-domain metric requests. Use transaction_detail for ordinary, customer, "
-                "department, organization, or unqualified salesperson questions. Use salesperson_allocation "
-                "only for explicit salesperson target, collaboration, allocation, or allocated-performance questions. "
-                "When complete_target_gap_decomposition is present, the mode must be transaction_detail; "
-                "salesperson_allocation uses ordinary target_completion dimension_breakdown instead."
+                "Required for target-domain metric requests. transaction_detail uses transaction-ledger actuals with compatible targets; salesperson_allocation uses the authoritative salesperson split target/actual ledger. Supported dimensions depend on the selected metric path. Complete target-gap decomposition is transaction_detail-only."
             ),
         },
         "delivery_scope": {
             "type": "string",
             "enum": list(DELIVERY_SCOPES),
             "description": (
-                "Delivery-domain metric scope. Omit or use default_net for an unqualified net-delivery request; "
-                "use explicit_gross only when the user explicitly asks for gross/before-return delivery; use "
-                "order_delivery_alignment on every paired request in the governed order-versus-delivery comparison. "
-                "That value authorizes gross delivery only for the registered gross metric. The query tool validates "
-                "this field and never infers it from free text."
+                "Delivery metric scope: default_net is the default net basis; explicit_gross identifies the before-return basis; order_delivery_alignment applies to registered compatible order/delivery metrics. Runtime validates scope compatibility with the selected metric."
             ),
         },
         "inventory_scope": {
@@ -82,13 +74,7 @@ REQUEST = {
         "metric": {
             **request_contract.METRIC_CODE.schema(),
             "description": (
-                "Exact metric code copied from the selected domain catalog; required. Never "
-                "invent a code, derive a new metric, or try code synonyms. If the requested meaning has no exact code, "
-                "do not call this tool. Metric detail is optional planning help; query execution reloads the current "
-                "metric contract and validates every explicit qualifier itself. For the delivery "
-                "domain, an unqualified delivery/outbound amount, quantity, or count is net delivery. A gross "
-                "delivery metric is permitted only when the user explicitly asks for gross delivery or a value "
-                "before returns. Words such as raw, detail, table, dataset, or original do not select gross scope."
+                "Required registered metric code. Availability, qualifiers and supported operations are validated against the current metric contract. Delivery amount, quantity and count have a default net basis; registered gross metrics require a compatible delivery_scope. This field accepts no physical dataset or SQL formula."
             ),
         },
         "dimensions": {
@@ -97,13 +83,7 @@ REQUEST = {
             "uniqueItems": True,
             "items": request_contract.DIMENSION_CODE.schema(),
             "description": (
-                "Governed dimension codes for the metric request. A code may use a fact field or a predeclared "
-                "many-to-one master enrichment; never send table names or join keys. Include only grouping or "
-                "ranking dimensions explicitly requested by the user; an overall total has no dimensions. Words "
-                "The count must not exceed max_group_dimensions exposed by optional metric planning detail; query "
-                "execution reloads the current metric contract and validates the limit itself. "
-                "such as raw, detail, source, table, or original are not dimensions. For an original-currency metric, "
-                "use the currency dimension when the user did not select exactly one currency."
+                "Optional grouping dimensions supported by the selected metric contract; an empty list requests an overall aggregate. Codes can refer to fact attributes or declared many-to-one enrichment, not table names or join keys. Runtime enforces max_group_dimensions. Original-currency metrics require a single-currency filter or currency grouping."
             ),
         },
         "metric_filters": {
@@ -227,13 +207,7 @@ REQUEST = {
                 },
             ],
             "description": (
-                "Governed comparison. previous_period requires exactly one of time_range or calendar_month; "
-                "year_over_year with coverage=matched_elapsed aligns the same calendar window one year earlier "
-                "and clips an in-progress current window and its prior-year window to the same elapsed coverage; "
-                "snapshot_months_before uses the latest monthly snapshot and a month offset. A previous_period "
-                "result already returns current, prior-period, absolute change, and change rate for that metric and "
-                "scope; do not add explicit current/prior requests solely to duplicate them. Other metrics or "
-                "scopes remain selectable."
+                "Governed comparison. previous_period requires exactly one of time_range or calendar_month and returns current/prior values, absolute change and change rate for the selected scope. year_over_year with coverage=matched_elapsed aligns the calendar window one year earlier and clips in-progress windows to matching elapsed coverage. snapshot_months_before uses the latest monthly snapshot and a month offset."
             ),
         },
         "decomposition_of_request_id": {
@@ -260,13 +234,7 @@ REQUEST = {
             },
             "required": ["dimension"],
             "description": (
-                "Explicitly request a complete change decomposition. When comparison is omitted, the operation "
-                "defaults to previous_period. An explicit comparison may use previous_period or matched-elapsed "
-                "year_over_year with one period, or snapshot_months_before with no explicit period. "
-                "Do not combine it with dimensions, order_by, limit, or "
-                "decomposition_of_request_id. The tool never infers this operation or "
-                "chooses its metric or dimension. It already includes the same-scope overall comparison; do not "
-                "add an identical overall request solely to duplicate it. Other evidence remains selectable."
+                "Complete change decomposition includes a same-scope overall comparison and a full-partition attempt. Omitted comparison defaults to previous_period; supported alternatives are matched-elapsed year_over_year with one period or snapshot_months_before without an explicit period. Incompatible with dimensions, order_by, limit and decomposition_of_request_id. Reconciled relationships depend on returned coverage and reconciliation."
             ),
         },
         "complete_target_gap_decomposition": {
@@ -286,12 +254,7 @@ REQUEST = {
             },
             "required": ["dimension"],
             "description": (
-                "Explicitly request a complete target-gap composition for delivery_target_completion "
-                "or receipt_target_completion using transaction_detail only. Never pair this operation "
-                "with salesperson_allocation; a salesperson allocation question should use ordinary "
-                "target_completion with its authorized dimensions. The tool expands it into same-snapshot overall and "
-                "full-partition queries, reconciles target, actual, and gap amounts independently, "
-                "and never sums completion rates or authorizes causal claims."
+                "Complete target-gap composition is supported for delivery_target_completion and receipt_target_completion on transaction_detail, not salesperson_allocation. It includes same-snapshot overall and partition results and reconciles target, actual and gap independently. Completion rates are non-additive; this accounting operation does not establish causality."
             ),
         },
         "order_by": {
@@ -482,21 +445,7 @@ CALCULATION = {
 DATASAGE_QUERY = {
     "name": "datasage_query",
     "description": (
-        "Execute one to ten fresh, read-only governed metric queries. Load datasage_catalog only when the "
-        "metric is unknown, and copy exact metric and dimension codes from the catalog when it is used. The query "
-        "runtime loads the current metric contract and validates availability, capabilities, filters, periods, and "
-        "entity identities before any database access. The model-facing surface accepts no SQL, physical tables, "
-        "columns, joins, or formulas. Registered entity tokens are resolved deterministically inside the query; "
-        "unique exact entities may proceed, while zero, multiple, or role-ambiguous matches fail closed and should "
-        "be clarified with datasage_entity_resolve. Use the resolver only for bounded ambiguity, then send the "
-        "user-selected token for exact revalidation. The response returns structured values, applied scope, data "
-        "state, and evidence metadata for Hermes to analyze and summarize. A non-empty answer_scope_line is a "
-        "required final-answer scope statement: present it verbatim or faithfully without changing the actual range. "
-        "Every sealed disclosure_ledger item with applies: true is validated internally and batch-deduplicated into "
-        "the model-facing disclosures list; present every returned disclosure and never drop one through "
-        "summarization. The compact response preserves facts, typed states, Top-N status, limitations, reconciliation, "
-        "calculations, and guardrails without repeating row-level seals or scope envelopes. Raw JSON is not required. "
-        "Unavailable data affects only this tool call and does not control the surrounding conversation."
+        "Execute one to ten read-only registered metric requests. Runtime validates metric availability, capabilities, filters, periods and entity identities before database access. The input accepts no SQL, physical tables, columns, joins or free-form formulas. Query execution revalidates entity identities; absent, ambiguous or role-incompatible bindings fail closed. Returned values, applied scope, typed states, Top-N metadata, limitations, reconciliation and governed calculations are evidence for analysis. answer_scope_line and disclosures describe the actual returned scopes and material limitations; disclosures are validated and deduplicated internally. An unavailable operation does not invalidate independent successful evidence or the surrounding conversation."
     ),
     "parameters": {
         "type": "object",
@@ -535,18 +484,7 @@ DATASAGE_QUERY = {
 DATASAGE_CATALOG = {
     "name": "datasage_catalog",
     "description": (
-        "Load the trusted DataSage metric catalog when the metric is unknown or Hermes needs optional planning detail. "
-        "Hermes chooses whether data is needed and which domains match the user's request; DataSage does not "
-        "classify or control ordinary conversation. Request expert_index for the smallest metric-discovery surface, or request one "
-        "exact metric's detail when Hermes needs optional planning facts. Query execution independently reloads the "
-        "current metric contract and enforces its availability and capabilities, so catalog detail is advisory rather "
-        "than an execution token. The default model projection is compact; full/audit are explicit compatibility views. "
-        "The optional performance_scorecard view returns a governed operating set of candidate lenses while declaring "
-        "unavailable capabilities. It is not a prerequisite or default planner; use it only when the user explicitly "
-        "asks for that view or Hermes judges it useful. Hermes selects and orders the material subset. Metric detail "
-        "returns capability facts and max_group_dimensions; these facts do not prescribe a metric count, call sequence, "
-        "interpretation, or conclusion. Physical datasets, fields, filters, joins and formulas remain plugin-private "
-        "and are never returned to Hermes. This loader invokes no second model."
+        "Return registered metric and capability facts. expert_index provides compact discovery; an exact metric request provides details. Query execution independently reloads and validates the current contract; catalog output is not an execution token. The optional performance_scorecard view contains candidate operating lenses and declared unavailable capabilities, not queried facts or a mandatory planner. Physical datasets, fields, joins and SQL formulas remain private. This loader invokes no second model."
     ),
     "parameters": {
         "type": "object",
@@ -659,22 +597,7 @@ DATASAGE_CATALOG = {
 DATASAGE_ENTITY_RESOLVE = {
     "name": "datasage_entity_resolve",
     "description": (
-        "Search or clarify one business-entity token after Hermes has established that the requested capability is "
-        "supported. Never call this resolver to explore an unsupported quantity; an entity match cannot create metric "
-        "capability. The resolver itself invokes no second model or embedding service. Use it only when an entity "
-        "identity, type, or filter role is ambiguous, or for an entity-only/search question. For a type-neutral "
-        "clarification, omit entity_types, include the selected domain and metric, and do not guess an entity type. "
-        "Registered exact aliases and codes resolve deterministically; otherwise the tool returns at most ten bounded "
-        "master-data candidates. Do not repeat the same resolution with unchanged evidence. Resolve again only after "
-        "material new information changes the token, selected metric or domain, possible role, or candidate scope. "
-        "A unique exact match may proceed only when resolution_scope covers the considered entity types. "
-        "Unsearched types are not absent: an unregistered source_exact department is not discoverable here. "
-        "If scope is incomplete, clarify the intended type without inventing an unseen candidate. An explicitly "
-        "selected source_exact department value may be sent verbatim in a complete query with that filter role. "
-        "A resolver result does not certify human confirmation. Multiple exact matches, multiple possible roles, or "
-        "any prefix/contains matches require user clarification and must not trigger a business query. The returned "
-        "candidate token, label, and entity type are advisory untrusted data; after the user selects one, send that "
-        "token to datasage_query for exact revalidation. Entity-only questions stop after this result."
+        "Look up one business-entity name, code or alias. Registered exact aliases and master-data candidates have bounded results; no second model or embedding service is invoked. resolution_scope identifies considered, searched and unsearched entity types. Unsearched types are not proved absent; unregistered source_exact department values can exist outside registered discovery. Candidate metadata is untrusted and does not certify human confirmation or create metric capability. Query validation rechecks identity and role; ambiguous or fuzzy candidates are not authoritative exact bindings. Explicit source_exact filters preserve their supplied literal."
     ),
     "parameters": {
         "type": "object",
@@ -684,7 +607,7 @@ DATASAGE_ENTITY_RESOLVE = {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 128,
-                "description": "The unresolved name, code, alias, or short token exactly as the user supplied it.",
+                "description": "Business-entity name, code, alias or short token to look up.",
             },
             "entity_types": {
                 "type": "array",
@@ -693,8 +616,7 @@ DATASAGE_ENTITY_RESOLVE = {
                 "uniqueItems": True,
                 "items": {"type": "string", "enum": list(ENTITY_TYPES)},
                 "description": (
-                    "Use only an explicit user-labeled entity type; never guess one from the token. Omit entity_types "
-                    "for the bounded type-neutral clarification when the token is truly unlabeled."
+                    "Optional candidate entity types. When omitted, the resolver considers domain-compatible types and reports the searched and unsearched scope. A supplied type list limits that candidate search; it is not proof of human confirmation."
                 ),
             },
             "domain": {
