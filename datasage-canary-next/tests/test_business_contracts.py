@@ -3255,7 +3255,7 @@ class BusinessContractTests(unittest.TestCase):
             ).read_text(encoding="utf-8")
         )
         self.assertEqual(
-            "datasage-mini-customer-risk-semantics/v8",
+            "datasage-mini-customer-risk-semantics/v9",
             customer_risk_contract["version"],
         )
         formal_dso_declarations = customer_risk_contract["metrics"][
@@ -3385,7 +3385,7 @@ class BusinessContractTests(unittest.TestCase):
         self.assertEqual(dso_result, dso_wire)
         attestation = assert_attestation_and_claim_seals(dso_result)
         self.assertEqual(
-            "formal-receivable-turnover-calculation-attestation/v1",
+            "formal-receivable-turnover-calculation-attestation/v2",
             attestation["contract_version"],
         )
         self.assertEqual("verified", attestation["status"])
@@ -3602,7 +3602,7 @@ class BusinessContractTests(unittest.TestCase):
             "same_period_gross_delivery_rmb": "901.00",
             "period_natural_days": 364,
             "snapshot_month_count": 14,
-            "effective_month_count": "11",
+            "effective_month_count": "13",
         }
         for fact_name, replacement in component_replacements.items():
             component_missing = json.loads(json.dumps(dso_result))
@@ -3728,22 +3728,22 @@ class BusinessContractTests(unittest.TestCase):
             (
                 "snapshot_incomplete",
                 {**dso_rows[0], "snapshot_month_count": 12},
-                "COMPLETE_13_MONTH_END_SNAPSHOTS",
+                "COMPLETE_MONTH_END_SNAPSHOTS",
             ),
             (
-                "effective_months_incomplete",
-                {**dso_rows[0], "effective_month_count": "11"},
-                "COMPLETE_12_EFFECTIVE_MONTHS",
+                "effective_months_exceed_window",
+                {**dso_rows[0], "effective_month_count": "13"},
+                "EFFECTIVE_MONTH_COUNT_WITHIN_WINDOW",
             ),
             (
                 "effective_months_fractional",
                 {**dso_rows[0], "effective_month_count": "12.5"},
-                "COMPLETE_12_EFFECTIVE_MONTHS",
+                "EFFECTIVE_MONTH_COUNT_WITHIN_WINDOW",
             ),
             (
                 "effective_months_boolean",
                 {**dso_rows[0], "effective_month_count": True},
-                "COMPLETE_12_EFFECTIVE_MONTHS",
+                "EFFECTIVE_MONTH_COUNT_WITHIN_WINDOW",
             ),
         )
         for case_name, row, reason in undefined_cases:
@@ -3765,7 +3765,7 @@ class BusinessContractTests(unittest.TestCase):
                     "_model_wire_result",
                     side_effect=capture_undefined_raw,
                 )
-                if case_name == "effective_months_incomplete"
+                if case_name == "effective_months_exceed_window"
                 else mock.patch.object(
                     tools,
                     "_model_wire_result",
@@ -3815,7 +3815,7 @@ class BusinessContractTests(unittest.TestCase):
             )
             assert_disclosure_seals(result)
             self.assertEqual(result, tools._model_wire_result(result), case_name)
-            if case_name == "effective_months_incomplete":
+            if case_name == "effective_months_exceed_window":
                 self.assertEqual(2, len(captured_undefined_raw))
                 raw_result = captured_undefined_raw[0]
                 raw_facts = raw_result["claim_ledger"][0]["facts"]
@@ -3904,8 +3904,12 @@ class BusinessContractTests(unittest.TestCase):
             short_window_result
         )
         self.assertEqual("undefined", short_window_attestation["status"])
+        self.assertNotIn(
+            "COMPLETE_NATURAL_MONTH_WINDOW",
+            short_window_attestation["undefined_reason_codes"],
+        )
         self.assertIn(
-            "COMPLETE_12_NATURAL_MONTH_WINDOW",
+            "COMPLETE_MONTH_END_SNAPSHOTS",
             short_window_attestation["undefined_reason_codes"],
         )
 
@@ -4054,7 +4058,7 @@ class BusinessContractTests(unittest.TestCase):
         self.assertIn("Preserve typed states", answer_policy)
         self.assertIn("Never invent or", query_policy)
         self.assertIn("substitute a metric", query_policy)
-        self.assertNotIn("formal-receivable-turnover-calculation-attestation/v1", main_skill)
+        self.assertNotIn("formal-receivable-turnover-calculation-attestation/v2", main_skill)
 
     def test_delivery_internal_customer_exclusion_is_sealed_and_model_visible(
         self,

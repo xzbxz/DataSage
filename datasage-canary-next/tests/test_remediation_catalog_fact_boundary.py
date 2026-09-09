@@ -31,7 +31,7 @@ class CatalogFactBoundaryTests(unittest.TestCase):
         self.assertEqual(64,len(response['source_evidence_ref']['source_ref_sha256']))
         ids={d['disclosure_id'] for d in response['disclosures']}
         for suffix in ('coverage','external-customer.scope','formula'):self.assertIn('customer-risk.formal-receivable-turnover.'+suffix,ids)
-        for field,value in [('metric_value','999'),('average_net_debt_rmb',None),('delivery_amount_rmb','0'),('snapshot_month_count',12),('effective_month_count','11')]:
+        for field,value in [('metric_value','999'),('average_net_debt_rmb',None),('delivery_amount_rmb','0'),('snapshot_month_count',12),('effective_month_count','13')]:
             with self.subTest(corruption=field):
                 invalid=self.dso({**row,field:value});r=self.h.result(invalid,'dso')
                 if not r['rows']:

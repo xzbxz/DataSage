@@ -48,7 +48,7 @@ class SemanticSingleSourceTests(unittest.TestCase):
                         pair_count += 1
                         self.assertIs(disclosure["text"], answer_note)
 
-        self.assertEqual(65, pair_count)
+        self.assertEqual(66, pair_count)  # DSO coverage and legacy note share one anchor.
         self.assertEqual(65, len(anchor_names))
         self.assertEqual(anchor_names, alias_names)
 

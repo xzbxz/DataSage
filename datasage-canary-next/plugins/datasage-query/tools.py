@@ -4989,6 +4989,7 @@ def _disclosure_ledger(
     known_dimension_codes: set[str],
     inherited_disclosures: Sequence[Mapping[str, Any]] = (),
     inventory_scope: str | None = None,
+    applied_time_range: Mapping[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
     """Build a typed, request-bound disclosure contract and seal its completeness."""
 
@@ -5064,6 +5065,14 @@ def _disclosure_ledger(
                 "公开指标披露包含实现层内容。",
                 stage="contract_load",
             )
+        if disclosure_id == _FORMAL_DSO_COVERAGE_DISCLOSURE:
+            months, days = _formal_dso_window_requirements(applied_time_range)
+            if months is not None:
+                public_text += (
+                    f" 本次期间为{applied_time_range['start']}至{applied_time_range['end']}（不含结束日），"
+                    f"共{months}个完整自然月、{days}个自然日；"
+                    f"要求覆盖期初至期末连续{months + 1}个月末余额，真实零余额参与计算，缺失余额不自动补零。"
+                )
         item = {
             "disclosure_id": disclosure_id,
             "disclosure_seal": "unsealed",
@@ -5115,7 +5124,7 @@ def _disclosure_ledger(
 
 
 _FORMAL_DSO_ATTESTATION_VERSION = (
-    "formal-receivable-turnover-calculation-attestation/v1"
+    "formal-receivable-turnover-calculation-attestation/v2"
 )
 _FORMAL_DSO_COVERAGE_DISCLOSURE = (
     "customer-risk.formal-receivable-turnover.coverage"
@@ -5141,20 +5150,19 @@ def _finite_decimal_present(value: Any) -> bool:
     return _finite_decimal(value) is not None
 
 
-def _formal_dso_complete_window(value: Any) -> tuple[bool, int | None]:
+def _formal_dso_window_requirements(value: Any) -> tuple[int | None, int | None]:
+    """Derive required month coverage and days from the applied date boundaries."""
     if not isinstance(value, Mapping):
-        return False, None
+        return None, None
     try:
         start = date.fromisoformat(str(value.get("start")))
         end = date.fromisoformat(str(value.get("end")))
     except (TypeError, ValueError):
-        return False, None
-    complete = (
-        start.day == 1
-        and end.day == 1
-        and (end.year - start.year) * 12 + end.month - start.month == 12
-    )
-    return complete, (end - start).days if complete else None
+        return None, None
+    months = (end.year - start.year) * 12 + end.month - start.month
+    if start.day != 1 or end.day != 1 or months < 1:
+        return None, None
+    return months, (end - start).days
 
 
 def _sealed_disclosure_ids(
@@ -5298,7 +5306,7 @@ def _formal_dso_calculation_attestation(
         or request.get("metric") != "formal_receivable_turnover_days"
     ):
         return None
-    window_complete, expected_period_days = _formal_dso_complete_window(
+    expected_months, expected_period_days = _formal_dso_window_requirements(
         applied_time_range
     )
     period_days = row.get("period_natural_days")
@@ -5333,9 +5341,17 @@ def _formal_dso_calculation_attestation(
         "period_natural_days_present": isinstance(period_days, int)
         and not isinstance(period_days, bool),
         "period_matches_complete_window": period_days_match,
-        "complete_12_natural_month_window": window_complete,
-        "complete_13_month_end_snapshots": row.get("snapshot_month_count") == 13,
-        "complete_12_effective_months": effective_month_count == Decimal(12),
+        "complete_natural_month_window": expected_months is not None,
+        "complete_month_end_snapshots": (
+            expected_months is not None
+            and row.get("snapshot_month_count") == expected_months + 1
+        ),
+        "effective_month_count_within_window": (
+            expected_months is not None
+            and effective_month_count is not None
+            and effective_month_count == effective_month_count.to_integral_value()
+            and 1 <= effective_month_count <= expected_months
+        ),
         "coverage_disclosure_sealed": _FORMAL_DSO_COVERAGE_DISCLOSURE
         in sealed_disclosures,
         "formula_disclosure_sealed": _FORMAL_DSO_FORMULA_DISCLOSURE
@@ -7044,9 +7060,9 @@ _FORMAL_DSO_ATTESTATION_GUARDS = (
     "gross_delivery_denominator_positive",
     "period_natural_days_present",
     "period_matches_complete_window",
-    "complete_12_natural_month_window",
-    "complete_13_month_end_snapshots",
-    "complete_12_effective_months",
+    "complete_natural_month_window",
+    "complete_month_end_snapshots",
+    "effective_month_count_within_window",
     "coverage_disclosure_sealed",
     "formula_disclosure_sealed",
     "both_external_customer_scopes_disclosed",
@@ -7126,7 +7142,7 @@ def _formal_dso_attested_components_are_valid(
     )
     period_days = component_values.get("period_natural_days")
     snapshot_month_count = component_values.get("snapshot_month_count")
-    complete_window, expected_period_days = _formal_dso_complete_window(
+    expected_months, expected_period_days = _formal_dso_window_requirements(
         applied_time_range
     )
     formula_value = (
@@ -7146,12 +7162,14 @@ def _formal_dso_attested_components_are_valid(
         and isinstance(period_days, int)
         and not isinstance(period_days, bool)
         and period_days > 0
-        and complete_window
+        and expected_months is not None
         and period_days == expected_period_days
         and isinstance(snapshot_month_count, int)
         and not isinstance(snapshot_month_count, bool)
-        and snapshot_month_count == 13
-        and effective_month_count == Decimal(12)
+        and snapshot_month_count == expected_months + 1
+        and effective_month_count is not None
+        and effective_month_count == effective_month_count.to_integral_value()
+        and 1 <= effective_month_count <= expected_months
         and formula_value is not None
         and _decimal_close(metric_value, formula_value)
     )
@@ -8883,6 +8901,7 @@ def _run_one(
             inherited_disclosures=semantics.get("default_disclosures") or (),
             known_dimension_codes=set(domain_dimensions),
             inventory_scope=scope.get("inventory_scope"),
+            applied_time_range=applied_time_range,
         )
         _attach_formal_dso_calculation_attestations(
             request=request,
