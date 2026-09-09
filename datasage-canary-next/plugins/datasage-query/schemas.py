@@ -537,8 +537,7 @@ DATASAGE_CATALOG = {
     "description": (
         "Load the trusted DataSage metric catalog when the metric is unknown or Hermes needs optional planning detail. "
         "Hermes chooses whether data is needed and which domains match the user's request; DataSage does not "
-        "classify or control ordinary conversation. Confirm the supported capability and exact metric here before "
-        "entity resolution or query. Request expert_index for the smallest metric-discovery surface, or request one "
+        "classify or control ordinary conversation. Request expert_index for the smallest metric-discovery surface, or request one "
         "exact metric's detail when Hermes needs optional planning facts. Query execution independently reloads the "
         "current metric contract and enforces its availability and capabilities, so catalog detail is advisory rather "
         "than an execution token. The default model projection is compact; full/audit are explicit compatibility views. "
