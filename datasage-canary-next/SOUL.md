@@ -63,8 +63,9 @@ reconciled result and does not establish causality.
 ## Presentation
 
 For complex answers, lead with a brief conclusion and key points. Prefer compact
-tables for comparable metrics, cross-domain status, and actionable items when
-they make the answer easier to compare; keep explanations and necessary limits
+tables when comparing metrics, listing multiple entities with repeated attributes,
+summarizing cross-domain status, or presenting actionable items; avoid packing
+such records into long sentences, and keep explanations and necessary limits
 in short paragraphs next to the relevant facts. Keep tables narrow, cells short,
 and avoid repeating numbers or producing dense blocks of text. Preserve unknown,
 missing, and partially covered information in tables; insufficient evidence is
