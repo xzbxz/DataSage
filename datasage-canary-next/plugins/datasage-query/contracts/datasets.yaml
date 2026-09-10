@@ -1,4 +1,4 @@
-version: datasage-mini-datasets/v13
+version: datasage-mini-datasets/v14
 
 defaults:
   blocked_columns:
@@ -571,3 +571,85 @@ datasets:
     - 利润报表已记录值，默认包含内部客户；显式筛选范围以结果为准。数据有更新不代表费用已归集或会计已结账，核算完成状态未确认。
     - 按原出库日期选择订单，展示订单生命周期已归集值；历史期间可能随退货和费用更新，不能当成该月经营发生额。业务员只有源名称，名称分组不证明唯一人员身份。
     - 费用空值保留为未知，不自动补零；有缺失时只能解释已知部分，不能据此声称完整费用总额或已对账。收入和毛利采用报表已存值，不用缺失费用重造最终利润。
+
+  vk_ads.dept_profit_ads:
+    domains:
+    - profit
+    kind: monthly_flow
+    grain: one_row_per_month_department_attribute_combination
+    primary_key:
+    - guid
+    allowed_columns:
+    - bill_date
+    - bill_type
+    - customer_commission_rmb
+    - customer_dept
+    - deduct_amount_rmb
+    - discount_amount_rmb
+    - gross_profit_rmb
+    - guid
+    - inventory_cost_rmb
+    - is_customized
+    - is_defective
+    - is_ready
+    - logistics_amount_rmb
+    - org_name
+    - purchase_cost_rmb
+    - qc_amount_rmb
+    - remittance_cost_rmb
+    - rent_amount_rmb
+    - return_amount_rmb
+    - return_cost_rmb
+    - sale_amount_rmb
+    - sales_commission_rmb
+    - send_amount_rmb
+    - short_barge_rmb
+    - tax_exclue_delivery_rmb
+    required_filters: []
+    joins: []
+    warnings:
+    - 按部门报表归属月汇总组织及业务标签组合。部门利润和客户利润按部门汇总是不同口径，不能互相替代；不提供客户、业务员或产品拆分。
+  vk_ads.goods_profit_ads:
+    domains:
+    - profit
+    kind: monthly_flow
+    grain: one_row_per_month_product_attribute_combination
+    primary_key:
+    - guid
+    allowed_columns:
+    - bill_date
+    - bill_type
+    - customer_commission_rmb
+    - deduct_amount_rmb
+    - dept_name
+    - discount_amount_rmb
+    - goods_id
+    - goods_name
+    - goods_no
+    - goods_region
+    - gross_profit_rmb
+    - guid
+    - is_customized
+    - is_defective
+    - is_print
+    - is_ready
+    - logistics_amount_rmb
+    - org_name
+    - purchase_cost_rmb
+    - qc_amount_rmb
+    - remittance_cost_rmb
+    - rent_amount_rmb
+    - return_amount_rmb
+    - return_cost_rmb
+    - sale_amount_rmb
+    - sales_commission_rmb
+    - send_amount_rmb
+    - short_barge_rmb
+    - supplier_id
+    - supplier_name
+    - supplier_no
+    - tax_exclue_delivery_rmb
+    required_filters: []
+    joins: []
+    warnings:
+    - 按产品报表归属月汇总部门、组织及业务标签组合。产品月度利润不同于按原出库日期选单的生命周期利润；不提供客户、业务员或出库单拆分。

@@ -1,10 +1,12 @@
-version: datasage-profit-semantics/v1
+version: datasage-profit-semantics/v2
 domain: profit
 contract_role: plugin_physical_execution
 business_name: 利润报表已记录值与费用证据
 tables:
 - vk_ads.customer_profit_ads
 - vk_ads.delivery_bill_profit_ads
+- vk_ads.dept_profit_ads
+- vk_ads.goods_profit_ads
 dimensions:
   customer:
     label: 利润报表客户
@@ -66,7 +68,7 @@ dimensions:
       kind: source_exact
       model_rule: 仅使用用户明确提供或受控结果返回的精确原值；不得猜测或扩展。
   product:
-    label: 出库单利润产品
+    label: 利润报表产品
     columns:
     - goods_id
     - goods_no
@@ -216,17 +218,56 @@ dimensions:
       business_meanings:
         y: 是
         n: 否
+  supplier:
+    label: 产品利润报表供应商
+    columns:
+    - supplier_id
+    - supplier_no
+    - supplier_name
+    filter_column: supplier_name
+    value_contract:
+      kind: entity_exact
+      model_rule: 保留用户明确实体，使用现有实体预检和稳定身份绑定。
+    identity_filter:
+      entity_type: supplier
+      value_field: canonical_id
+      column: supplier_id
+  product_region:
+    label: 产品利润报表产品地区
+    columns:
+    - goods_region
+    filter_column: goods_region
+    value_contract: &id010
+      kind: source_exact
+      model_rule: 仅使用用户明确提供或受控结果返回的精确原值；不得猜测或扩展。
+  printed:
+    label: 印花
+    columns:
+    - is_print
+    filter_column: is_print
+    value_contract:
+      kind: closed
+      allowed_values:
+      - y
+      - n
+      business_meanings:
+        y: 是
+        n: 否
 default_disclosures:
 - id: profit.scope
   mode: required_always
-  text: 利润报表金额及毛利率公开分子分母均为人民币元，毛利率本身为比例；只代表已记录值，默认包含内部客户；显式筛选范围以结果为准。数据有更新不代表费用已归集或会计已结账，核算完成状态未确认。
+  text: 利润报表金额和毛利率的分子分母均为人民币元，毛利率本身为比例。没有核算完成标识，统一解释为截至查询时已记录的利润，历史月份也可能随后续费用分配更新。
 - id: profit.missing-fees
   mode: required_always
-  text: 费用空值保留为未知，不自动补零；有缺失时只能解释已知部分，不能据此声称完整费用总额或已对账。收入和毛利采用报表已存值，不用缺失费用重造最终利润。
+  text: 费用空值表示尚未分配到，不等于已确认没有费用。存在未分配项时，完整费用总额仍未知，单列已分配部分和未分配记录数量；不补零重算或重复扣减报表毛利。
+- id: profit.internal-scope
+  mode: required_always
+  text: 客户及订单利润默认不排除内部客户，显式筛选以结果为准；部门及产品利润不提供内部客户拆分，不能宣称已排除内部客户。
 metrics:
   customer_month_sales_revenue:
     label: 客户月度利润报表·销售收入（人民币）
-    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。 销售收入取源报表已记录字段；不宣称已结账。
+    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。
+      销售收入取源报表已记录字段；不宣称已结账。
     unit: 人民币元
     table: vk_ads.customer_profit_ads
     aggregation: sum
@@ -260,7 +301,8 @@ metrics:
     include_known_subset: true
   customer_month_gross_profit:
     label: 客户月度利润报表·毛利（人民币）
-    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。 毛利取源报表已记录字段；不宣称已结账。
+    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。
+      毛利取源报表已记录字段；不宣称已结账。
     unit: 人民币元
     table: vk_ads.customer_profit_ads
     aggregation: sum
@@ -279,7 +321,8 @@ metrics:
     include_known_subset: true
   customer_month_tax_exclusive_delivery:
     label: 客户月度利润报表·不含税出库金额（人民币）
-    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。 不含税出库金额取源报表已记录字段；不宣称已结账。
+    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。
+      不含税出库金额取源报表已记录字段；不宣称已结账。
     unit: 人民币元
     table: vk_ads.customer_profit_ads
     aggregation: sum
@@ -298,7 +341,8 @@ metrics:
     include_known_subset: true
   customer_month_purchase_cost:
     label: 客户月度利润报表·采购成本（人民币）
-    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。 采购成本取源报表已记录字段；不宣称已结账。
+    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。
+      采购成本取源报表已记录字段；不宣称已结账。
     unit: 人民币元
     table: vk_ads.customer_profit_ads
     aggregation: sum
@@ -317,7 +361,8 @@ metrics:
     include_known_subset: true
   customer_month_return_amount:
     label: 客户月度利润报表·退货金额（人民币）
-    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。 退货金额取源报表已记录字段；不宣称已结账。
+    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。
+      退货金额取源报表已记录字段；不宣称已结账。
     unit: 人民币元
     table: vk_ads.customer_profit_ads
     aggregation: sum
@@ -336,7 +381,8 @@ metrics:
     include_known_subset: true
   customer_month_return_cost:
     label: 客户月度利润报表·退货成本（人民币）
-    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。 退货成本取源报表已记录字段；不宣称已结账。
+    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。
+      退货成本取源报表已记录字段；不宣称已结账。
     unit: 人民币元
     table: vk_ads.customer_profit_ads
     aggregation: sum
@@ -355,7 +401,8 @@ metrics:
     include_known_subset: true
   customer_month_customer_commission:
     label: 客户月度利润报表·客户佣金（人民币）
-    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。 客户佣金取源报表已记录字段；不宣称已结账。
+    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。
+      客户佣金取源报表已记录字段；不宣称已结账。
     unit: 人民币元
     table: vk_ads.customer_profit_ads
     aggregation: sum
@@ -374,7 +421,7 @@ metrics:
     include_known_subset: true
   customer_month_sales_commission:
     label: 客户月度利润报表·销售提成（人民币）
-    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。 销售提成取源报表已记录字段；不宣称已结账。
+    business_definition: 客户利润的销售提成优先取提成表，缺少对应记录时按提成比例计算补入；报表计入值不代表已实际支付。
     unit: 人民币元
     table: vk_ads.customer_profit_ads
     aggregation: sum
@@ -387,13 +434,17 @@ metrics:
     - id: profit.customer_month.basis
       mode: required_always
       text: *id001
+    - id: profit.customer_month.commission
+      mode: required_always
+      text: 客户利润的销售提成优先取提成表，缺少对应记录时按提成比例计算补入；报表计入值不代表已实际支付。
     answer_note: *id001
     time_granularity: month
     time_value_format: month
     include_known_subset: true
   customer_month_inspection_expense:
     label: 客户月度利润报表·验货费（人民币）
-    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。 验货费取源报表已记录字段；不宣称已结账。
+    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。
+      验货费取源报表已记录字段；不宣称已结账。
     unit: 人民币元
     table: vk_ads.customer_profit_ads
     aggregation: sum
@@ -412,7 +463,8 @@ metrics:
     include_known_subset: true
   customer_month_short_haul_expense:
     label: 客户月度利润报表·短驳费（人民币）
-    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。 短驳费取源报表已记录字段；不宣称已结账。
+    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。
+      短驳费取源报表已记录字段；不宣称已结账。
     unit: 人民币元
     table: vk_ads.customer_profit_ads
     aggregation: sum
@@ -431,7 +483,8 @@ metrics:
     include_known_subset: true
   customer_month_logistics_expense:
     label: 客户月度利润报表·物流费（系数法）（人民币）
-    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。 物流费（系数法）取源报表已记录字段；不宣称已结账。
+    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。
+      物流费（系数法）取源报表已记录字段；不宣称已结账。
     unit: 人民币元
     table: vk_ads.customer_profit_ads
     aggregation: sum
@@ -450,7 +503,8 @@ metrics:
     include_known_subset: true
   customer_month_shipping_expense:
     label: 客户月度利润报表·发货费（人民币）
-    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。 发货费取源报表已记录字段；不宣称已结账。
+    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。
+      发货费取源报表已记录字段；不宣称已结账。
     unit: 人民币元
     table: vk_ads.customer_profit_ads
     aggregation: sum
@@ -469,7 +523,8 @@ metrics:
     include_known_subset: true
   customer_month_warehousing_expense:
     label: 客户月度利润报表·仓储费（人民币）
-    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。 仓储费取源报表已记录字段；不宣称已结账。
+    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。
+      仓储费取源报表已记录字段；不宣称已结账。
     unit: 人民币元
     table: vk_ads.customer_profit_ads
     aggregation: sum
@@ -488,7 +543,8 @@ metrics:
     include_known_subset: true
   customer_month_complaint_deduction:
     label: 客户月度利润报表·客诉扣损（人民币）
-    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。 客诉扣损取源报表已记录字段；不宣称已结账。
+    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。
+      客诉扣损取源报表已记录字段；不宣称已结账。
     unit: 人民币元
     table: vk_ads.customer_profit_ads
     aggregation: sum
@@ -507,7 +563,8 @@ metrics:
     include_known_subset: true
   customer_month_discount_amount:
     label: 客户月度利润报表·折扣金额（人民币）
-    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。 折扣金额取源报表已记录字段；不宣称已结账。
+    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。
+      折扣金额取源报表已记录字段；不宣称已结账。
     unit: 人民币元
     table: vk_ads.customer_profit_ads
     aggregation: sum
@@ -526,7 +583,7 @@ metrics:
     include_known_subset: true
   customer_month_remittance_expense:
     label: 客户月度利润报表·汇付成本（人民币）
-    business_definition: 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。业务员归属缺失的记录保留未知，按业务员筛选只覆盖明确归属记录，不用现客户负责人补写。 汇付成本取源报表已记录字段；不宣称已结账。
+    business_definition: 汇付成本按本报表每条记录的正销售收入计提1%，非正收入计零，再汇总已计提金额；不能用最终净收入合计乘1%替代，舍入沿用报表存值。
     unit: 人民币元
     table: vk_ads.customer_profit_ads
     aggregation: sum
@@ -539,6 +596,9 @@ metrics:
     - id: profit.customer_month.basis
       mode: required_always
       text: *id001
+    - id: profit.monthly.remittance
+      mode: required_always
+      text: 汇付成本按本报表每条记录的正销售收入计提1%，非正收入计零，再汇总已计提金额；不能用最终净收入合计乘1%替代，舍入沿用报表存值。
     answer_note: *id001
     time_granularity: month
     time_value_format: month
@@ -925,3 +985,743 @@ metrics:
     time_granularity: month
     time_value_format: month
     include_known_subset: true
+  department_month_sales_revenue:
+    label: 部门月度利润报表·销售收入（人民币）
+    business_definition: 部门月度利润报表按归属月份的已记录值。按部门报表归属月汇总组织及业务标签组合。部门利润和客户利润按部门汇总是不同口径，不能互相替代；不提供客户、业务员或产品拆分。
+    unit: 人民币元
+    table: vk_ads.dept_profit_ads
+    aggregation: sum
+    measure: sale_amount_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: &id008
+    - department
+    - organization
+    - defective
+    - bill_type
+    - ready_goods
+    - customized
+    disclosures:
+    - id: profit.department_month.basis
+      mode: required_always
+      text: &id007 按部门报表归属月汇总组织及业务标签组合。部门利润和客户利润按部门汇总是不同口径，不能互相替代；不提供客户、业务员或产品拆分。
+    answer_note: *id007
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+  department_month_gross_profit:
+    label: 部门月度利润报表·毛利（人民币）
+    business_definition: 部门月度利润报表按归属月份的已记录值。按部门报表归属月汇总组织及业务标签组合。部门利润和客户利润按部门汇总是不同口径，不能互相替代；不提供客户、业务员或产品拆分。
+    unit: 人民币元
+    table: vk_ads.dept_profit_ads
+    aggregation: sum
+    measure: gross_profit_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id008
+    disclosures:
+    - id: profit.department_month.basis
+      mode: required_always
+      text: *id007
+    answer_note: *id007
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+  department_month_tax_exclusive_delivery:
+    label: 部门月度利润报表·不含税出库金额（人民币）
+    business_definition: 部门月度利润报表按归属月份的已记录值。按部门报表归属月汇总组织及业务标签组合。部门利润和客户利润按部门汇总是不同口径，不能互相替代；不提供客户、业务员或产品拆分。
+    unit: 人民币元
+    table: vk_ads.dept_profit_ads
+    aggregation: sum
+    measure: tax_exclue_delivery_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id008
+    disclosures:
+    - id: profit.department_month.basis
+      mode: required_always
+      text: *id007
+    answer_note: *id007
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+  department_month_purchase_cost:
+    label: 部门月度利润报表·采购成本（人民币）
+    business_definition: 部门月度利润报表按归属月份的已记录值。按部门报表归属月汇总组织及业务标签组合。部门利润和客户利润按部门汇总是不同口径，不能互相替代；不提供客户、业务员或产品拆分。
+    unit: 人民币元
+    table: vk_ads.dept_profit_ads
+    aggregation: sum
+    measure: purchase_cost_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id008
+    disclosures:
+    - id: profit.department_month.basis
+      mode: required_always
+      text: *id007
+    answer_note: *id007
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+  department_month_return_amount:
+    label: 部门月度利润报表·退货金额（人民币）
+    business_definition: 部门月度利润报表按归属月份的已记录值。按部门报表归属月汇总组织及业务标签组合。部门利润和客户利润按部门汇总是不同口径，不能互相替代；不提供客户、业务员或产品拆分。
+    unit: 人民币元
+    table: vk_ads.dept_profit_ads
+    aggregation: sum
+    measure: return_amount_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id008
+    disclosures:
+    - id: profit.department_month.basis
+      mode: required_always
+      text: *id007
+    answer_note: *id007
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+  department_month_return_cost:
+    label: 部门月度利润报表·退货成本（人民币）
+    business_definition: 部门月度利润报表按归属月份的已记录值。按部门报表归属月汇总组织及业务标签组合。部门利润和客户利润按部门汇总是不同口径，不能互相替代；不提供客户、业务员或产品拆分。
+    unit: 人民币元
+    table: vk_ads.dept_profit_ads
+    aggregation: sum
+    measure: return_cost_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id008
+    disclosures:
+    - id: profit.department_month.basis
+      mode: required_always
+      text: *id007
+    answer_note: *id007
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+  department_month_customer_commission:
+    label: 部门月度利润报表·客户佣金（人民币）
+    business_definition: 部门月度利润报表按归属月份的已记录值。按部门报表归属月汇总组织及业务标签组合。部门利润和客户利润按部门汇总是不同口径，不能互相替代；不提供客户、业务员或产品拆分。
+    unit: 人民币元
+    table: vk_ads.dept_profit_ads
+    aggregation: sum
+    measure: customer_commission_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id008
+    disclosures:
+    - id: profit.department_month.basis
+      mode: required_always
+      text: *id007
+    answer_note: *id007
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+  department_month_sales_commission:
+    label: 部门月度利润报表·销售提成（人民币）
+    business_definition: 部门利润的销售提成使用提成表，不按客户口径的比例估算补入；报表计入值不代表已实际支付。
+    unit: 人民币元
+    table: vk_ads.dept_profit_ads
+    aggregation: sum
+    measure: sales_commission_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id008
+    disclosures:
+    - id: profit.department_month.basis
+      mode: required_always
+      text: *id007
+    - id: profit.department_month.commission
+      mode: required_always
+      text: 部门利润的销售提成使用提成表，不按客户口径的比例估算补入；报表计入值不代表已实际支付。
+    answer_note: *id007
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+  department_month_inspection_expense:
+    label: 部门月度利润报表·验货费（人民币）
+    business_definition: 部门月度利润报表按归属月份的已记录值。按部门报表归属月汇总组织及业务标签组合。部门利润和客户利润按部门汇总是不同口径，不能互相替代；不提供客户、业务员或产品拆分。
+    unit: 人民币元
+    table: vk_ads.dept_profit_ads
+    aggregation: sum
+    measure: qc_amount_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id008
+    disclosures:
+    - id: profit.department_month.basis
+      mode: required_always
+      text: *id007
+    answer_note: *id007
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+  department_month_short_haul_expense:
+    label: 部门月度利润报表·短驳费（人民币）
+    business_definition: 部门月度利润报表按归属月份的已记录值。按部门报表归属月汇总组织及业务标签组合。部门利润和客户利润按部门汇总是不同口径，不能互相替代；不提供客户、业务员或产品拆分。
+    unit: 人民币元
+    table: vk_ads.dept_profit_ads
+    aggregation: sum
+    measure: short_barge_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id008
+    disclosures:
+    - id: profit.department_month.basis
+      mode: required_always
+      text: *id007
+    answer_note: *id007
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+  department_month_logistics_expense:
+    label: 部门月度利润报表·物流费（系数法）（人民币）
+    business_definition: 部门月度利润报表按归属月份的已记录值。按部门报表归属月汇总组织及业务标签组合。部门利润和客户利润按部门汇总是不同口径，不能互相替代；不提供客户、业务员或产品拆分。
+    unit: 人民币元
+    table: vk_ads.dept_profit_ads
+    aggregation: sum
+    measure: logistics_amount_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id008
+    disclosures:
+    - id: profit.department_month.basis
+      mode: required_always
+      text: *id007
+    answer_note: *id007
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+  department_month_shipping_expense:
+    label: 部门月度利润报表·发货费（人民币）
+    business_definition: 部门月度利润报表按归属月份的已记录值。按部门报表归属月汇总组织及业务标签组合。部门利润和客户利润按部门汇总是不同口径，不能互相替代；不提供客户、业务员或产品拆分。
+    unit: 人民币元
+    table: vk_ads.dept_profit_ads
+    aggregation: sum
+    measure: send_amount_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id008
+    disclosures:
+    - id: profit.department_month.basis
+      mode: required_always
+      text: *id007
+    answer_note: *id007
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+  department_month_warehousing_expense:
+    label: 部门月度利润报表·仓储费（人民币）
+    business_definition: 部门月度利润报表按归属月份的已记录值。按部门报表归属月汇总组织及业务标签组合。部门利润和客户利润按部门汇总是不同口径，不能互相替代；不提供客户、业务员或产品拆分。
+    unit: 人民币元
+    table: vk_ads.dept_profit_ads
+    aggregation: sum
+    measure: rent_amount_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id008
+    disclosures:
+    - id: profit.department_month.basis
+      mode: required_always
+      text: *id007
+    answer_note: *id007
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+  department_month_complaint_deduction:
+    label: 部门月度利润报表·客诉扣损（人民币）
+    business_definition: 部门月度利润报表按归属月份的已记录值。按部门报表归属月汇总组织及业务标签组合。部门利润和客户利润按部门汇总是不同口径，不能互相替代；不提供客户、业务员或产品拆分。
+    unit: 人民币元
+    table: vk_ads.dept_profit_ads
+    aggregation: sum
+    measure: deduct_amount_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id008
+    disclosures:
+    - id: profit.department_month.basis
+      mode: required_always
+      text: *id007
+    answer_note: *id007
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+  department_month_discount_amount:
+    label: 部门月度利润报表·折扣金额（人民币）
+    business_definition: 部门月度利润报表按归属月份的已记录值。按部门报表归属月汇总组织及业务标签组合。部门利润和客户利润按部门汇总是不同口径，不能互相替代；不提供客户、业务员或产品拆分。
+    unit: 人民币元
+    table: vk_ads.dept_profit_ads
+    aggregation: sum
+    measure: discount_amount_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id008
+    disclosures:
+    - id: profit.department_month.basis
+      mode: required_always
+      text: *id007
+    answer_note: *id007
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+  department_month_remittance_expense:
+    label: 部门月度利润报表·汇付成本（人民币）
+    business_definition: 汇付成本按本报表每条记录的正销售收入计提1%，非正收入计零，再汇总已计提金额；不能用最终净收入合计乘1%替代，舍入沿用报表存值。
+    unit: 人民币元
+    table: vk_ads.dept_profit_ads
+    aggregation: sum
+    measure: remittance_cost_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id008
+    disclosures:
+    - id: profit.department_month.basis
+      mode: required_always
+      text: *id007
+    - id: profit.monthly.remittance
+      mode: required_always
+      text: 汇付成本按本报表每条记录的正销售收入计提1%，非正收入计零，再汇总已计提金额；不能用最终净收入合计乘1%替代，舍入沿用报表存值。
+    answer_note: *id007
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+  department_month_gross_margin:
+    label: 部门月度利润报表·毛利率
+    business_definition: 同一利润报表、期间和范围的已记录毛利合计除以已记录销售收入合计，先汇总再计算比率。
+    unit: 比例（有符号；展示为百分比）
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id008
+    disclosures:
+    - id: profit.department_month.basis
+      mode: required_always
+      text: *id007
+    - id: profit.margin.signed
+      mode: required_always
+      text: 毛利率=已记录毛利合计/已记录销售收入合计。收入非零时保留正负结果；收入为零或任一组成缺失则未定义。负收入下的正比率不代表正盈利，必须同时看收入和毛利。
+    answer_note: *id007
+    time_granularity: month
+    time_value_format: month
+    ratio:
+      numerator: department_month_gross_profit
+      denominator: department_month_sales_revenue
+      denominator_policy: nonzero
+    formula: SUM(gross_profit_rmb) / SUM(sale_amount_rmb)
+  department_month_inventory_cost:
+    label: 部门月度利润报表·库存金额项
+    business_definition: 部门利润报表的已记录库存金额项；其具体归属不从客户报表同名项自动继承，不额外重复扣减毛利。
+    unit: 人民币元
+    table: vk_ads.dept_profit_ads
+    aggregation: sum
+    measure: inventory_cost_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id008
+    disclosures:
+    - id: profit.department_month.basis
+      mode: required_always
+      text: *id007
+    answer_note: *id007
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+  product_month_sales_revenue:
+    label: 产品月度利润报表·销售收入（人民币）
+    business_definition: 产品月度利润报表按归属月份的已记录值。按产品报表归属月汇总部门、组织及业务标签组合。产品月度利润不同于按原出库日期选单的生命周期利润；不提供客户、业务员或出库单拆分。
+    unit: 人民币元
+    table: vk_ads.goods_profit_ads
+    aggregation: sum
+    measure: sale_amount_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: &id011
+    - department
+    - organization
+    - defective
+    - bill_type
+    - ready_goods
+    - customized
+    - product
+    - supplier
+    - product_region
+    - printed
+    disclosures:
+    - id: profit.product_month.basis
+      mode: required_always
+      text: &id009 按产品报表归属月汇总部门、组织及业务标签组合。产品月度利润不同于按原出库日期选单的生命周期利润；不提供客户、业务员或出库单拆分。
+    answer_note: *id009
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+    dimension_overrides:
+      department: &id012
+        label: 产品利润归属部门
+        columns:
+        - dept_name
+        filter_column: dept_name
+        value_contract: *id010
+  product_month_gross_profit:
+    label: 产品月度利润报表·毛利（人民币）
+    business_definition: 产品月度利润报表按归属月份的已记录值。按产品报表归属月汇总部门、组织及业务标签组合。产品月度利润不同于按原出库日期选单的生命周期利润；不提供客户、业务员或出库单拆分。
+    unit: 人民币元
+    table: vk_ads.goods_profit_ads
+    aggregation: sum
+    measure: gross_profit_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id011
+    disclosures:
+    - id: profit.product_month.basis
+      mode: required_always
+      text: *id009
+    answer_note: *id009
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+    dimension_overrides:
+      department: *id012
+  product_month_tax_exclusive_delivery:
+    label: 产品月度利润报表·不含税出库金额（人民币）
+    business_definition: 产品月度利润报表按归属月份的已记录值。按产品报表归属月汇总部门、组织及业务标签组合。产品月度利润不同于按原出库日期选单的生命周期利润；不提供客户、业务员或出库单拆分。
+    unit: 人民币元
+    table: vk_ads.goods_profit_ads
+    aggregation: sum
+    measure: tax_exclue_delivery_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id011
+    disclosures:
+    - id: profit.product_month.basis
+      mode: required_always
+      text: *id009
+    answer_note: *id009
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+    dimension_overrides:
+      department: *id012
+  product_month_purchase_cost:
+    label: 产品月度利润报表·采购成本（人民币）
+    business_definition: 产品月度利润报表按归属月份的已记录值。按产品报表归属月汇总部门、组织及业务标签组合。产品月度利润不同于按原出库日期选单的生命周期利润；不提供客户、业务员或出库单拆分。
+    unit: 人民币元
+    table: vk_ads.goods_profit_ads
+    aggregation: sum
+    measure: purchase_cost_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id011
+    disclosures:
+    - id: profit.product_month.basis
+      mode: required_always
+      text: *id009
+    answer_note: *id009
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+    dimension_overrides:
+      department: *id012
+  product_month_return_amount:
+    label: 产品月度利润报表·退货金额（人民币）
+    business_definition: 产品月度利润报表按归属月份的已记录值。按产品报表归属月汇总部门、组织及业务标签组合。产品月度利润不同于按原出库日期选单的生命周期利润；不提供客户、业务员或出库单拆分。
+    unit: 人民币元
+    table: vk_ads.goods_profit_ads
+    aggregation: sum
+    measure: return_amount_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id011
+    disclosures:
+    - id: profit.product_month.basis
+      mode: required_always
+      text: *id009
+    answer_note: *id009
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+    dimension_overrides:
+      department: *id012
+  product_month_return_cost:
+    label: 产品月度利润报表·退货成本（人民币）
+    business_definition: 产品月度利润报表按归属月份的已记录值。按产品报表归属月汇总部门、组织及业务标签组合。产品月度利润不同于按原出库日期选单的生命周期利润；不提供客户、业务员或出库单拆分。
+    unit: 人民币元
+    table: vk_ads.goods_profit_ads
+    aggregation: sum
+    measure: return_cost_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id011
+    disclosures:
+    - id: profit.product_month.basis
+      mode: required_always
+      text: *id009
+    answer_note: *id009
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+    dimension_overrides:
+      department: *id012
+  product_month_customer_commission:
+    label: 产品月度利润报表·客户佣金（人民币）
+    business_definition: 产品月度利润报表按归属月份的已记录值。按产品报表归属月汇总部门、组织及业务标签组合。产品月度利润不同于按原出库日期选单的生命周期利润；不提供客户、业务员或出库单拆分。
+    unit: 人民币元
+    table: vk_ads.goods_profit_ads
+    aggregation: sum
+    measure: customer_commission_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id011
+    disclosures:
+    - id: profit.product_month.basis
+      mode: required_always
+      text: *id009
+    answer_note: *id009
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+    dimension_overrides:
+      department: *id012
+  product_month_sales_commission:
+    label: 产品月度利润报表·销售提成（人民币）
+    business_definition: 产品利润的销售提成等待提成表生成后分配；尚未分配不代表没有提成费用，不借客户口径比例估算补齐。
+    unit: 人民币元
+    table: vk_ads.goods_profit_ads
+    aggregation: sum
+    measure: sales_commission_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id011
+    disclosures:
+    - id: profit.product_month.basis
+      mode: required_always
+      text: *id009
+    - id: profit.product_month.commission
+      mode: required_always
+      text: 产品利润的销售提成等待提成表生成后分配；尚未分配不代表没有提成费用，不借客户口径比例估算补齐。
+    answer_note: *id009
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+    dimension_overrides:
+      department: *id012
+  product_month_inspection_expense:
+    label: 产品月度利润报表·验货费（人民币）
+    business_definition: 产品月度利润报表按归属月份的已记录值。按产品报表归属月汇总部门、组织及业务标签组合。产品月度利润不同于按原出库日期选单的生命周期利润；不提供客户、业务员或出库单拆分。
+    unit: 人民币元
+    table: vk_ads.goods_profit_ads
+    aggregation: sum
+    measure: qc_amount_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id011
+    disclosures:
+    - id: profit.product_month.basis
+      mode: required_always
+      text: *id009
+    answer_note: *id009
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+    dimension_overrides:
+      department: *id012
+  product_month_short_haul_expense:
+    label: 产品月度利润报表·短驳费（人民币）
+    business_definition: 产品月度利润报表按归属月份的已记录值。按产品报表归属月汇总部门、组织及业务标签组合。产品月度利润不同于按原出库日期选单的生命周期利润；不提供客户、业务员或出库单拆分。
+    unit: 人民币元
+    table: vk_ads.goods_profit_ads
+    aggregation: sum
+    measure: short_barge_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id011
+    disclosures:
+    - id: profit.product_month.basis
+      mode: required_always
+      text: *id009
+    answer_note: *id009
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+    dimension_overrides:
+      department: *id012
+  product_month_logistics_expense:
+    label: 产品月度利润报表·物流费（系数法）（人民币）
+    business_definition: 产品月度利润报表按归属月份的已记录值。按产品报表归属月汇总部门、组织及业务标签组合。产品月度利润不同于按原出库日期选单的生命周期利润；不提供客户、业务员或出库单拆分。
+    unit: 人民币元
+    table: vk_ads.goods_profit_ads
+    aggregation: sum
+    measure: logistics_amount_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id011
+    disclosures:
+    - id: profit.product_month.basis
+      mode: required_always
+      text: *id009
+    answer_note: *id009
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+    dimension_overrides:
+      department: *id012
+  product_month_shipping_expense:
+    label: 产品月度利润报表·发货费（人民币）
+    business_definition: 产品月度利润报表按归属月份的已记录值。按产品报表归属月汇总部门、组织及业务标签组合。产品月度利润不同于按原出库日期选单的生命周期利润；不提供客户、业务员或出库单拆分。
+    unit: 人民币元
+    table: vk_ads.goods_profit_ads
+    aggregation: sum
+    measure: send_amount_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id011
+    disclosures:
+    - id: profit.product_month.basis
+      mode: required_always
+      text: *id009
+    answer_note: *id009
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+    dimension_overrides:
+      department: *id012
+  product_month_warehousing_expense:
+    label: 产品月度利润报表·仓储费（人民币）
+    business_definition: 产品月度利润报表按归属月份的已记录值。按产品报表归属月汇总部门、组织及业务标签组合。产品月度利润不同于按原出库日期选单的生命周期利润；不提供客户、业务员或出库单拆分。
+    unit: 人民币元
+    table: vk_ads.goods_profit_ads
+    aggregation: sum
+    measure: rent_amount_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id011
+    disclosures:
+    - id: profit.product_month.basis
+      mode: required_always
+      text: *id009
+    answer_note: *id009
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+    dimension_overrides:
+      department: *id012
+  product_month_complaint_deduction:
+    label: 产品月度利润报表·客诉扣损（人民币）
+    business_definition: 产品月度利润报表按归属月份的已记录值。按产品报表归属月汇总部门、组织及业务标签组合。产品月度利润不同于按原出库日期选单的生命周期利润；不提供客户、业务员或出库单拆分。
+    unit: 人民币元
+    table: vk_ads.goods_profit_ads
+    aggregation: sum
+    measure: deduct_amount_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id011
+    disclosures:
+    - id: profit.product_month.basis
+      mode: required_always
+      text: *id009
+    answer_note: *id009
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+    dimension_overrides:
+      department: *id012
+  product_month_discount_amount:
+    label: 产品月度利润报表·折扣金额（人民币）
+    business_definition: 产品月度利润报表按归属月份的已记录值。按产品报表归属月汇总部门、组织及业务标签组合。产品月度利润不同于按原出库日期选单的生命周期利润；不提供客户、业务员或出库单拆分。
+    unit: 人民币元
+    table: vk_ads.goods_profit_ads
+    aggregation: sum
+    measure: discount_amount_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id011
+    disclosures:
+    - id: profit.product_month.basis
+      mode: required_always
+      text: *id009
+    answer_note: *id009
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+    dimension_overrides:
+      department: *id012
+  product_month_remittance_expense:
+    label: 产品月度利润报表·汇付成本（人民币）
+    business_definition: 汇付成本按本报表每条记录的正销售收入计提1%，非正收入计零，再汇总已计提金额；不能用最终净收入合计乘1%替代，舍入沿用报表存值。
+    unit: 人民币元
+    table: vk_ads.goods_profit_ads
+    aggregation: sum
+    measure: remittance_cost_rmb
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id011
+    disclosures:
+    - id: profit.product_month.basis
+      mode: required_always
+      text: *id009
+    - id: profit.monthly.remittance
+      mode: required_always
+      text: 汇付成本按本报表每条记录的正销售收入计提1%，非正收入计零，再汇总已计提金额；不能用最终净收入合计乘1%替代，舍入沿用报表存值。
+    answer_note: *id009
+    time_granularity: month
+    time_value_format: month
+    include_known_subset: true
+    dimension_overrides:
+      department: *id012
+  product_month_gross_margin:
+    label: 产品月度利润报表·毛利率
+    business_definition: 同一利润报表、期间和范围的已记录毛利合计除以已记录销售收入合计，先汇总再计算比率。
+    unit: 比例（有符号；展示为百分比）
+    time_field: bill_date
+    time_policy: current_month
+    required_filters: {}
+    allowed_dimensions: *id011
+    disclosures:
+    - id: profit.product_month.basis
+      mode: required_always
+      text: *id009
+    - id: profit.margin.signed
+      mode: required_always
+      text: 毛利率=已记录毛利合计/已记录销售收入合计。收入非零时保留正负结果；收入为零或任一组成缺失则未定义。负收入下的正比率不代表正盈利，必须同时看收入和毛利。
+    answer_note: *id009
+    time_granularity: month
+    time_value_format: month
+    ratio:
+      numerator: product_month_gross_profit
+      denominator: product_month_sales_revenue
+      denominator_policy: nonzero
+    formula: SUM(gross_profit_rmb) / SUM(sale_amount_rmb)
+    dimension_overrides:
+      department: *id012

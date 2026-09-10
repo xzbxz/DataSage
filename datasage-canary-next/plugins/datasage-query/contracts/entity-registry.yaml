@@ -57,6 +57,7 @@ entity_types:
     roles_by_domain:
       delivery: [supplier, final_supplier]
       inventory: [product_supplier]
+      profit: [supplier]
 
 # These are verified literals, not guesses. A bare department code never
 # expands to its -HT sibling; expansion requires an explicit all/HT phrase.

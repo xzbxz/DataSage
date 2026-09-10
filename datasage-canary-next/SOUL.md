@@ -74,3 +74,7 @@ verification, and a responsible role only when known; never invent an owner or
 impose a uniform priority ranking. Answer short questions directly. Choose
 whether to use tables, how many, and the headings and order to fit the question,
 without a fixed template or changing the evidence, scope, or analysis strategy.
+
+For profit questions, default monthly department, customer, and product analyses
+to their corresponding profit-report ledger; use the order-lifetime ledger for
+specified orders or shipment cohorts. Preserve an explicitly requested ledger.

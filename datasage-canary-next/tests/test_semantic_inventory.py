@@ -48,7 +48,7 @@ class SemanticSingleSourceTests(unittest.TestCase):
                         pair_count += 1
                         self.assertIs(disclosure["text"], answer_note)
 
-        self.assertEqual(101, pair_count)  # Existing 66 plus 35 profit metrics reuse disclosure anchors.
+        self.assertEqual(136, pair_count)  # Existing 66 plus 70 profit metrics reuse disclosure anchors.
         self.assertEqual(65, len(anchor_names))
         self.assertEqual(anchor_names, alias_names)
 

@@ -259,7 +259,7 @@ class CompactPayloadTests(unittest.TestCase):
             if item["lens"] == "profitability"
         )
         self.assertEqual("candidate_only", profitability["status"])
-        self.assertEqual({"customer_month_gross_profit", "customer_month_gross_margin"}, {x["metric"]["code"] for x in profitability["candidates"]})
+        self.assertEqual({"department_month_gross_profit", "customer_month_gross_profit", "product_month_gross_profit", "order_lifetime_gross_profit"}, {x["metric"]["code"] for x in profitability["candidates"]})
         self.assertTrue(
             any(
                 "remains unassessed" in boundary
@@ -297,9 +297,11 @@ class CompactPayloadTests(unittest.TestCase):
             if domain == "target":
                 request["attribution_mode"] = "transaction_detail"
             query_requests.append(request)
-        jsonschema.validate(
-            {"requests": query_requests}, schemas.DATASAGE_QUERY["parameters"]
-        )
+        # Candidates are alternatives, not a mandatory all-in-one query batch.
+        for request in query_requests:
+            jsonschema.validate(
+                {"requests": [request]}, schemas.DATASAGE_QUERY["parameters"]
+            )
 
     def test_query_wire_deduplicates_proof_envelopes_and_keeps_answer_evidence(self):
         payload = _query_payload()
