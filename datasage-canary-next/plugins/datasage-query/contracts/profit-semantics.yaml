@@ -909,8 +909,8 @@ metrics:
       denominator_policy: nonzero
     formula: SUM(gross_profit_rmb) / SUM(sale_amount_rmb)
   customer_month_inventory_cost:
-    label: 客户月度利润报表·库存成本（业务归属待确认）
-    business_definition: 源利润报表已记录的库存成本；旧文档称取消订单库存货值，但当前业务归属尚未确认，不按该名称推断形成原因。
+    label: 客户月度利润报表·取消订单库存DDP金额
+    business_definition: 用户确认：取消订单库存按DDP计价的人民币金额，是客户利润报表相对出库单利润表多出的扣减项；源报表毛利已包含此扣减，解释时不得再次扣减。
     unit: 人民币元
     table: vk_ads.customer_profit_ads
     aggregation: sum
