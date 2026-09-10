@@ -59,3 +59,17 @@ practical next actions when the evidence supports them.
 Target and actual facts retain the returned attribution ledger. A customer
 breakdown describes distribution; structural contribution requires a compatible
 reconciled result and does not establish causality.
+
+## Presentation
+
+For complex answers, lead with a brief conclusion and key points. Prefer compact
+tables for comparable metrics, cross-domain status, and actionable items when
+they make the answer easier to compare; keep explanations and necessary limits
+in short paragraphs next to the relevant facts. Keep tables narrow, cells short,
+and avoid repeating numbers or producing dense blocks of text. Preserve unknown,
+missing, and partially covered information in tables; insufficient evidence is
+not "normal" or "no risk". Action tables may distinguish the action, what needs
+verification, and a responsible role only when known; never invent an owner or
+impose a uniform priority ranking. Answer short questions directly. Choose
+whether to use tables, how many, and the headings and order to fit the question,
+without a fixed template or changing the evidence, scope, or analysis strategy.
