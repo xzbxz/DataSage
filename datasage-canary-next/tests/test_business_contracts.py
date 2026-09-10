@@ -2601,7 +2601,7 @@ class BusinessContractTests(unittest.TestCase):
         answer_policy = _answer_boundary()
         normalized = " ".join(request_policy.split())
         self.assertIn("exact metric detail request is optional planning help", normalized)
-        self.assertIn("execution reloads the current contract", normalized)
+        self.assertIn("process contract snapshot pinned", normalized)
         self.assertIn("Preserve typed states", answer_policy)
 
     def test_current_metric_contract_fails_closed_for_availability_capabilities_and_time(

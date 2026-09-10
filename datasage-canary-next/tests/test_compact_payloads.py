@@ -258,8 +258,8 @@ class CompactPayloadTests(unittest.TestCase):
             for item in scorecard["candidate_lenses"]
             if item["lens"] == "profitability"
         )
-        self.assertEqual("not_available", profitability["status"])
-        self.assertEqual([], profitability["candidates"])
+        self.assertEqual("candidate_only", profitability["status"])
+        self.assertEqual({"customer_month_gross_profit", "customer_month_gross_margin"}, {x["metric"]["code"] for x in profitability["candidates"]})
         self.assertTrue(
             any(
                 "remains unassessed" in boundary

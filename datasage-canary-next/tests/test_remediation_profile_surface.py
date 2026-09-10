@@ -38,6 +38,7 @@ SUPPORTED_DOMAINS = {
     "target",
     "receivable",
     "inventory",
+    "profit",
 }
 
 

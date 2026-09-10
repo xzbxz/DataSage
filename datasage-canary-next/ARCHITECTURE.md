@@ -16,8 +16,8 @@
 ## 定位、用户与升级线
 
 本 Profile 面向公司经营负责人及出库、销售、应收、财务、库存和目标
-负责人，支持五个受治理经营域：delivery、receipt/collections、receivable、
-target 和 inventory。它提供事实、诊断和证据约束的建议，
+负责人，支持六个受治理经营域：delivery、receipt/collections、receivable、
+target、inventory 和 profit。它提供事实、诊断和证据约束的建议，
 不是通用制度/HR问答、公共研究、用户文件分析器，也不是业务执行系统。
 当前候选目标成熟度为 L3 数据专家；本候选版本不声明 L4 主动管理或主动巡检能力。
 
@@ -28,7 +28,7 @@ target 和 inventory。它提供事实、诊断和证据约束的建议，
 不得自动批准、承诺或执行。
 
 WeCom 的 Profile toolset 声明 `clarify`、`datasage-query` 和官方 `code_execution`；所有已认证企微
-成员均可私聊和群聊，并共享五个经营域同一完整的 DataSage 查询面。Profile 不施加
+成员均可私聊和群聊，并共享六个经营域同一完整的 DataSage 查询面。Profile 不施加
 用户、群组、部门、实体、行或领域过滤；这不替代外部数据库授权。数据库执行仍为
 SELECT-only，并由治理查询合同、只读执行限制和 evidence 边界约束。Hermes 原生
 Skill 管理面不向 WeCom 暴露。
@@ -140,7 +140,7 @@ Hermes 拥有问题理解、工具选择、推理和最终结论；受限 WeCom 
 
 `performance_scorecard` 是经营分析候选镜头的目录视图，不是一份必须照抄的
 执行计划。它可以提供增长、目标、回款、库存、风险等可用镜头，
-并披露利润、现金流等缺口；Hermes 根据问题和证据重要性选择最小充分子集。
+利润仅为报表已记录值，核算完成状态未确认；并披露现金流等缺口；Hermes 根据问题和证据重要性选择最小充分子集。
 测试不得锁定固定八项、固定顺序、固定调用数或固定最终答案。
 
 ## 已删除的设计

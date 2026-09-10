@@ -112,3 +112,6 @@ datasage-canary-next/*
 !datasage-canary-next/tests/BUSINESS_ACCEPTANCE.md
 !datasage-canary-next/tests/BUSINESS_PILOT_FIVE.md
 !datasage-canary-next/tests/BUSINESS_COVERAGE.md
+
+!datasage-canary-next/plugins/datasage-query/contracts/profit-semantics.yaml
+!datasage-canary-next/tests/test_profit_contract.py

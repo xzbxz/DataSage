@@ -252,7 +252,7 @@ class RemainingCaseTests(unittest.TestCase):
     def test_B13_scorecard_availability_only(self):
         payload=self.invoke('datasage_catalog',{'requests':[{'view':'performance_scorecard'}]})
         lens=next(v for v in payload['results'][0]['candidate_lenses'] if v['lens']=='profitability')
-        self.assertEqual('not_available',lens['status']);self.assertFalse(lens['candidates']);self.assertFalse(self.sql_trace)
+        self.assertEqual('candidate_only',lens['status']);self.assertEqual({'customer_month_gross_profit','customer_month_gross_margin'},{x['metric']['code'] for x in lens['candidates']});self.assertFalse(self.sql_trace)
         self.save('B13','catalog_availability_only',lens,['All cross-domain synthesis, evidence omission, actionability and company-health judgment require actual model review; no business numerical scenario executed'])
 
     def test_B14_comparison_and_decomposition(self):

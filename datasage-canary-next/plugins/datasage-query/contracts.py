@@ -95,7 +95,7 @@ _PHYSICAL_VALUE_KEYS = {
     "time_field",
     "updated_at",
 }
-_TABLE_REFERENCE = re.compile(r"(?i)\bvk_(?:dw|dwd|ods)\.[A-Za-z_][A-Za-z0-9_]*\b")
+_TABLE_REFERENCE = re.compile(r"(?i)\bvk_(?:dw|dwd|ods|ads)\.[A-Za-z_][A-Za-z0-9_]*\b")
 _FORMULA_EXPRESSION = re.compile(r"(?i)\b(?:avg|count|max|min|sum)\s*\(")
 
 

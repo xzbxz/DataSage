@@ -2824,6 +2824,12 @@ def _build_metric_core(
         *_integrity_columns(metric_sql, missing, known),
         f"COUNT(*) AS {_quote_identifier(_INTERNAL_MATCH_COUNT)}",
     ]
+    if metric.get("include_known_subset") is True:
+        if metric.get("aggregation") != "sum":
+            raise QueryFailure("CONTRACT_UNAVAILABLE", "已知部分只适用于基础求和指标。")
+        evidence_columns.append(
+            f"CASE WHEN ({known}) > 0 THEN {metric_sql} ELSE NULL END AS known_subset_value"
+        )
     if eligibility_evidence is not None:
         evidence_columns = _overdue_integrity_columns(
             metric, dataset, datasets_contract, metric_join_alias,
@@ -3619,12 +3625,16 @@ def _build_ratio_metric_core(
         from_sql = "SELECT {select} FROM numerator AS n CROSS JOIN denominator AS d"
         ctes = f"WITH numerator AS ({numerator_sql}), denominator AS ({denominator_sql}) "
 
+    denominator_policy = ratio.get("denominator_policy", "positive")
+    if denominator_policy not in {"positive", "nonzero"}:
+        raise QueryFailure("CONTRACT_UNAVAILABLE", "比例分母政策无效。")
+    denominator_operator = "<>" if denominator_policy == "nonzero" else ">"
     numerator_value = "CASE WHEN COALESCE(n.missing_value_count, 0) > 0 THEN NULL ELSE COALESCE(n.metric_value, 0) END"
     denominator_value = "CASE WHEN COALESCE(d.missing_value_count, 0) > 0 THEN NULL ELSE COALESCE(d.metric_value, 0) END"
     select = [
         *output_dimensions,
         *_integrity_columns(
-            f"CASE WHEN ({denominator_value}) > 0 THEN ({numerator_value}) / d.metric_value ELSE NULL END",
+            f"CASE WHEN ({denominator_value}) {denominator_operator} 0 THEN ({numerator_value}) / d.metric_value ELSE NULL END",
             "COALESCE(n.missing_value_count, 0) + COALESCE(d.missing_value_count, 0)",
             "COALESCE(n.known_value_count, 0) + COALESCE(d.known_value_count, 0)",
         ),
@@ -4223,6 +4233,8 @@ def _business_metric_ref(request: Mapping[str, Any]) -> str | None:
 
 
 _PUBLIC_FACT_FIELDS = {
+    "numerator_value",
+    "denominator_value",
     "known_subset_value",
     "scope_row_count",
     "assessed_row_count",

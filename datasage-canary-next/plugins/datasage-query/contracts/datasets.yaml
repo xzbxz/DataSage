@@ -1,4 +1,4 @@
-version: datasage-mini-datasets/v12
+version: datasage-mini-datasets/v13
 
 defaults:
   blocked_columns:
@@ -465,3 +465,109 @@ datasets:
       - A month with delivery but zero inventory amount is not necessarily a complete accounting month.
       - The current physical table has no complaint_amount_rmb or inventory_amount_rmb column; do not expose or infer either field.
       - pur_delivery_rmb is delivery_amount_rmb minus return_amount_rmb and is the governed turnover denominator.
+
+  vk_ads.customer_profit_ads:
+    domains:
+    - profit
+    kind: monthly_flow
+    grain: one_row_per_month_customer_attribute_combination
+    primary_key:
+    - guid
+    allowed_columns:
+    - bill_date
+    - bill_type
+    - customer_category
+    - customer_commission_rmb
+    - customer_dept
+    - customer_id
+    - customer_name
+    - customer_no
+    - customer_region
+    - deduct_amount_rmb
+    - discount_amount_rmb
+    - gross_profit_rmb
+    - guid
+    - inventory_cost_rmb
+    - is_brand_cus
+    - is_ccbs_cus
+    - is_customized
+    - is_defective
+    - is_ha_cus
+    - is_ht_cus
+    - is_inner_cus
+    - is_ready
+    - logistics_amount_rmb
+    - org_name
+    - purchase_cost_rmb
+    - qc_amount_rmb
+    - remittance_cost_rmb
+    - rent_amount_rmb
+    - return_amount_rmb
+    - return_cost_rmb
+    - sale_amount_rmb
+    - sales_commission_rmb
+    - sales_id
+    - sales_name
+    - send_amount_rmb
+    - short_barge_rmb
+    - tax_exclue_delivery_rmb
+    required_filters: []
+    joins: []
+    warnings:
+    - 利润报表已记录值，默认包含内部客户；显式筛选范围以结果为准。数据有更新不代表费用已归集或会计已结账，核算完成状态未确认。
+    - 按报表归属月汇总客户全部属性组合行；同一客户同月可多行。无产品和订单字段，不能按产品/订单拆分客户月度利润。
+    - 费用空值保留为未知，不自动补零；有缺失时只能解释已知部分，不能据此声称完整费用总额或已对账。收入和毛利采用报表已存值，不用缺失费用重造最终利润。
+  vk_ads.delivery_bill_profit_ads:
+    domains:
+    - profit
+    kind: lifecycle_fact
+    grain: one_row_per_sale_bill_and_product
+    primary_key:
+    - sale_bill_id
+    - goods_id
+    allowed_columns:
+    - bill_no
+    - bill_type
+    - customer_category
+    - customer_commission_rmb
+    - customer_dept
+    - customer_id
+    - customer_name
+    - customer_no
+    - customer_type
+    - deduct_amount_rmb
+    - delivery_time
+    - discount_amount_rmb
+    - goods_id
+    - goods_name
+    - goods_no
+    - gross_profit_rmb
+    - is_brand_cus
+    - is_ccbs_cus
+    - is_customized
+    - is_defective
+    - is_ha_cus
+    - is_ht_cus
+    - is_inner_cus
+    - is_ready
+    - logistics_amount_rmb
+    - org_name
+    - purchase_cost_rmb
+    - qc_amount_rmb
+    - remittance_cost_rmb
+    - rent_amount_rmb
+    - return_amount_rmb
+    - return_cost_rmb
+    - sale_amount_rmb
+    - sale_bill_id
+    - sales_commission_rmb
+    - sales_name
+    - send_amount_rmb
+    - short_barge_rmb
+    - tax_exclue_delivery_rmb
+    required_filters: []
+    joins: []
+    warnings:
+    - 利润报表已记录值，默认包含内部客户；显式筛选范围以结果为准。数据有更新不代表费用已归集或会计已结账，核算完成状态未确认。
+    - 按原出库日期选择订单，展示订单生命周期已归集值；历史期间可能随退货和费用更新，不能当成该月经营发生额。业务员只有源名称，名称分组不证明唯一人员身份。
+    - 费用空值保留为未知，不自动补零；有缺失时只能解释已知部分，不能据此声称完整费用总额或已对账。收入和毛利采用报表已存值，不用缺失费用重造最终利润。

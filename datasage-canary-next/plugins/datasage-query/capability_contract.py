@@ -35,6 +35,9 @@ DOMAIN_SOURCES: dict[str, dict[str, str]] = {
     "inventory": {
         "semantics": "plugins/datasage-query/contracts/inventory-semantics.yaml",
     },
+    "profit": {
+        "semantics": "plugins/datasage-query/contracts/profit-semantics.yaml",
+    },
 }
 
 SUPPORTED_DOMAINS = tuple(DOMAIN_SOURCES)

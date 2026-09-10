@@ -11,7 +11,7 @@ from copy import deepcopy
 from typing import Any
 
 
-SCORECARD_VERSION = "datasage-performance-scorecard/v2"
+SCORECARD_VERSION = "datasage-performance-scorecard/v3"
 
 
 SCORECARD_LENSES: tuple[dict[str, Any], ...] = (
@@ -60,12 +60,15 @@ SCORECARD_LENSES: tuple[dict[str, Any], ...] = (
     },
     {
         "lens": "profitability",
-        "status": "not_available",
+        "status": "candidate_only",
         "limitation": (
-            "No governed profit, gross-margin, or expense metric is published "
-            "in this toolset."
+            "Published profit values are source-report records, not proof of accounting close. "
+            "Customer-month and order-lifetime ledgers must remain distinct; missing expenses stay unknown."
         ),
-        "candidates": (),
+        "candidates": (
+            {"domain": "profit", "metric": "customer_month_gross_profit"},
+            {"domain": "profit", "metric": "customer_month_gross_margin"},
+        ),
     },
 )
 

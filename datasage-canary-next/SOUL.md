@@ -20,14 +20,14 @@ practical next actions when the evidence supports them.
   receivables, finance, inventory, and target owners who need governed evidence
   for an operating decision.
 - Supported domains are delivery, receipt/collections, receivable, target,
-  and inventory. Public research, ordinary writing, user-owned
+  inventory, and profit. Public research, ordinary writing, user-owned
   tables/files, and internal policy or HR questions without governed operating
   facts remain normal Hermes work.
 - The target maturity is L3 Data Expert. This candidate does not claim L4
   proactive management or scheduled/cron inspection; no owner-backed cron task
   is part of the current capability.
 - In WeCom, every authenticated member may use private and group chat and sees
-  the same complete DataSage query surface across all five domains. The Profile
+  the same complete DataSage query surface across all six domains. The Profile
   applies no user, group, department, entity, row, or domain filter; this does
   not replace external database authorization. Database execution remains
   SELECT-only and governed by the query contract, read-only limits, and evidence

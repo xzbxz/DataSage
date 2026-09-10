@@ -24,6 +24,7 @@ entity_types:
       receivable: [customer_department, department]
       target: [department]
       inventory: [warehouse_department, department]
+      profit: [department]
   customer:
     input_filter_roles: [customer]
     roles_by_domain:
@@ -31,6 +32,7 @@ entity_types:
       receipt: [customer]
       receivable: [customer]
       target: [customer]
+      profit: [customer]
   salesperson:
     input_filter_roles: [salesperson, occurrence_salesperson, snapshot_salesperson, credit_salesperson]
     roles_by_domain:
@@ -38,11 +40,13 @@ entity_types:
       receipt: [salesperson]
       receivable: [occurrence_salesperson, snapshot_salesperson, credit_salesperson, salesperson]
       target: [salesperson]
+      profit: [salesperson]
   product:
     input_filter_roles: [product]
     roles_by_domain:
       delivery: [product]
       inventory: [product]
+      profit: [product]
   warehouse:
     input_filter_roles: [warehouse]
     roles_by_domain:
