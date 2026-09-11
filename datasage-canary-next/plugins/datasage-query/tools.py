@@ -4237,7 +4237,30 @@ def _business_metric_ref(request: Mapping[str, Any]) -> str | None:
 
 
 _PUBLIC_FACT_FIELDS = {
-    "recorded_net_rolls",
+    "sales_identity_ref",
+    "known_net_rolls",
+    "grouped_key_count",
+    "matched_product_groups",
+    "population_display_groups",
+    "unit_baseline_scope_groups",
+    "unit_display_groups",
+    "unit_net_quantity",
+    "unit_known_net_quantity",
+    "sales_name_variant_count",
+    "sales_missing_name_rows",
+    "outbound_unattributed_sales_rows",
+    "returns_unattributed_sales_rows",
+    "unit_gross_flow_rows",
+    "unit_return_flow_rows",
+    "unit_gross_known_quantity",
+    "unit_return_known_quantity",
+    "unit_gross_known_rolls",
+    "unit_return_known_rolls",
+    "unit_gross_missing_quantity_rows",
+    "unit_return_missing_quantity_rows",
+    "unit_gross_missing_roll_rows",
+    "unit_return_missing_roll_rows",
+
     "net_rolls",
     "baseline_scope_groups",
     "gross_flow_rows",
@@ -4250,7 +4273,6 @@ _PUBLIC_FACT_FIELDS = {
     "return_missing_quantity_rows",
     "gross_missing_roll_rows",
     "return_missing_roll_rows",
-    "recorded_net_quantity",
     "gross_quantity",
     "return_quantity",
     "gross_rolls",
@@ -8958,6 +8980,13 @@ def _run_one(
         if scope.get("_validate_frozen_pool") is True:
             try:
                 applied_time_range = validate_frozen_pool_rows(rows)
+                if request.get("metric") == "registered_slow_pool_baseline_net_outbound":
+                    for row in rows:
+                        if not row.get("__matched_row_count") and int(row.get("outbound_unknown_rows") or 0) + int(row.get("returns_unknown_rows") or 0) > 0:
+                            raise QueryFailure("FLOW_SCOPE_UNASSESSABLE", "存在无法确认范围的流水，不能将没有可返回销售组解释为空流水。", stage="result_validation")
+                        if "sales_id" in row and row.get("__matched_row_count"):
+                            sales_id = row["sales_id"]
+                            row["sales_identity_ref"] = ("unattributed" if sales_id is None else "sales_" + hashlib.sha256(f"flow-salesperson:{sales_id}".encode("utf-8")).hexdigest()[:16])
                 scope["time_range"] = applied_time_range
             except AnalysisQueryError as error:
                 raise QueryFailure(error.code, error.message, stage="baseline_validation") from error

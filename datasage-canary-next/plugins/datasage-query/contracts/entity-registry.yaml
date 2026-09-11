@@ -41,6 +41,7 @@ entity_types:
       receivable: [occurrence_salesperson, snapshot_salesperson, credit_salesperson, salesperson]
       target: [salesperson]
       profit: [salesperson]
+      inventory: [salesperson]
   product:
     input_filter_roles: [product]
     roles_by_domain:

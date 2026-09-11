@@ -2132,14 +2132,16 @@ def _frozen_pool_net_outbound_query(request, metric, datasets_contract, semantic
             if week > current_week: raise ValueError()
         except ValueError:
             raise AnalysisQueryError('INVALID_PLAN', '基线周必须是当前或过去的合法周标签。')
-    allowed = {'product': 'goods_id', 'pool_sku': 'goods_sku_id', 'warehouse_department': 'whse_dept', 'unit': 'unit'}
+    allowed = {'product': 'goods_id', 'pool_sku': 'goods_sku_id', 'warehouse_department': 'whse_dept', 'unit': 'unit', 'salesperson': 'sales_id'}
     chosen = request.get('dimensions') or ['unit']
     if not set(chosen) <= set(allowed) or 'unit' not in chosen:
-        raise AnalysisQueryError('UNSUPPORTED_DIMENSION', '净出库必须按库存单位分别汇总，可附加产品、规格、仓库部门。')
+        raise AnalysisQueryError('UNSUPPORTED_DIMENSION', '净出库必须按库存单位分别汇总，可附加产品、规格、仓库部门和流水销售归属。')
     grouping = [allowed[k] for k in chosen]
+    by_sales = 'salesperson' in chosen
+    sales_filter = filters_sales = None
     filters = request.get('metric_filters') or {}
     if not isinstance(filters, dict) or not set(filters) <= set(allowed):
-        raise AnalysisQueryError('UNSUPPORTED_DIMENSION', '仅支持冻结产品、规格、仓库部门和库存单位筛选。')
+        raise AnalysisQueryError('UNSUPPORTED_DIMENSION', '仅支持冻结范围筛选及流水销售身份筛选。')
     tables = metric.get('flow_sources') or {}
     if set(tables) != {'outbound','returns','sales','warehouses'} or metric.get('document_scope') != 'legacy_ht_suffix_or_bulk':
         raise AnalysisQueryError('CONTRACT_UNAVAILABLE', '净出库来源或已确认单据范围缺失。')
@@ -2155,20 +2157,29 @@ def _frozen_pool_net_outbound_query(request, metric, datasets_contract, semantic
     for name, columns in source_columns.items():
         ds = _dataset(tables[name], datasets_contract)
         for field in columns: _approved(field, ds)
+        if name in {'outbound','returns'}:
+            for field in ('sales_id','sales_name'): _approved(field,ds)
     qt = {k: _quote_table(v) for k,v in tables.items()}
     qb = _quote_table(base)
     params = [week if week is not None else current_week]
     choice = '%s' if week is not None else f"(SELECT MAX(week_label) FROM {qb} WHERE week_label<=%s AND week_label REGEXP '^[0-9]{{4}}-W[0-9]{{2}}$')"
     unit = lambda col: f"(CASE WHEN LOWER(TRIM({col}))='m' THEN 'm' ELSE NULLIF(TRIM({col}),'') END) COLLATE utf8mb4_bin"
     ctes = [f"clock AS (SELECT {choice} AS baseline_week,NOW(6) AS closing_read_at,UTC_TIMESTAMP(6) AS closing_utc_at,TIMESTAMPDIFF(SECOND,UTC_TIMESTAMP(6),NOW(6)) AS observed_clock_offset_seconds)"]
-    ctes.append(f"base_raw AS (SELECT *,{unit('source_unit')} AS normalized_unit FROM {qb} WHERE week_label=(SELECT baseline_week FROM clock))")
+    ctes.append(f"base_raw AS (SELECT week_label,source_row_id,frozen_at,baseline_version,source_table,goods_id,goods_sku_id,whse_dept,{unit('source_unit')} AS normalized_unit FROM {qb} WHERE week_label=(SELECT baseline_week FROM clock))")
     ctes.append("meta AS (SELECT COUNT(*) AS __baseline_rows,COUNT(DISTINCT source_row_id) AS __baseline_ids,COUNT(frozen_at) AS __baseline_timed_rows,COUNT(DISTINCT frozen_at) AS __baseline_times,MIN(frozen_at) AS baseline_frozen_at,COALESCE(SUM(CASE WHEN baseline_version=2 AND source_table=%s THEN 0 ELSE 1 END),0) AS __baseline_bad_source,COALESCE(SUM(CASE WHEN goods_id IS NOT NULL AND goods_sku_id IS NOT NULL AND NULLIF(whse_dept,'') IS NOT NULL AND normalized_unit IN ('m','y','kg','Pcs') THEN 0 ELSE 1 END),0) AS __baseline_bad_keys FROM base_raw)")
     params.append(metric.get('baseline_source_table'))
     ctes.append("base_keys AS (SELECT DISTINCT goods_id,goods_sku_id,whse_dept COLLATE utf8mb4_bin AS whse_dept,normalized_unit AS unit FROM base_raw)")
     filter_sql = []
     bindings = _entity_bindings(request)
     for key, value in filters.items():
-        _, value = _bound_value(bindings, key, value)
+        binding, value = _bound_value(bindings, key, value)
+        if key == 'salesperson':
+            definition = semantics['dimensions']['salesperson']
+            # The public pipeline compiles a name-based draft before entity resolution;
+            # final execution requires the existing entity_exact binding validation.
+            sales_filter_column = _dimension_filter(definition,binding)
+            filters_sales = value
+            continue
         if key == 'pool_sku':
             values = value if isinstance(value,list) else [value]
             if any(isinstance(v,bool) or not (isinstance(v,int) and v>=0 or isinstance(v,str) and v.isascii() and v.isdecimal()) for v in values):
@@ -2184,26 +2195,53 @@ def _frozen_pool_net_outbound_query(request, metric, datasets_contract, semantic
         valid = f"(SELECT CASE WHEN COUNT(*)=1 AND COUNT(bill_status)=1 THEN MAX(bill_status)=6 ELSE NULL END FROM {qt['sales']} s WHERE s.goods_detail_id=f.sale_bill_goods_id)" if outgoing else '(f.status=4 AND f.complnt_type=1 AND f.channel_type=1)'
         predicate = f"(f.is_inner_cus='n' AND {valid})"
         candidate = "EXISTS(SELECT 1 FROM keys_b k WHERE (f.goods_id IS NULL OR f.goods_id=k.goods_id) AND (f.goods_sku_id IS NULL OR f.goods_sku_id=k.goods_sku_id))"
+        sales_condition = ''
+        if filters_sales is not None:
+            filter_params = []
+            sales_filter = _value_filter('f',sales_filter_column,filters_sales,filter_params)
+            # The SQL placeholders occur after the legacy predicate in SELECT.
+            sales_condition = f' AND ({sales_filter} OR f.sales_id IS NULL)'
         warehouse_ok = f"(SELECT CASE WHEN COUNT(*)=1 AND COUNT(dept_name)=1 THEN MAX(dept_name)=f.whse_dept ELSE NULL END FROM {qt['warehouses']} w WHERE w.whse_id=f.{whse})"
-        ctes.append(f"{side}_raw AS (SELECT f.goods_id,f.goods_sku_id,NULLIF(f.whse_dept,'') COLLATE utf8mb4_bin AS whse_dept,{unit('f.unit')} AS unit,f.{qty} AS qty,f.{rolls} AS rolls,f.{time_field} AS event_at,{legacy} AS document_ok,{predicate} AS valid_ok,{warehouse_ok} AS warehouse_ok,CASE WHEN f.{bill} IS NULL OR f.{bill} NOT IN ('bulk','sq') THEN 1 ELSE 0 END AS unknown_document FROM {qt[side]} f WHERE {candidate} AND (f.{time_field} IS NULL OR (f.{time_field}>=(SELECT baseline_frozen_at FROM meta) AND f.{time_field}<(SELECT closing_read_at FROM clock))))")
+        ctes.append(f"{side}_raw AS (SELECT f.sales_id,NULLIF(f.sales_name,'') COLLATE utf8mb4_bin AS sales_name,f.goods_id,f.goods_sku_id,NULLIF(f.whse_dept,'') COLLATE utf8mb4_bin AS whse_dept,{unit('f.unit')} AS unit,f.{qty} AS qty,f.{rolls} AS rolls,f.{time_field} AS event_at,{legacy} AS document_ok,{predicate} AS valid_ok,{warehouse_ok} AS warehouse_ok,CASE WHEN f.{bill} IS NULL OR f.{bill} NOT IN ('bulk','sq') THEN 1 ELSE 0 END AS unknown_document FROM {qt[side]} f WHERE {candidate} AND (f.{time_field} IS NULL OR (f.{time_field}>=(SELECT baseline_frozen_at FROM meta) AND f.{time_field}<(SELECT closing_read_at FROM clock))){sales_condition})")
+        if filters_sales is not None: params.extend(filter_params)
         match = ' AND '.join(f'k.{key}=r.{key}' for key in ('goods_id','goods_sku_id','whse_dept','unit'))
         # Reliable different keys are out of scope, unknown keys cannot be silently excluded.
         unknown = "goods_id IS NULL OR goods_sku_id IS NULL OR whse_dept IS NULL OR unit IS NULL OR unit NOT IN ('m','y','kg','Pcs') OR warehouse_ok IS NULL OR warehouse_ok=0 OR document_ok IS NULL OR valid_ok IS NULL OR event_at IS NULL"
+        if filters_sales is not None: unknown += ' OR sales_id IS NULL'
         ctes.append(f"{side}_classified AS (SELECT r.*,CASE WHEN valid_ok=0 OR document_ok=0 THEN 'excluded' WHEN {unknown} THEN 'unknown' WHEN EXISTS(SELECT 1 FROM keys_b k WHERE {match}) THEN 'matched' ELSE 'unmatched' END AS match_state FROM {side}_raw r)")
-        ctes.append(f"{side}_totals AS (SELECT COUNT(*) AS {side}_candidate_rows,COALESCE(SUM(CASE WHEN match_state='matched' THEN 1 ELSE 0 END),0) AS {side}_matched_rows,COALESCE(SUM(CASE WHEN match_state='unmatched' THEN 1 ELSE 0 END),0) AS {side}_unmatched_rows,COALESCE(SUM(CASE WHEN match_state='excluded' THEN 1 ELSE 0 END),0) AS {side}_excluded_rows,COALESCE(SUM(CASE WHEN match_state='unknown' THEN 1 ELSE 0 END),0) AS {side}_unknown_rows,COALESCE(SUM(unknown_document),0) AS {side}_unknown_document_rows,COALESCE(SUM(CASE WHEN event_at IS NULL THEN 1 ELSE 0 END),0) AS {side}_missing_time_rows FROM {side}_classified)")
-        ctes.append(f"{side}_agg AS (SELECT goods_id,goods_sku_id,whse_dept,unit,COUNT(*) AS n,SUM(qty) AS qty,SUM(rolls) AS rolls,SUM(CASE WHEN qty IS NULL THEN 1 ELSE 0 END) AS missing_qty,SUM(CASE WHEN rolls IS NULL THEN 1 ELSE 0 END) AS missing_rolls FROM {side}_classified WHERE match_state='matched' GROUP BY goods_id,goods_sku_id,whse_dept,unit)")
-    join = lambda alias: ' AND '.join(f'k.{key}={alias}.{key}' for key in ('goods_id','goods_sku_id','whse_dept','unit'))
-    ctes.append(f"paired AS (SELECT k.*,COALESCE(o.n,0) AS gross_flow_rows,COALESCE(r.n,0) AS return_flow_rows,o.qty AS gross_known_quantity,r.qty AS return_known_quantity,o.rolls AS gross_known_rolls,r.rolls AS return_known_rolls,COALESCE(o.missing_qty,0) AS gross_missing_quantity_rows,COALESCE(r.missing_qty,0) AS return_missing_quantity_rows,COALESCE(o.missing_rolls,0) AS gross_missing_roll_rows,COALESCE(r.missing_rolls,0) AS return_missing_roll_rows FROM keys_b k LEFT JOIN outbound_agg o ON {join('o')} LEFT JOIN returns_agg r ON {join('r')})")
+        ctes.append(f"{side}_totals AS (SELECT COUNT(*) AS {side}_candidate_rows,COALESCE(SUM(CASE WHEN match_state='matched' THEN 1 ELSE 0 END),0) AS {side}_matched_rows,COALESCE(SUM(CASE WHEN match_state='unmatched' THEN 1 ELSE 0 END),0) AS {side}_unmatched_rows,COALESCE(SUM(CASE WHEN match_state='excluded' THEN 1 ELSE 0 END),0) AS {side}_excluded_rows,COALESCE(SUM(CASE WHEN match_state='unknown' THEN 1 ELSE 0 END),0) AS {side}_unknown_rows,COALESCE(SUM(unknown_document),0) AS {side}_unknown_document_rows,COALESCE(SUM(CASE WHEN event_at IS NULL THEN 1 ELSE 0 END),0) AS {side}_missing_time_rows,COALESCE(SUM(CASE WHEN match_state='matched' AND sales_id IS NULL THEN 1 ELSE 0 END),0) AS {side}_unattributed_sales_rows FROM {side}_classified)")
+        sales_key = ',sales_id' if by_sales else ''
+        ctes.append(f"{side}_agg AS (SELECT goods_id,goods_sku_id,whse_dept,unit{sales_key},COUNT(*) AS n,SUM(qty) AS qty,SUM(rolls) AS rolls,SUM(CASE WHEN qty IS NULL THEN 1 ELSE 0 END) AS missing_qty,SUM(CASE WHEN rolls IS NULL THEN 1 ELSE 0 END) AS missing_rolls FROM {side}_classified WHERE match_state='matched' GROUP BY goods_id,goods_sku_id,whse_dept,unit{sales_key})")
+    key_columns = ['goods_id','goods_sku_id','whse_dept','unit'] + (['sales_id'] if by_sales else [])
+    if by_sales:
+        # Only observed flow identities create sales groups; no employee roster or task assignment.
+        columns = ','.join(key_columns)
+        ctes.append(f'flow_keys AS (SELECT {columns} FROM outbound_agg UNION SELECT {columns} FROM returns_agg)')
+        ctes.append("sales_names AS (SELECT sales_id,sales_name FROM outbound_classified WHERE match_state='matched' UNION ALL SELECT sales_id,sales_name FROM returns_classified WHERE match_state='matched')")
+        ctes.append("sales_labels AS (SELECT sales_id,CASE WHEN COUNT(DISTINCT sales_name)=1 THEN MAX(sales_name) ELSE NULL END AS sales_name,COUNT(DISTINCT sales_name) AS sales_name_variant_count,SUM(CASE WHEN sales_name IS NULL THEN 1 ELSE 0 END) AS sales_missing_name_rows FROM sales_names GROUP BY sales_id)")
+    key_table = 'flow_keys' if by_sales else 'keys_b'
+    join = lambda alias: ' AND '.join(f'k.{key} <=> {alias}.{key}' for key in key_columns)
+    # Empty recorded sets contribute zero. Actual NULL measures remain counted as missing.
+    ctes.append(f"paired AS (SELECT k.*,COALESCE(o.n,0) AS gross_flow_rows,COALESCE(r.n,0) AS return_flow_rows,COALESCE(o.qty,0) AS gross_known_quantity,COALESCE(r.qty,0) AS return_known_quantity,COALESCE(o.rolls,0) AS gross_known_rolls,COALESCE(r.rolls,0) AS return_known_rolls,COALESCE(o.missing_qty,0) AS gross_missing_quantity_rows,COALESCE(r.missing_qty,0) AS return_missing_quantity_rows,COALESCE(o.missing_rolls,0) AS gross_missing_roll_rows,COALESCE(r.missing_rolls,0) AS return_missing_roll_rows FROM {key_table} k LEFT JOIN outbound_agg o ON {join('o')} LEFT JOIN returns_agg r ON {join('r')})")
     sums = ['gross_flow_rows','return_flow_rows','gross_known_quantity','return_known_quantity','gross_known_rolls','return_known_rolls','gross_missing_quantity_rows','return_missing_quantity_rows','gross_missing_roll_rows','return_missing_roll_rows']
-    ctes.append('grouped AS (SELECT '+','.join(grouping)+',COUNT(*) AS baseline_scope_groups,'+','.join(f'SUM({s}) AS {s}' for s in sums)+' FROM paired GROUP BY '+','.join(grouping)+')')
-    complete = 'outbound_unknown_rows=0 AND returns_unknown_rows=0 AND gross_missing_quantity_rows=0 AND return_missing_quantity_rows=0'
-    known_net = 'CASE WHEN gross_known_quantity IS NOT NULL OR return_known_quantity IS NOT NULL THEN COALESCE(gross_known_quantity,0)-COALESCE(return_known_quantity,0) ELSE NULL END'
-    known_net_rolls = 'CASE WHEN gross_known_rolls IS NOT NULL OR return_known_rolls IS NOT NULL THEN COALESCE(gross_known_rolls,0)-COALESCE(return_known_rolls,0) ELSE NULL END'
-    # No matching fact is not a proven business zero: full net requires both sides recorded.
-    net = f'CASE WHEN {complete} AND gross_flow_rows>0 AND return_flow_rows>0 THEN {known_net} ELSE NULL END'
-    sql = 'WITH '+',\n'.join(ctes)+f" SELECT g.*,m.*,clock.*,ot.*,rt.*,{net} AS metric_value,{known_net} AS known_subset_value,{known_net} AS recorded_net_quantity,{known_net_rolls} AS recorded_net_rolls,CASE WHEN outbound_unknown_rows=0 AND returns_unknown_rows=0 AND gross_missing_roll_rows=0 AND return_missing_roll_rows=0 AND gross_flow_rows>0 AND return_flow_rows>0 THEN {known_net_rolls} ELSE NULL END AS net_rolls,CASE WHEN {complete} THEN gross_known_quantity ELSE NULL END AS gross_quantity,CASE WHEN {complete} THEN return_known_quantity ELSE NULL END AS return_quantity,CASE WHEN outbound_unknown_rows=0 AND gross_missing_roll_rows=0 THEN gross_known_rolls ELSE NULL END AS gross_rolls,CASE WHEN returns_unknown_rows=0 AND return_missing_roll_rows=0 THEN return_known_rolls ELSE NULL END AS return_rolls,CASE WHEN NOT({complete}) THEN 'partial_unknown' WHEN gross_flow_rows=0 AND return_flow_rows=0 THEN 'no_recorded_flow' WHEN gross_flow_rows=0 OR return_flow_rows=0 THEN 'one_sided_recorded_flow' ELSE 'both_sides_recorded' END AS net_flow_state,COALESCE(g.baseline_scope_groups,0) AS __matched_row_count,COALESCE(g.gross_missing_quantity_rows+g.return_missing_quantity_rows,0)+outbound_unknown_rows+returns_unknown_rows+CASE WHEN g.gross_flow_rows=0 OR g.return_flow_rows=0 THEN 1 ELSE 0 END AS missing_value_count,COALESCE(g.gross_flow_rows+g.return_flow_rows,0) AS known_value_count FROM meta m CROSS JOIN clock CROSS JOIN outbound_totals ot CROSS JOIN returns_totals rt LEFT JOIN grouped g ON TRUE ORDER BY "+','.join('g.'+k for k in grouping)+' LIMIT %s'
+    aggregates = ','.join(f'SUM({field}) AS {field}' for field in sums)
+    baseline_count = 'NULL' if by_sales else 'COUNT(*)'
+    ctes.append('grouped AS (SELECT '+','.join(grouping)+f',{baseline_count} AS baseline_scope_groups,COUNT(*) AS grouped_key_count,SUM(CASE WHEN gross_flow_rows+return_flow_rows>0 THEN 1 ELSE 0 END) AS matched_product_groups,'+aggregates+' FROM paired GROUP BY '+','.join(grouping)+')')
+    ctes.append('unit_totals AS (SELECT unit,'+aggregates+' FROM paired GROUP BY unit)')
+    ctes.append('population AS (SELECT COUNT(*) AS population_display_groups FROM grouped)')
+    complete = 'outbound_unknown_rows=0 AND returns_unknown_rows=0 AND g.gross_missing_quantity_rows=0 AND g.return_missing_quantity_rows=0'
+    complete_rolls = 'outbound_unknown_rows=0 AND returns_unknown_rows=0 AND g.gross_missing_roll_rows=0 AND g.return_missing_roll_rows=0'
+    known_net = 'g.gross_known_quantity-g.return_known_quantity'
+    known_net_rolls = 'g.gross_known_rolls-g.return_known_rolls'
+    net = f'CASE WHEN {complete} THEN {known_net} ELSE NULL END'
+    unit_fields = ','.join(f'u.{field} AS unit_{field}' for field in sums)
+    unit_complete = 'outbound_unknown_rows=0 AND returns_unknown_rows=0 AND u.gross_missing_quantity_rows=0 AND u.return_missing_quantity_rows=0'
+    label_fields = ',sl.sales_name,sl.sales_name_variant_count,sl.sales_missing_name_rows' if by_sales else ''
+    label_join = ' LEFT JOIN sales_labels sl ON sl.sales_id <=> g.sales_id' if by_sales else ''
+    sql = 'WITH '+',\n'.join(ctes)+f" SELECT g.*{label_fields},m.*,clock.*,ot.*,rt.*,population.*,{unit_fields},(SELECT COUNT(*) FROM keys_b kb WHERE kb.unit=g.unit) AS unit_baseline_scope_groups,(SELECT COUNT(*) FROM grouped gg WHERE gg.unit=g.unit) AS unit_display_groups,{net} AS metric_value,{known_net} AS known_subset_value,{known_net_rolls} AS known_net_rolls,CASE WHEN {complete_rolls} THEN {known_net_rolls} ELSE NULL END AS net_rolls,CASE WHEN outbound_unknown_rows=0 AND g.gross_missing_quantity_rows=0 THEN g.gross_known_quantity ELSE NULL END AS gross_quantity,CASE WHEN returns_unknown_rows=0 AND g.return_missing_quantity_rows=0 THEN g.return_known_quantity ELSE NULL END AS return_quantity,CASE WHEN outbound_unknown_rows=0 AND g.gross_missing_roll_rows=0 THEN g.gross_known_rolls ELSE NULL END AS gross_rolls,CASE WHEN returns_unknown_rows=0 AND g.return_missing_roll_rows=0 THEN g.return_known_rolls ELSE NULL END AS return_rolls,CASE WHEN {unit_complete} THEN u.gross_known_quantity-u.return_known_quantity ELSE NULL END AS unit_net_quantity,u.gross_known_quantity-u.return_known_quantity AS unit_known_net_quantity,CASE WHEN NOT({complete}) THEN 'partial_unknown' WHEN g.gross_flow_rows=0 AND g.return_flow_rows=0 THEN 'no_recorded_flow' WHEN g.gross_flow_rows=0 OR g.return_flow_rows=0 THEN 'one_sided_recorded_flow' ELSE 'both_sides_recorded' END AS net_flow_state,COALESCE(g.grouped_key_count,0) AS __matched_row_count,COALESCE(g.gross_missing_quantity_rows+g.return_missing_quantity_rows,0)+outbound_unknown_rows+returns_unknown_rows AS missing_value_count,COALESCE(g.gross_flow_rows+g.return_flow_rows,0) AS known_value_count FROM meta m CROSS JOIN clock CROSS JOIN outbound_totals ot CROSS JOIN returns_totals rt CROSS JOIN population LEFT JOIN grouped g ON TRUE LEFT JOIN unit_totals u ON u.unit=g.unit"+label_join+' ORDER BY '+','.join('g.'+k for k in grouping)+' LIMIT %s'
     params.append(limit+1)
-    return sql,params,{'metric':request.get('metric'),'dataset':None,'source_datasets':[base,*tables.values()],'dimension_outputs':grouping,'filters':filters,'time_range':{'source':'frozen_baseline_to_current'},'warnings':[metric.get('answer_note','')],'_validate_frozen_pool':True}
+    outputs = grouping + (['sales_name'] if by_sales else [])
+    return sql,params,{'metric':request.get('metric'),'dataset':None,'source_datasets':[base,*tables.values()],'dimension_outputs':outputs,'filters':filters,'time_range':{'source':'frozen_baseline_to_current'},'warnings':[metric.get('answer_note','')],'_validate_frozen_pool':True}
 
 
 def build_analytical_metric_query(
