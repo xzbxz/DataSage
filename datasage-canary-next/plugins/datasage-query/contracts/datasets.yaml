@@ -1,4 +1,4 @@
-version: datasage-mini-datasets/v18
+version: datasage-mini-datasets/v19
 
 defaults:
   blocked_columns:
@@ -707,3 +707,51 @@ datasets:
     joins: []
     warnings:
     - 冻结时间字段可随更新改写，只代表当前记录值，不证明从未改写。
+
+  vk_dwd.pattern_matching_dwd:
+    domains:
+    - pattern_matching
+    kind: fact
+    metric_only: true
+    grain: recorded_task_execution_candidate_product_delivery_association
+    primary_key:
+    - task_id
+    - execute_id
+    - final_goods_no
+    - sale_goods_detail_id
+    allowed_columns:
+    - task_id
+    - task_no
+    - task_type
+    - customer_id
+    - customer_name
+    - sales_id
+    - sales_name
+    - task_region
+    - task_status
+    - task_create_time
+    - task_modified_time
+    - execute_id
+    - executor_id
+    - executor_erp_id
+    - executor_name
+    - execute_status
+    - execute_modified_time
+    - complete_time
+    - is_find
+    - is_suitable
+    - is_receive
+    - final_goods_no
+    - sale_bill_no
+    - sale_goods_detail_id
+    - delivery_amount
+    - currency_no
+    required_filters: []
+    joins: []
+    warnings:
+    - Nullable composite candidate key; a row is not a task, execution, person or delivery
+      order. Validate each grain.
+    - currency_no is task requirement currency; governed amounts use the verified linked
+      delivery currency.
+    - Business modification timestamps are not ETL refresh times. No free-text remarks,
+      prices, collaborators or approvers exposed.

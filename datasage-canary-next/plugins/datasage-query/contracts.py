@@ -1575,8 +1575,8 @@ def datasage_catalog(args: dict[str, Any], **_kwargs: Any) -> str:
         if not isinstance(args, dict) or set(args) != {"requests"}:
             raise ContractFailure("INVALID_INPUT", "目录参数只接受 requests。")
         requests = args.get("requests")
-        if not isinstance(requests, list) or not 1 <= len(requests) <= 6:
-            raise ContractFailure("INVALID_INPUT", "requests 必须包含一到六个域合同请求。")
+        if not isinstance(requests, list) or not 1 <= len(requests) <= len(DOMAIN_SOURCES):
+            raise ContractFailure("INVALID_INPUT", f"requests 必须包含一到{len(DOMAIN_SOURCES)}个域合同请求。")
         normalized: list[tuple[str | None, str | None, str | None]] = []
         for request in requests:
             if (

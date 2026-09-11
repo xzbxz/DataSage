@@ -2256,6 +2256,9 @@ def build_analytical_metric_query(
     query_observed_on = observed_on or _business_today()
     kind = metric.get("query_kind")
     _ensure_available(metric)
+    if kind == "pattern_matching":
+        from .pattern_queries import build_pattern_query
+        return build_pattern_query(request, metric, datasets_contract, semantics, limit, observed_on=query_observed_on)
     if kind == "frozen_pool_net_outbound":
         return _frozen_pool_net_outbound_query(request, metric, datasets_contract, semantics, limit, observed_on=query_observed_on)
     if kind == "frozen_pool_comparison":

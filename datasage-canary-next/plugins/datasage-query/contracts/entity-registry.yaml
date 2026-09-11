@@ -33,8 +33,9 @@ entity_types:
       receivable: [customer]
       target: [customer]
       profit: [customer]
+      pattern_matching: [customer]
   salesperson:
-    input_filter_roles: [salesperson, occurrence_salesperson, snapshot_salesperson, credit_salesperson]
+    input_filter_roles: [executor, salesperson, occurrence_salesperson, snapshot_salesperson, credit_salesperson]
     roles_by_domain:
       delivery: [salesperson]
       receipt: [salesperson]
@@ -42,6 +43,7 @@ entity_types:
       target: [salesperson]
       profit: [salesperson]
       inventory: [salesperson]
+      pattern_matching: [salesperson, executor]
   product:
     input_filter_roles: [product]
     roles_by_domain:

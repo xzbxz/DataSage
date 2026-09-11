@@ -8,7 +8,7 @@ class DomainConsolidationTests(unittest.TestCase):
     def test_domains_and_five_migrated_metrics_are_visible(self):
         from importlib import import_module
         cap=import_module(public.plugin.__name__+'.capability_contract')
-        self.assertEqual({'delivery','receipt','receivable','target','inventory','profit'},set(cap.DOMAIN_SOURCES))
+        self.assertEqual({'delivery','receipt','receivable','target','inventory','profit','pattern_matching'},set(cap.DOMAIN_SOURCES))
         for code in ('average_settlement_days','maximum_settlement_days','settlement_days_distribution','formal_receivable_turnover_days','delivery_receipt_comparison'):
             domain='receipt' if code=='delivery_receipt_comparison' else 'receivable'
             response=self.h.invoke('datasage_catalog',{'requests':[{'domain':domain,'metric':code}]})

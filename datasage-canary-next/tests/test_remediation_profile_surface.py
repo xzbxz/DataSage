@@ -39,6 +39,7 @@ SUPPORTED_DOMAINS = {
     "receivable",
     "inventory",
     "profit",
+    "pattern_matching",
 }
 
 

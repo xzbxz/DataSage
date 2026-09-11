@@ -16,8 +16,8 @@
 ## 定位、用户与升级线
 
 本 Profile 面向公司经营负责人及出库、销售、应收、财务、库存和目标
-负责人，支持六个受治理经营域：delivery、receipt/collections、receivable、
-target、inventory 和 profit。它提供事实、诊断和证据约束的建议，
+负责人，支持七个受治理经营域：delivery、receipt/collections、receivable、
+target、inventory、profit 和 pattern_matching。它提供事实、诊断和证据约束的建议，
 不是通用制度/HR问答、公共研究、用户文件分析器，也不是业务执行系统。
 当前候选目标成熟度为 L3 数据专家；本候选版本不声明 L4 主动管理或主动巡检能力。
 
@@ -28,7 +28,7 @@ target、inventory 和 profit。它提供事实、诊断和证据约束的建议
 不得自动批准、承诺或执行。
 
 WeCom 的 Profile toolset 声明 `clarify`、`datasage-query` 和官方 `code_execution`；所有已认证企微
-成员均可私聊和群聊，并共享六个经营域同一完整的 DataSage 查询面。Profile 不施加
+成员均可私聊和群聊，并共享七个经营域同一完整的 DataSage 查询面。Profile 不施加
 用户、群组、部门、实体、行或领域过滤；这不替代外部数据库授权。数据库执行仍为
 SELECT-only，并由治理查询合同、只读执行限制和 evidence 边界约束。Hermes 原生
 Skill 管理面不向 WeCom 暴露。

@@ -83,6 +83,7 @@ _COMMON_REQUEST_FIELDS = {
     "limit",
 }
 _METRIC_REQUEST_FIELDS = _COMMON_REQUEST_FIELDS | {
+    "pattern_time_basis",
     "baseline_week",
     "movement_state",
     "metric",
@@ -3301,6 +3302,8 @@ def _build_metric_query(
         raise QueryFailure("CONTRACT_UNAVAILABLE", "指标定义格式无效。")
     if (request.get("baseline_week") is not None or request.get("movement_state") is not None) and metric.get("query_kind") not in {"frozen_pool_comparison", "frozen_pool_net_outbound"}:
         raise QueryFailure("INVALID_PLAN", "该指标不接受基线周或变化状态参数。")
+    if request.get("pattern_time_basis") is not None and metric.get("query_kind") != "pattern_matching":
+        raise QueryFailure("INVALID_PLAN", "该指标不接受找版时间口径参数。")
     inventory_scope_filters = metric.get("inventory_scope_filters")
     requested_inventory_scope = request.get("inventory_scope")
     applied_inventory_scope: str | None = None
@@ -3355,7 +3358,7 @@ def _build_metric_query(
             raise QueryFailure("INVALID_PLAN", "该分析指标暂不接受通用比较参数。")
         time_bucket = request.get("time_bucket")
         if time_bucket is not None and (
-            metric.get("query_kind") not in {"target_completion", "allocated_amount"}
+            metric.get("query_kind") not in {"target_completion", "allocated_amount", "pattern_matching"}
             or time_bucket != "month"
         ):
             raise QueryFailure("INVALID_PLAN", "该分析指标不支持请求中的时间分组参数。")
@@ -4237,6 +4240,62 @@ def _business_metric_ref(request: Mapping[str, Any]) -> str | None:
 
 
 _PUBLIC_FACT_FIELDS = {
+    "task_status_unfilled_rows",
+    "execute_status_unfilled_rows",
+    "verified_linked_bill_count",
+    "requirement_currency_missing_rows",
+    "requirement_currency_conflict_details",
+    "rows_without_execution_id",
+    "pattern_read_at",
+    "pattern_read_utc_at",
+    "pattern_task_modified_max",
+    "pattern_execute_modified_max",
+    "pattern_scope_rows",
+    "pattern_scope_unknown_rows",
+    "pattern_display_groups",
+    "known_task_count",
+    "known_execution_count",
+    "known_executor_count",
+    "known_candidate_product_count",
+    "recorded_linked_detail_count",
+    "verified_linked_detail_count",
+    "recorded_linked_bill_count",
+    "tasks_with_recorded_link",
+    "tasks_with_verified_link",
+    "tasks_with_found_record",
+    "tasks_with_not_found_record",
+    "tasks_with_suitable_record",
+    "tasks_with_unsuitable_record",
+    "tasks_with_received_record",
+    "tasks_with_not_received_record",
+    "tasks_with_unfilled_found",
+    "tasks_with_unfilled_feedback",
+    "tasks_with_unfilled_receive",
+    "tasks_with_completed_status_record",
+    "task_status_conflict_count",
+    "execute_status_conflict_count",
+    "task_status_unknown_rows",
+    "execute_status_unknown_rows",
+    "unrecognized_flag_rows",
+    "task_identity_unknown_rows",
+    "execution_identity_unknown_rows",
+    "executor_identity_unknown_rows",
+    "candidate_product_unfilled_rows",
+    "candidate_product_nonatomic_rows",
+    "recorded_unverified_link_rows",
+    "result_source_rows",
+    "amount_key_count",
+    "known_amount",
+    "known_amount_keys",
+    "unresolved_amount_rows",
+    "currency_known_amount",
+    "currency_amount_keys",
+    "currency_unresolved_rows",
+    "pattern_task_ref",
+    "pattern_customer_ref",
+    "pattern_salesperson_ref",
+    "pattern_executor_ref",
+
     "sales_identity_ref",
     "known_net_rolls",
     "grouped_key_count",
@@ -6755,6 +6814,8 @@ def _public_time_range(value: Any) -> dict[str, Any]:
             raise QueryFailure("CONTRACT_UNAVAILABLE", "查询时间范围来源无效。")
         return {"start": start, "end": end, "source": source}
     source = value.get("source")
+    if source == "pattern_current_observation":
+        return {k:v for k,v in value.items() if k in {"source","basis","window_start","window_end","pattern_read_at","pattern_read_utc_at","pattern_task_modified_max","pattern_execute_modified_max"}}
     if source == "frozen_baseline_to_current":
         return {k: v for k, v in value.items() if k in {"source", "baseline_week", "frozen_at", "read_at", "read_utc_at", "observed_db_utc_offset_seconds"}}
     if source in {"current_snapshot", "latest_snapshot", "latest_non_null_snapshot"}:
@@ -6984,6 +7045,10 @@ def _scope_texts(value: Any) -> list[str]:
             return []
     source = value.get("source")
     as_of_date = value.get("as_of_date")
+    if source == "pattern_current_observation":
+        basis = {"current_observation":"当前全范围观察","task_created":"任务创建期间队列","execution_completed":"执行完成期间记录","linked_delivery":"已关联出库实际发生期间"}.get(value.get("basis"),"找版观察")
+        window = f"，{value.get('window_start')}至{value.get('window_end')}（不含结束日）" if value.get("window_start") else ""
+        return [f"{basis}{window}，读取时点{value.get('pattern_read_at')}（库端原值）"]
     if source == "frozen_baseline_to_current":
         return [f"基线{value.get('baseline_week')}，记录冻结{value.get('frozen_at')}至本次读取{value.get('read_at')}（库端时间原值）"]
     if source == "current_snapshot" and isinstance(as_of_date, str):
@@ -8949,7 +9014,7 @@ def _run_one(
         current_stage = "business_sql"
         business_sql_attempted_count = 1
         executor = execute_query or _execute_with_source
-        if scope.get("_validate_frozen_pool") is True and execute_query is None:
+        if (scope.get("_validate_frozen_pool") is True or scope.get("_validate_pattern_observation") is True) and execute_query is None:
             with _ConsistentSnapshotExecutor(deadline_at=deadline_at) as snapshot:
                 rows, truncated, business_source_evidence_ref = snapshot.execute(
                     sql, params, limit, deadline_at=deadline_at
@@ -8990,6 +9055,18 @@ def _run_one(
                 scope["time_range"] = applied_time_range
             except AnalysisQueryError as error:
                 raise QueryFailure(error.code, error.message, stage="baseline_validation") from error
+        if scope.get("_validate_pattern_observation") is True:
+            from .pattern_queries import pattern_observation
+            try:
+                applied_time_range = pattern_observation(rows, scope["time_range"])
+                scope["time_range"] = applied_time_range
+                for row in rows:
+                    for role, column in (("task","task_id"),("customer","customer_id"),("salesperson","sales_id"),("executor","executor_id")):
+                        if column in row and row.get("__matched_row_count"):
+                            value = row[column]
+                            row[f"pattern_{role}_ref"] = "unattributed" if value is None else role + "_" + hashlib.sha256(f"pattern-{role}:{value}".encode("utf-8")).hexdigest()[:16]
+            except AnalysisQueryError as error:
+                raise QueryFailure(error.code,error.message,stage="result_validation") from error
         public_rows, data_state = _evidence_rows_and_state(rows, truncated)
         applied_time_range, data_state = _resolve_snapshot_time_evidence(
             applied_time_range,
@@ -9016,8 +9093,9 @@ def _run_one(
         metric_ref = _business_metric_ref(request)
         metric_label = _business_metric_label(scope, semantics)
         metric_context = _business_metric_context(scope, semantics, datasets)
-        dimension_labels = _business_dimension_labels(request, semantics)
-        dimension_bindings = _business_dimension_bindings(request, scope, semantics)
+        dimension_request = ({**request, "dimensions": scope["_pattern_dimensions"]} if scope.get("_validate_pattern_observation") is True else request)
+        dimension_labels = _business_dimension_labels(dimension_request, semantics)
+        dimension_bindings = _business_dimension_bindings(dimension_request, scope, semantics)
         metrics = semantics.get("metrics")
         metric_definition = (
             metrics.get(request.get("metric"))

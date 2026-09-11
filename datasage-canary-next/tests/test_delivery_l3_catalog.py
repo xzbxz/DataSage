@@ -279,15 +279,15 @@ class DeliveryL3CatalogTests(unittest.TestCase):
                     }
                 ]
             },
-            "seven_requests": {"requests": [{"domain": "delivery"}] * 7},
+            "too_many_requests": {"requests": [{"domain": "delivery"}] * (len(schemas.DOMAINS) + 1)},
         }
         for label, value in catalog_cases.items():
             with self.subTest(catalog_case=label):
                 canonical_accepts = _schema_accepts(catalog_canonical, value)
                 model_accepts = _schema_accepts(catalog_model, value)
-                if label == "seven_requests":
+                if label == "too_many_requests":
                     # DeepSeek compatibility intentionally omits array-size
-                    # keywords; runtime still enforces the public 1-6 bound.
+                    # keywords; runtime still enforces the public registered-domain-count bound.
                     self.assertFalse(canonical_accepts)
                     self.assertTrue(model_accepts)
                 else:
@@ -296,12 +296,12 @@ class DeliveryL3CatalogTests(unittest.TestCase):
         self.assertTrue(_schema_accepts(catalog_model, catalog_cases["scorecard"]))
         self.assertFalse(_schema_accepts(catalog_model, catalog_cases["mixed_scorecard"]))
         self.assertFalse(_schema_accepts(catalog_model, catalog_cases["metric_and_view"]))
-        self.assertTrue(_schema_accepts(catalog_model, catalog_cases["seven_requests"]))
-        runtime_seven = json.loads(
-            contracts.datasage_catalog(catalog_cases["seven_requests"])
+        self.assertTrue(_schema_accepts(catalog_model, catalog_cases["too_many_requests"]))
+        runtime_over_limit = json.loads(
+            contracts.datasage_catalog(catalog_cases["too_many_requests"])
         )
-        self.assertEqual("failed", runtime_seven["status"])
-        self.assertEqual("INVALID_INPUT", runtime_seven["error"]["code"])
+        self.assertEqual("failed", runtime_over_limit["status"])
+        self.assertEqual("INVALID_INPUT", runtime_over_limit["error"]["code"])
 
         query_cases = {
             "delivery_scope_non_delivery": {

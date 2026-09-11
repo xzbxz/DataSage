@@ -123,3 +123,7 @@ datasage-canary-next/*
 !datasage-canary-next/tests/test_slow_baseline_net_outbound.py
 
 !datasage-canary-next/tests/test_slow_baseline_sales.py
+
+!datasage-canary-next/plugins/datasage-query/pattern_queries.py
+!datasage-canary-next/plugins/datasage-query/contracts/pattern-matching-semantics.yaml
+!datasage-canary-next/tests/test_pattern_matching.py
