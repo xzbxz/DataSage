@@ -1,4 +1,4 @@
-version: datasage-mini-datasets/v16
+version: datasage-mini-datasets/v17
 
 defaults:
   blocked_columns:
@@ -187,7 +187,7 @@ datasets:
     primary_key: [barcode_detail_id]
     updated_at: gmt_modified
     metric_only: true
-    allowed_columns: [barcode_detail_id, sale_bill_id, sale_bill_goods_id, delivery_time, sale_time, whse_id, whse_name, whse_region, whse_dept, whse_category, bar_code, resource_barcode, batch_no, cylinder_no, goods_id, goods_sku_id, customer_dept, org_name, biz_dept, biz_region, final_supplier_id, final_supplier_no, final_supplier_name, currency_no, unit, delivery_amount, delivery_amount_rmb, exchange_rate, goods_num, piece_num, is_inner_cus, is_missing, is_defective_whse, is_defective, is_ccbs_whse]
+    allowed_columns: [barcode_detail_id, sale_bill_id, sale_bill_goods_id, bill_type, delivery_time, sale_time, whse_id, whse_name, whse_region, whse_dept, whse_category, bar_code, resource_barcode, batch_no, cylinder_no, goods_id, goods_sku_id, customer_dept, org_name, biz_dept, biz_region, final_supplier_id, final_supplier_no, final_supplier_name, currency_no, unit, delivery_amount, delivery_amount_rmb, exchange_rate, goods_num, piece_num, is_inner_cus, is_missing, is_defective_whse, is_defective, is_ccbs_whse]
     required_filters: []
     joins:
       - {target: vk_dwd.sale_bill_goods_detail_dwd, local: [sale_bill_goods_id], remote: [goods_detail_id], cardinality: many_to_one, stage: before_metric_aggregation}

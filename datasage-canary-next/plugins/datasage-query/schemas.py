@@ -86,7 +86,7 @@ REQUEST = {
                 "Optional grouping dimensions supported by the selected metric contract; an empty list requests an overall aggregate unless the metric declares an intrinsic comparison grain (frozen-pool details use product/SKU/warehouse-department/unit; its summary defaults to unit). Codes can refer to fact attributes or declared many-to-one enrichment, not table names or join keys. Runtime enforces max_group_dimensions. Original-currency metrics require a single-currency filter or currency grouping."
             ),
         },
-        "baseline_week": {"type": "string", "pattern": r"^[0-9]{4}-W[0-9]{2}$", "description": "Only frozen-pool comparison metrics: select an existing baseline week. Omit to choose the latest recorded week no later than the current business week; never creates a baseline."},
+        "baseline_week": {"type": "string", "pattern": r"^[0-9]{4}-W[0-9]{2}$", "description": "Only frozen-pool comparison or baseline net-outbound metrics: select an existing baseline week. Omit to choose the latest recorded week no later than the current business week; never creates a baseline."},
         "movement_state": {"type": "string", "enum": ["New", "Exited", "Reduced", "No Change", "Increased", "Unassessable"], "description": "Only frozen-pool comparison group details: filter the displayed state; population counts retain the full requested product/department/unit scope."},
         "metric_filters": {
             "type": "object",

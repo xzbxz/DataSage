@@ -1,8 +1,8 @@
-version: datasage-mini-inventory-semantics/v12
+version: datasage-mini-inventory-semantics/v13
 domain: inventory
 contract_role: plugin_physical_execution
 business_name: 库存事实、未动销与周转分析
-tables: [vk_ai.slow_moving_baseline, vk_ods.slow_moving_goods_ods, vk_dw.inventory_barcode_detail_dw, vk_dwd.inventory_cost_dwd, vk_dw.goods_turnover_basic_data_dw, vk_dwd.goods_detail_dwd, vk_dwd.whse_info_dwd]
+tables: [vk_dwd.delivery_bill_barcode_detail_dwd, vk_dwd.delivery_return_detail_dwd, vk_dwd.sale_bill_goods_detail_dwd, vk_ai.slow_moving_baseline, vk_ods.slow_moving_goods_ods, vk_dw.inventory_barcode_detail_dw, vk_dwd.inventory_cost_dwd, vk_dw.goods_turnover_basic_data_dw, vk_dwd.goods_detail_dwd, vk_dwd.whse_info_dwd]
 
 dimension_sources:
   product_master: &product_master {type: governed_join, dataset: vk_dwd.goods_detail_dwd, local_column: goods_id, remote_column: goods_id, cardinality: many_to_one}
@@ -953,3 +953,63 @@ metrics:
     baseline_table: vk_ai.slow_moving_baseline
     quantity_scale: 4
     baseline_view: summary
+
+  registered_slow_pool_baseline_net_outbound:
+    label: 登记滞销池·基线产品范围净出库
+    business_definition: 基于现存完整冻结业务键集合，统计记录冻结时点至本次库端固定读取时点的已记录物理出库和有效退货；默认按库存单位汇总，可附加产品、规格、仓库部门。不代表冻结旧批次实际去化。
+    query_kind: frozen_pool_net_outbound
+    table: vk_ai.slow_moving_baseline
+    time_policy: current_snapshot
+    max_group_dimensions: 4
+    unit: 来源库存单位分别计量
+    allowed_dimensions:
+    - product
+    - pool_sku
+    - warehouse_department
+    - unit
+    dimension_overrides:
+      unit:
+        label: 登记库存单位
+        columns:
+        - column: source_unit
+          alias: unit
+        filter_column: source_unit
+        value_contract:
+          kind: closed
+          allowed_values:
+          - m
+          - y
+          - kg
+          - Pcs
+          canonical_aliases:
+            M: m
+          business_meanings:
+            m: 米
+            y: 码
+            kg: 千克
+            Pcs: 件
+        normalization: meter_case
+    baseline_source_table: vk_ods.slow_moving_goods_ods
+    document_scope: legacy_ht_suffix_or_bulk
+    flow_sources:
+      outbound: vk_dwd.delivery_bill_barcode_detail_dwd
+      returns: vk_dwd.delivery_return_detail_dwd
+      sales: vk_dwd.sale_bill_goods_detail_dwd
+      warehouses: vk_dwd.whse_info_dwd
+    disclosures:
+    - id: inventory.frozen-net.basis
+      mode: required_always
+      text: &frozen_net_basis 只统计现存冻结基线产品、规格、仓库部门及可靠库存单位范围内的已记录流量，不把当前New补入基线；同产品新货也可能发生流转，不能称原冻结旧库存去化。
+    - id: inventory.frozen-net.documents
+      mode: required_always
+      text: 沿用已确认旧追踪器范围：来源仓库部门以-HT结尾，或自身单据类型为大货；HT不另设类型白名单。出库与退货均用各自单据类型；大小写判断沿用来源规则，不修剪部门尾空格。出库须唯一关联已完成销售明细；退货须已结单销售退货并排除内部客户。未知类型单列，HT未知类型不因此排除。
+    - id: inventory.frozen-net.attribution
+      mode: required_always
+      text: 毛出库按实际出库仓，退货按实际退入仓及各自事实部门，销售归属不回连原出库。本接口不支持销售分组。仓库主数据只核对当前部门一致性，不能替换事实历史归属；不一致或缺失保留未知覆盖。两侧独立汇总，再按唯一基线业务键相减。
+    - id: inventory.frozen-net.coverage
+      mode: required_always
+      text: 保留毛出库、退货及已记录净数量。单侧无记录不证明业务为零，完整净数留空；已记录净数量仅表示已匹配且有数量的记录代数差，可为负，不能当完整净出库。缺失时间、身份、单位、有效性或归属时完整数值受限；候选、匹配、未匹配、排除和未知计数是筛选后基线产品/规格范围的全局记录数，不跨结果行重复相加。不同单位不相加，不使用促销单位补缺。
+    - id: inventory.frozen-net.time
+      mode: required_always
+      text: 使用实际记录冻结时间（含）至本次库端读取时间（不含）；缺时间候选单独保留，不能证明发生在窗口内。时间保留库端原值，当前UTC偏移不证明历史时区。记录冻结时间可能更新，现存完整记录不证明原始冻结从未删改。没有基线或基线身份/单位不完整时明确失败，不写入或补建。
+    answer_note: *frozen_net_basis

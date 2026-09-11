@@ -3299,7 +3299,7 @@ def _build_metric_query(
     metric = metrics[metric_code]
     if not isinstance(metric, dict):
         raise QueryFailure("CONTRACT_UNAVAILABLE", "指标定义格式无效。")
-    if (request.get("baseline_week") is not None or request.get("movement_state") is not None) and metric.get("query_kind") != "frozen_pool_comparison":
+    if (request.get("baseline_week") is not None or request.get("movement_state") is not None) and metric.get("query_kind") not in {"frozen_pool_comparison", "frozen_pool_net_outbound"}:
         raise QueryFailure("INVALID_PLAN", "该指标不接受基线周或变化状态参数。")
     inventory_scope_filters = metric.get("inventory_scope_filters")
     requested_inventory_scope = request.get("inventory_scope")
@@ -4237,6 +4237,39 @@ def _business_metric_ref(request: Mapping[str, Any]) -> str | None:
 
 
 _PUBLIC_FACT_FIELDS = {
+    "recorded_net_rolls",
+    "net_rolls",
+    "baseline_scope_groups",
+    "gross_flow_rows",
+    "return_flow_rows",
+    "gross_known_quantity",
+    "return_known_quantity",
+    "gross_known_rolls",
+    "return_known_rolls",
+    "gross_missing_quantity_rows",
+    "return_missing_quantity_rows",
+    "gross_missing_roll_rows",
+    "return_missing_roll_rows",
+    "recorded_net_quantity",
+    "gross_quantity",
+    "return_quantity",
+    "gross_rolls",
+    "return_rolls",
+    "outbound_candidate_rows",
+    "outbound_matched_rows",
+    "outbound_unmatched_rows",
+    "outbound_excluded_rows",
+    "outbound_unknown_rows",
+    "outbound_unknown_document_rows",
+    "outbound_missing_time_rows",
+    "returns_candidate_rows",
+    "returns_matched_rows",
+    "returns_unmatched_rows",
+    "returns_excluded_rows",
+    "returns_unknown_rows",
+    "returns_unknown_document_rows",
+    "returns_missing_time_rows",
+
     "opening_unknown_key_rows",
     "closing_unknown_key_rows",
     "opening_unknown_unit_rows",
@@ -4344,6 +4377,7 @@ _PUBLIC_FACT_FIELDS = {
     "excluded_open_balance_bill_count",
 }
 _PUBLIC_STATE_FIELDS = {
+    "net_flow_state",
     "pool_movement_state",
     "metric_data_state",
     "current_metric_data_state",
