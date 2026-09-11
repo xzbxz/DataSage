@@ -24,7 +24,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Callable, Mapping, Sequence
 
-from .analytical_queries import AnalysisQueryError, build_analytical_metric_query
+from .analytical_queries import AnalysisQueryError, build_analytical_metric_query, validate_frozen_pool_rows
 from .capability_contract import (
     AvailabilityContractError,
     CapabilityContractError,
@@ -83,6 +83,8 @@ _COMMON_REQUEST_FIELDS = {
     "limit",
 }
 _METRIC_REQUEST_FIELDS = _COMMON_REQUEST_FIELDS | {
+    "baseline_week",
+    "movement_state",
     "metric",
     "dimensions",
     "metric_filters",
@@ -3297,6 +3299,8 @@ def _build_metric_query(
     metric = metrics[metric_code]
     if not isinstance(metric, dict):
         raise QueryFailure("CONTRACT_UNAVAILABLE", "指标定义格式无效。")
+    if (request.get("baseline_week") is not None or request.get("movement_state") is not None) and metric.get("query_kind") != "frozen_pool_comparison":
+        raise QueryFailure("INVALID_PLAN", "该指标不接受基线周或变化状态参数。")
     inventory_scope_filters = metric.get("inventory_scope_filters")
     requested_inventory_scope = request.get("inventory_scope")
     applied_inventory_scope: str | None = None
@@ -4233,6 +4237,54 @@ def _business_metric_ref(request: Mapping[str, Any]) -> str | None:
 
 
 _PUBLIC_FACT_FIELDS = {
+    "opening_unknown_key_rows",
+    "closing_unknown_key_rows",
+    "opening_unknown_unit_rows",
+    "closing_unknown_unit_rows",
+    "closing_unknown_whitelist_rows",
+
+    "baseline_week",
+    "baseline_frozen_at",
+    "closing_read_at",
+    "closing_utc_at",
+    "observed_clock_offset_seconds",
+    "opening_source_rows",
+    "closing_source_rows",
+    "opening_quantity",
+    "closing_quantity",
+    "opening_known_quantity",
+    "closing_known_quantity",
+    "opening_known_rolls",
+    "closing_known_rolls",
+    "opening_rolls",
+    "closing_rolls",
+    "comparable_quantity_delta",
+    "opening_missing_quantity_rows",
+    "closing_missing_quantity_rows",
+    "opening_missing_roll_rows",
+    "closing_missing_roll_rows",
+    "opening_unknown_class_rows",
+    "closing_unknown_class_rows",
+    "closing_uncertain_membership_rows",
+    "identity_uncertain",
+    "opening_product_id_count",
+    "closing_product_id_count",
+    "opening_sku_id_count",
+    "closing_sku_id_count",
+    "population_union_groups",
+    "new_group_count",
+    "exited_group_count",
+    "reduced_group_count",
+    "unchanged_group_count",
+    "increased_group_count",
+    "unassessable_group_count",
+    "population_new_group_count",
+    "population_exited_group_count",
+    "population_reduced_group_count",
+    "population_unchanged_group_count",
+    "population_increased_group_count",
+    "population_unassessable_group_count",
+
     "pool_discountable_rolls",
     "pool_priced_rolls",
     "pool_overlap_rolls",
@@ -4292,6 +4344,7 @@ _PUBLIC_FACT_FIELDS = {
     "excluded_open_balance_bill_count",
 }
 _PUBLIC_STATE_FIELDS = {
+    "pool_movement_state",
     "metric_data_state",
     "current_metric_data_state",
     "comparison_metric_data_state",
@@ -6646,6 +6699,8 @@ def _public_time_range(value: Any) -> dict[str, Any]:
             raise QueryFailure("CONTRACT_UNAVAILABLE", "查询时间范围来源无效。")
         return {"start": start, "end": end, "source": source}
     source = value.get("source")
+    if source == "frozen_baseline_to_current":
+        return {k: v for k, v in value.items() if k in {"source", "baseline_week", "frozen_at", "read_at", "read_utc_at", "observed_db_utc_offset_seconds"}}
     if source in {"current_snapshot", "latest_snapshot", "latest_non_null_snapshot"}:
         return {"source": source}
     if source in {"latest_complete_accounting_months", "latest_available_accounting_months"} and isinstance(value.get("months"), int):
@@ -6873,6 +6928,8 @@ def _scope_texts(value: Any) -> list[str]:
             return []
     source = value.get("source")
     as_of_date = value.get("as_of_date")
+    if source == "frozen_baseline_to_current":
+        return [f"基线{value.get('baseline_week')}，记录冻结{value.get('frozen_at')}至本次读取{value.get('read_at')}（库端时间原值）"]
     if source == "current_snapshot" and isinstance(as_of_date, str):
         if value.get("as_of_basis") == _DATABASE_QUERY_DATE_OBSERVATION:
             return [f"截至 {as_of_date} 查询时观察到的当前库存快照"]
@@ -8836,9 +8893,15 @@ def _run_one(
         current_stage = "business_sql"
         business_sql_attempted_count = 1
         executor = execute_query or _execute_with_source
-        rows, truncated, business_source_evidence_ref = executor(
-            sql, params, limit, deadline_at=deadline_at
-        )
+        if scope.get("_validate_frozen_pool") is True and execute_query is None:
+            with _ConsistentSnapshotExecutor(deadline_at=deadline_at) as snapshot:
+                rows, truncated, business_source_evidence_ref = snapshot.execute(
+                    sql, params, limit, deadline_at=deadline_at
+                )
+        else:
+            rows, truncated, business_source_evidence_ref = executor(
+                sql, params, limit, deadline_at=deadline_at
+            )
         source_evidence_ref = _consistent_source_evidence_ref(
             [*preflight_source_evidence_refs, business_source_evidence_ref]
         )
@@ -8858,6 +8921,12 @@ def _run_one(
                 complete_partition_proof_failure = proof_failure.code
         _check_call_deadline(deadline_at)
         current_stage = "result_validation"
+        if scope.get("_validate_frozen_pool") is True:
+            try:
+                applied_time_range = validate_frozen_pool_rows(rows)
+                scope["time_range"] = applied_time_range
+            except AnalysisQueryError as error:
+                raise QueryFailure(error.code, error.message, stage="baseline_validation") from error
         public_rows, data_state = _evidence_rows_and_state(rows, truncated)
         applied_time_range, data_state = _resolve_snapshot_time_evidence(
             applied_time_range,

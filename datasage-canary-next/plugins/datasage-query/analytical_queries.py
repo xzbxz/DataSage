@@ -1961,6 +1961,160 @@ def _registered_slow_pool_query(request, metric, datasets_contract, semantics, l
         'filters':filters,'dimension_outputs':output_names,'warnings':[metric.get('answer_note','')]}
 
 
+def _frozen_pool_comparison_query(request, metric, datasets_contract, semantics, limit, *, observed_on=None):
+    """Compare recorded baselines with current records, never physical-batch disposal."""
+    import re
+    if any(request.get(k) is not None for k in ('time_range','calendar_month','comparison','time_bucket')):
+        raise AnalysisQueryError('INVALID_PLAN', '仅支持已有冻结时点到本次读取，不用当前池回填历史期末。')
+    week = request.get('baseline_week')
+    today = observed_on or _business_today()
+    iso = today.isocalendar()
+    current_week = f'{iso.year:04d}-W{iso.week:02d}'
+    if week is not None:
+        try:
+            if not isinstance(week,str) or not re.fullmatch(r'[0-9]{4}-W[0-9]{2}',week):raise ValueError()
+            date.fromisocalendar(int(week[:4]),int(week[6:]),1)
+            if week > current_week:raise ValueError()
+        except ValueError:
+            raise AnalysisQueryError('INVALID_PLAN','基线周必须是当前或过去的合法周标签。')
+    mode = metric.get('baseline_view')
+    if mode not in {'groups','summary'}:raise AnalysisQueryError('CONTRACT_UNAVAILABLE','基线比较视图未登记。')
+    movement = request.get('movement_state')
+    states = ('New','Exited','Reduced','No Change','Increased','Unassessable')
+    if movement is not None and (mode != 'groups' or movement not in states):
+        raise AnalysisQueryError('INVALID_PLAN','变化状态筛选仅适用于比较明细。')
+    chosen = request.get('dimensions') or []
+    if chosen:
+        expected={'product','pool_sku','warehouse_department','unit'} if mode=='groups' else {'unit','warehouse_department'}
+        if mode=='groups' and set(chosen)!=expected or mode=='summary' and (not set(chosen)<=expected or 'unit' not in chosen):
+            raise AnalysisQueryError('UNSUPPORTED_DIMENSION','明细保持产品、规格、部门、单位粒度；汇总按单位，可附加仓库部门。')
+    grouping=['unit','whse_dept'] if mode=='summary' and 'warehouse_department' in chosen else ['unit']
+    base_table=metric.get('baseline_table');current_table=metric.get('table')
+    base_ds=_dataset(base_table,datasets_contract);current_ds=_dataset(current_table,datasets_contract)
+    scale=metric.get('quantity_scale')
+    if not isinstance(scale,int) or isinstance(scale,bool) or scale!=4:
+        raise AnalysisQueryError('CONTRACT_UNAVAILABLE','基线比较只接受已核验的四位小数数量精度。')
+    def source(table,ds,alias,baseline=False):
+        def col(k):return _qualified(alias,_approved(k,ds))
+        qty=col('total_qty' if baseline else 'goods_num')
+        rolls=col('total_piece' if baseline else 'piece_num')
+        unit=f"(CASE WHEN LOWER(TRIM({col('source_unit')}))='m' THEN 'm' ELSE NULLIF(TRIM({col('source_unit')}),'') END) COLLATE utf8mb4_bin"
+        dept=f"NULLIF({col('whse_dept')},'') COLLATE utf8mb4_bin"
+        whitelist_unknown='0' if baseline else f"CASE WHEN {col('is_whitelist')} IS NULL OR {col('is_whitelist')} NOT IN ('n','y') THEN 1 ELSE 0 END"
+        membership='1'
+        if not baseline:
+            criteria=metric.get('required_filters') or {}
+            if set(criteria)!={'goods_num','is_whitelist'}:
+                raise AnalysisQueryError('CONTRACT_UNAVAILABLE','当前池纳入条件定义不完整。')
+            criterion_params=[]
+            quantity_condition=_filter_clause(alias,'goods_num',criteria['goods_num'],criterion_params)
+            whitelist_condition=_filter_clause(alias,'is_whitelist',criteria['is_whitelist'],criterion_params)
+            predicate=f"({quantity_condition} AND CASE WHEN {col('is_whitelist')} IN ('n','y') THEN ({whitelist_condition}) ELSE NULL END)"
+            membership=f"CASE WHEN {predicate} THEN 1 WHEN NOT({predicate}) THEN 0 ELSE -1 END"
+            params.extend(criterion_params*2)
+        return f"SELECT {col('source_row_id' if baseline else 'id')} AS source_id,{col('goods_id')} AS goods_id,{col('goods_sku_id')} AS goods_sku_id,{col('goods_name')} AS goods_name,{dept} AS whse_dept,{unit} AS unit,{qty} AS qty,{rolls} AS rolls,{col('slow_label')} AS slow_label,{membership} AS membership,{whitelist_unknown} AS unknown_whitelist FROM {_quote_table(table)} AS {alias}" + (f" WHERE {col('week_label')}=(SELECT baseline_week FROM clock)" if baseline else '')
+    params=[week if week is not None else current_week]
+    choice='%s' if week is not None else f"(SELECT MAX({_quote_column('week_label')}) FROM {_quote_table(base_table)} WHERE week_label<=%s AND week_label REGEXP '^[0-9]{{4}}-W[0-9]{{2}}$')"
+    ctes=[f"clock AS (SELECT {choice} AS baseline_week,NOW(6) AS closing_read_at,UTC_TIMESTAMP(6) AS closing_utc_at,TIMESTAMPDIFF(SECOND,UTC_TIMESTAMP(6),NOW(6)) AS observed_clock_offset_seconds)"]
+    for k in ('week_label','source_row_id','frozen_at','baseline_version','source_table'):_approved(k,base_ds)
+    ctes.append(f"meta AS (SELECT COUNT(*) AS __baseline_rows,COUNT(DISTINCT source_row_id) AS __baseline_ids,COUNT(frozen_at) AS __baseline_timed_rows,COUNT(DISTINCT frozen_at) AS __baseline_times,MIN(frozen_at) AS baseline_frozen_at,COALESCE(SUM(CASE WHEN baseline_version=2 AND source_table=%s THEN 0 ELSE 1 END),0) AS __baseline_bad_source FROM {_quote_table(base_table)} WHERE week_label=(SELECT baseline_week FROM clock))")
+    params.append(current_table)
+    ctes.extend(['b_raw AS ('+source(base_table,base_ds,'b',True)+')','c_raw AS ('+source(current_table,current_ds,'c')+')'])
+    filters=request.get('metric_filters') or {}
+    if not isinstance(filters,dict) or any(k not in {'product','pool_sku','warehouse_department','unit'} for k in filters):
+        raise AnalysisQueryError('UNSUPPORTED_DIMENSION','基线比较仅支持产品、规格、仓库部门和库存单位筛选。')
+    bindings=_entity_bindings(request)
+    filter_specs=[]
+    for name,value in filters.items():
+        _,value=_bound_value(bindings,name,value)
+        column={'product':'goods_id','pool_sku':'goods_sku_id','warehouse_department':'whse_dept','unit':'unit'}[name]
+        if name=='pool_sku':
+            vv=value if isinstance(value,list) else [value]
+            if any(isinstance(v,bool) or not (isinstance(v,int) and v>=0 or isinstance(v,str) and v.isascii() and v.isdecimal()) for v in vv):
+                raise AnalysisQueryError('INVALID_PLAN','规格标识必须是明确整数。')
+        filter_specs.append((column,value))
+    valid="goods_id IS NOT NULL AND goods_sku_id IS NOT NULL AND whse_dept IS NOT NULL AND unit IN ('m','y','kg','Pcs')"
+    for side in ('b','c'):
+        clauses=[]
+        for column,value in filter_specs:
+            fparams=[];expr=_value_filter('r',column,value,fparams);params.extend(fparams)
+            unknown=f'r.{column} IS NULL' if column!='unit' else "r.unit IS NULL OR r.unit NOT IN ('m','y','kg','Pcs')"
+            clauses.append(f'({expr} OR ({unknown}))')
+        if side=='c':clauses.append('membership<>0')
+        where=' WHERE '+' AND '.join(clauses) if clauses else ''
+        ctes.append(f"{side} AS (SELECT r.*,CASE WHEN {valid} THEN 1 ELSE 0 END AS key_valid,CASE WHEN {valid} THEN '' ELSE CONCAT('{side}:',source_id) END COLLATE utf8mb4_bin AS uncertainty_key FROM {side}_raw r{where})")
+    keys=['goods_id','goods_sku_id','whse_dept','unit','uncertainty_key'];ks=','.join(keys)
+    for side in ('b','c'):
+        ctes.append(f"{side}g AS (SELECT {ks},MAX(goods_name) AS goods_name,MIN(key_valid) AS key_valid,SUM(CASE WHEN membership=1 THEN 1 ELSE 0 END) AS n,SUM(CASE WHEN membership=-1 THEN 1 ELSE 0 END) AS uncertain_membership_rows,ROUND(SUM(CASE WHEN membership=1 THEN qty ELSE NULL END),4) AS qty,ROUND(SUM(CASE WHEN membership=1 THEN rolls ELSE NULL END),4) AS rolls,SUM(CASE WHEN qty IS NULL THEN 1 ELSE 0 END) AS missing_qty,SUM(CASE WHEN membership=1 AND rolls IS NULL THEN 1 ELSE 0 END) AS missing_rolls,SUM(CASE WHEN slow_label IS NULL OR slow_label NOT IN ('deprice','discountable','handing') THEN 1 ELSE 0 END) AS unknown_class_rows,SUM(CASE WHEN key_valid=0 THEN 1 ELSE 0 END) AS unknown_key_rows,SUM(CASE WHEN unit IS NULL OR unit NOT IN ('m','y','kg','Pcs') THEN 1 ELSE 0 END) AS unknown_unit_rows,SUM(unknown_whitelist) AS unknown_whitelist_rows FROM {side} GROUP BY {ks})")
+    ctes.append(f'keys_all AS (SELECT {ks} FROM bg UNION SELECT {ks} FROM cg)')
+    def join(alias):return ' AND '.join(f'k.{key} <=> {alias}.{key}' for key in keys)
+    def uncertain(side):
+        conditions=[f'(u.{key} IS NULL OR u.{key}=k.{key})' for key in keys[:3]]
+        conditions.append("(u.unit IS NULL OR u.unit NOT IN ('m','y','kg','Pcs') OR u.unit=k.unit)")
+        return f"EXISTS (SELECT 1 FROM {side} u WHERE u.key_valid=0 AND {' AND '.join(conditions)})"
+    ctes.append(f"paired AS (SELECT k.*,COALESCE(c.goods_name,b.goods_name) AS goods_name,COALESCE(b.n,0) AS opening_source_rows,COALESCE(c.n,0) AS closing_source_rows,b.qty AS oq,c.qty AS cq,b.rolls AS opening_rolls,c.rolls AS closing_rolls,COALESCE(b.missing_qty,0) AS opening_missing_quantity_rows,COALESCE(c.missing_qty,0) AS closing_missing_quantity_rows,COALESCE(b.missing_rolls,0) AS opening_missing_roll_rows,COALESCE(c.missing_rolls,0) AS closing_missing_roll_rows,COALESCE(b.unknown_class_rows,0) AS opening_unknown_class_rows,COALESCE(c.unknown_class_rows,0) AS closing_unknown_class_rows,COALESCE(c.uncertain_membership_rows,0) AS closing_uncertain_membership_rows,COALESCE(b.unknown_key_rows,0) AS opening_unknown_key_rows,COALESCE(c.unknown_key_rows,0) AS closing_unknown_key_rows,COALESCE(b.unknown_unit_rows,0) AS opening_unknown_unit_rows,COALESCE(c.unknown_unit_rows,0) AS closing_unknown_unit_rows,COALESCE(c.unknown_whitelist_rows,0) AS closing_unknown_whitelist_rows,CASE WHEN k.uncertainty_key<>'' OR {uncertain('b')} OR {uncertain('c')} THEN 1 ELSE 0 END AS identity_uncertain FROM keys_all k LEFT JOIN bg b ON {join('b')} LEFT JOIN cg c ON {join('c')})")
+    ctes.append("classified AS (SELECT p.*,CASE WHEN identity_uncertain=1 OR closing_uncertain_membership_rows>0 THEN 'Unassessable' WHEN opening_source_rows=0 AND closing_source_rows>0 THEN 'New' WHEN opening_source_rows>0 AND closing_source_rows=0 THEN 'Exited' WHEN opening_missing_quantity_rows>0 OR closing_missing_quantity_rows>0 THEN 'Unassessable' WHEN ROUND(cq-oq,4)<0 THEN 'Reduced' WHEN ROUND(cq-oq,4)>0 THEN 'Increased' ELSE 'No Change' END AS pool_movement_state,CASE WHEN identity_uncertain=0 AND unit IN ('m','y','kg','Pcs') AND opening_missing_quantity_rows=0 THEN oq ELSE NULL END AS opening_quantity,CASE WHEN unit IN ('m','y','kg','Pcs') THEN oq ELSE NULL END AS opening_known_quantity,CASE WHEN identity_uncertain=0 AND unit IN ('m','y','kg','Pcs') AND closing_missing_quantity_rows=0 AND closing_uncertain_membership_rows=0 THEN cq ELSE NULL END AS closing_quantity,CASE WHEN unit IN ('m','y','kg','Pcs') THEN cq ELSE NULL END AS closing_known_quantity FROM paired p)")
+    count_names=['new','exited','reduced','unchanged','increased','unassessable']
+    counts=[f"SUM(CASE WHEN pool_movement_state='{state}' THEN 1 ELSE 0 END) AS {name}_group_count" for state,name in zip(states,count_names)]
+    ctes.append('totals AS (SELECT COUNT(*) AS population_union_groups,'+','.join(c.replace(' AS ',' AS population_') for c in counts)+' FROM classified)')
+    if mode=='groups':
+        projection="goods_id,goods_name,goods_sku_id,whse_dept,unit,1 AS metric_value,pool_movement_state,opening_source_rows,closing_source_rows,opening_quantity,closing_quantity,opening_known_quantity,closing_known_quantity,opening_rolls AS opening_known_rolls,closing_rolls AS closing_known_rolls,CASE WHEN pool_movement_state IN ('Reduced','No Change','Increased') THEN ROUND(cq-oq,4) ELSE NULL END AS comparable_quantity_delta,CASE WHEN identity_uncertain=0 AND opening_missing_roll_rows=0 THEN opening_rolls ELSE NULL END AS opening_rolls,CASE WHEN identity_uncertain=0 AND closing_uncertain_membership_rows=0 AND closing_missing_roll_rows=0 THEN closing_rolls ELSE NULL END AS closing_rolls,opening_missing_quantity_rows,closing_missing_quantity_rows,opening_missing_roll_rows,closing_missing_roll_rows,opening_unknown_class_rows,closing_unknown_class_rows,closing_uncertain_membership_rows,opening_unknown_key_rows,closing_unknown_key_rows,opening_unknown_unit_rows,closing_unknown_unit_rows,closing_unknown_whitelist_rows,identity_uncertain"
+        tail=''
+        if movement is not None:tail=' WHERE pool_movement_state=%s';params.append(movement)
+        ctes.append('display_rows AS (SELECT '+projection+',1 AS __matched_row_count FROM classified'+tail+')')
+        outputs=['goods_id','goods_name','goods_sku_id','whse_dept','unit']
+        ordering=' ORDER BY d.whse_dept,d.goods_id,d.goods_sku_id,d.unit'
+    else:
+        cols=','.join(grouping)
+        aggregates=[f'{cols},COUNT(*) AS metric_value',*counts,
+            'SUM(opening_known_quantity) AS opening_known_quantity','SUM(closing_known_quantity) AS closing_known_quantity','SUM(opening_rolls) AS opening_known_rolls','SUM(closing_rolls) AS closing_known_rolls','SUM(opening_source_rows) AS opening_source_rows','SUM(closing_source_rows) AS closing_source_rows',
+            'COUNT(DISTINCT CASE WHEN opening_source_rows>0 THEN goods_id ELSE NULL END) AS opening_product_id_count','COUNT(DISTINCT CASE WHEN closing_source_rows>0 THEN goods_id ELSE NULL END) AS closing_product_id_count',
+            'COUNT(DISTINCT CASE WHEN opening_source_rows>0 THEN goods_sku_id ELSE NULL END) AS opening_sku_id_count','COUNT(DISTINCT CASE WHEN closing_source_rows>0 THEN goods_sku_id ELSE NULL END) AS closing_sku_id_count',
+            "CASE WHEN SUM(opening_source_rows)>0 AND SUM(CASE WHEN opening_source_rows>0 AND opening_quantity IS NULL THEN 1 ELSE 0 END)=0 THEN SUM(opening_quantity) ELSE NULL END AS opening_quantity",
+            "CASE WHEN SUM(closing_source_rows)>0 AND SUM(closing_uncertain_membership_rows)=0 AND SUM(CASE WHEN closing_source_rows>0 AND closing_quantity IS NULL THEN 1 ELSE 0 END)=0 THEN SUM(closing_quantity) ELSE NULL END AS closing_quantity",
+            "SUM(CASE WHEN pool_movement_state IN ('Reduced','No Change','Increased') THEN ROUND(cq-oq,4) ELSE NULL END) AS comparable_quantity_delta",
+            'CASE WHEN SUM(identity_uncertain)=0 AND SUM(opening_missing_roll_rows)=0 THEN SUM(opening_rolls) ELSE NULL END AS opening_rolls',
+            'CASE WHEN SUM(identity_uncertain)=0 AND SUM(closing_missing_roll_rows)=0 AND SUM(closing_uncertain_membership_rows)=0 THEN SUM(closing_rolls) ELSE NULL END AS closing_rolls',
+        ]
+        for k in ['opening_missing_quantity_rows','closing_missing_quantity_rows','opening_missing_roll_rows','closing_missing_roll_rows','opening_unknown_class_rows','closing_unknown_class_rows','closing_uncertain_membership_rows','opening_unknown_key_rows','closing_unknown_key_rows','opening_unknown_unit_rows','closing_unknown_unit_rows','closing_unknown_whitelist_rows','identity_uncertain']:aggregates.append(f'SUM({k}) AS {k}')
+        ctes.append('display_rows AS (SELECT '+','.join(aggregates)+',COUNT(*) AS __matched_row_count FROM classified GROUP BY '+cols+')')
+        outputs=grouping;ordering=' ORDER BY '+','.join('d.'+k for k in grouping)
+    if request.get('order_by') is not None:raise AnalysisQueryError('INVALID_PLAN','基线比较使用稳定键排序，不跨单位按数量排名。')
+    sql='WITH '+',\n'.join(ctes)+' SELECT d.*,m.*,clock.*,totals.*,0 AS missing_value_count,COALESCE(d.metric_value,0) AS known_value_count,1 AS value_coverage_rate FROM meta m CROSS JOIN clock CROSS JOIN totals LEFT JOIN display_rows d ON TRUE'+ordering+' LIMIT %s'
+    params.append(limit+1)
+    return sql,params,{'metric':request.get('metric'),'dataset':None,'source_datasets':[base_table,current_table],'dimension_outputs':outputs,'filters':filters,'time_range':{'source':'frozen_baseline_to_current'},'warnings':[metric.get('answer_note','')],'_validate_frozen_pool':True}
+
+
+def validate_frozen_pool_rows(rows):
+    """Check global baseline integrity even when the user's display is empty or truncated."""
+    if not rows:raise AnalysisQueryError('BASELINE_EVIDENCE_MISSING','没有返回可核验的基线元信息。')
+    first = rows[0]
+    metadata_keys = ['baseline_week','baseline_frozen_at','closing_read_at','closing_utc_at','observed_clock_offset_seconds','__baseline_rows','__baseline_ids','__baseline_timed_rows','__baseline_times','__baseline_bad_source']
+    for row in rows:
+        if any(row.get(k) != first.get(k) for k in metadata_keys):
+            raise AnalysisQueryError('BASELINE_EVIDENCE_MISSING','基线元信息在返回行间不一致。')
+        try:
+            count=int(row['__baseline_rows']);ids=int(row['__baseline_ids']);timed=int(row['__baseline_timed_rows']);times=int(row['__baseline_times']);bad=int(row['__baseline_bad_source'])
+        except (KeyError,TypeError,ValueError):raise AnalysisQueryError('BASELINE_EVIDENCE_MISSING','基线元信息不完整。')
+        if count==0:raise AnalysisQueryError('BASELINE_NOT_FOUND','没有符合所选周范围的现存基线；不会为查询自动冻结。')
+        if count<0 or ids!=count or bad!=0:raise AnalysisQueryError('BASELINE_INCOMPLETE','基线来源记录重复、缺失或版本不兼容，不能可靠比较。')
+        if timed!=count or times!=1:raise AnalysisQueryError('BASELINE_TIME_AMBIGUOUS','基线缺少唯一记录冻结时间，不能合并多个时点。')
+        try:
+            start=datetime.fromisoformat(str(row['baseline_frozen_at']));end=datetime.fromisoformat(str(row['closing_read_at']))
+            if start.tzinfo is not None or end.tzinfo is not None or start>end:raise ValueError()
+        except (KeyError,TypeError,ValueError):raise AnalysisQueryError('BASELINE_TIME_INVALID','记录冻结时间与本次库端读取时间不兼容。')
+        if row.get('__matched_row_count') is None:row['__matched_row_count']=0
+    metadata = {'source':'frozen_baseline_to_current','baseline_week':first['baseline_week'],'frozen_at':first['baseline_frozen_at'],'read_at':first['closing_read_at'],'read_utc_at':first['closing_utc_at'],'observed_db_utc_offset_seconds':first['observed_clock_offset_seconds']}
+    try:
+        w=metadata['baseline_week'];date.fromisocalendar(int(w[:4]),int(w[6:]),1)
+        if len(w)!=8 or w[4:6]!='-W':raise ValueError()
+    except (ValueError,TypeError):raise AnalysisQueryError('BASELINE_WEEK_INVALID','记录基线周标签无效。')
+    for row in rows:
+        for key in list(row):
+            if key.startswith('__baseline_'):row.pop(key)
+    return metadata
+
+
 def build_analytical_metric_query(
     request: Mapping[str, Any],
     metric: Mapping[str, Any],
@@ -1973,6 +2127,8 @@ def build_analytical_metric_query(
     query_observed_on = observed_on or _business_today()
     kind = metric.get("query_kind")
     _ensure_available(metric)
+    if kind == "frozen_pool_comparison":
+        return _frozen_pool_comparison_query(request, metric, datasets_contract, semantics, limit, observed_on=query_observed_on)
     if kind == "registered_slow_pool":
         return _registered_slow_pool_query(request, metric, datasets_contract, semantics, limit, observed_on=query_observed_on)
     if kind == "settlement_days":

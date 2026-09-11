@@ -1,4 +1,4 @@
-version: datasage-mini-datasets/v15
+version: datasage-mini-datasets/v16
 
 defaults:
   blocked_columns:
@@ -680,3 +680,30 @@ datasets:
     joins: []
     warnings:
     - 当前登记池，不等于全公司库存。促销价格仅作已记录正值状态判定，不公开明细，不计算货值。
+
+  vk_ai.slow_moving_baseline:
+    domains:
+    - inventory
+    kind: recorded_frozen_baseline
+    grain: week_label_plus_source_row_id
+    primary_key:
+    - id
+    allowed_columns:
+    - id
+    - week_label
+    - source_row_id
+    - frozen_at
+    - baseline_version
+    - source_table
+    - goods_id
+    - goods_sku_id
+    - goods_name
+    - whse_dept
+    - source_unit
+    - total_qty
+    - total_piece
+    - slow_label
+    required_filters: []
+    joins: []
+    warnings:
+    - 冻结时间字段可随更新改写，只代表当前记录值，不证明从未改写。

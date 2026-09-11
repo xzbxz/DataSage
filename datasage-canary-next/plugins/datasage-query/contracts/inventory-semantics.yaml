@@ -1,8 +1,8 @@
-version: datasage-mini-inventory-semantics/v11
+version: datasage-mini-inventory-semantics/v12
 domain: inventory
 contract_role: plugin_physical_execution
 business_name: 库存事实、未动销与周转分析
-tables: [vk_ods.slow_moving_goods_ods, vk_dw.inventory_barcode_detail_dw, vk_dwd.inventory_cost_dwd, vk_dw.goods_turnover_basic_data_dw, vk_dwd.goods_detail_dwd, vk_dwd.whse_info_dwd]
+tables: [vk_ai.slow_moving_baseline, vk_ods.slow_moving_goods_ods, vk_dw.inventory_barcode_detail_dw, vk_dwd.inventory_cost_dwd, vk_dw.goods_turnover_basic_data_dw, vk_dwd.goods_detail_dwd, vk_dwd.whse_info_dwd]
 
 dimension_sources:
   product_master: &product_master {type: governed_join, dataset: vk_dwd.goods_detail_dwd, local_column: goods_id, remote_column: goods_id, cardinality: many_to_one}
@@ -840,3 +840,116 @@ metrics:
       mode: required_always
       text: 库存数量只按来源库存单位分别解释，不用促销计价单位补缺，不跨米、码、千克或件相加。未知库存单位的数量保留缺口，卷数取原记录且不取整。
     answer_note: *slow_pool_bundle_basis
+
+  registered_slow_pool_baseline_groups:
+    label: 登记滞销池·冻结到当前比较明细
+    business_definition: 只读既有基线与当前池；数量按库存单位隔离。按产品、规格、仓库部门、单位固定粒度返回；源行重编号不单独触发状态，状态筛选只影响明细，总体分类数在截断前计算。金额不开放。数量差额仅针对共有且可判定组。主数值为候选比较组数，含未判定记录组，不等于产品数或条目数。
+    unit: 候选比较组（含未判定）
+    query_kind: frozen_pool_comparison
+    table: vk_ods.slow_moving_goods_ods
+    time_policy: current_snapshot
+    max_group_dimensions: 4
+    required_filters:
+      goods_num:
+        op: gt
+        value: 10
+      is_whitelist:
+        op: eq
+        value: n
+    allowed_dimensions:
+    - product
+    - pool_sku
+    - warehouse_department
+    - unit
+    dimension_overrides:
+      unit:
+        label: 登记库存单位
+        columns:
+        - column: source_unit
+          alias: unit
+        filter_column: source_unit
+        value_contract:
+          kind: closed
+          allowed_values:
+          - m
+          - y
+          - kg
+          - Pcs
+          canonical_aliases:
+            M: m
+          business_meanings:
+            m: 米
+            y: 码
+            kg: 千克
+            Pcs: 件
+        normalization: meter_case
+    disclosures:
+    - id: inventory.frozen-pool.basis
+      mode: required_always
+      text: &frozen_id001 比较现存冻结记录与本次读取的登记池，默认选当前业务周及之前最新已记录周，不自动冻结。New表示基线未记录，Exited仅表示当前筛选池未记录；均不证明首次形成滞销、售罄或处理完成。状态按同单位库存数量和来源四位小数精度判断，不使用业务容差。缺失身份、单位或纳入依据保留未判定；未知分类和卷数缺失另列。
+    - id: inventory.frozen-pool.time
+      mode: required_always
+      text: 冻结时间和期末读取时间以库端原值显示，不给无时区时间补贴时区；当前库端与UTC差额只说明本次时钟。冻结字段可能随更新改写，唯一时间不证明不可变。仅比较现存基线记录，没有独立原始清单证明当初全量冻结或未被改写。这里只比较登记记录，不提供销售去化或历史月末回填。
+    - id: inventory.frozen-pool.count-scope
+      mode: required_always
+      text: 主数值为候选比较组数，包含未判定记录组，不等于产品数或源条目数。数量按来源库存单位，卷数取源卷数。明细状态筛选仅影响显示，总体分类计数保留产品、规格、部门及单位筛选后的全范围，截断不代表全量明细。
+    answer_note: *frozen_id001
+    baseline_table: vk_ai.slow_moving_baseline
+    quantity_scale: 4
+    baseline_view: groups
+  registered_slow_pool_baseline_summary:
+    label: 登记滞销池·冻结到当前按单位比较汇总
+    business_definition: 只读既有基线与当前池；数量按库存单位隔离。默认按库存单位汇总，可附加仓库部门；条目数、非空产品/规格标识去重数、候选比较组数不同，不能跨单位累加去重计数。金额不开放。数量差额仅针对共有且可判定组。主数值为候选比较组数，含未判定记录组，不等于产品数或条目数。
+    unit: 候选比较组（含未判定）
+    query_kind: frozen_pool_comparison
+    table: vk_ods.slow_moving_goods_ods
+    time_policy: current_snapshot
+    max_group_dimensions: 4
+    required_filters:
+      goods_num:
+        op: gt
+        value: 10
+      is_whitelist:
+        op: eq
+        value: n
+    allowed_dimensions:
+    - product
+    - pool_sku
+    - warehouse_department
+    - unit
+    dimension_overrides:
+      unit:
+        label: 登记库存单位
+        columns:
+        - column: source_unit
+          alias: unit
+        filter_column: source_unit
+        value_contract:
+          kind: closed
+          allowed_values:
+          - m
+          - y
+          - kg
+          - Pcs
+          canonical_aliases:
+            M: m
+          business_meanings:
+            m: 米
+            y: 码
+            kg: 千克
+            Pcs: 件
+        normalization: meter_case
+    disclosures:
+    - id: inventory.frozen-pool.basis
+      mode: required_always
+      text: *frozen_id001
+    - id: inventory.frozen-pool.time
+      mode: required_always
+      text: 冻结时间和期末读取时间以库端原值显示，不给无时区时间补贴时区；当前库端与UTC差额只说明本次时钟。冻结字段可能随更新改写，唯一时间不证明不可变。仅比较现存基线记录，没有独立原始清单证明当初全量冻结或未被改写。这里只比较登记记录，不提供销售去化或历史月末回填。
+    - id: inventory.frozen-pool.count-scope
+      mode: required_always
+      text: 主数值为候选比较组数，包含未判定记录组，不等于产品数或源条目数。数量按来源库存单位，卷数取源卷数。明细状态筛选仅影响显示，总体分类计数保留产品、规格、部门及单位筛选后的全范围，截断不代表全量明细。
+    answer_note: *frozen_id001
+    baseline_table: vk_ai.slow_moving_baseline
+    quantity_scale: 4
+    baseline_view: summary

@@ -117,3 +117,5 @@ datasage-canary-next/*
 !datasage-canary-next/tests/test_profit_contract.py
 
 !datasage-canary-next/tests/test_registered_slow_pool.py
+
+!datasage-canary-next/tests/test_slow_baseline_comparison.py
