@@ -127,3 +127,5 @@ datasage-canary-next/*
 !datasage-canary-next/plugins/datasage-query/pattern_queries.py
 !datasage-canary-next/plugins/datasage-query/contracts/pattern-matching-semantics.yaml
 !datasage-canary-next/tests/test_pattern_matching.py
+
+!datasage-canary-next/tests/test_p1_projection_population.py

@@ -1,4 +1,4 @@
-version: datasage-mini-inventory-semantics/v14
+version: datasage-mini-inventory-semantics/v15
 domain: inventory
 contract_role: plugin_physical_execution
 business_name: 库存事实、未动销与周转分析
@@ -68,6 +68,7 @@ dimensions:
     answer_note: 使用出库和退货各自事实销售身份；不代表基线池分配、当前客户负责人或销售因果贡献。
     semantics: 使用销售或出库事实上的业务员，不使用客户当前负责人。
   pool_sku:
+    public_display_fields: [goods_sku_id]
     label: 登记规格标识
     columns:
     - goods_sku_id

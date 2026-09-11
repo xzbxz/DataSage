@@ -1989,6 +1989,7 @@ def _frozen_pool_comparison_query(request, metric, datasets_contract, semantics,
         if mode=='groups' and set(chosen)!=expected or mode=='summary' and (not set(chosen)<=expected or 'unit' not in chosen):
             raise AnalysisQueryError('UNSUPPORTED_DIMENSION','明细保持产品、规格、部门、单位粒度；汇总按单位，可附加仓库部门。')
     grouping=['unit','whse_dept'] if mode=='summary' and 'warehouse_department' in chosen else ['unit']
+    effective_dimensions = chosen or (['product','pool_sku','warehouse_department','unit'] if mode=='groups' else ['unit'])
     base_table=metric.get('baseline_table');current_table=metric.get('table')
     base_ds=_dataset(base_table,datasets_contract);current_ds=_dataset(current_table,datasets_contract)
     scale=metric.get('quantity_scale')
@@ -2082,7 +2083,7 @@ def _frozen_pool_comparison_query(request, metric, datasets_contract, semantics,
     if request.get('order_by') is not None:raise AnalysisQueryError('INVALID_PLAN','基线比较使用稳定键排序，不跨单位按数量排名。')
     sql='WITH '+',\n'.join(ctes)+' SELECT d.*,m.*,clock.*,totals.*,0 AS missing_value_count,COALESCE(d.metric_value,0) AS known_value_count,1 AS value_coverage_rate FROM meta m CROSS JOIN clock CROSS JOIN totals LEFT JOIN display_rows d ON TRUE'+ordering+' LIMIT %s'
     params.append(limit+1)
-    return sql,params,{'metric':request.get('metric'),'dataset':None,'source_datasets':[base_table,current_table],'dimension_outputs':outputs,'filters':filters,'time_range':{'source':'frozen_baseline_to_current'},'warnings':[metric.get('answer_note','')],'_validate_frozen_pool':True}
+    return sql,params,{'metric':request.get('metric'),'dataset':None,'source_datasets':[base_table,current_table],'dimension_outputs':outputs,'effective_dimensions':effective_dimensions,'filters':filters,'time_range':{'source':'frozen_baseline_to_current'},'warnings':[metric.get('answer_note','')],'_validate_frozen_pool':True}
 
 
 def validate_frozen_pool_rows(rows):
@@ -2241,7 +2242,7 @@ def _frozen_pool_net_outbound_query(request, metric, datasets_contract, semantic
     sql = 'WITH '+',\n'.join(ctes)+f" SELECT g.*{label_fields},m.*,clock.*,ot.*,rt.*,population.*,{unit_fields},(SELECT COUNT(*) FROM keys_b kb WHERE kb.unit=g.unit) AS unit_baseline_scope_groups,(SELECT COUNT(*) FROM grouped gg WHERE gg.unit=g.unit) AS unit_display_groups,{net} AS metric_value,{known_net} AS known_subset_value,{known_net_rolls} AS known_net_rolls,CASE WHEN {complete_rolls} THEN {known_net_rolls} ELSE NULL END AS net_rolls,CASE WHEN outbound_unknown_rows=0 AND g.gross_missing_quantity_rows=0 THEN g.gross_known_quantity ELSE NULL END AS gross_quantity,CASE WHEN returns_unknown_rows=0 AND g.return_missing_quantity_rows=0 THEN g.return_known_quantity ELSE NULL END AS return_quantity,CASE WHEN outbound_unknown_rows=0 AND g.gross_missing_roll_rows=0 THEN g.gross_known_rolls ELSE NULL END AS gross_rolls,CASE WHEN returns_unknown_rows=0 AND g.return_missing_roll_rows=0 THEN g.return_known_rolls ELSE NULL END AS return_rolls,CASE WHEN {unit_complete} THEN u.gross_known_quantity-u.return_known_quantity ELSE NULL END AS unit_net_quantity,u.gross_known_quantity-u.return_known_quantity AS unit_known_net_quantity,CASE WHEN NOT({complete}) THEN 'partial_unknown' WHEN g.gross_flow_rows=0 AND g.return_flow_rows=0 THEN 'no_recorded_flow' WHEN g.gross_flow_rows=0 OR g.return_flow_rows=0 THEN 'one_sided_recorded_flow' ELSE 'both_sides_recorded' END AS net_flow_state,COALESCE(g.grouped_key_count,0) AS __matched_row_count,COALESCE(g.gross_missing_quantity_rows+g.return_missing_quantity_rows,0)+outbound_unknown_rows+returns_unknown_rows AS missing_value_count,COALESCE(g.gross_flow_rows+g.return_flow_rows,0) AS known_value_count FROM meta m CROSS JOIN clock CROSS JOIN outbound_totals ot CROSS JOIN returns_totals rt CROSS JOIN population LEFT JOIN grouped g ON TRUE LEFT JOIN unit_totals u ON u.unit=g.unit"+label_join+' ORDER BY '+','.join('g.'+k for k in grouping)+' LIMIT %s'
     params.append(limit+1)
     outputs = grouping + (['sales_name'] if by_sales else [])
-    return sql,params,{'metric':request.get('metric'),'dataset':None,'source_datasets':[base,*tables.values()],'dimension_outputs':outputs,'filters':filters,'time_range':{'source':'frozen_baseline_to_current'},'warnings':[metric.get('answer_note','')],'_validate_frozen_pool':True}
+    return sql,params,{'metric':request.get('metric'),'dataset':None,'source_datasets':[base,*tables.values()],'dimension_outputs':outputs,'effective_dimensions':chosen,'filters':filters,'time_range':{'source':'frozen_baseline_to_current'},'warnings':[metric.get('answer_note','')],'_validate_frozen_pool':True}
 
 
 def build_analytical_metric_query(

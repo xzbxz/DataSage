@@ -53,6 +53,7 @@ def metric_comparison_kinds(definition: Mapping[str, Any]) -> list[str]:
         return list(FLOW_COMPARISON_KINDS)
     return []
 _FORBIDDEN_MODEL_KEYS = {
+    "public_display_fields",
     "aggregation",
     "column",
     "columns",
@@ -83,6 +84,7 @@ _PHYSICAL_VALUE_KEY_SUFFIXES = (
     "_table",
 )
 _PHYSICAL_VALUE_KEYS = {
+    "public_display_fields",
     "column",
     "columns",
     "document_key",

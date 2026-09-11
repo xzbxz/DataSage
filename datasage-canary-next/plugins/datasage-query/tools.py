@@ -4997,7 +4997,7 @@ def _claim_ledger(
             for field in _PUBLIC_STATE_FIELDS
             if field in row and row[field] is not None
         }
-        dimensions: list[dict[str, str]] = []
+        dimensions: list[dict[str, Any]] = []
         for binding in dimension_bindings:
             label = binding.get("label")
             fields = binding.get("fields")
@@ -5009,6 +5009,7 @@ def _claim_ledger(
                 or any(not isinstance(field, str) for field in fields)
             ):
                 continue
+            approved_display = set(binding.get("public_display_fields") or ())
             for field in fields:
                 normalized_field = field.casefold()
                 if (
@@ -5017,13 +5018,19 @@ def _claim_ledger(
                     or (
                         normalized_field.endswith(("_id", "_no"))
                         and normalized_field != "currency_no"
+                        and field not in approved_display
                     )
                 ):
                     continue
                 display_value = _safe_display_value(row.get(field))
                 if display_value is None:
                     continue
-                dimensions.append({"label": label, "value": display_value})
+                dimension_value: dict[str, Any] = {"label": label, "value": display_value}
+                raw_value = row.get(field)
+                if field in approved_display and isinstance(raw_value, str) and display_value != raw_value:
+                    # Existing bounded/sanitized rendering is not an exact input token.
+                    dimension_value["display_only"] = True
+                dimensions.append(dimension_value)
                 break
         period_value = _safe_display_value(row.get("period"))
         if period_value is not None and not any(
@@ -6709,6 +6716,23 @@ def _business_dimension_labels(
     return labels
 
 
+def _effective_dimension_request(
+    request: Mapping[str, Any], scope: Mapping[str, Any], semantics: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Use the compiler's final logical grain at every public projection boundary."""
+    chosen = scope.get("effective_dimensions", request.get("dimensions") or [])
+    definitions = semantics.get("dimensions")
+    if (
+        not isinstance(chosen, list)
+        or any(not isinstance(code, str) for code in chosen)
+        or len(chosen) != len(set(chosen))
+        or not isinstance(definitions, Mapping)
+        or any(code not in definitions for code in chosen)
+    ):
+        raise QueryFailure("CONTRACT_UNAVAILABLE", "查询的有效分组维度元信息无效。")
+    return {**request, "dimensions": list(chosen)}
+
+
 def _business_dimension_bindings(
     request: Mapping[str, Any],
     scope: Mapping[str, Any],
@@ -6739,11 +6763,20 @@ def _business_dimension_bindings(
             for _column, output in _dimension_columns(definition)
             if output in public_outputs
         ]
+        approved_display = definition.get("public_display_fields", [])
+        declared_fields = {output for _column, output in _dimension_columns(definition)}
+        if (
+            not isinstance(approved_display, list)
+            or any(not isinstance(field, str) or field.startswith("_") or field.casefold() in {"id", "no"} for field in approved_display)
+            or not set(approved_display) <= declared_fields
+        ):
+            raise QueryFailure("CONTRACT_UNAVAILABLE", "业务标识展示合同无效。")
+        approved_display = [field for field in approved_display if field in public_outputs]
         safe_outputs = [
             output
             for output in declared_outputs
             if output.casefold() != "id"
-            and not output.casefold().endswith("_id")
+            and (not output.casefold().endswith("_id") or output in approved_display)
         ]
 
         def display_priority(output: str) -> tuple[int, int]:
@@ -6763,6 +6796,7 @@ def _business_dimension_bindings(
                     "dimension": str(dimension),
                     "fields": candidates,
                     "label": label.strip(),
+                    **({"public_display_fields": approved_display} if approved_display else {}),
                 }
             )
     return bindings
@@ -9093,7 +9127,7 @@ def _run_one(
         metric_ref = _business_metric_ref(request)
         metric_label = _business_metric_label(scope, semantics)
         metric_context = _business_metric_context(scope, semantics, datasets)
-        dimension_request = ({**request, "dimensions": scope["_pattern_dimensions"]} if scope.get("_validate_pattern_observation") is True else request)
+        dimension_request = _effective_dimension_request(request, scope, semantics)
         dimension_labels = _business_dimension_labels(dimension_request, semantics)
         dimension_bindings = _business_dimension_bindings(dimension_request, scope, semantics)
         metrics = semantics.get("metrics")

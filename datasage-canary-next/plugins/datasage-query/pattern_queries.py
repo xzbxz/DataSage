@@ -74,7 +74,11 @@ def build_pattern_query(request, metric, datasets_contract, semantics, limit, *,
     # Rename requirement currency before filtering; only the linked transaction supplies amount currency.
     columns=[f for f in fields if f!='currency_no']
     extras=['task_key_ok','execute_key_ok','product_key_ok','task_time_variants','task_status_variants','execute_status_variants','link_ok','link_recorded','linked_delivery_time','linked_amount','linked_bill_id','requirement_currency_variants','candidate_product_label','task_status_label','execute_status_label']
-    ctes.append('r AS (SELECT '+','.join(columns+extras)+',currency_no AS requirement_currency,transaction_currency AS currency_no FROM prepared)')
+    # A task without a recorded/suspected link is outside an amount population,
+    # not a linked fact with missing transaction time or currency. Keep suspected
+    # links (including missing detail IDs) so genuine coverage gaps still propagate.
+    amount_population = ' WHERE link_recorded=1' if view != 'summary' else ''
+    ctes.append('r AS (SELECT '+','.join(columns+extras)+',currency_no AS requirement_currency,transaction_currency AS currency_no FROM prepared'+amount_population+')')
     where=' WHERE '+' AND '.join(clauses) if clauses else ''
     scope_unknown=' OR '.join(unknown) if unknown else 'FALSE'
     period=f",DATE_FORMAT(r.{time_column},'%%Y-%%m') AS period" if bucket=='month' else ''
@@ -160,7 +164,7 @@ def build_pattern_query(request, metric, datasets_contract, semantics, limit, *,
     sql='WITH '+',\n'.join(ctes)+f' SELECT g.*,clock.*,observation.*,coverage.*,population.*{extra},{value} AS metric_value,{known_value} AS known_subset_value,{missing} AS missing_value_count,COALESCE(g.result_source_rows,0) AS known_value_count,COALESCE(g.result_source_rows,0) AS __matched_row_count FROM clock CROSS JOIN observation CROSS JOIN coverage CROSS JOIN population LEFT JOIN grouped g ON TRUE'+amount_join+label_join+order+' LIMIT %s'
     params.append(limit+1)
     outputs=[*grouping,*[labels[k][0] for k in chosen if k in labels]]
-    return sql,params,{'metric':request.get('metric'),'dataset':None,'source_datasets':[table,linked_table],'dimension_outputs':outputs,'filters':filters,'time_range':{'source':'pattern_current_observation','basis':basis,'window_start':window.get('start'),'window_end':window.get('end')},'_validate_pattern_observation':True,'_pattern_dimensions':chosen,'warnings':[metric.get('answer_note','')]}
+    return sql,params,{'metric':request.get('metric'),'dataset':None,'source_datasets':[table,linked_table],'dimension_outputs':outputs,'filters':filters,'time_range':{'source':'pattern_current_observation','basis':basis,'window_start':window.get('start'),'window_end':window.get('end')},'_validate_pattern_observation':True,'effective_dimensions':chosen,'warnings':[metric.get('answer_note','')]}
 
 
 def pattern_observation(rows, scope):
