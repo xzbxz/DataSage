@@ -1,4 +1,4 @@
-version: datasage-mini-datasets/v14
+version: datasage-mini-datasets/v15
 
 defaults:
   blocked_columns:
@@ -653,3 +653,30 @@ datasets:
     joins: []
     warnings:
     - 按产品报表归属月汇总部门、组织及业务标签组合。产品月度利润不同于按原出库日期选单的生命周期利润；不提供客户、业务员或出库单拆分。
+
+  vk_ods.slow_moving_goods_ods:
+    domains:
+    - inventory
+    kind: registered_current_pool
+    grain: one_row_per_source_id
+    primary_key:
+    - id
+    allowed_columns:
+    - id
+    - whse_dept
+    - goods_id
+    - goods_sku_id
+    - goods_no
+    - goods_name
+    - attr_val
+    - color_label
+    - source_unit
+    - goods_num
+    - piece_num
+    - slow_label
+    - is_whitelist
+    - promotion_price
+    required_filters: []
+    joins: []
+    warnings:
+    - 当前登记池，不等于全公司库存。促销价格仅作已记录正值状态判定，不公开明细，不计算货值。

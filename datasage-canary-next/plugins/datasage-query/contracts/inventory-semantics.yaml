@@ -1,8 +1,8 @@
-version: datasage-mini-inventory-semantics/v10
+version: datasage-mini-inventory-semantics/v11
 domain: inventory
 contract_role: plugin_physical_execution
 business_name: 库存事实、未动销与周转分析
-tables: [vk_dw.inventory_barcode_detail_dw, vk_dwd.inventory_cost_dwd, vk_dw.goods_turnover_basic_data_dw, vk_dwd.goods_detail_dwd, vk_dwd.whse_info_dwd]
+tables: [vk_ods.slow_moving_goods_ods, vk_dw.inventory_barcode_detail_dw, vk_dwd.inventory_cost_dwd, vk_dw.goods_turnover_basic_data_dw, vk_dwd.goods_detail_dwd, vk_dwd.whse_info_dwd]
 
 dimension_sources:
   product_master: &product_master {type: governed_join, dataset: vk_dwd.goods_detail_dwd, local_column: goods_id, remote_column: goods_id, cardinality: many_to_one}
@@ -49,6 +49,20 @@ currency_policy_templates:
     never_sum_mixed_currency: true
 
 dimensions:
+  pool_sku:
+    label: 登记规格标识
+    columns:
+    - goods_sku_id
+    filter_column: goods_sku_id
+    value_contract: &id001
+      kind: source_exact
+      model_rule: 仅使用用户明确提供或受控结果返回的精确原值；不得猜测、翻译、归一化或扩展。
+  pool_class:
+    label: 登记分类原值
+    columns:
+    - slow_label
+    filter_column: slow_label
+    value_contract: *id001
   warehouse: {label: 仓库, columns: [whse_id, whse_name], filter_column: whse_name, identity_filter: {entity_type: warehouse, value_field: canonical_id, column: whse_id}, value_contract: *vc_entity_exact}
   warehouse_department: {label: 仓库部门, columns: [whse_dept], filter_column: whse_dept, value_contract: *vc_source_exact}
   warehouse_organization: {label: 仓库组织, columns: [whse_org], filter_column: whse_org, value_contract: *vc_source_exact, answer_note: 仓库组织使用 whse_org，表示实物库存归属。}
@@ -416,3 +430,413 @@ metrics:
     required_filters: {}
     allowed_dimensions: *turnover_dimensions
     answer_note: *answer_note_inventory_turnover_days
+  registered_slow_pool_quantity:
+    label: 当前登记滞销池·库存数量（按库存单位）
+    business_definition: 仅统计当前源记录及明确筛选范围；库存数量（按库存单位）
+    unit: 来源库存单位
+    query_kind: registered_slow_pool
+    pool_statistic: quantity
+    table: vk_ods.slow_moving_goods_ods
+    time_policy: current_snapshot
+    max_group_dimensions: 3
+    required_filters:
+      goods_num:
+        op: gt
+        value: 10
+      is_whitelist:
+        op: eq
+        value: n
+    allowed_dimensions:
+    - warehouse_department
+    - product
+    - pool_sku
+    - color
+    - pool_class
+    - unit
+    dimension_overrides:
+      unit: &id003
+        label: 登记库存单位
+        columns:
+        - column: source_unit
+          alias: unit
+        filter_column: source_unit
+        value_contract:
+          kind: closed
+          allowed_values:
+          - m
+          - y
+          - kg
+          - Pcs
+          canonical_aliases:
+            M: m
+          business_meanings:
+            m: 米
+            y: 码
+            kg: 千克
+            Pcs: 件
+        normalization: meter_case
+    classification_policy: &id004
+      known_labels:
+      - deprice
+      - discountable
+      - handing
+      discountable_label: discountable
+    disclosures:
+    - &id005
+      id: inventory.registered-slow-pool.basis
+      mode: required_always
+      text: &id002 本次读取的当前登记滞销池，沿用旧追踪范围：排除白名单，仅统计各自库存单位下来源数量大于10的记录；不是10卷或统一10米，也不是按未销售天数重判全公司库存。读取日期不是库存刷新或人工维护时间；缺少筛选依据的记录不能证明已纳入。
+    - &id006
+      id: inventory.registered-slow-pool.classes
+      mode: required_always
+      text: 登记为可打折与已记录正促销价可以重叠，不能相加当总池；交集单列。未记录价格不等于价格为零；未知登记分类单列，不能猜成其他类别。没有匹配记录不代表真实库存为零。
+    - &id007
+      id: inventory.registered-slow-pool.units
+      mode: required_always
+      text: 库存数量只按来源库存单位分别解释，不用促销计价单位补缺，不跨米、码、千克或件相加。未知库存单位的数量保留缺口，卷数取原记录且不取整。
+    answer_note: *id002
+    unit_policy:
+      mode: group_or_filter
+      column: source_unit
+  registered_slow_pool_rolls:
+    label: 当前登记滞销池·库存卷数
+    business_definition: 仅统计当前源记录及明确筛选范围；库存卷数
+    unit: 卷
+    query_kind: registered_slow_pool
+    pool_statistic: rolls
+    table: vk_ods.slow_moving_goods_ods
+    time_policy: current_snapshot
+    max_group_dimensions: 3
+    required_filters:
+      goods_num:
+        op: gt
+        value: 10
+      is_whitelist:
+        op: eq
+        value: n
+    allowed_dimensions:
+    - warehouse_department
+    - product
+    - pool_sku
+    - color
+    - pool_class
+    - unit
+    dimension_overrides:
+      unit: *id003
+    classification_policy: *id004
+    disclosures:
+    - *id005
+    - *id006
+    - *id007
+    answer_note: *id002
+  registered_slow_pool_entries:
+    label: 当前登记滞销池·来源条目数
+    business_definition: 仅统计当前源记录及明确筛选范围；以来源主键计数，不是产品数。
+    unit: 条
+    query_kind: registered_slow_pool
+    pool_statistic: entries
+    table: vk_ods.slow_moving_goods_ods
+    time_policy: current_snapshot
+    max_group_dimensions: 3
+    required_filters:
+      goods_num:
+        op: gt
+        value: 10
+      is_whitelist:
+        op: eq
+        value: n
+    allowed_dimensions:
+    - warehouse_department
+    - product
+    - pool_sku
+    - color
+    - pool_class
+    - unit
+    dimension_overrides:
+      unit: *id003
+    classification_policy: *id004
+    disclosures:
+    - *id005
+    - *id006
+    - *id007
+    answer_note: *id002
+  registered_slow_pool_products:
+    label: 当前登记滞销池·产品标识去重数
+    business_definition: 仅统计当前源记录及明确筛选范围；按非空产品标识去重，缺失标识时全量计数未知并保留已知部分。
+    unit: 个
+    query_kind: registered_slow_pool
+    pool_statistic: products
+    table: vk_ods.slow_moving_goods_ods
+    time_policy: current_snapshot
+    max_group_dimensions: 3
+    required_filters:
+      goods_num:
+        op: gt
+        value: 10
+      is_whitelist:
+        op: eq
+        value: n
+    allowed_dimensions:
+    - warehouse_department
+    - product
+    - pool_sku
+    - color
+    - pool_class
+    - unit
+    dimension_overrides:
+      unit: *id003
+    classification_policy: *id004
+    disclosures:
+    - *id005
+    - *id006
+    - *id007
+    answer_note: *id002
+  registered_slow_pool_skus:
+    label: 当前登记滞销池·规格标识去重数
+    business_definition: 仅统计当前源记录及明确筛选范围；按非空规格标识去重，不是产品数或来源条目数，缺失时保留缺口。
+    unit: 个
+    query_kind: registered_slow_pool
+    pool_statistic: skus
+    table: vk_ods.slow_moving_goods_ods
+    time_policy: current_snapshot
+    max_group_dimensions: 3
+    required_filters:
+      goods_num:
+        op: gt
+        value: 10
+      is_whitelist:
+        op: eq
+        value: n
+    allowed_dimensions:
+    - warehouse_department
+    - product
+    - pool_sku
+    - color
+    - pool_class
+    - unit
+    dimension_overrides:
+      unit: *id003
+    classification_policy: *id004
+    disclosures:
+    - *id005
+    - *id006
+    - *id007
+    answer_note: *id002
+  registered_slow_pool_discount_rolls:
+    label: 当前登记滞销池·已登记可打折卷数
+    business_definition: 仅统计当前源记录及明确筛选范围；已登记可打折卷数
+    unit: 卷
+    query_kind: registered_slow_pool
+    pool_statistic: discount_rolls
+    table: vk_ods.slow_moving_goods_ods
+    time_policy: current_snapshot
+    max_group_dimensions: 3
+    required_filters:
+      goods_num:
+        op: gt
+        value: 10
+      is_whitelist:
+        op: eq
+        value: n
+    allowed_dimensions:
+    - warehouse_department
+    - product
+    - pool_sku
+    - color
+    - pool_class
+    - unit
+    dimension_overrides:
+      unit: *id003
+    classification_policy: *id004
+    disclosures:
+    - *id005
+    - *id006
+    - *id007
+    answer_note: *id002
+  registered_slow_pool_priced_rolls:
+    label: 当前登记滞销池·已记录正促销价覆盖卷数
+    business_definition: 仅统计当前源记录及明确筛选范围；只计当前记录明确为正促销价的卷数，不展示价格或推断货值；此数值覆盖率不是价格填写率。
+    unit: 卷
+    query_kind: registered_slow_pool
+    pool_statistic: priced_rolls
+    table: vk_ods.slow_moving_goods_ods
+    time_policy: current_snapshot
+    max_group_dimensions: 3
+    required_filters:
+      goods_num:
+        op: gt
+        value: 10
+      is_whitelist:
+        op: eq
+        value: n
+    allowed_dimensions:
+    - warehouse_department
+    - product
+    - pool_sku
+    - color
+    - pool_class
+    - unit
+    dimension_overrides:
+      unit: *id003
+    classification_policy: *id004
+    disclosures:
+    - *id005
+    - *id006
+    - *id007
+    answer_note: *id002
+  registered_slow_pool_overlap_rolls:
+    label: 当前登记滞销池·可打折且已记录正价交集卷数
+    business_definition: 仅统计当前源记录及明确筛选范围；可打折且已记录正价交集卷数
+    unit: 卷
+    query_kind: registered_slow_pool
+    pool_statistic: overlap_rolls
+    table: vk_ods.slow_moving_goods_ods
+    time_policy: current_snapshot
+    max_group_dimensions: 3
+    required_filters:
+      goods_num:
+        op: gt
+        value: 10
+      is_whitelist:
+        op: eq
+        value: n
+    allowed_dimensions:
+    - warehouse_department
+    - product
+    - pool_sku
+    - color
+    - pool_class
+    - unit
+    dimension_overrides:
+      unit: *id003
+    classification_policy: *id004
+    disclosures:
+    - *id005
+    - *id006
+    - *id007
+    answer_note: *id002
+  registered_slow_pool_unknown_label_rolls:
+    label: 当前登记滞销池·未知登记分类卷数
+    business_definition: 仅统计当前源记录及明确筛选范围；未知登记分类卷数
+    unit: 卷
+    query_kind: registered_slow_pool
+    pool_statistic: unknown_label_rolls
+    table: vk_ods.slow_moving_goods_ods
+    time_policy: current_snapshot
+    max_group_dimensions: 3
+    required_filters:
+      goods_num:
+        op: gt
+        value: 10
+      is_whitelist:
+        op: eq
+        value: n
+    allowed_dimensions:
+    - warehouse_department
+    - product
+    - pool_sku
+    - color
+    - pool_class
+    - unit
+    dimension_overrides:
+      unit: *id003
+    classification_policy: *id004
+    disclosures:
+    - *id005
+    - *id006
+    - *id007
+    answer_note: *id002
+  registered_slow_pool_unpriced_rolls:
+    label: 当前登记滞销池·未记录促销价卷数
+    business_definition: 仅统计当前源记录及明确筛选范围；未记录促销价卷数
+    unit: 卷
+    query_kind: registered_slow_pool
+    pool_statistic: unpriced_rolls
+    table: vk_ods.slow_moving_goods_ods
+    time_policy: current_snapshot
+    max_group_dimensions: 3
+    required_filters:
+      goods_num:
+        op: gt
+        value: 10
+      is_whitelist:
+        op: eq
+        value: n
+    allowed_dimensions:
+    - warehouse_department
+    - product
+    - pool_sku
+    - color
+    - pool_class
+    - unit
+    dimension_overrides:
+      unit: *id003
+    classification_policy: *id004
+    disclosures:
+    - *id005
+    - *id006
+    - *id007
+    answer_note: *id002
+
+  registered_slow_pool_classification_rolls:
+    label: 当前登记滞销池·同次分类卷数
+    business_definition: 同一条只读查询返回总卷数、可打折、已记录正促销价、交集、未知分类及未记录价格卷数；分类不可相加。缺失分类时另提供可判定的已知部分，不能当完整分类总数。
+    unit: 卷
+    query_kind: registered_slow_pool
+    pool_statistic: classification_rolls
+    table: vk_ods.slow_moving_goods_ods
+    time_policy: current_snapshot
+    max_group_dimensions: 3
+    required_filters:
+      goods_num:
+        op: gt
+        value: 10
+      is_whitelist:
+        op: eq
+        value: n
+    allowed_dimensions:
+    - warehouse_department
+    - product
+    - pool_sku
+    - color
+    - pool_class
+    - unit
+    dimension_overrides:
+      unit:
+        label: 登记库存单位
+        columns:
+        - column: source_unit
+          alias: unit
+        filter_column: source_unit
+        value_contract:
+          kind: closed
+          allowed_values:
+          - m
+          - y
+          - kg
+          - Pcs
+          canonical_aliases:
+            M: m
+          business_meanings:
+            m: 米
+            y: 码
+            kg: 千克
+            Pcs: 件
+        normalization: meter_case
+    classification_policy:
+      known_labels:
+      - deprice
+      - discountable
+      - handing
+      discountable_label: discountable
+    disclosures:
+    - id: inventory.registered-slow-pool.basis
+      mode: required_always
+      text: &slow_pool_bundle_basis 本次读取的当前登记滞销池，沿用旧追踪范围：排除白名单，仅统计各自库存单位下来源数量大于10的记录；不是10卷或统一10米，也不是按未销售天数重判全公司库存。读取日期不是库存刷新或人工维护时间；缺少筛选依据的记录不能证明已纳入。
+    - id: inventory.registered-slow-pool.classes
+      mode: required_always
+      text: 登记为可打折与已记录正促销价可以重叠，不能相加当总池；交集单列。未记录价格不等于价格为零；未知登记分类单列，不能猜成其他类别。没有匹配记录不代表真实库存为零。
+    - id: inventory.registered-slow-pool.units
+      mode: required_always
+      text: 库存数量只按来源库存单位分别解释，不用促销计价单位补缺，不跨米、码、千克或件相加。未知库存单位的数量保留缺口，卷数取原记录且不取整。
+    answer_note: *slow_pool_bundle_basis

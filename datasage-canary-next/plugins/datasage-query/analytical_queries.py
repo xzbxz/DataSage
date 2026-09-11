@@ -1,9 +1,9 @@
 """Semantics-driven analytical query builders for DataSage Expert.
 
 The ordinary metric builder handles one fact and one aggregation.  This module
-owns the small set of analytical shapes that genuinely require a different
-grain: document-level settlement behavior, formal DSO, and two independently
-aggregated facts compared at a governed dimension.
+owns analytical shapes requiring coordinated aggregates or different grains:
+document-level settlement, formal DSO, paired facts, inventory turnover, and
+current registered-pool classifications from one observation.
 """
 
 from __future__ import annotations
@@ -1837,6 +1837,130 @@ def _target_completion_query(
     }
 
 
+def _registered_slow_pool_query(request, metric, datasets_contract, semantics, limit, *, observed_on=None):
+    """Current registered records only; no baseline, writes, price output or unit fallback."""
+    if any(request.get(k) is not None for k in ('time_range', 'calendar_month', 'comparison', 'time_bucket')):
+        raise AnalysisQueryError('INVALID_PLAN', '当前登记池只回答本次读取状态，不接受历史期间或基线比较。')
+    table = metric.get('table')
+    dataset = _dataset(table, datasets_contract)
+    dimensions = {**semantics.get('dimensions', {}), **metric.get('dimension_overrides', {})}
+    chosen = request.get('dimensions') or []
+    filters = request.get('metric_filters') or {}
+    if not isinstance(chosen, list) or len(chosen) > _max_group_dimensions(metric) or len(set(chosen)) != len(chosen) or not isinstance(filters, dict):
+        raise AnalysisQueryError('INVALID_PLAN', '登记池分组或筛选无效。')
+    allowed = set(metric.get('allowed_dimensions') or [])
+    if any(k not in allowed for k in [*chosen, *filters]):
+        raise AnalysisQueryError('UNSUPPORTED_DIMENSION', '登记池不支持该维度。')
+    statistic = metric.get('pool_statistic')
+    statistics = {'quantity', 'rolls', 'entries', 'products', 'skus', 'discount_rolls', 'priced_rolls', 'overlap_rolls', 'unknown_label_rolls', 'unpriced_rolls', 'classification_rolls'}
+    if statistic not in statistics:
+        raise AnalysisQueryError('CONTRACT_UNAVAILABLE', '登记池统计口径未登记。')
+    if statistic == 'quantity' and 'unit' not in chosen:
+        values = filters.get('unit')
+        if values is None or (isinstance(values, list) and len(values) != 1):
+            raise AnalysisQueryError('UNIT_SCOPE_REQUIRED', '登记池数量必须按库存单位分组或限定单一库存单位。')
+    def column(name):
+        return _qualified('s', _approved(name, dataset))
+    unit = f"CASE WHEN LOWER({column('source_unit')}) = 'm' THEN 'm' ELSE NULLIF(TRIM({column('source_unit')}), '') END"
+    output_names = []
+    selections = []
+    for name in chosen:
+        definition = dimensions[name]
+        if definition.get('source'):
+            raise AnalysisQueryError('CONTRACT_UNAVAILABLE', '登记池不连接未经确认的主数据。')
+        for field, alias in _dimension_columns(definition):
+            if alias in output_names:
+                raise AnalysisQueryError('CONTRACT_UNAVAILABLE', '登记池维度重复。')
+            selections.append(f"{unit if name == 'unit' else column(field)} AS {_quote_column(alias)}")
+            output_names.append(alias)
+    policy = metric.get('classification_policy') or {}
+    labels = policy.get('known_labels')
+    discount = policy.get('discountable_label')
+    units = dimensions['unit'].get('value_contract', {}).get('allowed_values')
+    if not isinstance(labels, list) or not labels or discount not in labels or not isinstance(units, list) or not units:
+        raise AnalysisQueryError('CONTRACT_UNAVAILABLE', '登记池分类或库存单位定义无效。')
+    params = [*labels, discount, *units]
+    label = column('slow_label')
+    selections.extend([
+        f"{column('id')} AS pool_id", f"{column('goods_id')} AS pool_product_id",
+        f"{column('goods_sku_id')} AS pool_sku_id", f"{column('goods_num')} AS pool_quantity",
+        f"{column('piece_num')} AS pool_rolls",
+        f"CASE WHEN {label} IN ({','.join(['%s']*len(labels))}) THEN CASE WHEN {label} = %s THEN 1 ELSE 0 END ELSE NULL END AS discount_flag",
+        f"CASE WHEN {unit} IN ({','.join(['%s']*len(units))}) THEN 0 ELSE 1 END AS unknown_unit",
+        f"CASE WHEN {column('promotion_price')} > 0 THEN 1 ELSE 0 END AS positive_price_flag",
+        f"CASE WHEN {column('promotion_price')} IS NULL THEN 1 ELSE 0 END AS missing_price_flag",
+    ])
+    where = []
+    for field, spec in (metric.get('required_filters') or {}).items():
+        _approved(field, dataset)
+        where.append(_filter_clause('s', field, spec, params))
+    bindings = _entity_bindings(request)
+    for name, value in filters.items():
+        definition = dimensions[name]
+        binding, value = _bound_value(bindings, name, value)
+        field = _dimension_filter(definition, binding)
+        _approved(field, dataset)
+        if name == 'pool_sku':
+            values = value if isinstance(value, list) else [value]
+            if any(isinstance(v, bool) or not (isinstance(v, int) and v >= 0 or isinstance(v, str) and v.isascii() and v.isdecimal()) for v in values):
+                raise AnalysisQueryError('INVALID_PLAN', '规格标识必须是明确的整数。')
+        clause = _value_filter('s', field, value, params)
+        if name == 'unit':clause = clause.replace(_qualified('s', field), unit)
+        where.append(clause)
+    cte = f"WITH pool AS (SELECT {', '.join(selections)} FROM {_quote_table(table)} AS s"
+    if where:cte += ' WHERE ' + ' AND '.join(where)
+    cte += ') '
+    if statistic in {'entries','products','skus'}:
+        field = {'entries':'pool_id','products':'pool_product_id','skus':'pool_sku_id'}[statistic]
+        value = f"COUNT({'DISTINCT ' if statistic != 'entries' else ''}{field})"
+        missing_row = f'{field} IS NULL'
+    elif statistic == 'quantity':
+        value = 'COALESCE(SUM(CASE WHEN unknown_unit=0 THEN pool_quantity ELSE NULL END),0)'
+        missing_row = 'pool_quantity IS NULL OR unknown_unit=1'
+    else:
+        condition, unknown = {
+            'rolls':('1=1','1=0'),
+            'classification_rolls':('1=1','1=0'),
+            'discount_rolls':('discount_flag=1','discount_flag IS NULL'),
+            'priced_rolls':('positive_price_flag=1','1=0'),
+            'overlap_rolls':('discount_flag=1 AND positive_price_flag=1','discount_flag IS NULL AND positive_price_flag=1'),
+            'unknown_label_rolls':('discount_flag IS NULL','1=0'),
+            'unpriced_rolls':('missing_price_flag=1','1=0'),
+        }[statistic]
+        value = f'COALESCE(SUM(CASE WHEN {condition} THEN pool_rolls ELSE 0 END),0)'
+        missing_row = f'({unknown}) OR (({condition}) AND pool_rolls IS NULL)'
+    missing = f'COALESCE(SUM(CASE WHEN {missing_row} THEN 1 ELSE 0 END),0)'
+    known = f'COUNT(*)-({missing})'
+    select = [*[_quote_column(k) for k in output_names],
+        f'CASE WHEN {missing}>0 THEN NULL ELSE {value} END AS metric_value',
+        f'CASE WHEN {known}>0 THEN {value} ELSE NULL END AS known_subset_value',
+        f'{missing} AS missing_value_count', f'{known} AS known_value_count',
+        f'CASE WHEN COUNT(*)>0 THEN 1.0*({known})/COUNT(*) ELSE NULL END AS value_coverage_rate',
+        f"CASE WHEN COUNT(*)=0 THEN 'missing' WHEN {missing}=0 THEN 'complete' WHEN {known}=0 THEN 'missing' ELSE 'incomplete' END AS metric_data_state",
+        'COUNT(*) AS __matched_row_count',
+    ]
+    if statistic == 'classification_rolls':
+        for field, condition, unknown in [
+            ('pool_discountable_rolls','discount_flag=1','discount_flag IS NULL'),
+            ('pool_priced_rolls','positive_price_flag=1','1=0'),
+            ('pool_overlap_rolls','discount_flag=1 AND positive_price_flag=1','discount_flag IS NULL AND positive_price_flag=1'),
+            ('pool_unknown_label_rolls','discount_flag IS NULL','1=0'),
+            ('pool_unpriced_rolls','missing_price_flag=1','1=0'),
+        ]:
+            miss = f'COALESCE(SUM(CASE WHEN ({unknown}) OR (({condition}) AND pool_rolls IS NULL) THEN 1 ELSE 0 END),0)'
+            val = f'COALESCE(SUM(CASE WHEN {condition} THEN pool_rolls ELSE 0 END),0)'
+            select.append(f'CASE WHEN {miss}>0 THEN NULL ELSE {val} END AS {field}')
+            if field in {'pool_discountable_rolls','pool_overlap_rolls'}:
+                select.append(f'CASE WHEN COUNT(*)-({miss})>0 THEN {val} ELSE NULL END AS pool_known_{field[5:]}')
+    sql = cte + 'SELECT ' + ', '.join(select) + ' FROM pool'
+    if output_names:sql += ' GROUP BY '+','.join(_quote_column(k) for k in output_names)
+    sql += _order_clause(request, output_names, allowed_value_fields={'metric_value'})+' LIMIT %s'
+    params.append(limit+1)
+    return sql, params, {'metric':request.get('metric'),'dataset':table,'source_datasets':[table],
+        'time_range':{'source':'current_snapshot','as_of_date':(observed_on or _business_today()).isoformat()},
+        'filters':filters,'dimension_outputs':output_names,'warnings':[metric.get('answer_note','')]}
+
+
 def build_analytical_metric_query(
     request: Mapping[str, Any],
     metric: Mapping[str, Any],
@@ -1849,6 +1973,8 @@ def build_analytical_metric_query(
     query_observed_on = observed_on or _business_today()
     kind = metric.get("query_kind")
     _ensure_available(metric)
+    if kind == "registered_slow_pool":
+        return _registered_slow_pool_query(request, metric, datasets_contract, semantics, limit, observed_on=query_observed_on)
     if kind == "settlement_days":
         return _settlement_query(
             request,

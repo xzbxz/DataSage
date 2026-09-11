@@ -115,3 +115,5 @@ datasage-canary-next/*
 
 !datasage-canary-next/plugins/datasage-query/contracts/profit-semantics.yaml
 !datasage-canary-next/tests/test_profit_contract.py
+
+!datasage-canary-next/tests/test_registered_slow_pool.py

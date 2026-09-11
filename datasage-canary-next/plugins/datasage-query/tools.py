@@ -4233,6 +4233,13 @@ def _business_metric_ref(request: Mapping[str, Any]) -> str | None:
 
 
 _PUBLIC_FACT_FIELDS = {
+    "pool_discountable_rolls",
+    "pool_priced_rolls",
+    "pool_overlap_rolls",
+    "pool_unknown_label_rolls",
+    "pool_unpriced_rolls",
+    "pool_known_discountable_rolls",
+    "pool_known_overlap_rolls",
     "numerator_value",
     "denominator_value",
     "known_subset_value",
