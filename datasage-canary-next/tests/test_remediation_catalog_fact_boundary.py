@@ -33,7 +33,9 @@ class CatalogFactBoundaryTests(unittest.TestCase):
         for suffix in ('coverage','external-customer.scope','formula'):self.assertIn('receivable.formal-receivable-turnover.'+suffix,ids)
         for field,value in [('metric_value','999'),('average_net_debt_rmb',None),('delivery_amount_rmb','0'),('snapshot_month_count',12),('effective_month_count','13')]:
             with self.subTest(corruption=field):
-                invalid=self.dso({**row,field:value});r=self.h.result(invalid,'dso')
+                invalid=self.dso({**row,field:value})
+                self.assertEqual('failed' if field=='metric_value' else 'success',invalid['status'])
+                r=next(item for item in invalid['results'] if item['request_id']=='dso')
                 if not r['rows']:
                     self.assertEqual('undefined',r['data_state']);self.assertEqual('EVIDENCE_INTEGRITY_INVALID',r['error']['code'])
                 else:

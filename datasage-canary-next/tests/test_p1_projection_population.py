@@ -23,19 +23,19 @@ class P1PublicRegressions(unittest.TestCase):
             r=h.result(h.compare(**kw));observed=set()
             for row in r['rows']:
                 d=dimensions(row);f=row['facts']
-                observed.add((d.get('产品'),d.get('登记规格标识'),d.get('仓库部门'),d.get('单位'),f['opening_quantity'],row['states']['pool_movement_state']))
+                observed.add((d.get('产品'),d.get('登记规格标识'),d.get('仓库部门'),d.get('登记库存单位'),f['opening_quantity'],row['states']['pool_movement_state']))
             self.assertEqual({('Product','11','A','m',30,'Exited'),('Product','12','A','kg',40,'Exited')},observed)
     def test_baseline_summary_default_empty_and_explicit_preserve_unit_values(self):
         h=self.fixture(baseline.BaselineComparisonTests);self.seed_baseline(h)
         for kw in [{},{'dimensions':[]},{'dimensions':['unit']}]:
             r=h.result(h.compare('summary',**kw))
-            self.assertEqual({('m',30,1),('kg',40,1)},{(dimensions(row).get('单位'),row['facts']['opening_quantity'],row['facts']['exited_group_count']) for row in r['rows']})
+            self.assertEqual({('m',30,1),('kg',40,1)},{(dimensions(row).get('登记库存单位'),row['facts']['opening_quantity'],row['facts']['exited_group_count']) for row in r['rows']})
     def test_net_default_empty_explicit_units_and_signed_state_match(self):
         h=self.fixture(net.BaselineNetTests)
         h.baseline([(2,2,2,22,'kg',40,3,'2026-09-08T09:00:00')]);h.outgoing(5);h.returning(12)
         for kw in [{},{'dimensions':[]},{'dimensions':['unit']}]:
             r=h.result(h.run_net(**kw))
-            self.assertEqual({('m',-7,'both_sides_recorded'),('kg',0,'no_recorded_flow')},{(dimensions(row).get('单位'),row['facts']['metric_value'],row['states']['net_flow_state']) for row in r['rows']})
+            self.assertEqual({('m',-7,'both_sides_recorded'),('kg',0,'no_recorded_flow')},{(dimensions(row).get('登记库存单位'),row['facts']['metric_value'],row['states']['net_flow_state']) for row in r['rows']})
     def test_same_long_product_name_different_skus_remain_distinct(self):
         h=self.fixture(pool.SlowPoolTests)
         h.add([(1,'A',1,11,'m','m',20,2,'handing',12345,'n'),(2,'A',2,12,'m','m',30,3,'handing',12345,'n')])

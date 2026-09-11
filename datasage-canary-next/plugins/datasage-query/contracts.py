@@ -865,6 +865,46 @@ def _target_gap_decomposition_projection(
     }
 
 
+def _model_dimension_projection(code, definition, physical_identifiers):
+    business_definition = definition.get("business_definition")
+    if business_definition is None:
+        business_definition = definition.get("semantics")
+    label = _safe_business_text(definition.get("label"), physical_identifiers)
+    value_contract = _value_contract_projection(
+        definition.get("value_contract"),
+        dimension=code,
+        filterable_default=definition.get("filterable", True),
+    )
+    if label is None or value_contract is None:
+        raise ContractFailure(
+            "CONTRACT_UNAVAILABLE",
+            f"dimension {code} lacks a safe label or value contract",
+        )
+    item = {
+        "code": code,
+        "label": label,
+        "value_contract": value_contract,
+    }
+    optional_dimension_fields = {
+        "business_definition": _safe_business_text(
+            business_definition, physical_identifiers
+        ),
+        "unit": _copy_guidance(definition.get("unit")),
+        "time_semantics": _copy_guidance(definition.get("time_semantics")),
+        "answer_note": _safe_business_text(
+            definition.get("answer_note"), physical_identifiers
+        ),
+    }
+    item.update(
+        {
+            key: value
+            for key, value in optional_dimension_fields.items()
+            if value is not None
+        }
+    )
+    return item
+
+
 def _model_semantic_projection(
     domain: str,
     semantics: Mapping[str, Any],
@@ -1094,43 +1134,7 @@ def _model_semantic_projection(
         definition = dimensions[raw_code]
         if not isinstance(definition, Mapping):
             raise ContractFailure("CONTRACT_UNAVAILABLE", f"dimension {code} is invalid")
-        business_definition = definition.get("business_definition")
-        if business_definition is None:
-            business_definition = definition.get("semantics")
-        label = _safe_business_text(definition.get("label"), physical_identifiers)
-        value_contract = _value_contract_projection(
-            definition.get("value_contract"),
-            dimension=code,
-            filterable_default=definition.get("filterable", True),
-        )
-        if label is None or value_contract is None:
-            raise ContractFailure(
-                "CONTRACT_UNAVAILABLE",
-                f"dimension {code} lacks a safe label or value contract",
-            )
-        item = {
-            "code": code,
-            "label": label,
-            "value_contract": value_contract,
-        }
-        optional_dimension_fields = {
-            "business_definition": _safe_business_text(
-                business_definition, physical_identifiers
-            ),
-            "unit": _copy_guidance(definition.get("unit")),
-            "time_semantics": _copy_guidance(definition.get("time_semantics")),
-            "answer_note": _safe_business_text(
-                definition.get("answer_note"), physical_identifiers
-            ),
-        }
-        item.update(
-            {
-                key: value
-                for key, value in optional_dimension_fields.items()
-                if value is not None
-            }
-        )
-        projected_dimensions.append(item)
+        projected_dimensions.append(_model_dimension_projection(code, definition, physical_identifiers))
 
     compressed_metrics, allowed_dimension_sets = (
         _compress_metric_dimension_sets(projected_metrics)
@@ -1473,10 +1477,15 @@ def _catalog_metric_detail(
         ]
     else:
         allowed_dimensions = []
+    _datasets, semantic_contract = execution_contracts(domain)
+    try:
+        effective = capability_contract.effective_dimension_definitions(semantic_contract, metric_code)
+    except CapabilityContractError as exc:
+        raise ContractFailure(exc.code, exc.message) from exc
+    physical = _physical_identifiers(semantic_contract) - _business_tokens(semantic_contract)
     definitions = {
-        str(raw.get("code")): dict(raw)
-        for raw in raw_dimensions
-        if isinstance(raw, Mapping) and isinstance(raw.get("code"), str)
+        code: _model_dimension_projection(code, effective[code], physical)
+        for code in allowed_dimensions if code in effective
     }
     metric["allowed_dimensions"] = allowed_dimensions
     if metric.get("change_decomposition_dimensions"):

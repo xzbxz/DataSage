@@ -424,6 +424,11 @@ def _validate_metric_contract(
         raise QueryFailure("UNSUPPORTED_METRIC", "该指标尚未进入受控指标定义。")
     _ensure_metric_available(metric)
     _ensure_metric_tree_available(metric_code, semantics)
+    if (
+        metric.get("query_kind") == "target_completion"
+        and metric.get("unit") != capability_contract.TARGET_COMPLETION_UNIT
+    ):
+        raise QueryFailure("CONTRACT_UNAVAILABLE", "目标完成率主值单位必须是比例。")
     _validate_detail_request_capabilities(request, metric, semantics)
     normalized = dict(request)
     required_time_bucket = metric.get("required_time_bucket")
@@ -619,6 +624,10 @@ def _validate_value_contract_definitions(semantics: Mapping[str, Any]) -> None:
                 "指标合同格式无效。",
                 stage="contract_load",
             )
+        if metric.get("dimension_overrides"):
+            effective = _effective_dimensions(semantics, metric)
+            for code in metric["dimension_overrides"]:
+                _parsed_value_contract(effective[code])
         capability = metric.get("change_decomposition")
         if capability is None:
             continue
@@ -641,6 +650,15 @@ def _validate_value_contract_definitions(semantics: Mapping[str, Any]) -> None:
             )
 
 
+def _effective_dimensions(
+    semantics: Mapping[str, Any], metric: Mapping[str, Any] | str | None = None,
+) -> dict[str, Any]:
+    try:
+        return capability_contract.effective_dimension_definitions(semantics, metric)
+    except CapabilityContractError as exc:
+        raise QueryFailure(exc.code, exc.message, stage="contract_load") from exc
+
+
 def _validate_metric_filter_value_contracts(
     request: Mapping[str, Any], semantics: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -651,7 +669,7 @@ def _validate_metric_filter_value_contracts(
         return dict(request)
     normalized_request = dict(request)
     normalized_filters = dict(filters)
-    dimensions = semantics.get("dimensions")
+    dimensions = _effective_dimensions(semantics, request.get("metric"))
     if not isinstance(dimensions, Mapping):
         raise QueryFailure(
             "CONTRACT_UNAVAILABLE",
@@ -2364,11 +2382,8 @@ def _overdue_integrity_columns(metric, dataset, datasets_contract, joined_alias,
 def _metric_dimension_definition(
     dimensions: Mapping[str, Any], metric: Mapping[str, Any], code: str
 ) -> Mapping[str, Any]:
-    overrides = metric.get("dimension_overrides") or {}
-    if not isinstance(overrides, dict):
-        raise QueryFailure("CONTRACT_UNAVAILABLE", "指标维度覆盖定义无效。")
-    definition = overrides.get(code, dimensions.get(code))
-    if not isinstance(definition, dict):
+    definition = _effective_dimensions({"dimensions": dimensions}, metric).get(code)
+    if not isinstance(definition, Mapping):
         raise QueryFailure("CONTRACT_UNAVAILABLE", "指标维度定义无效。")
     return definition
 
@@ -4526,10 +4541,11 @@ def _safe_display_value(value: Any) -> str | None:
 def _public_scope_entities(
     resolved_entities: Sequence[Mapping[str, Any]],
     semantics: Mapping[str, Any],
+    metric: str | None = None,
 ) -> list[dict[str, str]]:
     """Project governed filter identity without leaking execution identifiers."""
 
-    dimensions = semantics.get("dimensions")
+    dimensions = _effective_dimensions(semantics, metric)
     if not isinstance(dimensions, Mapping):
         raise QueryFailure("CONTRACT_UNAVAILABLE", "业务域缺少维度语义。")
     public: list[dict[str, str]] = []
@@ -4982,6 +4998,7 @@ def _claim_ledger(
     truncated: bool,
     rows: Sequence[Mapping[str, Any]],
     scope_entities: Sequence[Mapping[str, str]] = (),
+    fact_units: Mapping[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Build canonical public evidence claims; renderers never infer raw rows."""
 
@@ -5063,10 +5080,15 @@ def _claim_ledger(
                 "scope_fingerprint": scope_fingerprint,
                 "projection_fingerprint": projection_fingerprint,
                 "unit": metric_unit,
+                **({"fact_units": {
+                    field: unit for field, unit in fact_units.items() if field in facts
+                }} if fact_units else {}),
                 "currency": (
                     "CNY"
-                    if any(field.endswith("_rmb") for field in facts)
-                    or metric_unit in {"人民币元", "元"}
+                    if not fact_units and (
+                        any(field.endswith("_rmb") for field in facts)
+                        or metric_unit in {"人民币元", "元"}
+                    )
                     else None
                 ),
                 "facts": facts,
@@ -6704,7 +6726,7 @@ def _business_dimension_labels(
     requested = request.get("dimensions") or []
     if not requested:
         return []
-    dimensions = semantics.get("dimensions")
+    dimensions = _effective_dimensions(semantics, request.get("metric"))
     if not isinstance(dimensions, Mapping):
         return []
     labels: list[str] = []
@@ -6742,7 +6764,7 @@ def _business_dimension_bindings(
 
     requested = request.get("dimensions") or []
     outputs = scope.get("dimension_outputs") or []
-    dimensions = semantics.get("dimensions")
+    dimensions = _effective_dimensions(semantics, request.get("metric"))
     if (
         not isinstance(requested, list)
         or not isinstance(outputs, list)
@@ -7917,6 +7939,11 @@ def _model_wire_result(
         projected["change_reconciliation"] = _model_wire_change_reconciliation(
             projected["change_reconciliation"]
         )
+    if (
+        isinstance(projected.get("error"), Mapping)
+        and projected["error"].get("code") == "EVIDENCE_INTEGRITY_INVALID"
+    ):
+        projected["status"] = "partial" if projected.get("claim_ledger") else "failed"
     return projected
 
 
@@ -8143,6 +8170,7 @@ def _calculation_scope_contract(
         "version": "governed-calculation-scope/v1",
         "metric_basis_fingerprint": f"basis_{digest[:24]}",
         "filter_scope": dict(request.get("metric_filters") or {}),
+        "group_dimensions": list(scope.get("effective_dimensions", request.get("dimensions") or [])),
         "share_partition_dimensions": [
             str(dimension)
             for dimension in share_dimensions
@@ -8220,7 +8248,10 @@ def _calculation_operand(
     scope_fingerprint = claim.get("scope_fingerprint")
     projection_fingerprint = claim.get("projection_fingerprint")
     calculation_scope = result.get("_calculation_scope")
-    if dimensions != [] or not isinstance(scope_entities, list):
+    if (
+        dimensions != [] or not isinstance(scope_entities, list)
+        or (isinstance(calculation_scope, Mapping) and calculation_scope.get("group_dimensions"))
+    ):
         raise QueryFailure(
             "CALCULATION_REQUIRES_SCALAR",
             "带分组维度的结果不能作为标量计算操作数。",
@@ -8835,6 +8866,8 @@ def _validate_query_dispatch(
     for index, raw_request in enumerate(envelope.requests):
         request_path = f"requests[{index}]"
         try:
+            if any(str(key).startswith("_") for key in raw_request):
+                raise QueryFailure("INVALID_INPUT", "调用方不能提供内部执行字段。", stage="input_validation")
             request, _datasets, semantics = _validate_request_plan_without_entities(
                 raw_request,
                 observed_on=observed_on,
@@ -9166,6 +9199,7 @@ def _run_one(
         public_scope_entities = _public_scope_entities(
             resolved_entities,
             semantics,
+            request.get("metric"),
         )
         claim_ledger = _claim_ledger(
             request["request_id"],
@@ -9179,6 +9213,8 @@ def _run_one(
             truncated,
             public_rows,
             public_scope_entities,
+            fact_units=(capability_contract.TARGET_COMPLETION_FACT_UNITS
+                        if metric_definition.get("query_kind") == "target_completion" else None),
         )
         disclosure_ledger, disclosure_ledger_seal = _disclosure_ledger(
             request=request,
@@ -9380,7 +9416,7 @@ def _deadline_payload(args, results=()):
             public_results.append({"request_id": request_id, "status": "failed", "rows": [],
                 "claim_ledger": [], "error": branch_error or error})
     return {
-        "status": "partial" if any(result.get("status") == "success" for result in public_results) else "failed",
+        "status": "partial" if any(result.get("status") in {"success", "partial"} for result in public_results) else "failed",
         "request_count": len(public_ids), "metric_contexts": [], "results": public_results, "error": error,
     }
 
@@ -9832,6 +9868,7 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
             results,
             target_gap_partitions,
         )
+        physical_results = list(results)
         requests, results = _order_public_branch_artifacts(
             public_requests,
             requests,
@@ -9847,18 +9884,6 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
             results,
             observed_on=period_observed_on,
         )
-        successful = sum(1 for result in results if result["status"] == "success")
-        failed_calculations = sum(
-            calculation.get("status") != "success"
-            for calculation in calculation_results
-        )
-        overall = (
-            "success"
-            if successful == len(results) and failed_calculations == 0
-            else "partial"
-            if successful
-            else "failed"
-        )
         request_by_id = {
             str(request.get("request_id")): request
             for request in requests
@@ -9867,7 +9892,7 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
         }
         result_by_id = {
             str(result.get("request_id")): result
-            for result in results
+            for result in physical_results
             if isinstance(result, Mapping)
             and isinstance(result.get("request_id"), str)
         }
@@ -9902,6 +9927,12 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
             results,
             public_results,
         )
+        usable = any(r.get("status") in {"success", "partial"} for r in public_results)
+        complete = (
+            all(r.get("status") == "success" for r in public_results)
+            and all(c.get("status") == "success" for c in public_calculation_results)
+        )
+        overall = "success" if complete else "partial" if usable else "failed"
         payload = {
             "status": overall,
             "request_count": len(results),
@@ -9909,7 +9940,7 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
             "metric_contexts": _model_wire_metric_contexts(results),
             "evidence_bundle": evidence.build_evidence_bundle(
                 requests,
-                evidence_results,
+                [*evidence_results, *[r for r in physical_results if r.get("request_id") not in request_by_id]],
             ),
             "results": public_results,
         }

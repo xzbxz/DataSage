@@ -592,6 +592,12 @@ class BusinessContractTests(unittest.TestCase):
                     "period": dict(shared["applied_time_range"]),
                     "source_truncated": False,
                     "allowed_relations": ["target_status"],
+                    "unit": "比例",
+                    "fact_units": {
+                        "metric_value": "比例", "completion_rate": "比例",
+                        "target_amount_rmb": "人民币元", "actual_amount_rmb": "人民币元",
+                        "gap_amount_rmb": "人民币元",
+                    },
                     "facts": {
                         "target_amount_rmb": target,
                         "actual_amount_rmb": actual,
@@ -3005,7 +3011,7 @@ class BusinessContractTests(unittest.TestCase):
         self,
     ) -> None:
         def run_query(
-            request: dict[str, object], rows: list[dict[str, object]]
+            request: dict[str, object], rows: list[dict[str, object]], expected_status: str = "success"
         ) -> tuple[dict[str, object], list[dict[str, object]]]:
             calls: list[dict[str, object]] = []
 
@@ -3024,7 +3030,7 @@ class BusinessContractTests(unittest.TestCase):
                         session_id="business-contract-session",
                     )
                 )
-            self.assertEqual("success", payload["status"])
+            self.assertEqual(expected_status, payload["status"])
             self.assertEqual(1, len(calls))
             return payload["results"][0], calls
 
@@ -3999,6 +4005,7 @@ class BusinessContractTests(unittest.TestCase):
                 result, calls = run_query(
                     {**dso_request, "request_id": f"r4_{case_name}"},
                     dso_rows,
+                    expected_status="failed" if mode == "invalid_item_seal" else "success",
                 )
             self.assertEqual(1, len(calls), case_name)
             if mode == "invalid_item_seal":

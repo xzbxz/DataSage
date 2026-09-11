@@ -302,8 +302,7 @@ def _target_gap_reconciliation_is_valid(
         or not isinstance(business_metric_ref, str)
         or not business_metric_ref
         or business_metric_ref != overall_business_metric_ref
-        or not isinstance(business_metric_unit, str)
-        or not business_metric_unit
+        or business_metric_unit != capability_contract.TARGET_COMPLETION_UNIT
         or business_metric_unit != overall_business_metric_unit
         or not isinstance(applied_time_range, Mapping)
         or applied_time_range != overall_applied_time_range
@@ -368,7 +367,8 @@ def _target_gap_reconciliation_is_valid(
         return False
 
     if any(
-        "unit" in claim and claim.get("unit") != business_metric_unit
+        claim.get("unit") != business_metric_unit
+        or claim.get("fact_units") != capability_contract.TARGET_COMPLETION_FACT_UNITS
         for claim in [overall_claims[0], *claims]
     ):
         return False
@@ -426,6 +426,8 @@ def _target_gap_reconciliation_is_valid(
 
 
 def _completeness(result: Mapping[str, Any]) -> str:
+    if result.get("status") == "partial":
+        return "limited"
     if result.get("status") != "success":
         return "failed"
     if result.get("truncated") is True or result.get("data_state") == "truncated":
@@ -501,7 +503,9 @@ def _limitations(
     overall_result: Mapping[str, Any] | None = None,
 ) -> list[str]:
     limitations: list[str] = []
-    if result.get("status") != "success":
+    if result.get("status") == "partial":
+        limitations.append("REQUEST_PARTIALLY_FAILED")
+    elif result.get("status") != "success":
         limitations.append("REQUEST_FAILED")
     if result.get("truncated") is True or result.get("data_state") == "truncated":
         limitations.extend(("SOURCE_TRUNCATED", "COMPLETE_POPULATION_STATEMENT_NOT_AUTHORIZED"))

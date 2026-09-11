@@ -1,4 +1,4 @@
-version: datasage-mini-target-semantics/v15
+version: datasage-mini-target-semantics/v16
 domain: target
 contract_role: plugin_physical_execution
 target_gap_decomposition_contract: contracts/target-gap-decomposition.yaml
@@ -158,6 +158,7 @@ metrics:
     label: 出库目标完成情况
     business_definition: 对照所选期间同一归属口径下的出库目标与净出库实际，返回目标、实际、缺口、完成率及目标和期间状态；目标与实际均排除内部客户。
     unit_policy: 目标、实际与缺口为人民币元；完成率为比例（可为负，可超过1，不做截断）
+    unit: 比例
     query_kind: target_completion
     max_group_dimensions: 2
     time_policy: current_month
@@ -235,6 +236,7 @@ metrics:
     label: 收款目标完成情况
     business_definition: 对照所选期间同一归属口径下的收款目标与净收款登记额，返回目标、登记额、缺口、完成率及目标和期间状态；目标与登记额均包含内部客户，登记额不代表实结或到账。
     unit_policy: 目标、净收款登记额与缺口为人民币元；完成率为比例（可为负，可超过1，不做截断）
+    unit: 比例
     query_kind: target_completion
     max_group_dimensions: 2
     time_policy: current_month

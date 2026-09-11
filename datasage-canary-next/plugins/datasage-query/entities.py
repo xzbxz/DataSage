@@ -758,6 +758,14 @@ def _build_candidate_query(
     return sql, params
 
 
+def _effective_dimensions(semantics, metric=None):
+    from .capability_contract import effective_dimension_definitions, CapabilityContractError
+    try:
+        return effective_dimension_definitions(semantics, metric)
+    except CapabilityContractError as exc:
+        raise EntityFailure(exc.code, exc.message) from exc
+
+
 def _batchable_metric_lookup_keys(
     request: Mapping[str, Any],
     semantics: Mapping[str, Any],
@@ -777,7 +785,7 @@ def _batchable_metric_lookup_keys(
             str(attribution_mode) if isinstance(attribution_mode, str) else None
         ),
     ) or set()
-    dimensions = semantics.get("dimensions")
+    dimensions = _effective_dimensions(semantics, metric)
     if not isinstance(dimensions, Mapping):
         raise EntityFailure("CONTRACT_UNAVAILABLE", "业务域缺少维度语义。")
     pending: list[tuple[str, str, str]] = []
@@ -1286,7 +1294,7 @@ def canonicalize_metric_request(
     normalized_filters: dict[str, Any] = {}
     evidence: list[dict[str, Any]] = []
     entity_bindings: dict[str, dict[str, Any]] = {}
-    dimensions = semantics.get("dimensions")
+    dimensions = _effective_dimensions(semantics, metric)
     if not isinstance(dimensions, Mapping):
         raise EntityFailure("CONTRACT_UNAVAILABLE", "业务域缺少维度语义。")
     cache = resolution_cache if resolution_cache is not None else {}

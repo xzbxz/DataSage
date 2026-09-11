@@ -307,6 +307,13 @@ def _inventory_turnover_period(
     ], {"start": start_date.isoformat(), "end": end_date.isoformat(), "source": "explicit"}
 
 
+def _effective_dimensions(semantics, metric):
+    try:
+        return capability_contract.effective_dimension_definitions(semantics, metric)
+    except capability_contract.CapabilityContractError as exc:
+        raise AnalysisQueryError(exc.code, exc.message) from exc
+
+
 def _inventory_turnover_query(
     request: Mapping[str, Any],
     metric: Mapping[str, Any],
@@ -318,7 +325,7 @@ def _inventory_turnover_query(
 ) -> tuple[str, list[Any], dict[str, Any]]:
     table = metric.get("table")
     dataset = _dataset(table, datasets_contract)
-    dimensions = semantics.get("dimensions")
+    dimensions = _effective_dimensions(semantics, metric)
     if not isinstance(dimensions, dict):
         raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "库存维度语义无效。")
     requested_dimensions = request.get("dimensions") or []
@@ -593,7 +600,7 @@ def _settlement_query(
     bill_time = _approved(metric.get("bill_time_field"), dataset)
     completion_time = _approved(metric.get("completion_time_field"), dataset)
     open_amount = _approved(metric.get("open_amount_field"), dataset)
-    dimensions = semantics.get("dimensions") or {}
+    dimensions = _effective_dimensions(semantics, metric)
     allowed_dimensions = set(metric.get("allowed_dimensions") or [])
     selected = request.get("dimensions") or []
     filters = request.get("metric_filters") or {}
@@ -624,7 +631,7 @@ def _settlement_query(
 
     selected_columns: list[tuple[str, str]] = []
     for code in codes:
-        definition = (metric.get("dimension_overrides") or {}).get(code, dimensions[code])
+        definition = dimensions[code]
         for column, output in _dimension_columns(definition):
             _approved(column, dataset)
             if code in selected:
@@ -1843,7 +1850,7 @@ def _registered_slow_pool_query(request, metric, datasets_contract, semantics, l
         raise AnalysisQueryError('INVALID_PLAN', '当前登记池只回答本次读取状态，不接受历史期间或基线比较。')
     table = metric.get('table')
     dataset = _dataset(table, datasets_contract)
-    dimensions = {**semantics.get('dimensions', {}), **metric.get('dimension_overrides', {})}
+    dimensions = _effective_dimensions(semantics, metric)
     chosen = request.get('dimensions') or []
     filters = request.get('metric_filters') or {}
     if not isinstance(chosen, list) or len(chosen) > _max_group_dimensions(metric) or len(set(chosen)) != len(chosen) or not isinstance(filters, dict):

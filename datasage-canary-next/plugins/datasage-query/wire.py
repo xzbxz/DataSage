@@ -265,6 +265,7 @@ def _compact_query_row(claim: Mapping[str, Any]) -> dict[str, Any]:
             "states",
             "allowed_relations",
             "unit",
+            "fact_units",
             "currency",
         )
         if key in claim

@@ -501,6 +501,46 @@ def _fixed_filter_spec(spec: Mapping[str, Any]) -> tuple[str, Any]:
     )
 
 
+TARGET_COMPLETION_UNIT = "比例"
+TARGET_COMPLETION_FACT_UNITS = {
+    "metric_value": TARGET_COMPLETION_UNIT,
+    "completion_rate": TARGET_COMPLETION_UNIT,
+    "target_amount_rmb": "人民币元",
+    "actual_amount_rmb": "人民币元",
+    "gap_amount_rmb": "人民币元",
+}
+
+
+def effective_dimension_definitions(
+    semantics: Mapping[str, Any], metric: Mapping[str, Any] | str | None = None,
+) -> dict[str, Any]:
+    """Resolve metric-specific definitions without inheriting a different SQL source.
+
+    Existing overrides replace physical mappings. Only omitted descriptive/value
+    metadata inherits the domain contract; joins, normalization, identity columns
+    and public display exceptions must remain explicitly declared by the override.
+    """
+    dimensions = semantics.get("dimensions")
+    if not isinstance(dimensions, Mapping):
+        raise CapabilityContractError("CONTRACT_UNAVAILABLE", "Dimension definitions are invalid.")
+    if isinstance(metric, str):
+        metrics = semantics.get("metrics")
+        metric = metrics.get(metric) if isinstance(metrics, Mapping) else None
+        if not isinstance(metric, Mapping):
+            raise CapabilityContractError("CONTRACT_UNAVAILABLE", "Metric dimension owner is invalid.")
+    overrides = metric.get("dimension_overrides", {}) if isinstance(metric, Mapping) else {}
+    if not isinstance(overrides, Mapping) or not set(overrides) <= set(dimensions):
+        raise CapabilityContractError("CONTRACT_UNAVAILABLE", "Metric dimension overrides are invalid.")
+    effective = dict(dimensions)
+    metadata = {"label", "business_definition", "semantics", "value_contract", "filterable", "unit", "time_semantics"}
+    for code, override in overrides.items():
+        base = dimensions[code]
+        if not isinstance(base, Mapping) or not isinstance(override, Mapping):
+            raise CapabilityContractError("CONTRACT_UNAVAILABLE", "Metric dimension override is invalid.")
+        effective[code] = {**{k: v for k, v in base.items() if k in metadata}, **override}
+    return effective
+
+
 def _dimension_columns(
     definition: Mapping[str, Any],
 ) -> list[tuple[str, str]]:
