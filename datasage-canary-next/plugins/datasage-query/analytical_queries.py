@@ -1811,6 +1811,7 @@ def _target_completion_query(
         "gap_amount_rmb",
     }
     order_by = request.get("order_by")
+    ranking_plan = None
     if not output_aliases:
         if order_by is not None:
             raise AnalysisQueryError("INVALID_PLAN", "无分组目标完成指标不接受 order_by。")
@@ -1826,10 +1827,17 @@ def _target_completion_query(
             direction = str(order_by.get("direction") or "").upper()
             if field not in {*value_fields, *output_aliases} or direction not in {"ASC", "DESC"}:
                 raise AnalysisQueryError("INVALID_PLAN", "目标完成排序字段或方向不受支持。")
+        value_order = f"{_quote_column(field)} {direction}"
+        if field in value_fields:
+            sql = (f"SELECT ranked.*,COUNT(*) OVER () AS rank_population_count, "
+                   f"SUM(CASE WHEN {_quote_column(field)} IS NULL THEN 1 ELSE 0 END) OVER () AS rank_unknown_value_count, "
+                   f"RANK() OVER (ORDER BY ({_quote_column(field)} IS NULL) ASC,{value_order}) AS query_rank, "
+                   f"COUNT(*) OVER (PARTITION BY {_quote_column(field)}) AS rank_tie_count FROM ({sql}) AS ranked")
+            ranking_plan = {"field": field, "direction": direction.lower()}
         if field in {"metric_value", "completion_rate"}:
             sql += f" ORDER BY ({_quote_column(field)} IS NULL) ASC, {_quote_column(field)} {direction}"
         else:
-            sql += f" ORDER BY {_quote_column(field)} {direction}"
+            sql += f" ORDER BY ({_quote_column(field)} IS NULL) ASC, {_quote_column(field)} {direction}"
     sql += " LIMIT %s"
 
     warnings = [str(metric.get("answer_note"))] if metric.get("answer_note") else []
@@ -1841,6 +1849,7 @@ def _target_completion_query(
         "filters": request_filters,
         "warnings": warnings,
         "dimension_outputs": output_aliases,
+        "ranking_plan": ranking_plan,
     }
 
 

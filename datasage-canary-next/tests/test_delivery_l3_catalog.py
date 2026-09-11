@@ -246,7 +246,8 @@ class DeliveryL3CatalogTests(unittest.TestCase):
                     self.assertTrue(result["metric"]["answer_boundary_summary"])
                 else:
                     for item in result["metrics"]:
-                        self.assertTrue(item["answer_boundary_summary"])
+                        expanded = {**result.get("metric_defaults", {}), **item}
+                        self.assertTrue(expanded["answer_boundary_summary"])
 
     def test_deepseek_static_guards_match_canonical_catalog_and_delivery_scope(self) -> None:
         catalog_canonical = schemas.DATASAGE_CATALOG["parameters"]

@@ -17,7 +17,7 @@ from .capability_contract import (
     YEAR_OVER_YEAR_COMPARISON,
     query_request_schema_conditions,
 )
-from . import request_contract
+from . import capability_contract, request_contract
 
 DOMAINS = list(SUPPORTED_DOMAINS)
 
@@ -226,6 +226,7 @@ REQUEST = {
             "type": "object",
             "additionalProperties": False,
             "properties": {
+                "direction": {"type": "string", "enum": list(capability_contract.CHANGE_DIRECTIONS), "description": "Sort most negative, most positive (default), or largest absolute deltas first. Ordering does not filter the full partition; returned rows can have other signs."},
                 "dimension": {
                     **request_contract.DIMENSION_CODE.schema(),
                     "description": (
@@ -239,6 +240,15 @@ REQUEST = {
             "description": (
                 "Complete change decomposition includes a same-scope overall comparison and a full-partition attempt. Omitted comparison defaults to previous_period; supported alternatives are matched-elapsed year_over_year with one period or snapshot_months_before without an explicit period. Incompatible with dimensions, order_by, limit and decomposition_of_request_id. Reconciled relationships depend on returned coverage and reconciliation."
             ),
+        },
+        "period_summary": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "field": {"type": "string", "enum": ["metric_value", "target_amount_rmb", "actual_amount_rmb", "gap_amount_rmb"]},
+                "periods": {"type": "array", "minItems": 1, "maxItems": 36, "uniqueItems": True,
+                            "items": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}$"}},
+            }, "required": ["field", "periods"],
+            "description": "Check selected-month sum / queried-window sum on a complete monthly series without entity grouping. Only time-additive monetary/flow fields; never sum ratios or stock snapshots. This does not filter the source query.",
         },
         "complete_target_gap_decomposition": {
             "type": "object",
@@ -487,7 +497,7 @@ DATASAGE_QUERY = {
 DATASAGE_CATALOG = {
     "name": "datasage_catalog",
     "description": (
-        "Return registered metric and capability facts. expert_index provides compact discovery; an exact metric request provides details. Query execution independently reloads and validates the current contract; catalog output is not an execution token. The optional performance_scorecard view contains candidate operating lenses and declared unavailable capabilities, not queried facts or a mandatory planner. Physical datasets, fields, joins and SQL formulas remain private. This loader invokes no second model."
+        "Return registered metric and capability facts. expert_index uses lossless shared defaults: overlay each metric on result.metric_defaults, then resolve allowed_dimension_set via result.allowed_dimension_sets.  an exact metric request provides details. Query execution validates the process contract snapshot; catalog output is not an execution token. The optional performance_scorecard view contains candidate operating lenses and declared unavailable capabilities, not queried facts or a mandatory planner. Physical datasets, fields, joins and SQL formulas remain private. This loader invokes no second model."
     ),
     "parameters": {
         "type": "object",
@@ -519,7 +529,7 @@ DATASAGE_CATALOG = {
                             "type": "string",
                             "enum": ["expert_index", "full", "audit", "performance_scorecard"],
                             "description": (
-                                "Use expert_index for compact discovery. Omit view for the default compact "
+                                "Use expert_index for compact discovery. Omit view for the expanded summary "
                                 "model projection. Use full or audit only for explicit compatibility/audit "
                                 "inspection. Use performance_scorecard without domain or metric only for the "
                                 "optional governed cross-domain candidate lenses."

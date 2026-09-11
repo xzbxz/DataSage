@@ -664,7 +664,9 @@ class BusinessContractTests(unittest.TestCase):
     def test_main_skill_top_n_disclosure_depends_on_returned_state(self) -> None:
         content = _answer_boundary()
         normalized = " ".join(content.split())
-        self.assertIn("A Top-N result describes only the returned ranking", normalized)
+        self.assertIn("A Top-N result retains its actual ordering field and direction", normalized)
+        self.assertIn("even when rows are truncated", normalized)
+        self.assertIn("unknown ranking values and ties", normalized)
         for field in ("`requested_limit`", "`effective_limit`", "`has_more`"):
             self.assertIn(field, normalized)
         self.assertEqual(100, schemas.REQUEST["properties"]["limit"]["maximum"])

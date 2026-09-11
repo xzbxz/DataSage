@@ -84,6 +84,7 @@ _COMMON_REQUEST_FIELDS = {
 }
 _METRIC_REQUEST_FIELDS = _COMMON_REQUEST_FIELDS | {
     "pattern_time_basis",
+    "period_summary",
     "baseline_week",
     "movement_state",
     "metric",
@@ -1268,6 +1269,19 @@ def _validate_request(
                 f"Use at most {request_contract.MAX_GROUP_DIMENSIONS} unique governed dimension codes."
             ),
         )
+    period_summary = request.get("period_summary")
+    if period_summary is not None:
+        if (not isinstance(period_summary, Mapping) or set(period_summary) != {"field", "periods"}
+            or period_summary.get("field") not in {"metric_value", "target_amount_rmb", "actual_amount_rmb", "gap_amount_rmb"}
+            or request.get("time_bucket") != "month" or request.get("dimensions") or request.get("comparison") is not None):
+            raise QueryFailure("INVALID_INPUT", "期间合计需要无实体分组的按月序列及明确的可加字段。")
+        periods = period_summary.get("periods")
+        if (not isinstance(periods, list) or not 1 <= len(periods) <= 36
+            or any(not isinstance(p, str) or re.fullmatch(r"[0-9]{4}-[0-9]{2}", p) is None for p in periods)
+            or len(set(periods)) != len(periods)):
+            raise QueryFailure("INVALID_INPUT", "期间合计的月份列表无效。")
+        for period in periods:
+            _calendar_month_time_range(period)
     order_by = request.get("order_by")
     if order_by is not None:
         supplied_fields = set(order_by) if isinstance(order_by, Mapping) else set()
@@ -1437,14 +1451,15 @@ def _validate_request(
         )
         if (
             not isinstance(complete_decomposition, Mapping)
-            or set(complete_decomposition) != {"dimension"}
+            or set(complete_decomposition) - {"dimension", "direction"}
+            or complete_decomposition.get("direction", "increase") not in capability_contract.CHANGE_DIRECTIONS
             or not request_contract.valid_string(
                 dimension, request_contract.DIMENSION_CODE
             )
         ):
             raise QueryFailure(
                 "INVALID_INPUT",
-                "complete_change_decomposition must contain exactly one non-empty dimension.",
+                "complete_change_decomposition requires a dimension and optional governed direction.",
             )
         conflicts = {
             "dimensions",
@@ -1607,6 +1622,11 @@ def _expand_complete_change_decompositions(
             "dimensions": [dimension],
             "decomposition_of_request_id": overall_id,
             "limit": 20,
+        }
+        direction = operation.get("direction", "increase")
+        partition_request["order_by"] = {
+            "field": "absolute_delta_value" if direction == "absolute" else "delta_value",
+            "direction": "asc" if direction == "decrease" else "desc",
         }
         expanded.extend((overall_request, partition_request))
         operation_partitions[partition_id] = overall_id
@@ -3162,6 +3182,8 @@ def _build_comparison_metric_query(
             "COUNT(*) OVER () AS "
             f"{_quote_identifier(_INTERNAL_PARTITION_ROW_COUNT)}"
         )
+        for name, expression in evidence.CHANGE_DISTRIBUTION_SQL.items():
+            proof_select += f", {expression} OVER () AS `__distribution_{name}`"
         if requires_completeness_proof:
             proof_select += (
                 ", SUM(partition_rows.current_missing_value_count) OVER () AS "
@@ -3189,12 +3211,14 @@ def _build_comparison_metric_query(
         "metric_value",
         "comparison_value",
         "delta_value",
+        "absolute_delta_value",
         "change_rate",
         *dimensions,
     } or direction not in {"ASC", "DESC"}:
         raise QueryFailure("INVALID_PLAN", "比较排序字段不受支持。")
     if dimensions:
-        sql += f" ORDER BY {_quote_identifier(str(field))} {direction}"
+        order_expression = "ABS(`delta_value`)" if field == "absolute_delta_value" else _quote_identifier(str(field))
+        sql += f" ORDER BY {order_expression} {direction}"
     sql += " LIMIT %s"
     warnings = list(current_scope.get("warnings") or [])
     for warning in prior_scope.get("warnings") or []:
@@ -3282,6 +3306,27 @@ def _metric_query_limit(request: Mapping[str, Any]) -> int:
     return min(environment_cap, requested_limit)
 
 
+def _period_additive_fields(metric, scope, datasets, semantics):
+    if metric.get("query_kind") == "target_completion":
+        return ["target_amount_rmb", "actual_amount_rmb", "gap_amount_rmb"]
+    if metric.get("time_policy") in {"current_snapshot", "latest_snapshot", "latest_non_null_snapshot"}:
+        return []
+    sum_kinds = {"sum", "sum_positive", "sum_product", "sum_product_many"}
+    components = metric.get("components") or []
+    component_metrics = [(semantics.get("metrics") or {}).get(c.get("metric"), {}) for c in components]
+    component_additivity = bool(component_metrics) and all(
+        c.get("aggregation") in sum_kinds
+        and c.get("time_policy") not in {"current_snapshot", "latest_snapshot", "latest_non_null_snapshot"}
+        for c in component_metrics
+    )
+    additive = metric.get("aggregation") in sum_kinds or component_additivity or metric.get("query_kind") == "allocated_amount"
+    sources = scope.get("source_datasets") or [scope.get("dataset")]
+    catalog = datasets.get("datasets", {})
+    if additive and sources and all(catalog.get(name, {}).get("kind") in {"fact", "actual_fact", "monthly_flow", "monthly_target_fact", "lifecycle_fact"} for name in sources):
+        return ["metric_value"]
+    return []
+
+
 def _validate_pre_entity_metric_plan(
     request: Mapping[str, Any],
     datasets_contract: Mapping[str, Any],
@@ -3291,13 +3336,25 @@ def _validate_pre_entity_metric_plan(
 ) -> None:
     """Compile the governed plan before entity lookup so pure failures are DB-free."""
 
-    _build_metric_query(
+    _sql, _params, scope = _build_metric_query(
         request,
         datasets_contract,
         semantics,
         _metric_query_limit(request),
         observed_on=observed_on,
     )
+
+    check = request.get("period_summary")
+    if check and check["field"] not in _period_additive_fields(semantics["metrics"][request["metric"]], scope, datasets_contract, semantics):
+        raise QueryFailure("NONADDITIVE_PERIOD_FIELD", "该字段不能跨月份求和。", stage="input_validation")
+    if check:
+        period = scope.get("time_range") or {}
+        start, end = _period_boundary_date(period.get("start")), _period_boundary_date(period.get("end"))
+        if start is not None and end is not None:
+            if start.day != 1 or end.day != 1:
+                raise QueryFailure("FULL_MONTH_WINDOW_REQUIRED", "期间合计需要完整自然月边界。", stage="input_validation")
+            if any(not start <= _period_boundary_date(month) < end for month in check["periods"]):
+                raise QueryFailure("PERIOD_OUTSIDE_QUERY", "选定月份不在查询期间内。", stage="input_validation")
 
 
 def _build_metric_query(
@@ -3781,7 +3838,7 @@ def _evidence_rows_and_state(
         {
             str(key): value
             for key, value in row.items()
-            if key not in _INTERNAL_RESULT_FIELDS
+            if key not in _INTERNAL_RESULT_FIELDS and not str(key).startswith("__distribution_")
         }
         for row in rows
     ]
@@ -4255,6 +4312,7 @@ def _business_metric_ref(request: Mapping[str, Any]) -> str | None:
 
 
 _PUBLIC_FACT_FIELDS = {
+    "query_rank", "rank_tie_count", "rank_population_count", "rank_unknown_value_count",
     "task_status_unfilled_rows",
     "execute_status_unfilled_rows",
     "verified_linked_bill_count",
@@ -4491,6 +4549,7 @@ _SCOPE_PRESENTATION_KEYS = {
     "limit",
     "decomposition_of_request_id",
     "_target_gap_of_request_id",
+    "period_summary",
 }
 
 
@@ -4738,6 +4797,7 @@ def _scope_fingerprints(
             {
                 "population": population_projection,
                 "dimension_outputs": scope.get("dimension_outputs") or [],
+                **({"ranking_plan": scope["ranking_plan"]} if scope.get("ranking_plan") else {}),
                 "join_plan": join_plan,
                 "selected_dataset_contracts": projection_datasets,
                 "sources": sorted(projection_source_names),
@@ -4861,6 +4921,9 @@ def _validated_embedded_partition_proof(
                     stage="result_validation",
                 )
             proof[public_field] = count
+    distribution = evidence.distribution_from_window_rows(rows, full_count, delta)
+    if distribution is not None:
+        proof["change_distribution"] = distribution
     return proof
 
 
@@ -6022,6 +6085,10 @@ def _authorize_change_decompositions(
             or driver_delta != overall_delta
         ):
             continue
+        distribution = (
+            partition_proof.get("change_distribution") if bounded_proof_valid
+            else evidence.distribution_from_deltas([item[2] for item in complete_driver_triplets])
+        )
         for claim, triplet in zip(driver_claims, complete_driver_triplets):
             delta = triplet[2]
             if delta != 0:
@@ -6082,6 +6149,8 @@ def _authorize_change_decompositions(
                 else "exact_three_column_additive_partition"
             ),
         }
+        if distribution is not None:
+            driver["_change_reconciliation_pending"]["change_distribution"] = distribution
         if completeness_reconciliation is not None:
             driver["_change_reconciliation_pending"][
                 "completeness_proof"
@@ -7944,6 +8013,15 @@ def _model_wire_result(
         and projected["error"].get("code") == "EVIDENCE_INTEGRITY_INVALID"
     ):
         projected["status"] = "partial" if projected.get("claim_ledger") else "failed"
+    if request is not None and projected.get("status") == "success":
+        numeric = evidence.build_numeric_evidence(projected, request, result.get("_period_additive_fields", []))
+        if numeric:
+            projected["numeric_evidence"] = numeric
+        ranking = evidence.build_ranking_evidence(projected, result.get("_ranking_plan"))
+        if ranking:
+            projected["ranking_evidence"] = ranking
+        elif result.get("_ranking_plan"):
+            projected["ranking_evidence"] = {"status": "unavailable", "reason": "RANK_PROOF_INVALID", **result["_ranking_plan"]}
     return projected
 
 
@@ -9243,6 +9321,8 @@ def _run_one(
         )
         result = {
             "request_id": request["request_id"],
+            "_period_additive_fields": _period_additive_fields(metric_definition, scope, datasets, semantics),
+            "_ranking_plan": scope.get("ranking_plan"),
             "_calculation_scope": _calculation_scope_contract(
                 request,
                 scope,

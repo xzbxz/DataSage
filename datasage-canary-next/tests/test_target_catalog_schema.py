@@ -180,7 +180,8 @@ class TargetCatalogSchemaTests(unittest.TestCase):
                 item["code"]: item for item in views["summary"]["metrics"]
             },
             "expert_index": {
-                item["code"]: item for item in views["expert_index"]["metrics"]
+                item["code"]: {**views["expert_index"].get("metric_defaults", {}), **item}
+                for item in views["expert_index"]["metrics"]
             },
             "detail": views["detail"]["metric"],
         }

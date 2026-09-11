@@ -1225,6 +1225,7 @@ def _is_bound_metric_detail_catalog_call(
     elif model_wire_version in {
         "datasage-catalog-model-wire/v2",
         "datasage-catalog-model-wire/v3",
+        "datasage-catalog-model-wire/v4",
     }:
         if set(payload) != compact_keys:
             return False

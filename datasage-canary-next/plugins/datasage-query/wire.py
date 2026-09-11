@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import wraps
+from collections import Counter
 import json
 import time
 from . import db_executor, settings
@@ -15,6 +16,9 @@ def _compact_json(payload: dict[str, Any]) -> str:
 _CATALOG_METRIC_FIELDS = (
     "code",
     "label",
+    "ordering",
+    "period_summary_fields",
+    "change_decomposition_orderings",
     "business_definition",
     "time_policy",
     "unit",
@@ -216,9 +220,30 @@ def _compact_catalog_result(
         if metric.get("limitations"):
             compact_metric["limitations"] = metric["limitations"]
         metrics.append(compact_metric)
+    dimension_sets = None
+    metric_defaults = None
+    if level == "expert_index":
+        from .contracts import _compress_metric_dimension_sets
+        # Reuse the catalog's existing lossless set encoding, not another cache.
+        metrics, dimension_sets = _compress_metric_dimension_sets([
+            {**m, "allowed_dimensions": m.get("allowed_dimensions", [])} for m in metrics
+        ])
+        metric_defaults = {}
+        shared_keys = set.intersection(*(set(m) for m in metrics)) if metrics else set()
+        for key in sorted(shared_keys - {"code", "label", "business_definition"}):
+            encoded = [json.dumps(m[key], ensure_ascii=False, sort_keys=True, separators=(",", ":")) for m in metrics]
+            value, frequency = Counter(encoded).most_common(1)[0]
+            if frequency < 2:
+                continue
+            metric_defaults[key] = json.loads(value)
+            for m, candidate in zip(metrics, encoded):
+                if candidate == value:
+                    m.pop(key)
     return {
         key: value
         for key, value in {
+            "allowed_dimension_sets": dimension_sets,
+            "metric_defaults": metric_defaults,
             "domain": result.get("domain"),
             "level": level,
             "metric_count": result.get("metric_count", len(metrics)),
@@ -232,7 +257,7 @@ def _compact_catalog_result(
 def compact_catalog_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """Project full internal catalog contracts to a compact model surface."""
 
-    if payload.get("model_wire_version") == "datasage-catalog-model-wire/v3":
+    if payload.get("model_wire_version") in {"datasage-catalog-model-wire/v3", "datasage-catalog-model-wire/v4"}:
         return payload
     results = payload.get("results")
     if not isinstance(results, list):
@@ -248,15 +273,15 @@ def compact_catalog_payload(payload: dict[str, Any]) -> dict[str, Any]:
         for key, value in payload.items()
         if key not in {"results"}
     }
-    compact["model_wire_version"] = "datasage-catalog-model-wire/v3"
+    compact["model_wire_version"] = "datasage-catalog-model-wire/v4"
     compact["results"] = compact_results
     if value_policies:
         compact["dimension_value_policies"] = value_policies
     return compact
 
 
-def _compact_query_row(claim: Mapping[str, Any]) -> dict[str, Any]:
-    return {
+def _compact_query_row(claim: Mapping[str, Any], *, has_ranking: bool = False) -> dict[str, Any]:
+    compact = {
         key: claim[key]
         for key in (
             "claim_id",
@@ -270,6 +295,10 @@ def _compact_query_row(claim: Mapping[str, Any]) -> dict[str, Any]:
         )
         if key in claim
     }
+    if has_ranking and isinstance(compact.get("facts"), Mapping):
+        compact["facts"] = {k: v for k, v in compact["facts"].items()
+                            if k not in {"rank_population_count", "rank_unknown_value_count"}}
+    return compact
 
 
 def _compact_evidence_bundle(bundle: Any) -> dict[str, Any]:
@@ -341,6 +370,8 @@ def compact_query_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "business_dimension_labels",
                 "change_reconciliation",
                 "target_gap_reconciliation",
+                "ranking_evidence",
+                "numeric_evidence",
                 "row_count",
                 "truncated",
                 "requested_limit",
@@ -352,7 +383,7 @@ def compact_query_payload(payload: dict[str, Any]) -> dict[str, Any]:
             if key in result
         }
         compact_rows = [
-            _compact_query_row(claim)
+            _compact_query_row(claim, has_ranking=bool(result.get("ranking_evidence")))
             for claim in claims
             if isinstance(claim, Mapping)
         ]

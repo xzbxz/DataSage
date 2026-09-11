@@ -30,6 +30,219 @@ _SEMANTIC_FINGERPRINT_PRESENTATION_KEYS = {
 _LIMITED_STATES = {"empty", "undefined", "incomplete"}
 _COMPLETE_STATES = {"rows", "complete", "zero"}
 
+# These aggregates run over the existing complete comparison partition, before LIMIT.
+CHANGE_DISTRIBUTION_SQL = {
+    "positive_count": "SUM(CASE WHEN partition_rows.delta_value > 0 THEN 1 ELSE 0 END)",
+    "negative_count": "SUM(CASE WHEN partition_rows.delta_value < 0 THEN 1 ELSE 0 END)",
+    "zero_count": "SUM(CASE WHEN partition_rows.delta_value = 0 THEN 1 ELSE 0 END)",
+    "unknown_count": "SUM(CASE WHEN partition_rows.delta_value IS NULL THEN 1 ELSE 0 END)",
+    "positive_delta_sum": "SUM(CASE WHEN partition_rows.delta_value > 0 THEN partition_rows.delta_value ELSE 0 END)",
+    "negative_delta_sum": "SUM(CASE WHEN partition_rows.delta_value < 0 THEN partition_rows.delta_value ELSE 0 END)",
+    "largest_decline": "MIN(CASE WHEN partition_rows.delta_value < 0 THEN partition_rows.delta_value ELSE 0 END)",
+}
+
+
+def _distribution(stats, count, delta):
+    counts = {k: _exact_nonnegative_int(stats.get(k)) for k in (
+        "positive_count", "negative_count", "zero_count", "unknown_count")}
+    numbers = {k: _finite_decimal(stats.get(k)) for k in (
+        "positive_delta_sum", "negative_delta_sum", "largest_decline")}
+    if any(v is None for v in [*counts.values(), *numbers.values()]):
+        return None
+    positive, negative, largest = numbers.values()
+    if (sum(counts.values()) != count or counts["unknown_count"] != 0
+        or positive < 0 or negative > largest or largest > 0
+        or (counts["positive_count"] == 0) != (positive == 0)
+        or (counts["negative_count"] == 0) != (negative == 0)
+        or not _decimal_close(positive + negative, delta)):
+        return None
+    if counts["negative_count"]:
+        average = negative / counts["negative_count"]
+        if largest > average and not _decimal_close(largest, average):
+            return None
+    return {"scope": "full_partition_groups", **counts,
+            "source_collection_completeness": "not_proven",
+            **{k: str(v) for k, v in numbers.items()},
+            "largest_decline_share": str(largest / negative) if negative else None}
+
+
+def distribution_from_deltas(values):
+    numbers = [_finite_decimal(v) for v in values]
+    if not numbers or any(v is None for v in numbers):
+        return None
+    stats = {"positive_count": sum(v > 0 for v in numbers),
+             "negative_count": sum(v < 0 for v in numbers),
+             "zero_count": sum(v == 0 for v in numbers), "unknown_count": 0,
+             "positive_delta_sum": sum((v for v in numbers if v > 0), Decimal(0)),
+             "negative_delta_sum": sum((v for v in numbers if v < 0), Decimal(0)),
+             "largest_decline": min([Decimal(0), *numbers])}
+    return _distribution(stats, len(numbers), sum(numbers, Decimal(0)))
+
+
+def distribution_from_window_rows(rows, count, delta):
+    if not rows or not all("__distribution_" + k in rows[0] for k in CHANGE_DISTRIBUTION_SQL):
+        return None
+    stats = {k: rows[0]["__distribution_" + k] for k in CHANGE_DISTRIBUTION_SQL}
+    if any(any(_finite_decimal(r.get("__distribution_" + k)) != _finite_decimal(v)
+               for k, v in stats.items()) for r in rows):
+        return None
+    return _distribution(stats, count, delta)
+
+
+def _bound_observation(result, observation):
+    """Bind deterministic checks to the exact surviving claims, not caller labels."""
+    payload = {"request_id": result.get("request_id"),
+               "scope_fingerprint": result.get("scope_fingerprint"),
+               "projection_fingerprint": result.get("projection_fingerprint"),
+               "claims": [(c["claim_id"], c["claim_seal"]) for c in result["claim_ledger"]],
+               "observation": observation}
+    return {**observation, "evidence_seal": "sha256_" + hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()}
+
+
+def build_ranking_evidence(result, plan):
+    claims = result.get("claim_ledger") or []
+    if (not isinstance(plan, Mapping) or not claims
+        or any(not claim_is_valid_for_result(c, result) for c in claims)):
+        return None
+    field, direction = plan.get("field"), plan.get("direction")
+    if field not in capability_contract.TARGET_COMPLETION_FACT_UNITS or direction not in {"asc", "desc"}:
+        return None
+    facts = [c.get("facts", {}) for c in claims]
+    if any(c.get("fact_units", {}).get(field) != capability_contract.TARGET_COMPLETION_FACT_UNITS[field] for c in claims):
+        return None
+    counts = [_exact_nonnegative_int(f.get("rank_population_count")) for f in facts]
+    unknown = [_exact_nonnegative_int(f.get("rank_unknown_value_count")) for f in facts]
+    ranks = [_exact_nonnegative_int(f.get("query_rank")) for f in facts]
+    ties = [_exact_nonnegative_int(f.get("rank_tie_count")) for f in facts]
+    if (any(v is None for v in [*counts, *unknown, *ranks, *ties])
+        or len(set(counts)) != 1 or len(set(unknown)) != 1 or counts[0] < len(claims)
+        or unknown[0] > counts[0] or any(not 1 <= rank <= counts[0] for rank in ranks)
+        or any(not 1 <= tied <= counts[0] for tied in ties) or ranks != sorted(ranks)):
+        return None
+    values = [_finite_decimal(f.get(field)) for f in facts]
+    known_values = [v for v in values if v is not None]
+    if known_values != sorted(known_values, reverse=direction == "desc"):
+        return None
+    top_known = ranks[0] == 1 and values[0] is not None
+    top_proven = top_known and unknown[0] == 0
+    observation = {"status": "verified_order" if unknown[0] == 0 else "known_values_only",
+        "field": field, "direction": direction,
+        "unit": capability_contract.TARGET_COMPLETION_FACT_UNITS[field],
+        "scope": "queried_population", "population_count": counts[0],
+        "unknown_value_count": unknown[0], "top_value_proven": top_proven,
+        "unique_top": top_proven and ties[0] == 1,
+        "top_ties_complete": top_proven and sum(rank == 1 for rank in ranks) == ties[0],
+        "all_rows_returned": not result.get("truncated") and len(claims) == counts[0],
+        "source_collection_completeness": "not_proven",
+        "returned_rank_field": "query_rank", "tie_count_field": "rank_tie_count"}
+    return _bound_observation(result, observation)
+
+
+def build_numeric_evidence(result, request, additive_fields):
+    claims = result.get("claim_ledger") or []
+    if not claims:
+        return _bound_observation(result, {"period_summary": {"status": "unavailable", "reason": "EMPTY_RESULT"}}) if request.get("period_summary") else {}
+    if any(not claim_is_valid_for_result(c, result) for c in claims):
+        return {}
+    checks = {}
+    if any("known_value_count" in c.get("facts", {}) for c in claims):
+        checks["count_interpretation"] = "coverage_counts_do_not_authorize_distinct_document_counts"
+    if (not result.get("truncated") and request.get("comparison")
+        and len(request.get("dimensions") or []) == 1
+        and (result.get("change_reconciliation") or {}).get("status") != "reconciled"):
+        distribution = distribution_from_deltas([c.get("facts", {}).get("delta_value") for c in claims])
+        if distribution is not None:
+            checks["change_distribution"] = distribution
+    if len(claims) == 1:
+        claim = claims[0];facts = claim.get("facts", {})
+        numerator = _finite_decimal(facts.get("gap_amount_rmb"))
+        denominator = _finite_decimal(facts.get("target_amount_rmb"))
+        if "gap_amount_rmb" in facts and "target_amount_rmb" in facts:
+            units = claim.get("fact_units") or {}
+            unit_valid = units.get("gap_amount_rmb") == units.get("target_amount_rmb") and bool(units.get("gap_amount_rmb"))
+            checks["ratios"] = [{"claim_id": claim["claim_id"],
+                "numerator_field": "gap_amount_rmb", "denominator_field": "target_amount_rmb",
+                "numerator": str(numerator) if numerator is not None else None,
+                "denominator": str(denominator) if denominator is not None else None,
+                "value": str(numerator / denominator) if unit_valid and numerator is not None and denominator else None,
+                "value_state": "unit_unverified" if not unit_valid else "available" if numerator is not None and denominator else "zero_denominator" if denominator == 0 else "missing_input",
+                "meaning": "gap divided by target", "unit": "比例",
+                "operand_unit": units.get("gap_amount_rmb") if unit_valid else None,
+                "causal_or_structural_contribution_authorized": False}]
+        coverage = []
+        for name, top, bottom in [
+            ("eligibility_coverage_rate", "assessed_row_count", ["scope_row_count"]),
+            ("value_coverage_rate", "known_value_count", ["known_value_count", "missing_value_count"]),
+        ]:
+            if name not in facts or (name == "value_coverage_rate" and "scope_row_count" not in facts):
+                continue
+            n = _exact_nonnegative_int(facts.get(top))
+            terms = [_exact_nonnegative_int(facts.get(k)) for k in bottom]
+            if n is None or any(v is None for v in terms):
+                continue
+            total = sum(terms)
+            coverage.append({"field": name, "numerator_field": top, "denominator_fields": bottom,
+                "numerator": n, "denominator": total,
+                "value": str(Decimal(n) / total) if total else None,
+                "unit": "比例",
+                "count_grain": "source_records_not_distinct_documents"})
+        if coverage: checks["coverage_ratios"] = coverage
+    summary = request.get("period_summary")
+    if request.get("time_bucket") == "month" and not request.get("dimensions"):
+        from datetime import date
+        period = result.get("applied_time_range") or {}
+        reason = None
+        expected = []
+        try:
+            boundaries = [period["start"], period["end"]]
+            start, end = [date.fromisoformat(v + "-01" if re.fullmatch(r"[0-9]{4}-[0-9]{2}", v) else v) for v in boundaries]
+            if start.day != 1 or end.day != 1 or start >= end:raise ValueError()
+            cursor = start
+            while cursor < end and len(expected) <= 120:
+                expected.append(cursor.strftime("%Y-%m"));cursor = capability_contract._shift_months(cursor, 1)
+        except (KeyError, TypeError, ValueError, OverflowError):reason = "FULL_MONTH_WINDOW_REQUIRED"
+        if reason is None and result.get("truncated"):reason = "SERIES_TRUNCATED"
+        if reason is None and period.get("calendar_evidence", {}).get("period_state") != "completed":reason = "PERIOD_NOT_COMPLETED"
+        series = {}
+        for c in claims:
+            dims = c.get("dimensions") or []
+            months = [d.get("value") for d in dims if re.fullmatch(r"[0-9]{4}-[0-9]{2}", str(d.get("value", "")))]
+            if len(months) != 1 or months[0] in series:
+                reason = reason or "AMBIGUOUS_PERIOD_GRAIN"
+                continue
+            series[months[0]] = c
+        if reason is None and set(series) != set(expected):reason = "MISSING_PERIODS"
+        values = {p: _finite_decimal(c.get("facts", {}).get("metric_value")) for p,c in series.items()}
+        if reason is None and all(v is not None for v in values.values()):
+            checks["period_ranking"] = {"field": "metric_value", "scope": "complete_queried_month_window",
+                "ascending": [{"period": p, "rank": 1 + sum(x < v for x in values.values())}
+                              for p,v in sorted(values.items(), key=lambda item:(item[1],item[0]))],
+                "ties": "competition_rank", "source_collection_completeness": "not_proven"}
+        if summary:
+            field = summary["field"];selected = summary["periods"]
+            numbers = {p: _finite_decimal(c.get("facts", {}).get(field)) for p,c in series.items()}
+            if field not in additive_fields:reason = "NONADDITIVE_PERIOD_FIELD"
+            if not set(selected) <= set(expected):reason = "PERIOD_OUTSIDE_QUERY"
+            if reason is None and any(v is None for v in numbers.values()):reason = "MISSING_VALUES"
+            if reason:
+                checks["period_summary"] = {"status": "unavailable", "reason": reason}
+            else:
+                total = sum(numbers.values(), Decimal(0));subtotal = sum((numbers[p] for p in selected), Decimal(0))
+                units = {c.get("fact_units", {}).get(field, c.get("unit") if field == "metric_value" else None) for c in claims}
+                if len(units) != 1 or None in units:
+                    checks["period_summary"] = {"status": "unavailable", "reason": "UNIT_UNVERIFIED"}
+                else:
+                    checks["period_summary"] = {"status": "verified_arithmetic", "field": field,
+                        "selected_periods": sorted(selected), "window_periods": expected,
+                        "sum_unit": next(iter(units)), "ratio_unit": "比例",
+                        "selected_sum": str(subtotal), "window_sum": str(total),
+                        "ratio": str(subtotal / total) if total else None,
+                        "ratio_state": "available" if total else "zero_denominator",
+                        "basis": "selected_period_sum / queried_window_sum",
+                        "causal_or_structural_contribution_authorized": False}
+    return _bound_observation(result, checks) if checks else {}
+
 
 def _canonical_semantic_value(value: Any, path: tuple[str, ...] = ()) -> Any:
     """Canonicalize unordered semantic collections without exposing them."""
@@ -870,6 +1083,26 @@ def _reconciliation_is_valid(result: Mapping[str, Any]) -> bool:
             overall_key in reconciliation
             or driver_key in reconciliation
         ) and reconciliation.get(overall_key) != reconciliation.get(driver_key):
+            return False
+    distribution = reconciliation.get("change_distribution")
+    if distribution is not None:
+        count = _exact_nonnegative_int(reconciliation.get("full_partition_row_count"))
+        delta = _finite_decimal(reconciliation.get("overall_delta"))
+        if not isinstance(distribution, Mapping) or count is None or delta is None:
+            return False
+        expected = _distribution(distribution, count, delta)
+        if expected is None or dict(distribution) != expected:
+            return False
+        returned = [_finite_decimal(c.get("facts", {}).get("delta_value")) for c in claims]
+        if any(v is None for v in returned):
+            return False
+        if (distribution["positive_count"] < sum(v > 0 for v in returned)
+            or distribution["negative_count"] < sum(v < 0 for v in returned)
+            or distribution["zero_count"] < sum(v == 0 for v in returned)
+            or Decimal(distribution["positive_delta_sum"]) < sum((v for v in returned if v > 0), Decimal(0))
+            or Decimal(distribution["negative_delta_sum"]) > sum((v for v in returned if v < 0), Decimal(0))
+            or Decimal(distribution["largest_decline"]) > min([Decimal(0), *returned])
+            or (not result.get("truncated") and count != len(claims))):
             return False
     return True
 

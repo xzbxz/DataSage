@@ -20,6 +20,11 @@ Rule ID: `datasage.query-rules/v1`
   execution validates capabilities against the process contract snapshot pinned
   when the plugin registers. File edits take effect after the affected Hermes
   process restarts and registers the plugin again, not by querying repeatedly.
+- In an expert index, overlay each metric on its result's `metric_defaults`,
+  then resolve `allowed_dimension_set` through that result's
+  `allowed_dimension_sets`; the shared lists preserve the complete capabilities.
+  Load relevant domains and exact details as needed, reuse already loaded
+  unchanged contracts, and avoid repeatedly printing full catalogs in Python.
 - Select an exact registered metric from business meaning. Never invent or
   substitute a metric, dimension, entity, period, unit, or currency, including
   a related amount, count, quantity, rate, average, extreme, or total.
@@ -37,6 +42,11 @@ paths and dimensions. A catalog-advertised capability is not returned evidence.
 `UNSUPPORTED_TARGET_GAP_DECOMPOSITION` and `UNSUPPORTED_DIMENSION` describe a
 local operation failure. Other successful facts remain usable with their own
 scope; changing a dimension or ledger produces a different result.
+
+For largest target gaps, ordinary target breakdown already accepts
+`order_by={field: gap_amount_rmb, direction: desc}`. Inspect its ranking evidence;
+completion-rate ordering answers a different question. A sorted Top result can
+prove an extremum without proving a complete customer-level gap decomposition.
 
 ## Delivery request semantics
 
@@ -61,6 +71,10 @@ returned evidence, not completed-period or population-wide proof.
 - Use the metric's governed business time. Never substitute record-creation time
   for a documented transaction or snapshot time.
 - Start boundaries are inclusive and end boundaries are exclusive.
+- For a complete monthly series without entity grouping, `period_summary`
+  identifies a public additive field and selected months for checked selected
+  sum / whole-window sum. It never changes source filtering or fills missing
+  months. Ratios and stock snapshots are not time-additive.
 
 ## Currency and units
 
@@ -95,6 +109,10 @@ returned evidence, not completed-period or population-wide proof.
 - Construct comparisons, decompositions, groups, subtotals, shares, driver
   counts, and residual attribution only through capabilities exposed by the
   exact metric contract.
+- `complete_change_decomposition.direction` chooses `decrease`, `increase`
+  (default), or `absolute` ordering of the same full partition. Choose the
+  relevant ordering for the question; it is not a sign filter. Distribution
+  statements require explicit full counts/sums, not a net unreturned remainder.
 - In a Skill-enabled CLI/maintenance session, consult as needed
   [`datasage.answer-boundary/v1`](answer-boundary.md). It solely owns whether a
   returned comparison, contribution, decomposition, or truncation authorizes a

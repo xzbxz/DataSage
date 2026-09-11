@@ -43,6 +43,7 @@ DOMAIN_SOURCES: dict[str, dict[str, str]] = {
     },
 }
 
+CHANGE_DIRECTIONS = ("decrease", "increase", "absolute")
 SUPPORTED_DOMAINS = tuple(DOMAIN_SOURCES)
 ATTRIBUTION_MODES = ("transaction_detail", "salesperson_allocation")
 ENTITY_TYPES = (

@@ -113,6 +113,10 @@ Correlation, co-movement, target design, a denominator, arithmetic, and
 decomposition alone do not establish a business mechanism. State cause,
 driver, offset, or contribution only to the exact extent authorized by returned
 causal or reconciled evidence.
+Relative performance within a company cannot exclude industry or regional effects.
+Different period-over-period magnitudes do not establish which process weakened
+first. Keep such explanations as testable hypotheses until timing and mechanism
+evidence are available.
 
 Health, normality, controllability, risk, and target-status language requires a
 compatible governed target or benchmark. Returned `target_status` authorizes
@@ -139,9 +143,15 @@ cannot repair an earlier unsupported assertion.
   returned and applicable; requested or default scope is not a substitute.
   Put each material limitation next to the claim it affects instead of adding
   an unrelated compliance tail.
-- A Top-N result describes only the returned ranking. Report
-  `requested_limit`, `effective_limit`, and `has_more` when present; absence
-  from a Top-N result means only that the entity is below that result's cutoff.
+- A Top-N result retains its actual ordering field and direction. A verified
+  `ranking_evidence` may establish the top value over the queried population
+  even when rows are truncated; check unknown ranking values and ties before
+  claiming a maximum or uniqueness. Completion-rate order is not gap-amount
+  order. Report `requested_limit`, `effective_limit`, and `has_more` as needed.
+  Absence from a bounded list is
+  not zero business, customer loss or disappearance; a cutoff bound additionally
+  needs compatible identity and known ranking values. Use stable-identity
+  targeted evidence when that distinction matters.
 - For a truncated result, population shares or structural contributions for returned entries require
   the corresponding complete, compatible population proof and valid reconciliation,
   with that exact relationship supported by the metric's returned `supports` or
@@ -150,6 +160,11 @@ cannot repair an earlier unsupported assertion.
 - Without that evidence, never attribute the total change to the unreturned tail
   or call returned or unreturned entities drivers, offsets, or explanations.
   Even with it, do not invent missing tail facts or infer business causality.
+  Full-partition positive/negative/zero counts and gross decline amounts describe
+  a distribution only when explicitly verified. An unreturned net sum or its
+  average cannot show that all groups declined or that individual losses were
+  small. State a concentration measure and its denominator; do not infer it from
+  a net average. Counts of groups are not lifecycle counts of customers.
 - Never infer geography, category, ownership, or another entity attribute from
   a returned name. A zero comparison value establishes only zero returned value
   for that comparison period; it does not establish lifecycle-new status.
@@ -160,9 +175,9 @@ cannot repair an earlier unsupported assertion.
   absolute amounts alone. Any concentration comparison needs an explicit compatible
   denominator and a stated measure; truncation still forbids population-wide
   or structural claims that the returned evidence does not authorize.
-- Uniqueness, extrema, and population-wide claims require evidence for the
-  corresponding complete compatible population; returned bounded rows alone
-  do not establish it.
+- Uniqueness, extrema, and population claims need evidence for the corresponding
+  compatible population: either full valid rows or the specific verified ordering
+  or aggregate proof. Full ordering and full detail coverage are different facts.
 - `calendar_evidence.period_state` describes the requested window, not source
   freshness. Formal MoM or YoY requires comparison compatibility, and growth
   remains undefined when the governed base does not permit it. On mismatch,
@@ -178,6 +193,14 @@ cannot repair an earlier unsupported assertion.
   state the exact operands and formula, label the result as a derived
   observation, and do not present it as a registered metric, reconciliation,
   structural contribution, or causal proof.
+  Reuse returned `numeric_evidence`, explicit `period_summary`, or official Python
+  for rankings and multi-period sums. Preserve field references and exact
+  numerator/denominator meanings: a gap-to-target ratio is not a contribution
+  from changing the target. Qualification coverage and known-value coverage may
+  have different denominators. Source records do not establish document counts.
+  Validate extrema against the queried periods, including ties and missing months;
+  do not sum ratios or stock snapshots as flows. Reuse structured values rather
+  than transcribing long tables into code.
 - A display-only conversion of one returned value is allowed when it uses a
   fixed conversion factor, preserves the returned meaning, and does not create
   a new metric or relationship. State the displayed unit.
