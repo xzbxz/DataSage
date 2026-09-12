@@ -75,7 +75,7 @@ ENTITY_RUNTIME_POLICY = {
     "hard_max_candidates": ENTITY_RESOLVE_HARD_LIMIT,
 }
 BUSINESS_TIME_ZONE = timezone(timedelta(hours=8))
-DELIVERY_SCOPES = ("default_net", "explicit_gross", "order_delivery_alignment")
+DELIVERY_SCOPES = ("default_net", "explicit_gross", "order_delivery_alignment", "source_recorded")
 INVENTORY_SCOPES = ("total", "on_hand", "available", "allocated", "in_transit")
 # Compatibility export; request_contract is the sole owner of public limits.
 PUBLIC_REQUEST_LIMIT = request_contract.PUBLIC_REQUEST_LIMIT

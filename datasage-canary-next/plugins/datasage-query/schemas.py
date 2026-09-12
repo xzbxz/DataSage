@@ -58,7 +58,7 @@ REQUEST = {
             "type": "string",
             "enum": list(DELIVERY_SCOPES),
             "description": (
-                "Delivery metric scope: default_net is the default net basis; explicit_gross identifies the before-return basis; order_delivery_alignment applies to registered compatible order/delivery metrics. Runtime validates scope compatibility with the selected metric."
+                "Delivery metric scope: default_net is the default net basis; explicit_gross identifies the before-return basis; order_delivery_alignment applies to registered compatible order/delivery metrics. source_recorded is the independently scoped ADS event source, not net delivery. Runtime validates scope compatibility with the selected metric."
             ),
         },
         "inventory_scope": {

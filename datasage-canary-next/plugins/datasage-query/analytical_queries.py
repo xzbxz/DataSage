@@ -2273,6 +2273,9 @@ def build_analytical_metric_query(
     query_observed_on = observed_on or _business_today()
     kind = metric.get("query_kind")
     _ensure_available(metric)
+    if kind == "fabric_source":
+        from .fabric_source_queries import build_fabric_query
+        return build_fabric_query(request, metric, datasets_contract, semantics, limit, observed_on=query_observed_on)
     if kind == "pattern_matching":
         from .pattern_queries import build_pattern_query
         return build_pattern_query(request, metric, datasets_contract, semantics, limit, observed_on=query_observed_on)

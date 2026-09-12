@@ -1,8 +1,9 @@
-version: datasage-mini-delivery-semantics/v21
+version: datasage-mini-delivery-semantics/v22
 domain: delivery
 contract_role: plugin_physical_execution
 
 tables:
+  - vk_ads.delivery_barcode_source_ads
   - vk_dwd.sale_bill_goods_detail_dwd
   - vk_dwd.delivery_bill_barcode_detail_dwd
   - vk_dwd.delivery_return_detail_dwd
@@ -775,6 +776,117 @@ dimensions:
     value_contract: *vc_source_exact
     answer_note: 当前供应商主数据属性。
 
+
+  fabric_channel:
+    label: 源归一货源渠道
+    columns:
+    - source_channel
+    filter_column: source_channel
+    value_contract:
+      kind: closed
+      allowed_values:
+      - 中国订单
+      - 销售端提报
+      - 测算专员备货
+      - 无来源
+      - 未识别渠道
+  fabric_candidates:
+    label: 源渠道候选集合
+    columns:
+    - source_channel_set
+    filter_column: source_channel_set
+    value_contract:
+      kind: source_exact
+      model_rule: 仅使用明确源值；显示标签不证明独立业务事实。
+  fabric_candidate_count:
+    label: 源渠道候选数
+    columns:
+    - column: source_channel_cnt
+      alias: source_channel_cnt_label
+    filter_column: source_channel_cnt_label
+    value_contract:
+      kind: source_exact
+      model_rule: 仅使用明确源值；显示标签不证明独立业务事实。
+  fabric_source_confidence:
+    label: 源渠道可信度
+    columns:
+    - source_confidence
+    filter_column: source_confidence
+    value_contract:
+      kind: source_exact
+      model_rule: 仅使用明确源值；显示标签不证明独立业务事实。
+  fabric_trace_confidence:
+    label: 源血缘可信度
+    columns:
+    - trace_confidence
+    filter_column: trace_confidence
+    value_contract:
+      kind: source_exact
+      model_rule: 仅使用明确源值；显示标签不证明独立业务事实。
+  fabric_ambiguity:
+    label: 源歧义标记
+    columns:
+    - source_ambiguity_flag
+    filter_column: source_ambiguity_flag
+    value_contract:
+      kind: source_exact
+      model_rule: 仅使用明确源值；显示标签不证明独立业务事实。
+  fabric_root_count:
+    label: 源入库根候选数
+    columns:
+    - column: root_candidate_cnt
+      alias: root_candidate_cnt_label
+    filter_column: root_candidate_cnt_label
+    value_contract:
+      kind: source_exact
+      model_rule: 仅使用明确源值；显示标签不证明独立业务事实。
+  fabric_cohort_label:
+    label: 源原形成标签
+    columns:
+    - inventory_cohort
+    filter_column: inventory_cohort
+    value_contract:
+      kind: source_exact
+      model_rule: 仅使用明确源值；显示标签不证明独立业务事实。
+  fabric_formation:
+    label: 源依据形成时期核验
+    columns:
+    - column: inventory_cohort
+      alias: formation_assessment
+    filter_column: formation_assessment
+    value_contract:
+      kind: source_exact
+      model_rule: 仅使用明确源值；显示标签不证明独立业务事实。
+  fabric_time_basis:
+    label: 源形成时间依据
+    columns:
+    - cohort_basis_type
+    filter_column: cohort_basis_type
+    value_contract:
+      kind: source_exact
+      model_rule: 仅使用明确源值；显示标签不证明独立业务事实。
+  fabric_sku:
+    label: 源规格标识
+    columns:
+    - goods_sku_id
+    filter_column: goods_sku_id
+    value_contract:
+      kind: source_exact
+      model_rule: 仅使用明确源值；显示标签不证明独立业务事实。
+    public_display_fields:
+    - goods_sku_id
+  fabric_ht:
+    label: 源客户部门包含HT分类
+    columns:
+    - column: current_customer_dept
+      alias: fabric_ht_class
+    filter_column: fabric_ht_class
+    value_contract:
+      kind: closed
+      allowed_values:
+      - 含HT
+      - 非HT
+      - 未知部门
 current_attribute_overrides: &current_attribute_overrides
   customer_label:
     label: 当前客户标签
@@ -950,7 +1062,7 @@ public_disclosures:
 default_disclosures:
   - id: delivery.external-customer.scope
     mode: required_always
-    text: "出库域指标固定排除内部客户。"
+    text: "出库域的常规指标固定排除内部客户；源记录摘要仅以可确认外部客户记录计算已知数值，异常记录保留范围缺口。"
   - id: delivery.department.roles
     mode: required_when
     when: {any_request_dimension_or_filter_present: [department, business_department, business_region]}
@@ -1674,3 +1786,145 @@ metrics:
     time_policy: current_month
     required_filters: *order_filters
     allowed_dimensions: *delivery_analysis
+
+  fabric_delivery_source_summary:
+    label: 面料源出库及低价标签摘要
+    business_definition: 在独立出库源范围中返回已记录事件条数、卷数、人民币销售额、低价标签卷数和销售额、低价标签事件DDP与销售额差额，以及货源和形成依据覆盖。
+    unit: 源出库事件条
+    query_kind: fabric_source
+    fabric_side: delivery
+    table: vk_ads.delivery_barcode_source_ads
+    source_key: barcode_detail_id
+    source_fields:
+    - goods_id
+    - goods_name
+    - goods_sku_id
+    - piece_num
+    - ddp_amount_rmb
+    - source_channel
+    - source_channel_set
+    - source_channel_cnt
+    - source_confidence
+    - trace_confidence
+    - source_ambiguity_flag
+    - root_candidate_cnt
+    - inventory_cohort
+    - cohort_basis_time
+    - cohort_basis_type
+    - cohort_confidence
+    - first_in_whse_time
+    - first_in_whse_time_max
+    - etl_time
+    - barcode_detail_id
+    - delivery_time
+    - current_customer_dept
+    - is_low_price
+    - sale_amount_rmb
+    - amount_exception_flag
+    - is_inner_cus
+    - is_ccbs_cus
+    - bill_type
+    time_policy: source_recorded_history
+    max_group_dimensions: 4
+    allowed_dimensions:
+    - product
+    - fabric_sku
+    - department
+    - fabric_channel
+    - fabric_candidates
+    - fabric_candidate_count
+    - fabric_source_confidence
+    - fabric_trace_confidence
+    - fabric_ambiguity
+    - fabric_root_count
+    - fabric_cohort_label
+    - fabric_formation
+    - fabric_time_basis
+    - fabric_ht
+    dimension_overrides:
+      product:
+        label: 源产品
+        columns:
+        - goods_id
+        - goods_name
+        filter_column: goods_name
+        value_contract:
+          kind: entity_exact
+        identity_filter:
+          entity_type: product
+          value_field: canonical_id
+          column: goods_id
+      department:
+        label: 源出库客户部门
+        columns:
+        - current_customer_dept
+        filter_column: current_customer_dept
+        value_contract:
+          kind: source_exact
+          model_rule: 仅使用明确源值；显示标签不证明独立业务事实。
+    result_fact_units:
+      fabric_rolls: 卷
+      fabric_known_rolls: 卷
+      fabric_tagged_rolls: 卷
+      fabric_known_tagged_rolls: 卷
+      fabric_ddp_rmb: 人民币元
+      fabric_known_ddp_rmb: 人民币元
+      fabric_tagged_ddp_rmb: 人民币元
+      fabric_known_tagged_ddp_rmb: 人民币元
+      fabric_sales_rmb: 人民币元
+      fabric_known_sales_rmb: 人民币元
+      fabric_tagged_sales_rmb: 人民币元
+      fabric_known_tagged_sales_rmb: 人民币元
+      fabric_tagged_ddp_gap_rmb: 人民币元
+      fabric_known_tagged_ddp_gap_rmb: 人民币元
+      fabric_tag_rate: 比例
+      fabric_tag_contribution: 比例
+      fabric_scope_rows: 源记录条
+      fabric_group_rows: 源记录条
+      fabric_unknown_tags: 源记录条
+      fabric_missing_rolls: 源记录条
+      fabric_missing_ddp: 源记录条
+      fabric_missing_sales: 源记录条
+      fabric_negative_roll_rows: 源记录条
+      fabric_identity_errors: 源记录条
+      fabric_scope_unknown: 源记录条
+      fabric_unknown_channels: 源记录条
+      fabric_multiple_channels: 源记录条
+      fabric_multiple_roots: 源记录条
+      fabric_formation_pending: 源记录条
+      fabric_missing_formation: 源记录条
+      fabric_cross_year_roots: 源记录条
+      fabric_low_formation_confidence: 源记录条
+      fabric_missing_etl: 源记录条
+      fabric_etl_time_count: 个
+      fabric_population_groups: 个
+      fabric_in_transit_rows: 源记录条
+      fabric_current_status_unknown: 源记录条
+      fabric_source_amount_exceptions: 源记录条
+      fabric_scope_tagged_rolls: 卷
+      metric_value: 源出库事件条
+      fabric_unresolved_rolls_rows: 源记录条
+      fabric_unresolved_tagged_rolls_rows: 源记录条
+      fabric_unresolved_ddp_rmb_rows: 源记录条
+      fabric_unresolved_tagged_ddp_rmb_rows: 源记录条
+      fabric_unresolved_sales_rmb_rows: 源记录条
+      fabric_unresolved_tagged_sales_rmb_rows: 源记录条
+      fabric_unresolved_tagged_ddp_gap_rmb_rows: 源记录条
+      fabric_no_source_rows: 源记录条
+      fabric_unknown_candidates: 源记录条
+      fabric_unknown_cohort_labels: 源记录条
+    disclosures:
+    - id: delivery.fabric-source.labels
+      mode: required_always
+      text: 源标签只作已记录事实，不把六成或八成升级为公司正式低价标准。DDP是源基准金额，不是已证明的财务成本；差额不是财务损失或利润。归一渠道不等于唯一真实来源；候选、低可信、无来源及未知保留。形成时间缺失、低可信兜底、跨年多根及根时间不完整进入待核验，源原标签另列；不独立证明血缘真实性。读取、业务发生和逐行ETL时点不同，最大ETL不能证明完整原子批次。
+    - id: delivery.fabric-source.coverage
+      mode: required_always
+      text: 卷数是已记录事件累计或源快照卷数，不是唯一物理卷生命周期。两侧独立汇总，不按条码连接推导净销售或售罄率。原始数量、采购成本、正式重复退货率、人员或责任排名不开放。NULL不补零，已知部分与缺口分别返回，负数保留；存在缺卷数、未知标签或负卷数时完整标签比例受限。标签率分母是当前分组全部卷数；贡献份额分母是同一期间和筛选范围内全部分组的标签卷数（包含无来源和未知来源），在截断前计算，重复展示的总体不可相加。
+    - id: delivery.fabric-source.scope
+      mode: required_always
+      text: 默认读取完整已记录出库ADS源范围，包含HT；源从2025年起，排内部客户和CCBS、按当前商品分类纳入面料，HT全类型、非HT大货。这不是全公司出库或默认净出库。HT按客户部门包含HT识别，不用此前基线净出库的后缀规则；可明确筛选非HT，部门缺失另列未知。显式期间按记录出库时间，时间缺失保留范围未知；不指定期间为全部已记录源历史。
+    delivery_scope_policy:
+      allowed_scopes:
+      - source_recorded
+      required: false
+      default: source_recorded

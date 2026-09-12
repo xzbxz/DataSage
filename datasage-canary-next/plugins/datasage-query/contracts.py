@@ -678,6 +678,10 @@ def _delivery_scope_flags(
         and item.get("mode") == "required_always"
         for item in inherited
     )
+    if definition.get("query_kind") == "fabric_source":
+        # Source summaries retain policy drift as unresolved rows, rather than
+        # claiming every returned source record is a verified external sale.
+        external_customers_only = False
 
     completed_returns_only = (
         definition.get("time_field") == "statement_time"

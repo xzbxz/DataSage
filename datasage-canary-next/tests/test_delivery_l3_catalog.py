@@ -117,8 +117,8 @@ class DeliveryL3CatalogTests(unittest.TestCase):
         expert = _catalog(
             {"domain": "delivery", "view": "expert_index"}
         )["results"][0]
-        self.assertEqual(35, summary["metric_count"])
-        self.assertEqual(35, expert["metric_count"])
+        self.assertEqual(36, summary["metric_count"])
+        self.assertEqual(36, expert["metric_count"])
         self.assertEqual(
             self.available,
             {item["code"] for item in summary["metrics"]},
@@ -146,7 +146,7 @@ class DeliveryL3CatalogTests(unittest.TestCase):
                     compact_metric["operation_summary"],
                 )
                 self.assertEqual(
-                    ["previous_period", "year_over_year"],
+                    ([] if code == "fabric_delivery_source_summary" else ["previous_period", "year_over_year"]),
                     raw_metric["comparison_kinds"],
                 )
 
@@ -194,7 +194,7 @@ class DeliveryL3CatalogTests(unittest.TestCase):
                     self.assertEqual(runtime_accepts, catalog_accepts)
 
                 self.assertIn("external_customers_only", metric["scope_flags"])
-                self.assertTrue(metric["scope_flags"]["external_customers_only"])
+                self.assertEqual(code != "fabric_delivery_source_summary", metric["scope_flags"]["external_customers_only"])
                 self.assertIn("answer_boundary_summary", metric)
                 self.assertTrue(metric["answer_boundary_summary"])
 

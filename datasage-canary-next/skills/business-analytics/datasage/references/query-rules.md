@@ -60,6 +60,28 @@ and evidence relationships on skill-enabled surfaces. Pending/current-master,
 unknown, return-settlement and truncated states remain properties of the
 returned evidence, not completed-period or population-wide proof.
 
+## Fabric source summaries
+
+For fabric source questions, discover the source summary in the existing
+delivery or inventory domain. Delivery uses its separate `source_recorded`
+scope, includes HT by default, and optionally filters non-HT using the published
+contains-HT classification. Inventory defaults to the complete source snapshot
+including transit; `on_hand` uses verified current inventory status. Neither
+source summary replaces net delivery or the registered slow-inventory pool.
+
+Read the row's individual fact units: record count, rolls, RMB source amounts
+and ratios coexist in these summaries. Missing full values remain unknown;
+known subsets and unresolved counts are separate facts. The DDP benchmark gap
+is not financial loss or profit. Source low-price/stagnant labels are recorded
+labels, not approved company thresholds. Preserve pending formation evidence
+alongside the original source label. Group tag rates and tag contributions use
+different denominators; the repeated full-scope denominator must not be summed.
+The first source batch exposes rolls, not raw quantities or recovered units.
+Delivery can group by month; inventory offers only the current source snapshot.
+Read time, business time and row ETL time are distinct and do not attest an
+atomic ETL batch. The two sources cannot establish barcode lifecycle or causal
+responsibility.
+
 ## Time
 
 - Resolve omitted or imprecise time wording using the selected metric's published

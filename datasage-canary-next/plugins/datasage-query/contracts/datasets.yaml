@@ -1,4 +1,4 @@
-version: datasage-mini-datasets/v19
+version: datasage-mini-datasets/v20
 
 defaults:
   blocked_columns:
@@ -755,3 +755,204 @@ datasets:
       delivery currency.
     - Business modification timestamps are not ETL refresh times. No free-text remarks,
       prices, collaborators or approvers exposed.
+
+  vk_ads.delivery_barcode_source_ads:
+    kind: fact
+    grain: one_recorded_barcode_delivery_event
+    primary_key:
+    - barcode_detail_id
+    allowed_columns:
+    - goods_id
+    - goods_name
+    - goods_sku_id
+    - piece_num
+    - ddp_amount_rmb
+    - source_channel
+    - source_channel_set
+    - source_channel_cnt
+    - source_confidence
+    - trace_confidence
+    - source_ambiguity_flag
+    - root_candidate_cnt
+    - inventory_cohort
+    - cohort_basis_time
+    - cohort_basis_type
+    - cohort_confidence
+    - first_in_whse_time
+    - first_in_whse_time_max
+    - etl_time
+    - barcode_detail_id
+    - delivery_time
+    - current_customer_dept
+    - is_low_price
+    - sale_amount_rmb
+    - amount_exception_flag
+    - is_inner_cus
+    - is_ccbs_cus
+    - bill_type
+    forbidden_columns:
+    - attr_val
+    - bar_code
+    - channel_compare_status
+    - check_bill_nos
+    - check_detail_cnt
+    - check_is_ready_set
+    - check_ready_type_set
+    - current_customer_id
+    - current_customer_name
+    - current_customer_no
+    - current_order_status
+    - current_sale_bill_id
+    - current_sale_bill_no
+    - current_sales_id
+    - current_sales_name
+    - ddp_price
+    - deal_ddp_ratio
+    - deal_price
+    - delivery_bill_no
+    - delivery_month
+    - first_hit_type
+    - goods_no
+    - goods_num
+    - has_quality_issue
+    - has_repeat_return
+    - inventory_age_at_delivery_days
+    - is_ready
+    - issue_type_set
+    - latest_return_reason
+    - loss_gap_rmb
+    - low_price_rule
+    - low_price_threshold
+    - no_source_reason
+    - old_price_channel_no
+    - old_price_channel_type
+    - org_name
+    - original_customer_depts
+    - original_customer_ids
+    - original_customer_names
+    - original_order_cnt
+    - original_order_statuses
+    - original_sale_bill_ids
+    - original_sale_bill_nos
+    - original_sales_ids
+    - original_sales_names
+    - ready_apply_bill_nos
+    - ready_apply_cnt
+    - ready_apply_customers
+    - ready_apply_depts
+    - ready_apply_sales
+    - resource_barcode
+    - responsibility_status
+    - responsible_customer_names
+    - responsible_depts
+    - responsible_reference_nos
+    - responsible_sales_names
+    - return_count
+    - return_reason_set
+    - root_barcode_set
+    - root_in_whse_bill_no_set
+    - root_in_whse_detail_id_set
+    - source_rule
+    - trace_max_depth
+    - trace_node_cnt
+    - trace_status
+    - whse_dept
+    - whse_name
+    - low_price_loss_rmb
+    required_filters: []
+    metric_only: true
+    domains:
+    - delivery
+  vk_ads.inventory_barcode_source_ads:
+    kind: current_snapshot
+    grain: one_recorded_source_inventory_snapshot_row
+    primary_key:
+    - inventory_id
+    allowed_columns:
+    - goods_id
+    - goods_name
+    - goods_sku_id
+    - piece_num
+    - ddp_amount_rmb
+    - source_channel
+    - source_channel_set
+    - source_channel_cnt
+    - source_confidence
+    - trace_confidence
+    - source_ambiguity_flag
+    - root_candidate_cnt
+    - inventory_cohort
+    - cohort_basis_time
+    - cohort_basis_type
+    - cohort_confidence
+    - first_in_whse_time
+    - first_in_whse_time_max
+    - etl_time
+    - inventory_id
+    - whse_dept
+    - is_stagnant
+    - whse_org
+    - whse_type
+    forbidden_columns:
+    - attr_val
+    - bar_code
+    - channel_compare_status
+    - check_bill_nos
+    - check_detail_cnt
+    - check_is_ready_set
+    - check_ready_type_set
+    - come_whse_month
+    - come_whse_time
+    - current_whse_stay_days
+    - ddp_price
+    - first_hit_type
+    - goods_no
+    - goods_num
+    - has_quality_issue
+    - has_repeat_return
+    - inventory_age_days
+    - is_discountable
+    - is_handing_sales
+    - issue_type_set
+    - latest_return_reason
+    - no_source_reason
+    - old_price_channel_no
+    - old_price_channel_type
+    - original_customer_depts
+    - original_customer_ids
+    - original_customer_names
+    - original_order_cnt
+    - original_order_statuses
+    - original_sale_bill_ids
+    - original_sale_bill_nos
+    - original_sales_ids
+    - original_sales_names
+    - purchase_cost_price
+    - purchase_cost_rmb
+    - ready_apply_bill_nos
+    - ready_apply_cnt
+    - ready_apply_customers
+    - ready_apply_depts
+    - ready_apply_sales
+    - resource_barcode
+    - responsibility_status
+    - responsible_customer_names
+    - responsible_depts
+    - responsible_reference_nos
+    - responsible_sales_names
+    - return_count
+    - return_reason_set
+    - root_barcode_set
+    - root_in_whse_bill_no_set
+    - root_in_whse_detail_id_set
+    - source_rule
+    - stagnant_type
+    - trace_max_depth
+    - trace_node_cnt
+    - trace_status
+    - whse_id
+    - whse_name
+    required_filters: []
+    metric_only: true
+    domains:
+    - inventory

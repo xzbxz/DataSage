@@ -1380,7 +1380,7 @@ class BusinessContractTests(unittest.TestCase):
             )
         )["results"][0]
         self.assertEqual(
-            "datasage-mini-inventory-semantics/v15",
+            "datasage-mini-inventory-semantics/v16",
             detail["source_versions"]["semantics"],
         )
         self.assertEqual(
@@ -4103,8 +4103,8 @@ class BusinessContractTests(unittest.TestCase):
 
         self.assertTrue(metrics)
         self.assertTrue(
-            all(excludes_internal_customer(code) for code in metrics),
-            "域级披露只能覆盖全部执行路径都固定排除内部客户的指标",
+            all(excludes_internal_customer(code) for code in metrics if code != "fabric_delivery_source_summary"),
+            "常规指标仍须固定排除内部客户；源摘要由独立范围缺口测试覆盖",
         )
         inherited = semantics["default_disclosures"]
         self.assertEqual(
@@ -4112,7 +4112,7 @@ class BusinessContractTests(unittest.TestCase):
                 {
                     "id": "delivery.external-customer.scope",
                     "mode": "required_always",
-                    "text": "出库域指标固定排除内部客户。",
+                    "text": "出库域的常规指标固定排除内部客户；源记录摘要仅以可确认外部客户记录计算已知数值，异常记录保留范围缺口。",
                 },
                 {
                     "id": "delivery.department.roles",
@@ -4186,7 +4186,7 @@ class BusinessContractTests(unittest.TestCase):
                 scope = disclosures["delivery.external-customer.scope"]
                 self.assertIs(scope["applies"], True)
                 self.assertEqual("required_always", scope["mode"])
-                self.assertEqual("出库域指标固定排除内部客户。", scope["text"])
+                self.assertEqual("出库域的常规指标固定排除内部客户；源记录摘要仅以可确认外部客户记录计算已知数值，异常记录保留范围缺口。", scope["text"])
                 self.assertTrue(
                     tools._disclosure_ledger_has_valid_seal(
                         result["disclosure_ledger"],

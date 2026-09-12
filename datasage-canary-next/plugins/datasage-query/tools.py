@@ -1941,6 +1941,8 @@ def _validate_delivery_metric_scope(
             raise QueryFailure("GROSS_SCOPE_REQUIRES_EXPLICIT_REQUEST",
                 "毛出库指标必须通过结构化字段确认用户明确要求毛口径或下单出库对照。")
         raise QueryFailure("INVALID_INPUT", "当前指标与 delivery_scope 不一致。")
+    if scope is None and policy["default"] not in {None, "default_net"}:
+        normalized["delivery_scope"] = policy["default"]
     filters = normalized.get("metric_filters") or {}
     if isinstance(filters, dict) and "ready_goods" in filters:
         value = filters["ready_goods"]
@@ -3430,7 +3432,7 @@ def _build_metric_query(
             raise QueryFailure("INVALID_PLAN", "该分析指标暂不接受通用比较参数。")
         time_bucket = request.get("time_bucket")
         if time_bucket is not None and (
-            metric.get("query_kind") not in {"target_completion", "allocated_amount", "pattern_matching"}
+            metric.get("query_kind") not in {"target_completion", "allocated_amount", "pattern_matching", "fabric_source"}
             or time_bucket != "month"
         ):
             raise QueryFailure("INVALID_PLAN", "该分析指标不支持请求中的时间分组参数。")
@@ -4530,6 +4532,9 @@ _PUBLIC_FACT_FIELDS = {
     "excluded_negative_bill_count",
     "excluded_open_balance_bill_count",
 }
+from .fabric_source_queries import FACT_FIELDS as _FABRIC_FACT_FIELDS
+_PUBLIC_FACT_FIELDS.update(_FABRIC_FACT_FIELDS)
+
 _PUBLIC_STATE_FIELDS = {
     "net_flow_state",
     "pool_movement_state",
@@ -6939,6 +6944,12 @@ def _public_time_range(value: Any) -> dict[str, Any]:
             raise QueryFailure("CONTRACT_UNAVAILABLE", "查询时间范围来源无效。")
         return {"start": start, "end": end, "source": source}
     source = value.get("source")
+    if source == "fabric_source_observation":
+        return {k: v for k, v in value.items() if k in {
+            "source", "basis", "window_start", "window_end", "inventory_scope",
+            "fabric_read_at", "fabric_read_utc_at", "fabric_etl_min", "fabric_etl_max",
+            "fabric_etl_time_count", "fabric_missing_etl", "fabric_scope_rows",
+        }}
     if source == "pattern_current_observation":
         return {k:v for k,v in value.items() if k in {"source","basis","window_start","window_end","pattern_read_at","pattern_read_utc_at","pattern_task_modified_max","pattern_execute_modified_max"}}
     if source == "frozen_baseline_to_current":
@@ -7170,6 +7181,10 @@ def _scope_texts(value: Any) -> list[str]:
             return []
     source = value.get("source")
     as_of_date = value.get("as_of_date")
+    if source == "fabric_source_observation":
+        basis = "源出库已记录事件" if value.get("basis") == "recorded_delivery_history" else "源库存快照（" + ("可确认在仓" if value.get("inventory_scope") == "on_hand" else "完整源范围，含在途") + "）"
+        window = f"，{value.get('window_start')}至{value.get('window_end')}（结束不含）" if value.get("window_start") else ""
+        return [f"{basis}{window}；本次库端读取{value.get('fabric_read_at')}，ETL时点不代表完整批次"]
     if source == "pattern_current_observation":
         basis = {"current_observation":"当前全范围观察","task_created":"任务创建期间队列","execution_completed":"执行完成期间记录","linked_delivery":"已关联出库实际发生期间"}.get(value.get("basis"),"找版观察")
         window = f"，{value.get('window_start')}至{value.get('window_end')}（不含结束日）" if value.get("window_start") else ""
@@ -9212,6 +9227,13 @@ def _run_one(
                             row[f"pattern_{role}_ref"] = "unattributed" if value is None else role + "_" + hashlib.sha256(f"pattern-{role}:{value}".encode("utf-8")).hexdigest()[:16]
             except AnalysisQueryError as error:
                 raise QueryFailure(error.code,error.message,stage="result_validation") from error
+        if scope.get("_fabric_observation"):
+            from .fabric_source_queries import fabric_observation
+            try:
+                applied_time_range = fabric_observation(rows, scope["time_range"])
+            except AnalysisQueryError as error:
+                raise QueryFailure(error.code, error.message, stage="result_validation") from error
+            scope["time_range"] = applied_time_range
         public_rows, data_state = _evidence_rows_and_state(rows, truncated)
         applied_time_range, data_state = _resolve_snapshot_time_evidence(
             applied_time_range,
@@ -9291,8 +9313,8 @@ def _run_one(
             truncated,
             public_rows,
             public_scope_entities,
-            fact_units=(capability_contract.TARGET_COMPLETION_FACT_UNITS
-                        if metric_definition.get("query_kind") == "target_completion" else None),
+            fact_units=(metric_definition.get("result_fact_units") or (capability_contract.TARGET_COMPLETION_FACT_UNITS
+                        if metric_definition.get("query_kind") == "target_completion" else None)),
         )
         disclosure_ledger, disclosure_ledger_seal = _disclosure_ledger(
             request=request,
