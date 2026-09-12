@@ -17,22 +17,36 @@ exists.
 Future approved bindings belong to Profile-local `local-report-bindings.json`
 (Git ignored). It is an object with exactly `version: 1`, `default_report`
 (report ID) and `reports` (ID-to-definition mapping). Each selected definition
-requires:
+requires common fields department, views and limit. Weekly views additionally
+require baseline_week and max_baseline_age_days; monthly views require an explicit
+calendar_month and use the independent monthly opening pool. A monthly-only binding
+rejects weekly baseline/age/time_range fields; it does not reinterpret a week as a
+month-start pool. All real bindings remain unconfigured. Available views:
+
+- pool_summary / flow_summary / flow_sales for weekly cohorts;
+- monthly_pool_summary / monthly_flow_summary / monthly_flow_sales for monthly cohorts.
+
+Field details:
 
 | Field | Contract |
 |---|---|
 | department | One reviewed source warehouse department; no CLI override |
 | baseline_week | One explicit valid existing ISO week; no automatic latest-week fallback |
 | max_baseline_age_days | Explicit operator-approved bound, integer 1–366; no shipped business default |
-| views | Nonempty unique selection of pool_summary, flow_summary, flow_sales |
+| views | Nonempty unique selection of the six views above |
 | limit | Integer 1–100, further limited by existing query/wire budgets |
+| calendar_month | Required for monthly views, YYYY-MM; not a weekly baseline |
 | time_range (optional) | Exactly start/end ISO dates, half-open; applies only to flow views |
 
 No SQL, metric field, arbitrary request plan, recipients, schedule or send
 options are accepted. A definition using a period must include a flow view.
-Pool comparison stays a current observation even when flows use a past window.
+Weekly pool comparison stays a current observation when weekly flows use a past
+window; independent monthly closing uses the specified current/historical source.
 The existing metric time validation, units, unknown states, negative quantities,
 source identity, concurrency, deadlines and evidence projection remain active.
+
+Both ordinary and high-price net rolls come from the shared query result. The
+renderer does not recalculate high-price totals or remove zero ordinary-net rows.
 
 The entrypoint loads settings via the existing Profile configuration and pins
 the contract snapshot. After the local allowlist passes, it calls the existing
@@ -60,3 +74,9 @@ official-script subprocess tests use only a temporary Profile and synthetic
 SQLite fixtures with network blocked; they prove neither production binding nor
 recipient delivery. Real scope, age policy, baseline owner, business cycle and
 recipient choices remain to be approved before B/C/D stages.
+
+Sales report views consume SQL-provided scope and sales roll totals, including
+cross-quantity-unit roll totals. No quantities are summed across units. For a
+war total plus sales breakdown, one flow_sales query already carries both.
+Different query branches retain their own read times; do not claim their results
+are a single atomic observation or derive inventory change equals sales.

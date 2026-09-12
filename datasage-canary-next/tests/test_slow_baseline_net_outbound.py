@@ -17,7 +17,7 @@ class BaselineNetTests(unittest.TestCase):
         for table in ['delivery_bill_barcode_detail_dwd','delivery_return_detail_dwd','sale_bill_goods_detail_dwd','whse_info_dwd']:
             self.conn.execute('DROP TABLE IF EXISTS vk_dwd.'+table)
         self.conn.executescript('''
-        CREATE TABLE vk_dwd.delivery_bill_barcode_detail_dwd(goods_id INTEGER,goods_sku_id INTEGER,whse_dept TEXT,unit TEXT,goods_num REAL,piece_num REAL,delivery_time TEXT,whse_id INTEGER,bill_type TEXT COLLATE NOCASE,is_inner_cus TEXT,sale_bill_goods_id INTEGER,sales_id INTEGER,sales_name TEXT);
+        CREATE TABLE vk_dwd.delivery_bill_barcode_detail_dwd(goods_id INTEGER,goods_sku_id INTEGER,whse_dept TEXT,unit TEXT,goods_num REAL,piece_num REAL,delivery_time TEXT,whse_id INTEGER,bill_type TEXT COLLATE NOCASE,is_inner_cus TEXT,sale_bill_goods_id INTEGER,sales_id INTEGER,sales_name TEXT,deal_price REAL,ddp_price REAL);
         CREATE TABLE vk_dwd.delivery_return_detail_dwd(goods_id INTEGER,goods_sku_id INTEGER,whse_dept TEXT,unit TEXT,return_goods_num REAL,return_piece_num REAL,statement_time TEXT,in_whse_id INTEGER,sale_bill_type TEXT COLLATE NOCASE,is_inner_cus TEXT,status INTEGER,complnt_type INTEGER,channel_type INTEGER,sales_id INTEGER,sales_name TEXT);
         CREATE TABLE vk_dwd.sale_bill_goods_detail_dwd(goods_detail_id INTEGER,bill_status INTEGER);
         CREATE TABLE vk_dwd.whse_info_dwd(whse_id INTEGER,dept_name TEXT);
@@ -25,8 +25,8 @@ class BaselineNetTests(unittest.TestCase):
         INSERT INTO vk_dwd.sale_bill_goods_detail_dwd VALUES(1,6);
         ''')
         self.baseline([(1,1,1,11,'m',30,2,'2026-09-08T09:00:00')])
-    def outgoing(self,qty=10,rolls=1,dept='A',unit='m',when='2026-09-09T12:00:00',whse=1,bill='bulk',goods=1,sku=11,sale=1,inner='n',sales_id=100,sales_name='Sales A'):
-        self.insert('vk_dwd.delivery_bill_barcode_detail_dwd','goods_id,goods_sku_id,whse_dept,unit,goods_num,piece_num,delivery_time,whse_id,bill_type,is_inner_cus,sale_bill_goods_id,sales_id,sales_name',[(goods,sku,dept,unit,qty,rolls,when,whse,bill,inner,sale,sales_id,sales_name)])
+    def outgoing(self,qty=10,rolls=1,dept='A',unit='m',when='2026-09-09T12:00:00',whse=1,bill='bulk',goods=1,sku=11,sale=1,inner='n',sales_id=100,sales_name='Sales A',deal_price=80,ddp_price=100):
+        self.insert('vk_dwd.delivery_bill_barcode_detail_dwd','goods_id,goods_sku_id,whse_dept,unit,goods_num,piece_num,delivery_time,whse_id,bill_type,is_inner_cus,sale_bill_goods_id,sales_id,sales_name,deal_price,ddp_price',[(goods,sku,dept,unit,qty,rolls,when,whse,bill,inner,sale,sales_id,sales_name,deal_price,ddp_price)])
     def returning(self,qty=3,rolls=1,dept='A',unit='m',when='2026-09-10T12:00:00',whse=1,bill='bulk',goods=1,sku=11,status=4,inner='n',sales_id=200,sales_name='Sales B'):
         self.insert('vk_dwd.delivery_return_detail_dwd','goods_id,goods_sku_id,whse_dept,unit,return_goods_num,return_piece_num,statement_time,in_whse_id,sale_bill_type,is_inner_cus,status,complnt_type,channel_type,sales_id,sales_name',[(goods,sku,dept,unit,qty,rolls,when,whse,bill,inner,status,1,1,sales_id,sales_name)])
     def run_net(self,**kw):return self.query(metric('registered_slow_pool_baseline_net_outbound','inventory',month=None,**kw))

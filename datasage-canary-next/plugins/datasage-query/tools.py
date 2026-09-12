@@ -379,6 +379,12 @@ def _validate_detail_request_capabilities(
     if not isinstance(requested_filters, Mapping):
         raise QueryFailure("INVALID_PLAN", "过滤条件格式无效。")
     allowed_dimensions = _metric_allowed_dimensions(request, metric, semantics)
+    try:
+        grouping=capability_contract.metric_grouping(metric)
+    except capability_contract.CapabilityContractError as exc:
+        raise QueryFailure(exc.code,exc.message) from exc
+    if grouping and requested_dimensions and not set(grouping['required'])<=set(requested_dimensions)<=set(grouping['allowed']):
+        raise QueryFailure('UNSUPPORTED_DIMENSION','该指标分组组合不受支持；可筛选维度不等于可分组维度。',stage='input_validation')
     if not {*requested_dimensions, *requested_filters}.issubset(allowed_dimensions):
         raise QueryFailure(
             "UNSUPPORTED_DIMENSION",
@@ -4534,6 +4540,18 @@ _PUBLIC_FACT_FIELDS = {
 }
 from .fabric_source_queries import FACT_FIELDS as _FABRIC_FACT_FIELDS
 _PUBLIC_FACT_FIELDS.update(_FABRIC_FACT_FIELDS)
+_PUBLIC_FACT_FIELDS.update({'high_net_rolls','high_known_net_rolls','high_gross_rolls','high_known_gross_rolls',
+    'high_missing_price_rows','high_missing_roll_rows','high_price_anomaly_rows','unit_high_net_rolls',
+    'unit_high_known_net_rolls','unit_high_known_gross_rolls','unit_high_missing_price_rows',
+    'unit_high_missing_roll_rows','unit_high_price_anomaly_rows'})
+
+_PUBLIC_FACT_FIELDS.update({'opening_group_count','closing_group_count','opening_uncertain_membership_rows',
+    'monthly_opening_snapshot_rows','monthly_closing_available','monthly_whitelist_rows',
+    'monthly_whitelist_unknown_rows','monthly_opening_uncertain_groups'})
+
+_PUBLIC_FACT_FIELDS.update({'scope_net_rolls', 'scope_high_known_net_rolls', 'unit_high_known_net_rolls', 'scope_known_net_rolls', 'sales_high_missing_roll_rows', 'scope_high_net_rolls', 'sales_high_missing_price_rows', 'sales_high_known_net_rolls', 'unit_net_rolls', 'unit_high_net_rolls', 'population_sales_groups', 'sales_high_net_rolls', 'sales_net_rolls', 'unit_known_net_rolls', 'sales_known_net_rolls'})
+
+_PUBLIC_FACT_FIELDS.update({'scope_high_missing_price_rows','scope_high_missing_roll_rows','scope_missing_roll_rows','sales_missing_roll_rows'})
 
 _PUBLIC_STATE_FIELDS = {
     "net_flow_state",
@@ -6944,6 +6962,8 @@ def _public_time_range(value: Any) -> dict[str, Any]:
             raise QueryFailure("CONTRACT_UNAVAILABLE", "查询时间范围来源无效。")
         return {"start": start, "end": end, "source": source}
     source = value.get("source")
+    if source == "monthly_slow_pool_observation":
+        return {k:v for k,v in value.items() if k in {"source","closing_basis","whitelist_basis"} or k.startswith("monthly_")}
     if source == "frozen_baseline_recorded_window":
         return {k: v for k, v in value.items() if k in {
             "source", "baseline_week", "frozen_at", "read_at", "read_utc_at",
@@ -7187,6 +7207,9 @@ def _scope_texts(value: Any) -> list[str]:
             return []
     source = value.get("source")
     as_of_date = value.get("as_of_date")
+    if source == "monthly_slow_pool_observation":
+        closing = "本次当前登记池" if value.get("closing_basis")=="current_ods" else f"{value.get('monthly_month')}物理月末快照"
+        return [f"独立月报{value.get('monthly_month')}；期初{value.get('monthly_opening_month')}物理快照、期末{closing}；两端使用本次同一库存单位白名单组合；流水{value.get('monthly_window_start')}至{value.get('monthly_window_end')}（结束不含），读取{value.get('monthly_read_at')}；当月不代表完整月结"]
     if source == "frozen_baseline_recorded_window":
         partial = f"；原请求结束{value.get('requested_window_end')}，期间未完，仅截至本次读取" if value.get("window_coverage") == "partial_to_read" else ""
         return [f"基线{value.get('baseline_week')}（记录冻结{value.get('frozen_at')}）；已记录流水{value.get('window_start')}至{value.get('window_end')}（结束不含），读取{value.get('read_at')}，均为库端时间{partial}；不表示历史期末库存"]
@@ -9183,7 +9206,7 @@ def _run_one(
         current_stage = "business_sql"
         business_sql_attempted_count = 1
         executor = execute_query or _execute_with_source
-        if (scope.get("_validate_frozen_pool") is True or scope.get("_validate_pattern_observation") is True) and execute_query is None:
+        if (scope.get("_validate_frozen_pool") is True or scope.get("_validate_monthly_pool") is True or scope.get("_validate_pattern_observation") is True) and execute_query is None:
             with _ConsistentSnapshotExecutor(deadline_at=deadline_at) as snapshot:
                 rows, truncated, business_source_evidence_ref = snapshot.execute(
                     sql, params, limit, deadline_at=deadline_at
@@ -9211,10 +9234,14 @@ def _run_one(
                 complete_partition_proof_failure = proof_failure.code
         _check_call_deadline(deadline_at)
         current_stage = "result_validation"
-        if scope.get("_validate_frozen_pool") is True:
+        if scope.get("_validate_frozen_pool") is True or scope.get("_validate_monthly_pool") is True:
             try:
-                applied_time_range = validate_frozen_pool_rows(rows)
-                if request.get("metric") == "registered_slow_pool_baseline_net_outbound":
+                if scope.get("_validate_monthly_pool"):
+                    from .monthly_slow_pool import validate_monthly_rows
+                    applied_time_range = validate_monthly_rows(rows,flow=bool(scope.get("_monthly_flow")))
+                else:
+                    applied_time_range = validate_frozen_pool_rows(rows)
+                if request.get("metric") == "registered_slow_pool_baseline_net_outbound" or scope.get("_monthly_flow"):
                     for row in rows:
                         if not row.get("__matched_row_count") and int(row.get("outbound_unknown_rows") or 0) + int(row.get("returns_unknown_rows") or 0) > 0:
                             raise QueryFailure("FLOW_SCOPE_UNASSESSABLE", "存在无法确认范围的流水，不能将没有可返回销售组解释为空流水。", stage="result_validation")

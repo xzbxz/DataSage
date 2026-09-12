@@ -14,6 +14,7 @@ def _compact_json(payload: dict[str, Any]) -> str:
 
 
 _CATALOG_METRIC_FIELDS = (
+    "grouping",
     "code",
     "label",
     "ordering",

@@ -542,6 +542,22 @@ def effective_dimension_definitions(
     return effective
 
 
+def metric_grouping(metric: Mapping[str, Any]) -> dict[str, list[str]] | None:
+    """One grouping contract for both catalog and pre-I/O validation.
+    allowed_dimensions continues to include independently legal filters.
+    """
+    raw=metric.get('grouping')
+    if raw is None:return None
+    if not isinstance(raw,Mapping) or set(raw)!={'allowed','required','default'}:
+        raise CapabilityContractError('CONTRACT_UNAVAILABLE','指标分组定义无效。')
+    for value in raw.values():
+        if not isinstance(value,list) or any(not isinstance(x,str) for x in value) or len(set(value))!=len(value):
+            raise CapabilityContractError('CONTRACT_UNAVAILABLE','指标分组定义无效。')
+    if not set(raw['required'])<=set(raw['default'])<=set(raw['allowed'])<=set(metric.get('allowed_dimensions') or []):
+        raise CapabilityContractError('CONTRACT_UNAVAILABLE','指标分组与过滤维度不一致。')
+    return {k:list(v) for k,v in raw.items()}
+
+
 def _dimension_columns(
     definition: Mapping[str, Any],
 ) -> list[tuple[str, str]]:

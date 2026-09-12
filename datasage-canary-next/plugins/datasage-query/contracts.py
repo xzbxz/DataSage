@@ -1020,6 +1020,11 @@ def _model_semantic_projection(
             "comparison_kinds": comparison_kinds,
             "supports_generic_comparison": bool(comparison_kinds),
         }
+        try:
+            grouping=capability_contract.metric_grouping(definition)
+        except capability_contract.CapabilityContractError as exc:
+            raise ContractFailure(exc.code,exc.message) from exc
+        if grouping is not None:item['grouping']=grouping
         if definition.get("query_kind") == "target_completion":
             item["period_summary_fields"] = ["target_amount_rmb", "actual_amount_rmb", "gap_amount_rmb"]
             item["ordering"] = {"fields": ["completion_rate", "target_amount_rmb", "actual_amount_rmb", "gap_amount_rmb"], "directions": ["asc", "desc"], "default": {"field": "completion_rate", "direction": "desc"}, "rank_scope": "queried_population_if_all_ranking_values_known", "complete_target_gap_requires_full_partition": True}
@@ -1315,6 +1320,7 @@ def _catalog_summary(domain: str, planner: Mapping[str, Any]) -> dict[str, Any]:
                 "available_inventory_scopes",
                 "default_inventory_scope",
                 "max_group_dimensions",
+                "grouping",
                 "delivery_scope_policy",
                 "scope_flags",
                 "answer_boundary_summary",
@@ -1382,6 +1388,7 @@ def _catalog_expert_index(domain: str, planner: Mapping[str, Any]) -> dict[str, 
                 "default_inventory_scope",
                 "exact_default_lookup_supported",
                 "max_group_dimensions",
+                "grouping",
                 "comparison_kinds",
                 "ordering",
                 "change_decomposition_orderings",

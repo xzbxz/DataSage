@@ -1,4 +1,4 @@
-version: datasage-mini-datasets/v20
+version: datasage-mini-datasets/v21
 
 defaults:
   blocked_columns:
@@ -181,6 +181,8 @@ datasets:
       - Never join this fact row-by-row to delivery facts for net metrics; aggregate each fact independently and combine the aggregates.
 
   vk_dwd.delivery_bill_barcode_detail_dwd:
+    calculation_columns:
+      slow_achievement: [deal_price, ddp_price]
     domains: [delivery]
     kind: fact
     grain: one_actual_outbound_piece_or_barcode
@@ -956,3 +958,29 @@ datasets:
     metric_only: true
     domains:
     - inventory
+
+  vk_dw.inventory_barcode_detail_bymonth_dw:
+    domains:
+    - inventory
+    kind: monthly_snapshot
+    grain: recorded_physical_inventory_rows_per_month
+    primary_key: []
+    allowed_columns:
+    - id
+    - month_date
+    - goods_id
+    - goods_sku_id
+    - goods_name
+    - whse_dept
+    - unit
+    - goods_num
+    - piece_num
+    - whse_org
+    - whse_type
+    - is_handing_sales
+    - is_discountable
+    required_filters: []
+    metric_only: true
+    warnings:
+    - Only the monthly pool compiler defines approved source scope; no cost-accounting
+      substitution or automatic status/deletion filtering.

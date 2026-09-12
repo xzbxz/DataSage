@@ -1,4 +1,4 @@
-version: datasage-mini-inventory-semantics/v17
+version: datasage-mini-inventory-semantics/v18
 domain: inventory
 contract_role: plugin_physical_execution
 business_name: 库存事实、未动销与周转分析
@@ -607,7 +607,7 @@ metrics:
     - &id006
       id: inventory.registered-slow-pool.classes
       mode: required_always
-      text: 登记为可打折与已记录正促销价可以重叠，不能相加当总池；交集单列。未记录价格不等于价格为零；未知登记分类单列，不能猜成其他类别。没有匹配记录不代表真实库存为零。
+      text: 这里的可打折类别指优先分类结果，不等于原始可打折标签；原始标签与处理标签可重叠。登记类别与已记录正促销价可以重叠，不能相加当总池；交集单列。未记录价格不等于价格为零；未知登记分类单列，不能猜成其他类别。没有匹配记录不代表真实库存为零。
     - &id007
       id: inventory.registered-slow-pool.units
       mode: required_always
@@ -741,7 +741,7 @@ metrics:
     - *id007
     answer_note: *id002
   registered_slow_pool_discount_rolls:
-    label: 当前登记滞销池·已登记可打折卷数
+    label: 当前登记滞销池·可打折类别卷数（不含处理类别）
     business_definition: 仅统计当前源记录及明确筛选范围；已登记可打折卷数
     unit: 卷
     query_kind: registered_slow_pool
@@ -803,7 +803,7 @@ metrics:
     - *id007
     answer_note: *id002
   registered_slow_pool_overlap_rolls:
-    label: 当前登记滞销池·可打折且已记录正价交集卷数
+    label: 当前登记滞销池·可打折类别且有正促销价卷数
     business_definition: 仅统计当前源记录及明确筛选范围；可打折且已记录正价交集卷数
     unit: 卷
     query_kind: registered_slow_pool
@@ -897,7 +897,7 @@ metrics:
     answer_note: *id002
 
   registered_slow_pool_classification_rolls:
-    label: 当前登记滞销池·同次分类卷数
+    label: 当前登记滞销池·同次类别与促销价覆盖卷数
     business_definition: 同一条只读查询返回总卷数、可打折、已记录正促销价、交集、未知分类及未记录价格卷数；分类不可相加。缺失分类时另提供可判定的已知部分，不能当完整分类总数。
     unit: 卷
     query_kind: registered_slow_pool
@@ -953,13 +953,29 @@ metrics:
       text: &slow_pool_bundle_basis 本次读取的当前登记滞销池，沿用旧追踪范围：排除白名单，仅统计各自库存单位下来源数量大于10的记录；不是10卷或统一10米，也不是按未销售天数重判全公司库存。读取日期不是库存刷新或人工维护时间；缺少筛选依据的记录不能证明已纳入。
     - id: inventory.registered-slow-pool.classes
       mode: required_always
-      text: 登记为可打折与已记录正促销价可以重叠，不能相加当总池；交集单列。未记录价格不等于价格为零；未知登记分类单列，不能猜成其他类别。没有匹配记录不代表真实库存为零。
+      text: 这里的可打折类别指优先分类结果，不等于原始可打折标签；原始标签与处理标签可重叠。登记类别与已记录正促销价可以重叠，不能相加当总池；交集单列。未记录价格不等于价格为零；未知登记分类单列，不能猜成其他类别。没有匹配记录不代表真实库存为零。
     - id: inventory.registered-slow-pool.units
       mode: required_always
       text: 库存数量只按来源库存单位分别解释，不用促销计价单位补缺，不跨米、码、千克或件相加。未知库存单位的数量保留缺口，卷数取原记录且不取整。
     answer_note: *slow_pool_bundle_basis
 
   registered_slow_pool_baseline_groups:
+    grouping:
+      allowed:
+      - product
+      - pool_sku
+      - warehouse_department
+      - unit
+      required:
+      - product
+      - pool_sku
+      - warehouse_department
+      - unit
+      default:
+      - product
+      - pool_sku
+      - warehouse_department
+      - unit
     label: 登记滞销池·冻结到当前比较明细
     business_definition: 只读既有基线与当前池；数量按库存单位隔离。按产品、规格、仓库部门、单位固定粒度返回；源行重编号不单独触发状态，状态筛选只影响明细，总体分类数在截断前计算。金额不开放。数量差额仅针对共有且可判定组。主数值为候选比较组数，含未判定记录组，不等于产品数或条目数。
     unit: 候选比较组（含未判定）
@@ -1016,13 +1032,21 @@ metrics:
     quantity_scale: 4
     baseline_view: groups
   registered_slow_pool_baseline_summary:
+    grouping:
+      allowed:
+      - unit
+      - warehouse_department
+      required:
+      - unit
+      default:
+      - unit
     label: 登记滞销池·冻结到当前按单位比较汇总
     business_definition: 只读既有基线与当前池；数量按库存单位隔离。默认按库存单位汇总，可附加仓库部门；条目数、非空产品/规格标识去重数、候选比较组数不同，不能跨单位累加去重计数。金额不开放。数量差额仅针对共有且可判定组。主数值为候选比较组数，含未判定记录组，不等于产品数或条目数。
     unit: 候选比较组（含未判定）
     query_kind: frozen_pool_comparison
     table: vk_ods.slow_moving_goods_ods
     time_policy: current_snapshot
-    max_group_dimensions: 4
+    max_group_dimensions: 2
     required_filters:
       goods_num:
         op: gt
@@ -1073,8 +1097,44 @@ metrics:
     baseline_view: summary
 
   registered_slow_pool_baseline_net_outbound:
-    label: 登记滞销池·基线产品范围净出库
-    business_definition: 基于现存完整冻结业务键集合，默认统计记录冻结时点至本次读取的已记录物理出库和有效退货；显式指定一个基线周后，也可查询冻结之后的日期区间或月份，未完成期间仅截至读取时点；默认按库存单位汇总，可附加产品、规格、仓库部门及流水销售归属。不代表冻结旧批次实际去化。
+    result_fact_units:
+      scope_net_rolls: 卷
+      scope_known_net_rolls: 卷
+      scope_high_net_rolls: 卷
+      scope_high_known_net_rolls: 卷
+      sales_net_rolls: 卷
+      sales_known_net_rolls: 卷
+      sales_high_net_rolls: 卷
+      sales_high_known_net_rolls: 卷
+      unit_net_rolls: 卷
+      unit_known_net_rolls: 卷
+      net_rolls: 卷
+      known_net_rolls: 卷
+      gross_rolls: 卷
+      return_rolls: 卷
+      high_net_rolls: 卷
+      high_known_net_rolls: 卷
+      high_gross_rolls: 卷
+      high_known_gross_rolls: 卷
+      unit_high_net_rolls: 卷
+      unit_high_known_net_rolls: 卷
+      scope_missing_roll_rows: 条
+      scope_high_missing_price_rows: 条
+      scope_high_missing_roll_rows: 条
+      sales_missing_roll_rows: 条
+      sales_high_missing_price_rows: 条
+      sales_high_missing_roll_rows: 条
+      population_sales_groups: 组
+      unit_high_known_gross_rolls: 卷
+      high_missing_price_rows: 条
+      high_missing_roll_rows: 条
+      high_price_anomaly_rows: 条
+      unit_high_missing_price_rows: 条
+      unit_high_missing_roll_rows: 条
+      unit_high_price_anomaly_rows: 条
+    high_price_policy: {kind: slow_achievement, factor: 0.75, operator: gt}
+    label: 登记滞销池·周基线净出库与高折战果
+    business_definition: 同时提供普通净出库卷数与高折净出库卷数，作为已确认销售战果；数量和卷数分别计量。基于现存完整冻结业务键集合，默认统计记录冻结时点至本次读取的已记录物理出库和有效退货；显式指定一个基线周后，也可查询冻结之后的日期区间或月份，未完成期间仅截至读取时点；默认按库存单位汇总，可附加产品、规格、仓库部门及流水销售归属。不代表冻结旧批次实际去化。
     query_kind: frozen_pool_net_outbound
     table: vk_ai.slow_moving_baseline
     time_policy: frozen_baseline_recorded_window
@@ -1130,10 +1190,13 @@ metrics:
       text: 所有数值仅描述已记录流量，不证明真实业务全量到齐。在合格基线、明确范围且没有未知候选时，没有匹配流水的空集合计零；单侧出库或退货正常计算代数差，负数保留。真实数量缺失或候选未知时主值留空、已知部分另列；空集合不计作缺失数量记录。缺失时间、身份、单位、有效性或归属时完整数值受限；候选、匹配、未匹配、排除和未知计数是筛选后基线产品/规格范围的全局记录数，不跨结果行重复相加。不同单位不相加，不使用促销单位补缺。
     - id: inventory.frozen-net.sales
       mode: required_always
-      text: 销售只表示匹配流水归属，不代表滞销任务池责任。按稳定身份对齐，同名不同人分开；同一身份名称有差异时显示名称不确定及变体数，不以当前姓名覆盖历史。销售对应产品组可重叠，不能相加当唯一基线组数。单位总体流量和显示组数在截断前计算，包含未知销售组；仅返回部分行不代表全体。指定销售筛选时未归属记录仍影响覆盖，不暗中分给该销售。
+      text: 销售只表示匹配流水归属，不代表滞销任务池责任。按稳定身份对齐，同名不同人分开；同一身份名称有差异时显示名称不确定及变体数，不以当前姓名覆盖历史。销售对应产品组可重叠，不能相加当唯一基线组数。单位总体流量、跨数量单位的卷数总量及销售卷数总量都在截断前计算；数量不跨单位合并。所有重复展示的总量不能再相加。显示组数，包含未知销售组；仅返回部分行不代表全体。指定销售筛选时未归属记录仍影响覆盖，不暗中分给该销售。
     - id: inventory.frozen-net.window
       mode: required_always
       text: 显式日期或月份必须选择单个现存基线周，期间起点不得早于实际冻结。未来未开始期间失败，未完期间截止本次读取并公开原请求结束；不把当下库存回填历史期末。一个月多周基线不相加，不自动生成月初池或精确完成率。该期间是选定基线产品范围的已记录流量，不能称当月新冻结任务总进度。
+    - id: inventory.frozen-net.high-price
+      mode: required_always
+      text: 普通战果取净出库卷数；高折战果取成交价严格大于DDP的75%的出库卷数减全部合格退货卷数，恰好75%不计高折出库。不要求DDP正数；非正DDP或负成交价作为异常计数另列。价格或卷数缺失分开保留，高折缺口不抹掉完整普通净卷。零普通净值而高折非零的销售仍保留，负数和原精度不截断。两指标供进展观察，不生成奖金结算规则。
     - id: inventory.frozen-net.time
       mode: required_always
       text: 未指定期间时使用实际记录冻结时间（含）至本次库端读取时间（不含）；显式期间以返回的实际窗口为准。缺时间候选单独保留，不能证明发生在窗口内。时间保留库端原值，当前UTC偏移不证明历史时区。记录冻结时间可能更新，现存完整记录不证明原始冻结从未删改。没有基线或基线身份/单位不完整时明确失败，不写入或补建。
@@ -1275,3 +1338,270 @@ metrics:
       on_hand: {}
     default_inventory_scope: total
     status_table: vk_dw.inventory_barcode_detail_dw
+
+  registered_slow_monthly_groups:
+    monthly_scope_policy: &monthly_scope_policy
+      excluded_warehouse_type: CCBS仓
+      excluded_organizations: [五点中国公司, 缅鑫国际贸易有限公司]
+      minimum_quantity_exclusive: 10
+    grouping:
+      allowed:
+      - product
+      - pool_sku
+      - warehouse_department
+      - unit
+      required:
+      - product
+      - pool_sku
+      - warehouse_department
+      - unit
+      default:
+      - product
+      - pool_sku
+      - warehouse_department
+      - unit
+    label: 滞销独立月报·月初与期末池明细
+    business_definition: 月初取上月物理快照按旧范围四键汇总后数量大于10；当月期末取当前ODS源行门槛，历史期末取目标月物理快照；两端同步排除同次当前库存单位白名单组合。返回两端总体与变化，New参加期末及总体变化；不把库存变化当销售量。
+    unit: 候选比较组（含未判定）
+    query_kind: monthly_slow_pool
+    table: vk_dw.inventory_barcode_detail_bymonth_dw
+    time_policy: monthly_slow_pool
+    max_group_dimensions: 4
+    allowed_dimensions:
+    - product
+    - pool_sku
+    - warehouse_department
+    - unit
+    dimension_overrides:
+      unit:
+        label: 库存数量单位
+        columns:
+        - column: unit
+          alias: unit
+        filter_column: unit
+        value_contract:
+          kind: closed
+          allowed_values:
+          - m
+          - y
+          - kg
+          - Pcs
+          canonical_aliases:
+            M: m
+          business_meanings:
+            m: 米
+            y: 码
+            kg: 千克
+            Pcs: 件
+        normalization: meter_case
+    disclosures:
+    - id: inventory.monthly-slow.basis
+      mode: required_always
+      text: 独立月报不是周基线月流水。月初为上月物理库存快照派生池；当月期末为本次当前登记池，历史期末为目标月物理快照。月两端按同一次当前白名单的产品、规格、仓库部门、库存单位组合排除，不使用促销单位。当前白名单重算历史范围是已确认政策，不要求新月初冻结。
+    - id: inventory.monthly-slow.threshold
+      mode: required_always
+      text: 物理月快照排CCBS仓与指定两组织，按处理或可打折标签以及HCM、HN、BKK、IDK及各自后缀-HT部门范围纳入，四键汇总后数量大于10；当月当前ODS沿原源行数量大于10规则。不是10卷，不增加库存状态或销售单删除条件。人工只维护白名单，不重定库存数量和标签。
+    - id: inventory.monthly-slow.coverage
+      mode: required_always
+      text: 月中新品参与总体变化但不进入月初池战果。当前月仅截至读取，期初与期末用同一份当前白名单，历史物理快照缺失不回填当前库存；期末缺失不抹掉可用期间战果。数量单位分别计量，缺值与来源未知单列，退出不等于售罄。白名单或池纳入依据未知时，已知部分仅反映可见候选，不能当完整已确认战果。月初业务组、来源行及规格标识计数含义不同；重复展示的总体和白名单覆盖计数不可再相加。
+    quantity_scale: 4
+    baseline_view: groups
+    monthly_view: comparison
+    monthly_snapshot_table: vk_dw.inventory_barcode_detail_bymonth_dw
+    monthly_ods_table: vk_ods.slow_moving_goods_ods
+    monthly_departments:
+    - HCM
+    - HN
+    - BKK
+    - IDK
+    - HCM-HT
+    - HN-HT
+    - IDK-HT
+    - BKK-HT
+  registered_slow_monthly_summary:
+    monthly_scope_policy: *monthly_scope_policy
+    grouping:
+      allowed:
+      - unit
+      - warehouse_department
+      required:
+      - unit
+      default:
+      - unit
+    label: 滞销独立月报·总体变化
+    business_definition: 月初取上月物理快照按旧范围四键汇总后数量大于10；当月期末取当前ODS源行门槛，历史期末取目标月物理快照；两端同步排除同次当前库存单位白名单组合。返回两端总体与变化，New参加期末及总体变化；不把库存变化当销售量。
+    unit: 候选比较组（含未判定）
+    query_kind: monthly_slow_pool
+    table: vk_dw.inventory_barcode_detail_bymonth_dw
+    time_policy: monthly_slow_pool
+    max_group_dimensions: 2
+    allowed_dimensions:
+    - product
+    - pool_sku
+    - warehouse_department
+    - unit
+    dimension_overrides:
+      unit:
+        label: 库存数量单位
+        columns:
+        - column: unit
+          alias: unit
+        filter_column: unit
+        value_contract:
+          kind: closed
+          allowed_values:
+          - m
+          - y
+          - kg
+          - Pcs
+          canonical_aliases:
+            M: m
+          business_meanings:
+            m: 米
+            y: 码
+            kg: 千克
+            Pcs: 件
+        normalization: meter_case
+    disclosures:
+    - id: inventory.monthly-slow.basis
+      mode: required_always
+      text: 独立月报不是周基线月流水。月初为上月物理库存快照派生池；当月期末为本次当前登记池，历史期末为目标月物理快照。月两端按同一次当前白名单的产品、规格、仓库部门、库存单位组合排除，不使用促销单位。当前白名单重算历史范围是已确认政策，不要求新月初冻结。
+    - id: inventory.monthly-slow.threshold
+      mode: required_always
+      text: 物理月快照排CCBS仓与指定两组织，按处理或可打折标签以及HCM、HN、BKK、IDK及各自后缀-HT部门范围纳入，四键汇总后数量大于10；当月当前ODS沿原源行数量大于10规则。不是10卷，不增加库存状态或销售单删除条件。人工只维护白名单，不重定库存数量和标签。
+    - id: inventory.monthly-slow.coverage
+      mode: required_always
+      text: 月中新品参与总体变化但不进入月初池战果。当前月仅截至读取，期初与期末用同一份当前白名单，历史物理快照缺失不回填当前库存；期末缺失不抹掉可用期间战果。数量单位分别计量，缺值与来源未知单列，退出不等于售罄。白名单或池纳入依据未知时，已知部分仅反映可见候选，不能当完整已确认战果。月初业务组、来源行及规格标识计数含义不同；重复展示的总体和白名单覆盖计数不可再相加。
+    quantity_scale: 4
+    baseline_view: summary
+    monthly_view: comparison
+    monthly_snapshot_table: vk_dw.inventory_barcode_detail_bymonth_dw
+    monthly_ods_table: vk_ods.slow_moving_goods_ods
+    monthly_departments:
+    - HCM
+    - HN
+    - BKK
+    - IDK
+    - HCM-HT
+    - HN-HT
+    - IDK-HT
+    - BKK-HT
+  registered_slow_monthly_net_outbound:
+    monthly_scope_policy: *monthly_scope_policy
+    result_fact_units:
+      scope_net_rolls: 卷
+      scope_known_net_rolls: 卷
+      scope_high_net_rolls: 卷
+      scope_high_known_net_rolls: 卷
+      sales_net_rolls: 卷
+      sales_known_net_rolls: 卷
+      sales_high_net_rolls: 卷
+      sales_high_known_net_rolls: 卷
+      unit_net_rolls: 卷
+      unit_known_net_rolls: 卷
+      net_rolls: 卷
+      known_net_rolls: 卷
+      gross_rolls: 卷
+      return_rolls: 卷
+      high_net_rolls: 卷
+      high_known_net_rolls: 卷
+      high_gross_rolls: 卷
+      high_known_gross_rolls: 卷
+      unit_high_net_rolls: 卷
+      unit_high_known_net_rolls: 卷
+      scope_missing_roll_rows: 条
+      scope_high_missing_price_rows: 条
+      scope_high_missing_roll_rows: 条
+      sales_missing_roll_rows: 条
+      sales_high_missing_price_rows: 条
+      sales_high_missing_roll_rows: 条
+      population_sales_groups: 组
+      unit_high_known_gross_rolls: 卷
+      high_missing_price_rows: 条
+      high_missing_roll_rows: 条
+      high_price_anomaly_rows: 条
+      unit_high_missing_price_rows: 条
+      unit_high_missing_roll_rows: 条
+      unit_high_price_anomaly_rows: 条
+    high_price_policy:
+      kind: slow_achievement
+      factor: 0.75
+      operator: gt
+    label: 滞销独立月报·普通与高折净出库战果
+    business_definition: 月初取上月物理快照按旧范围四键汇总后数量大于10；当月期末取当前ODS源行门槛，历史期末取目标月物理快照；两端同步排除同次当前库存单位白名单组合。仅月初池参与普通和高折净出库战果，New不纳入；双方实际时间和自身销售归属。
+    query_kind: monthly_slow_pool
+    table: vk_dw.inventory_barcode_detail_bymonth_dw
+    time_policy: monthly_slow_pool
+    max_group_dimensions: 5
+    unit: 来源库存单位分别计量
+    allowed_dimensions:
+    - salesperson
+    - product
+    - pool_sku
+    - warehouse_department
+    - unit
+    dimension_overrides:
+      unit:
+        label: 库存数量单位
+        columns:
+        - column: unit
+          alias: unit
+        filter_column: unit
+        value_contract:
+          kind: closed
+          allowed_values:
+          - m
+          - y
+          - kg
+          - Pcs
+          canonical_aliases:
+            M: m
+          business_meanings:
+            m: 米
+            y: 码
+            kg: 千克
+            Pcs: 件
+        normalization: meter_case
+    document_scope: legacy_ht_suffix_or_bulk
+    flow_sources:
+      outbound: vk_dwd.delivery_bill_barcode_detail_dwd
+      returns: vk_dwd.delivery_return_detail_dwd
+      sales: vk_dwd.sale_bill_goods_detail_dwd
+      warehouses: vk_dwd.whse_info_dwd
+    disclosures:
+    - id: inventory.monthly-slow.basis
+      mode: required_always
+      text: 独立月报不是周基线月流水。月初为上月物理库存快照派生池；当月期末为本次当前登记池，历史期末为目标月物理快照。月两端按同一次当前白名单的产品、规格、仓库部门、库存单位组合排除，不使用促销单位。当前白名单重算历史范围是已确认政策，不要求新月初冻结。
+    - id: inventory.monthly-slow.threshold
+      mode: required_always
+      text: 物理月快照排CCBS仓与指定两组织，按处理或可打折标签以及HCM、HN、BKK、IDK及各自后缀-HT部门范围纳入，四键汇总后数量大于10；当月当前ODS沿原源行数量大于10规则。不是10卷，不增加库存状态或销售单删除条件。人工只维护白名单，不重定库存数量和标签。
+    - id: inventory.monthly-slow.coverage
+      mode: required_always
+      text: 月中新品参与总体变化但不进入月初池战果。当前月仅截至读取，期初与期末用同一份当前白名单，历史物理快照缺失不回填当前库存；期末缺失不抹掉可用期间战果。数量单位分别计量，缺值与来源未知单列，退出不等于售罄。白名单或池纳入依据未知时，已知部分仅反映可见候选，不能当完整已确认战果。月初业务组、来源行及规格标识计数含义不同；重复展示的总体和白名单覆盖计数不可再相加。
+    - id: inventory.frozen-net.documents
+      mode: required_always
+      text: 沿用已确认旧追踪器范围：来源仓库部门以-HT结尾，或自身单据类型为大货；HT不另设类型白名单。出库与退货均用各自单据类型；大小写判断沿用来源规则，不修剪部门尾空格。出库须唯一关联已完成销售明细；退货须已结单销售退货并排除内部客户。未知类型单列，HT未知类型不因此排除。
+    - id: inventory.frozen-net.attribution
+      mode: required_always
+      text: 毛出库按实际出库仓，退货按实际退入仓及各自事实部门，销售归属不回连原出库。销售按各自流水身份分组，未知身份保留未知组；不连接员工名册补零，不把基线池分配给销售。仓库主数据只核对当前部门一致性，不能替换事实历史归属；不一致或缺失保留未知覆盖。两侧独立汇总，再按唯一基线业务键相减。
+    - id: inventory.frozen-net.coverage
+      mode: required_always
+      text: 所有数值仅描述已记录流量，不证明真实业务全量到齐。在合格基线、明确范围且没有未知候选时，没有匹配流水的空集合计零；单侧出库或退货正常计算代数差，负数保留。真实数量缺失或候选未知时主值留空、已知部分另列；空集合不计作缺失数量记录。缺失时间、身份、单位、有效性或归属时完整数值受限；候选、匹配、未匹配、排除和未知计数是筛选后基线产品/规格范围的全局记录数，不跨结果行重复相加。不同单位不相加，不使用促销单位补缺。
+    - id: inventory.frozen-net.sales
+      mode: required_always
+      text: 销售只表示匹配流水归属，不代表滞销任务池责任。按稳定身份对齐，同名不同人分开；同一身份名称有差异时显示名称不确定及变体数，不以当前姓名覆盖历史。销售对应产品组可重叠，不能相加当唯一基线组数。单位总体流量、跨数量单位的卷数总量及销售卷数总量都在截断前计算；数量不跨单位合并。所有重复展示的总量不能再相加。显示组数，包含未知销售组；仅返回部分行不代表全体。指定销售筛选时未归属记录仍影响覆盖，不暗中分给该销售。
+    - id: inventory.frozen-net.high-price
+      mode: required_always
+      text: 普通战果取净出库卷数；高折战果取成交价严格大于DDP的75%的出库卷数减全部合格退货卷数，恰好75%不计高折出库。不要求DDP正数；非正DDP或负成交价作为异常计数另列。价格或卷数缺失分开保留，高折缺口不抹掉完整普通净卷。零普通净值而高折非零的销售仍保留，负数和原精度不截断。两指标供进展观察，不生成奖金结算规则。
+    monthly_view: flow
+    monthly_snapshot_table: vk_dw.inventory_barcode_detail_bymonth_dw
+    monthly_ods_table: vk_ods.slow_moving_goods_ods
+    monthly_departments:
+    - HCM
+    - HN
+    - BKK
+    - IDK
+    - HCM-HT
+    - HN-HT
+    - IDK-HT
+    - BKK-HT
