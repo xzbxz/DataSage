@@ -6,6 +6,8 @@ auth.json
 auth.lock
 
 # Hermes runtime state
+local-report-bindings.json
+report_runs/
 state.db
 state.db-shm
 state.db-wal

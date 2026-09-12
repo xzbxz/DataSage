@@ -1,0 +1,62 @@
+# Local trusted slow reports
+
+This is an operator entrypoint, not a registered model tool. Public DataSage
+admission still requires the existing bound identity. The report entrypoint
+does not set WeCom or replay identities and does not register jobs or send
+messages. Same-account processes can read or change local bindings; a report
+ID, script name or environment variable is not an unforgeable cron principal.
+
+The installed entrypoint is `scripts/datasage_slow_report.py`, under the active
+Profile. It requires the official Hermes environment and matching HERMES_HOME.
+Invoke it with the installed Hermes Python, optionally `--report-id ID`.
+No binding file is shipped. Until an operator-approved binding exists it exits
+2 with `REPORT_NOT_CONFIGURED` before runtime/database initialization and writes
+no report artifacts. Do not configure or schedule it merely because the script
+exists.
+
+Future approved bindings belong to Profile-local `local-report-bindings.json`
+(Git ignored). It is an object with exactly `version: 1`, `default_report`
+(report ID) and `reports` (ID-to-definition mapping). Each selected definition
+requires:
+
+| Field | Contract |
+|---|---|
+| department | One reviewed source warehouse department; no CLI override |
+| baseline_week | One explicit valid existing ISO week; no automatic latest-week fallback |
+| max_baseline_age_days | Explicit operator-approved bound, integer 1–366; no shipped business default |
+| views | Nonempty unique selection of pool_summary, flow_summary, flow_sales |
+| limit | Integer 1–100, further limited by existing query/wire budgets |
+| time_range (optional) | Exactly start/end ISO dates, half-open; applies only to flow views |
+
+No SQL, metric field, arbitrary request plan, recipients, schedule or send
+options are accepted. A definition using a period must include a flow view.
+Pool comparison stays a current observation even when flows use a past window.
+The existing metric time validation, units, unknown states, negative quantities,
+source identity, concurrency, deadlines and evidence projection remain active.
+
+The entrypoint loads settings via the existing Profile configuration and pins
+the contract snapshot. After the local allowlist passes, it calls the existing
+`runtime_guarded_datasage_query` through the existing bounded wire handler.
+It does not copy the query engine or weaken the public entitlement wrapper.
+Only local operator access is asserted; this is not per-user authorization.
+
+Output is field/state presentation, not a model conclusion, causal explanation
+or depletion/completion score. Source text is escaped so MEDIA directives cannot
+be injected into official stdout delivery. Different units are kept separate;
+repeated unit totals are shown once per unit per result, never added again.
+
+Successful/partial query packets and rendered text are stored as JSON/text under
+the Git-ignored `report_runs/slow/<run-id>/`. Atomic per-file replacement avoids
+publishing half-written files. A partial or failed computation remains locally
+inspectable but exits 3 without ordinary report stdout. Missing data inside a
+successful query remains explicitly unknown; it is not coerced to zero. Binding,
+stale-baseline and context errors exit 2; unexpected runtime errors exit 3 with
+a generic code, avoiding credential/error-body output. Artifact retention is
+not automated in this stage.
+
+Official no_agent owns interpreting stdout/silence/exit status. No local sending
+queue, cron store, message API or attachment delivery is implemented. Bounded
+official-script subprocess tests use only a temporary Profile and synthetic
+SQLite fixtures with network blocked; they prove neither production binding nor
+recipient delivery. Real scope, age policy, baseline owner, business cycle and
+recipient choices remain to be approved before B/C/D stages.

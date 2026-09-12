@@ -1,0 +1,233 @@
+"""Operator-only reports. Not a registered model tool or a cron identity proof.
+
+Trust belongs to the local OS operator and reviewed bindings. A process with the
+same filesystem privileges can impersonate a report ID; no claim to prevent it.
+No SQL, recipients, sending, scheduler or production fixture is exposed here.
+"""
+from __future__ import annotations
+from datetime import date, datetime
+from pathlib import Path
+import json
+import re
+import sys
+
+from . import contract_store, settings, tools, wire
+
+VIEWS = {
+    'pool_summary': ('registered_slow_pool_baseline_summary', ['unit']),
+    'flow_summary': ('registered_slow_pool_baseline_net_outbound', ['unit']),
+    'flow_sales': ('registered_slow_pool_baseline_net_outbound', ['salesperson', 'unit']),
+}
+BINDINGS_FILE = 'local-report-bindings.json'
+
+
+class ReportError(ValueError):
+    def __init__(self, code):
+        self.code = code
+        super().__init__(code)
+
+
+def load_bindings(profile: Path):
+    path = profile / BINDINGS_FILE
+    if not path.is_file():
+        raise ReportError('REPORT_NOT_CONFIGURED')
+    if path.is_symlink() or path.resolve().parent != profile.resolve():
+        raise ReportError('REPORT_BINDINGS_PATH_INVALID')
+    if path.stat().st_size > 65536:
+        raise ReportError('REPORT_BINDINGS_INVALID')
+    try:
+        def unique(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result: raise ReportError('REPORT_BINDINGS_INVALID')
+                result[key] = value
+            return result
+        return json.loads(path.read_text(encoding='utf-8'), object_pairs_hook=unique)
+    except (OSError, ValueError) as exc:
+        raise ReportError('REPORT_BINDINGS_INVALID') from exc
+
+
+def resolve_binding(bindings, report_id=None):
+    if (not isinstance(bindings, dict) or set(bindings) != {'version','default_report','reports'}
+            or type(bindings['version']) is not int or bindings['version'] != 1
+            or not isinstance(bindings['reports'], dict)):
+        raise ReportError('REPORT_BINDINGS_INVALID')
+    report_id = report_id if report_id is not None else bindings['default_report']
+    if not isinstance(report_id, str) or not re.fullmatch(r'[a-z][a-z0-9_-]{0,63}', report_id):
+        raise ReportError('REPORT_ID_INVALID')
+    binding = bindings['reports'].get(report_id)
+    if binding is None: raise ReportError('REPORT_ID_NOT_CONFIGURED')
+    required = {'department','baseline_week','max_baseline_age_days','views','limit'}
+    if not isinstance(binding, dict) or not required <= set(binding) or set(binding)-required-{'time_range'}:
+        raise ReportError('REPORT_BINDING_INVALID')
+    department = binding['department']
+    if not isinstance(department, str) or not department.strip() or len(department)>100 or any(ord(c)<32 for c in department):
+        raise ReportError('REPORT_DEPARTMENT_INVALID')
+    week = binding['baseline_week']
+    try:
+        if not isinstance(week, str) or not re.fullmatch(r'\d{4}-W\d{2}',week):raise ValueError()
+        date.fromisocalendar(int(week[:4]),int(week[6:]),1)
+    except ValueError:raise ReportError('REPORT_BASELINE_INVALID')
+    for key, maximum in [('max_baseline_age_days',366),('limit',100)]:
+        if type(binding[key]) is not int or not 1<=binding[key]<=maximum:raise ReportError('REPORT_BINDING_INVALID')
+    views=binding['views']
+    if not isinstance(views,list) or not views or any(not isinstance(v,str) or v not in VIEWS for v in views) or len(set(views))!=len(views):
+        raise ReportError('REPORT_VIEWS_INVALID')
+    window=binding.get('time_range')
+    if window is not None:
+        try:
+            if not isinstance(window,dict) or set(window)!={'start','end'}:raise ValueError()
+            for v in window.values():
+                if not isinstance(v,str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}',v):raise ValueError()
+                date.fromisoformat(v)
+            if window['start']>=window['end'] or not any(v.startswith('flow_') for v in views):raise ValueError()
+        except ValueError:raise ReportError('REPORT_WINDOW_INVALID')
+    return report_id, json.loads(json.dumps(binding))
+
+
+def _assert_local_context():
+    from gateway.session_context import get_session_env
+    if any(get_session_env('HERMES_SESSION_'+key) for key in ('PLATFORM','SOURCE','USER_ID')):
+        raise ReportError('REPORT_INTERACTIVE_CONTEXT_REJECTED')
+
+
+def execute_report(bindings, report_id=None):
+    _assert_local_context()
+    report_id,binding=resolve_binding(bindings,report_id)
+    requests=[]
+    for view in binding['views']:
+        metric, dimensions=VIEWS[view]
+        request={'request_id':view,'domain':'inventory','mode':'metric','metric':metric,
+            'dimensions':list(dimensions),'baseline_week':binding['baseline_week'],
+            'metric_filters':{'warehouse_department':binding['department']},'limit':binding['limit']}
+        if view.startswith('flow_') and binding.get('time_range') is not None:
+            request['time_range']=dict(binding['time_range'])
+        requests.append(request)
+    # This is the existing internal readiness/execution composition, AFTER the
+    # separate local report allowlist. Public registration still uses entitlements.
+    handler=wire.bounded_json_handler('datasage_query',tools.runtime_guarded_datasage_query)
+    payload=json.loads(handler({'requests':requests}))
+    if payload.get('status') not in {'success','partial'}:
+        return {'report_id':report_id,'status':'failed','trust':'local_os_operator','query':payload}
+    results=payload.get('results')
+    if (not isinstance(results,list) or len(results)!=len(requests)
+            or {r.get('request_id') for r in results if isinstance(r,dict)}!={r['request_id'] for r in requests}):
+        raise ReportError('REPORT_RESULT_EVIDENCE_INVALID')
+    # A binding names an explicit cohort and an operator-approved age bound.
+    # Never silently switch to a newer/older cohort to make a scheduled report work.
+    for result in results:
+        if result.get('status') != 'success':continue
+        scope=result.get('applied_time_range') or {}
+        try:
+            if scope['baseline_week']!=binding['baseline_week']:raise ValueError()
+            frozen=datetime.fromisoformat(scope['frozen_at']);read=datetime.fromisoformat(scope['read_at'])
+            if frozen.tzinfo is not None or read.tzinfo is not None or read<frozen:raise ValueError()
+            if (read-frozen).total_seconds()>binding['max_baseline_age_days']*86400:
+                raise ReportError('REPORT_BASELINE_STALE')
+        except (KeyError,TypeError,ValueError) as exc:
+            if isinstance(exc,ReportError):raise
+            raise ReportError('REPORT_BASELINE_EVIDENCE_INVALID') from exc
+    return {'report_id':report_id,'status':payload['status'],'trust':'local_os_operator','query':payload}
+
+
+def _display(value):
+    if value is None:return '未知'
+    # Untrusted source labels must not become official MEDIA delivery directives.
+    value=str(value).replace('\r','\\r').replace('\n','\\n')
+    value=re.sub('MEDIA', 'ＭＥＤＩＡ', value, flags=re.I)
+    return value.replace('[SILENT]','［SILENT］')
+
+
+def render_text(report):
+    payload=report['query']
+    lines=['滞销范围观察（本机报表）',_display(payload.get('answer_scope_line','未取得有效查询范围'))]
+    labels={'metric_value':'已记录净数量','known_subset_value':'净数量已知部分','net_rolls':'净卷数',
+        'known_net_rolls':'净卷数已知部分','gross_quantity':'已记录出库数量','return_quantity':'已记录退货数量',
+        'opening_quantity':'基线登记数量','closing_quantity':'当前登记数量','opening_rolls':'基线登记卷数',
+        'closing_rolls':'当前登记卷数','missing_value_count':'缺失及未知计数',
+        'outbound_unknown_rows':'出库范围未知记录','returns_unknown_rows':'退货范围未知记录'}
+    for result in payload.get('results',[]):
+        lines.append(_display(result.get('business_metric_label','查询分项'))+'；状态：'+_display(result.get('data_state',result.get('status'))))
+        if result.get('error'):
+            lines.append('失败：'+_display(result['error'].get('code')))
+        if result.get('truncated'):lines.append('仅展示部分分组，不能视为全体。')
+        shown_units=set()
+        for row in result.get('rows',[]):
+            dims=row.get('dimensions',[])
+            lines.append('；'.join(_display(d['label'])+'='+_display(d['value']) for d in dims))
+            unit=next((d['value'] for d in dims if '单位' in d['label']),row.get('unit','来源单位'))
+            fact=row.get('facts',{})
+            if fact.get('sales_identity_ref') is not None:lines.append('销售身份引用：'+_display(fact['sales_identity_ref']))
+            if result.get('request_id')=='flow_sales' and unit not in shown_units and 'unit_net_quantity' in fact:
+                lines.append('截断前该单位范围净数量：'+_display(fact['unit_net_quantity'])+' '+_display(unit))
+                shown_units.add(unit)
+            for field,label in labels.items():
+                if field not in fact:continue
+                complete_field={'known_subset_value':'metric_value','known_net_rolls':'net_rolls'}.get(field)
+                if complete_field and fact.get(complete_field) is not None:continue
+                if field=='metric_value' and result.get('request_id')=='pool_summary':label='比较业务组数';suffix='组'
+                else:suffix='卷' if 'rolls' in field else '条' if field.endswith(('_count','_rows')) else _display(unit)
+                lines.append(label+'：'+_display(row['facts'][field])+' '+suffix)
+            if row.get('states'):lines.append('证据状态：'+_display(json.dumps(row['states'],ensure_ascii=False)))
+    for item in payload.get('disclosures',[]):lines.append(_display(item['text']))
+    if payload.get('error'):lines.append('失败：'+_display(payload['error'].get('code')))
+    lines.append('库存变化与已记录净出库分别解释；不表示原冻结批次消化率或历史期末库存。')
+    return '\n'.join(lines)+'\n'
+
+
+def configure_runtime(profile):
+    from hermes_cli.env_loader import load_hermes_dotenv
+    import yaml
+    load_hermes_dotenv(hermes_home=profile)
+    config=yaml.safe_load((profile/'config.yaml').read_text(encoding='utf-8'))
+    reader=config['plugins']['entries']['datasage-query'].get('settings',{})
+    if not isinstance(reader,dict):raise ReportError('REPORT_RUNTIME_CONFIG_INVALID')
+    settings.bind_config_reader(lambda key,default=None:reader.get(key,default))
+    contract_store.pin_contract_snapshot()
+
+
+def save_artifacts(profile, report, text):
+    """Private run files; no recipients, queues or cron store. Never in Git."""
+    import os
+    import uuid
+    root=profile/'report_runs'/'slow'
+    for candidate in (profile/'report_runs',root):
+        if candidate.is_symlink() or not candidate.resolve().is_relative_to(profile.resolve()):
+            raise ReportError('REPORT_OUTPUT_PATH_INVALID')
+    root.mkdir(parents=True,exist_ok=True)
+    run=root/uuid.uuid4().hex
+    run.mkdir()
+    document={**report,'runtime':{'profile_home':str(profile.resolve()),'python_executable':sys.executable,
+        'python_prefix':sys.prefix,'pid':os.getpid(),'identity_basis':'local OS operator; not WeCom authorization'}}
+    for name,content in [('report.json',json.dumps(document,ensure_ascii=False,indent=2)),('report.txt',text)]:
+        temporary=run/(name+'.tmp')
+        temporary.write_text(content,encoding='utf-8')
+        temporary.replace(run/name)
+    return run
+
+
+def main(profile, argv=None):
+    import argparse
+    from hermes_constants import get_hermes_home
+    parser=argparse.ArgumentParser(description='Local trusted slow report; no scheduling or sending.')
+    parser.add_argument('--report-id')
+    args=parser.parse_args(argv)
+    try:
+        if Path(get_hermes_home()).resolve()!=profile.resolve():raise ReportError('REPORT_PROFILE_MISMATCH')
+        _assert_local_context()
+        bindings=load_bindings(profile)
+        resolve_binding(bindings,args.report_id) # Fail before loading credentials/runtime.
+        configure_runtime(profile)
+        report=execute_report(bindings,args.report_id)
+        text=render_text(report)
+        save_artifacts(profile,report,text)
+        if report['status']!='success':
+            # Partial observations remain inspectable in API results; cron must not
+            # publish a partial computation as an ordinary successful report.
+            print('REPORT_QUERY_INCOMPLETE',file=sys.stderr);return 3
+        print(text,end='')
+        return 0
+    except ReportError as exc:
+        print(exc.code,file=sys.stderr);return 2
+    except Exception:
+        print('REPORT_RUNTIME_FAILED',file=sys.stderr);return 3
