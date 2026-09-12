@@ -84,6 +84,35 @@ responsibility.
 
 ## Time
 
+For on-demand slow-moving progress, reuse the inventory catalog's registered
+pool, frozen-baseline comparison and baseline-product net-outbound capabilities.
+They answer different questions: current membership, recorded baseline versus
+current membership/quantity, and recorded outbound less returns in a fixed
+product scope. Inventory changes are not sales, and Exited does not mean sold
+out. Source ADS labels remain a separate population.
+
+A net-outbound request without a period retains its frozen-at-to-read default.
+For an explicit date range or calendar month, select exactly one existing
+`baseline_week`. The range must start on or after its actual freeze; never
+substitute a later baseline or sum weekly cohorts into a monthly denominator.
+An ongoing period reports its actual end at the database read time and retains
+the requested end. A future period fails. For example, a cohort frozen in
+August may define September flows only when that cohort is explicitly chosen;
+it does not become a proven September opening pool.
+
+Keep quantity grouped by inventory unit. Product, source SKU, warehouse
+department and each flow's own salesperson can be added to the flow breakdown.
+Sales product groups overlap and repeated unit totals are not additive across
+rows. Use returned coverage and identity states, including unknown sales and
+negative net returns. Independent calls have their own clocks/snapshots; only
+claim reconciliations established by the returned evidence.
+
+Current comparison cannot supply a historical week/month-end pool. Historical
+monthly inventory labels and today's whitelist do not prove the then-frozen
+registered pool. If that stock endpoint or a monthly cohort policy is missing,
+explain the gap while retaining independently available period flows. Do not
+invent an exact depletion/completion rate or require cron to answer a query.
+
 - Resolve omitted or imprecise time wording using the selected metric's published
   time policy, default, and legal windows. “最近” without a duration does not by
   itself establish a 30-day window.

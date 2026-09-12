@@ -6944,6 +6944,12 @@ def _public_time_range(value: Any) -> dict[str, Any]:
             raise QueryFailure("CONTRACT_UNAVAILABLE", "查询时间范围来源无效。")
         return {"start": start, "end": end, "source": source}
     source = value.get("source")
+    if source == "frozen_baseline_recorded_window":
+        return {k: v for k, v in value.items() if k in {
+            "source", "baseline_week", "frozen_at", "read_at", "read_utc_at",
+            "observed_db_utc_offset_seconds", "window_start", "window_end",
+            "requested_window_end", "window_coverage",
+        }}
     if source == "fabric_source_observation":
         return {k: v for k, v in value.items() if k in {
             "source", "basis", "window_start", "window_end", "inventory_scope",
@@ -7181,6 +7187,9 @@ def _scope_texts(value: Any) -> list[str]:
             return []
     source = value.get("source")
     as_of_date = value.get("as_of_date")
+    if source == "frozen_baseline_recorded_window":
+        partial = f"；原请求结束{value.get('requested_window_end')}，期间未完，仅截至本次读取" if value.get("window_coverage") == "partial_to_read" else ""
+        return [f"基线{value.get('baseline_week')}（记录冻结{value.get('frozen_at')}）；已记录流水{value.get('window_start')}至{value.get('window_end')}（结束不含），读取{value.get('read_at')}，均为库端时间{partial}；不表示历史期末库存"]
     if source == "fabric_source_observation":
         basis = "源出库已记录事件" if value.get("basis") == "recorded_delivery_history" else "源库存快照（" + ("可确认在仓" if value.get("inventory_scope") == "on_hand" else "完整源范围，含在途") + "）"
         window = f"，{value.get('window_start')}至{value.get('window_end')}（结束不含）" if value.get("window_start") else ""

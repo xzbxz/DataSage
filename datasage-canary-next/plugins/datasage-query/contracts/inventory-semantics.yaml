@@ -1,4 +1,4 @@
-version: datasage-mini-inventory-semantics/v16
+version: datasage-mini-inventory-semantics/v17
 domain: inventory
 contract_role: plugin_physical_execution
 business_name: 库存事实、未动销与周转分析
@@ -1074,10 +1074,10 @@ metrics:
 
   registered_slow_pool_baseline_net_outbound:
     label: 登记滞销池·基线产品范围净出库
-    business_definition: 基于现存完整冻结业务键集合，统计记录冻结时点至本次库端固定读取时点的已记录物理出库和有效退货；默认按库存单位汇总，可附加产品、规格、仓库部门及流水销售归属。不代表冻结旧批次实际去化。
+    business_definition: 基于现存完整冻结业务键集合，默认统计记录冻结时点至本次读取的已记录物理出库和有效退货；显式指定一个基线周后，也可查询冻结之后的日期区间或月份，未完成期间仅截至读取时点；默认按库存单位汇总，可附加产品、规格、仓库部门及流水销售归属。不代表冻结旧批次实际去化。
     query_kind: frozen_pool_net_outbound
     table: vk_ai.slow_moving_baseline
-    time_policy: current_snapshot
+    time_policy: frozen_baseline_recorded_window
     max_group_dimensions: 5
     unit: 来源库存单位分别计量
     allowed_dimensions:
@@ -1131,9 +1131,12 @@ metrics:
     - id: inventory.frozen-net.sales
       mode: required_always
       text: 销售只表示匹配流水归属，不代表滞销任务池责任。按稳定身份对齐，同名不同人分开；同一身份名称有差异时显示名称不确定及变体数，不以当前姓名覆盖历史。销售对应产品组可重叠，不能相加当唯一基线组数。单位总体流量和显示组数在截断前计算，包含未知销售组；仅返回部分行不代表全体。指定销售筛选时未归属记录仍影响覆盖，不暗中分给该销售。
+    - id: inventory.frozen-net.window
+      mode: required_always
+      text: 显式日期或月份必须选择单个现存基线周，期间起点不得早于实际冻结。未来未开始期间失败，未完期间截止本次读取并公开原请求结束；不把当下库存回填历史期末。一个月多周基线不相加，不自动生成月初池或精确完成率。该期间是选定基线产品范围的已记录流量，不能称当月新冻结任务总进度。
     - id: inventory.frozen-net.time
       mode: required_always
-      text: 使用实际记录冻结时间（含）至本次库端读取时间（不含）；缺时间候选单独保留，不能证明发生在窗口内。时间保留库端原值，当前UTC偏移不证明历史时区。记录冻结时间可能更新，现存完整记录不证明原始冻结从未删改。没有基线或基线身份/单位不完整时明确失败，不写入或补建。
+      text: 未指定期间时使用实际记录冻结时间（含）至本次库端读取时间（不含）；显式期间以返回的实际窗口为准。缺时间候选单独保留，不能证明发生在窗口内。时间保留库端原值，当前UTC偏移不证明历史时区。记录冻结时间可能更新，现存完整记录不证明原始冻结从未删改。没有基线或基线身份/单位不完整时明确失败，不写入或补建。
     answer_note: *frozen_net_basis
 
   fabric_inventory_source_summary:

@@ -2128,6 +2128,29 @@ def validate_frozen_pool_rows(rows):
         w=metadata['baseline_week'];date.fromisocalendar(int(w[:4]),int(w[6:]),1)
         if len(w)!=8 or w[4:6]!='-W':raise ValueError()
     except (ValueError,TypeError):raise AnalysisQueryError('BASELINE_WEEK_INVALID','记录基线周标签无效。')
+    if 'flow_window_start' in first:
+        window_keys = ('flow_window_start','flow_window_end','requested_window_end')
+        if any(any(row.get(k) != first.get(k) for k in window_keys) for row in rows):
+            raise AnalysisQueryError('FLOW_WINDOW_INVALID','期间元信息在返回行间不一致。')
+        try:
+            window_start=datetime.fromisoformat(str(first['flow_window_start']))
+            window_end=datetime.fromisoformat(str(first['flow_window_end']))
+            requested_end=datetime.fromisoformat(str(first['requested_window_end']))
+            frozen=datetime.fromisoformat(str(first['baseline_frozen_at']))
+            read=datetime.fromisoformat(str(first['closing_read_at']))
+            if any(v.tzinfo is not None for v in (window_start,window_end,requested_end)):raise ValueError()
+            if window_start < frozen:
+                raise AnalysisQueryError('FLOW_WINDOW_PRECEDES_BASELINE','所选期间早于实际冻结时点；请选择更早的有效基线或明确较晚的期间，不能回溯新冻结产品为当时基线。')
+            if window_start >= read:
+                raise AnalysisQueryError('FLOW_WINDOW_NOT_OBSERVED','所选期间尚未开始，不能将未来流水解释为零。')
+            if window_start >= requested_end or window_end != min(requested_end,read):raise ValueError()
+        except AnalysisQueryError:
+            raise
+        except (KeyError,TypeError,ValueError):
+            raise AnalysisQueryError('FLOW_WINDOW_INVALID','已记录流水期间与读取时点不兼容。')
+        metadata.update(source='frozen_baseline_recorded_window',window_start=first['flow_window_start'],
+            window_end=first['flow_window_end'],requested_window_end=first['requested_window_end'],
+            window_coverage='partial_to_read' if requested_end>read else 'requested_window_observed')
     for row in rows:
         for key in list(row):
             if key.startswith('__baseline_'):row.pop(key)
@@ -2137,8 +2160,11 @@ def validate_frozen_pool_rows(rows):
 def _frozen_pool_net_outbound_query(request, metric, datasets_contract, semantics, limit, *, observed_on=None):
     """Recorded flows in unique frozen business keys; never frozen physical-batch disposal."""
     import re
-    if any(request.get(k) is not None for k in ('time_range', 'calendar_month', 'comparison', 'time_bucket', 'movement_state', 'order_by')):
-        raise AnalysisQueryError('INVALID_PLAN', '基线产品范围净出库仅支持记录冻结时间至本次读取，按稳定键排序。')
+    if any(request.get(k) is not None for k in ('comparison', 'time_bucket', 'movement_state', 'order_by')):
+        raise AnalysisQueryError('INVALID_PLAN', '基线产品范围净出库按稳定键排序，不接受状态筛选、时间分组或通用比较。')
+    window=request.get('time_range')
+    if window is not None and request.get('baseline_week') is None:
+        raise AnalysisQueryError('BASELINE_WEEK_REQUIRED','指定流水期间时须明确一个现存基线周；不会自动合并多周或选择月初池。')
     week = request.get('baseline_week')
     iso = (observed_on or _business_today()).isocalendar()
     current_week = f'{iso.year:04d}-W{iso.week:02d}'
@@ -2185,6 +2211,13 @@ def _frozen_pool_net_outbound_query(request, metric, datasets_contract, semantic
     ctes.append(f"base_raw AS (SELECT week_label,source_row_id,frozen_at,baseline_version,source_table,goods_id,goods_sku_id,whse_dept,{unit('source_unit')} AS normalized_unit FROM {qb} WHERE week_label=(SELECT baseline_week FROM clock))")
     ctes.append("meta AS (SELECT COUNT(*) AS __baseline_rows,COUNT(DISTINCT source_row_id) AS __baseline_ids,COUNT(frozen_at) AS __baseline_timed_rows,COUNT(DISTINCT frozen_at) AS __baseline_times,MIN(frozen_at) AS baseline_frozen_at,COALESCE(SUM(CASE WHEN baseline_version=2 AND source_table=%s THEN 0 ELSE 1 END),0) AS __baseline_bad_source,COALESCE(SUM(CASE WHEN goods_id IS NOT NULL AND goods_sku_id IS NOT NULL AND NULLIF(whse_dept,'') IS NOT NULL AND normalized_unit IN ('m','y','kg','Pcs') THEN 0 ELSE 1 END),0) AS __baseline_bad_keys FROM base_raw)")
     params.append(metric.get('baseline_source_table'))
+    if window is not None:
+        # Explicit periods select flows in ONE fixed cohort. A period still in
+        # progress ends at the database read clock and is disclosed as partial.
+        ctes.append('flow_window AS (SELECT %s AS flow_window_start,CASE WHEN %s<closing_read_at THEN %s ELSE closing_read_at END AS flow_window_end,%s AS requested_window_end FROM clock)')
+        params.extend([window['start'],window['end'],window['end'],window['end']])
+    flow_start='(SELECT flow_window_start FROM flow_window)' if window is not None else '(SELECT baseline_frozen_at FROM meta)'
+    flow_end='(SELECT flow_window_end FROM flow_window)' if window is not None else '(SELECT closing_read_at FROM clock)'
     ctes.append("base_keys AS (SELECT DISTINCT goods_id,goods_sku_id,whse_dept COLLATE utf8mb4_bin AS whse_dept,normalized_unit AS unit FROM base_raw)")
     filter_sql = []
     bindings = _entity_bindings(request)
@@ -2219,7 +2252,7 @@ def _frozen_pool_net_outbound_query(request, metric, datasets_contract, semantic
             # The SQL placeholders occur after the legacy predicate in SELECT.
             sales_condition = f' AND ({sales_filter} OR f.sales_id IS NULL)'
         warehouse_ok = f"(SELECT CASE WHEN COUNT(*)=1 AND COUNT(dept_name)=1 THEN MAX(dept_name)=f.whse_dept ELSE NULL END FROM {qt['warehouses']} w WHERE w.whse_id=f.{whse})"
-        ctes.append(f"{side}_raw AS (SELECT f.sales_id,NULLIF(f.sales_name,'') COLLATE utf8mb4_bin AS sales_name,f.goods_id,f.goods_sku_id,NULLIF(f.whse_dept,'') COLLATE utf8mb4_bin AS whse_dept,{unit('f.unit')} AS unit,f.{qty} AS qty,f.{rolls} AS rolls,f.{time_field} AS event_at,{legacy} AS document_ok,{predicate} AS valid_ok,{warehouse_ok} AS warehouse_ok,CASE WHEN f.{bill} IS NULL OR f.{bill} NOT IN ('bulk','sq') THEN 1 ELSE 0 END AS unknown_document FROM {qt[side]} f WHERE {candidate} AND (f.{time_field} IS NULL OR (f.{time_field}>=(SELECT baseline_frozen_at FROM meta) AND f.{time_field}<(SELECT closing_read_at FROM clock))){sales_condition})")
+        ctes.append(f"{side}_raw AS (SELECT f.sales_id,NULLIF(f.sales_name,'') COLLATE utf8mb4_bin AS sales_name,f.goods_id,f.goods_sku_id,NULLIF(f.whse_dept,'') COLLATE utf8mb4_bin AS whse_dept,{unit('f.unit')} AS unit,f.{qty} AS qty,f.{rolls} AS rolls,f.{time_field} AS event_at,{legacy} AS document_ok,{predicate} AS valid_ok,{warehouse_ok} AS warehouse_ok,CASE WHEN f.{bill} IS NULL OR f.{bill} NOT IN ('bulk','sq') THEN 1 ELSE 0 END AS unknown_document FROM {qt[side]} f WHERE {candidate} AND (f.{time_field} IS NULL OR (f.{time_field}>={flow_start} AND f.{time_field}<{flow_end})){sales_condition})")
         if filters_sales is not None: params.extend(filter_params)
         match = ' AND '.join(f'k.{key}=r.{key}' for key in ('goods_id','goods_sku_id','whse_dept','unit'))
         # Reliable different keys are out of scope, unknown keys cannot be silently excluded.
@@ -2258,6 +2291,8 @@ def _frozen_pool_net_outbound_query(request, metric, datasets_contract, semantic
     sql = 'WITH '+',\n'.join(ctes)+f" SELECT g.*{label_fields},m.*,clock.*,ot.*,rt.*,population.*,{unit_fields},(SELECT COUNT(*) FROM keys_b kb WHERE kb.unit=g.unit) AS unit_baseline_scope_groups,(SELECT COUNT(*) FROM grouped gg WHERE gg.unit=g.unit) AS unit_display_groups,{net} AS metric_value,{known_net} AS known_subset_value,{known_net_rolls} AS known_net_rolls,CASE WHEN {complete_rolls} THEN {known_net_rolls} ELSE NULL END AS net_rolls,CASE WHEN outbound_unknown_rows=0 AND g.gross_missing_quantity_rows=0 THEN g.gross_known_quantity ELSE NULL END AS gross_quantity,CASE WHEN returns_unknown_rows=0 AND g.return_missing_quantity_rows=0 THEN g.return_known_quantity ELSE NULL END AS return_quantity,CASE WHEN outbound_unknown_rows=0 AND g.gross_missing_roll_rows=0 THEN g.gross_known_rolls ELSE NULL END AS gross_rolls,CASE WHEN returns_unknown_rows=0 AND g.return_missing_roll_rows=0 THEN g.return_known_rolls ELSE NULL END AS return_rolls,CASE WHEN {unit_complete} THEN u.gross_known_quantity-u.return_known_quantity ELSE NULL END AS unit_net_quantity,u.gross_known_quantity-u.return_known_quantity AS unit_known_net_quantity,CASE WHEN NOT({complete}) THEN 'partial_unknown' WHEN g.gross_flow_rows=0 AND g.return_flow_rows=0 THEN 'no_recorded_flow' WHEN g.gross_flow_rows=0 OR g.return_flow_rows=0 THEN 'one_sided_recorded_flow' ELSE 'both_sides_recorded' END AS net_flow_state,COALESCE(g.grouped_key_count,0) AS __matched_row_count,COALESCE(g.gross_missing_quantity_rows+g.return_missing_quantity_rows,0)+outbound_unknown_rows+returns_unknown_rows AS missing_value_count,COALESCE(g.gross_flow_rows+g.return_flow_rows,0) AS known_value_count FROM meta m CROSS JOIN clock CROSS JOIN outbound_totals ot CROSS JOIN returns_totals rt CROSS JOIN population LEFT JOIN grouped g ON TRUE LEFT JOIN unit_totals u ON u.unit=g.unit"+label_join+' ORDER BY '+','.join('g.'+k for k in grouping)+' LIMIT %s'
     params.append(limit+1)
     outputs = grouping + (['sales_name'] if by_sales else [])
+    if window is not None:
+        sql=sql.replace(' SELECT g.*', ' SELECT flow_window.*,g.*',1).replace('FROM meta m CROSS JOIN clock CROSS JOIN outbound_totals','FROM meta m CROSS JOIN clock CROSS JOIN flow_window CROSS JOIN outbound_totals',1)
     return sql,params,{'metric':request.get('metric'),'dataset':None,'source_datasets':[base,*tables.values()],'dimension_outputs':outputs,'effective_dimensions':chosen,'filters':filters,'time_range':{'source':'frozen_baseline_to_current'},'warnings':[metric.get('answer_note','')],'_validate_frozen_pool':True}
 
 
