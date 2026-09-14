@@ -16,8 +16,10 @@ class CustomerHistoryTests(unittest.TestCase):
             t=datetime.fromisoformat(value)
             return t.replace(year=t.year-1,day=min(t.day,monthrange(t.year-1,t.month)[1])).isoformat()
         self.h.conn.create_function('HISTORY_START',1,lower)
+        # SQLite preserves value semantics here, not MySQL charset validation.
+        self.h.conn.create_function('CONVERT',1,lambda value:value)
         original=self.h.execute
-        self.h.execute=lambda sql,*a,**kw:original(sql.replace('DATE_SUB(closing_read_at,INTERVAL 12 MONTH)','HISTORY_START(closing_read_at)'),*a,**kw)
+        self.h.execute=lambda sql,*a,**kw:original(sql.replace('DATE_SUB(closing_read_at,INTERVAL 12 MONTH)','HISTORY_START(closing_read_at)').replace(' USING utf8mb4',''),*a,**kw)
         self.h.conn.executescript('''
         ALTER TABLE vk_dwd.delivery_bill_barcode_detail_dwd ADD COLUMN barcode_detail_id INTEGER;
         ALTER TABLE vk_dwd.delivery_return_detail_dwd ADD COLUMN barcode_detail_id INTEGER;
@@ -176,3 +178,16 @@ class CustomerHistoryTests(unittest.TestCase):
     def test_parent_product_mismatch_cannot_assign_a_customer(self):
         self.out();self.h.conn.execute('UPDATE vk_dwd.sale_bill_goods_detail_dwd SET goods_id=999')
         self.assertEqual('HISTORY_SCOPE_UNASSESSABLE',self.query()['results'][0]['error']['code'])
+
+    def test_missing_and_unicode_customer_names_preserve_returns_and_nulls(self):
+        self.out();self.ret(qty=1)
+        self.h.conn.execute('UPDATE vk_dwd.customer_dwd SET customer_name=NULL')
+        self.h.conn.execute('UPDATE vk_dwd.sale_bill_goods_detail_dwd SET customer_name=NULL')
+        result=self.result()
+        self.assertEqual(1,facts(result)[0]['history_customer_details_missing'])
+        self.assertEqual(1,facts(result)[0]['history_return_quantity'])
+        self.assertFalse(any(d['label']=='客户' and d.get('value') for d in result['rows'][0]['dimensions']))
+        self.h.conn.execute("UPDATE vk_dwd.customer_dwd SET customer_name=' 客户甲😀 ' WHERE customer_id=1")
+        result=self.result()
+        self.assertTrue(any(d['label']=='客户' and d['value']=='客户甲😀' for d in result['rows'][0]['dimensions']))
+        self.assertEqual(1,facts(result)[0]['history_return_quantity'])

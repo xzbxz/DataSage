@@ -77,7 +77,8 @@ def build_history_query(request, metric, datasets, semantics, limit, *, observed
         legacy,valid,warehouse=recorded_flow_predicates(outgoing,qt)
         params.extend(['%-HT','bulk'])
         customer='s.customer_id' if outgoing else 'f.customer_id'
-        label='s.customer_name' if outgoing else 'NULL'
+        # MySQL's untyped NULL has binary charset; COLLATE below needs utf8mb4.
+        label='s.customer_name' if outgoing else 'CONVERT(NULL USING utf8mb4)'
         parent='s.n=1 AND s.goods_id=f.goods_id' if outgoing else '1=1'
         order='s.sale_bill_id' if outgoing else 'NULL'
         join=' LEFT JOIN sales_index s ON s.goods_detail_id=f.sale_bill_goods_id' if outgoing else ''
