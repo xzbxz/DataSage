@@ -1025,6 +1025,10 @@ def _model_semantic_projection(
         except capability_contract.CapabilityContractError as exc:
             raise ContractFailure(exc.code,exc.message) from exc
         if grouping is not None:item['grouping']=grouping
+        buckets = capability_contract.analytical_time_buckets(definition)
+        if buckets is not None:item['allowed_time_buckets']=buckets
+        if definition.get('query_kind') == 'monthly_slow_pool' and 'order_by' in capability_contract.MONTHLY_SLOW_FORBIDDEN_PARAMETERS:
+            item['ordering'] = {'fields': [], 'directions': []}
         if definition.get("query_kind") == "target_completion":
             item["period_summary_fields"] = ["target_amount_rmb", "actual_amount_rmb", "gap_amount_rmb"]
             item["ordering"] = {"fields": ["completion_rate", "target_amount_rmb", "actual_amount_rmb", "gap_amount_rmb"], "directions": ["asc", "desc"], "default": {"field": "completion_rate", "direction": "desc"}, "rank_scope": "queried_population_if_all_ranking_values_known", "complete_target_gap_requires_full_partition": True}
@@ -1313,6 +1317,8 @@ def _catalog_summary(domain: str, planner: Mapping[str, Any]) -> dict[str, Any]:
                 "operation_summary_by_attribution_mode",
                 "target_gap_decomposition",
                 "comparison_kinds",
+                "allowed_time_buckets",
+                "required_time_bucket",
                 "ordering",
                 "change_decomposition_orderings",
                 "period_summary_fields",
@@ -1390,6 +1396,8 @@ def _catalog_expert_index(domain: str, planner: Mapping[str, Any]) -> dict[str, 
                 "max_group_dimensions",
                 "grouping",
                 "comparison_kinds",
+                "allowed_time_buckets",
+                "required_time_bucket",
                 "ordering",
                 "change_decomposition_orderings",
                 "period_summary_fields",

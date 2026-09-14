@@ -542,6 +542,19 @@ def effective_dimension_definitions(
     return effective
 
 
+MONTHLY_SLOW_FORBIDDEN_PARAMETERS = ('baseline_week', 'comparison', 'time_bucket', 'order_by')
+
+
+def analytical_time_buckets(metric: Mapping[str, Any]) -> list[str] | None:
+    """Shared analytical-builder time-bucket gate; None leaves ordinary metrics alone."""
+    kind = metric.get("query_kind")
+    if kind is None:
+        return None
+    if kind == "fabric_source" and metric.get("fabric_side") != "delivery":
+        return []
+    return ["month"] if kind in {"target_completion", "allocated_amount", "pattern_matching", "fabric_source"} else []
+
+
 def metric_grouping(metric: Mapping[str, Any]) -> dict[str, list[str]] | None:
     """One grouping contract for both catalog and pre-I/O validation.
     allowed_dimensions continues to include independently legal filters.

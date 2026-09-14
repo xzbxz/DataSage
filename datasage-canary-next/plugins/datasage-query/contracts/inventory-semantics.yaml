@@ -1,4 +1,4 @@
-version: datasage-mini-inventory-semantics/v19
+version: datasage-mini-inventory-semantics/v20
 domain: inventory
 contract_role: plugin_physical_execution
 business_name: 库存事实、未动销与周转分析
@@ -1097,6 +1097,10 @@ metrics:
     baseline_view: summary
 
   registered_slow_pool_baseline_net_outbound:
+    grouping:
+      allowed: [product, pool_sku, warehouse_department, unit, salesperson]
+      required: [unit]
+      default: [unit]
     result_fact_units:
       scope_net_rolls: 卷
       scope_known_net_rolls: 卷
@@ -1487,6 +1491,10 @@ metrics:
     - IDK-HT
     - BKK-HT
   registered_slow_monthly_net_outbound:
+    grouping:
+      allowed: [product, pool_sku, warehouse_department, unit, salesperson]
+      required: [unit]
+      default: [unit]
     monthly_scope_policy: *monthly_scope_policy
     result_fact_units:
       scope_net_rolls: 卷

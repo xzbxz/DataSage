@@ -150,7 +150,7 @@ REQUEST = {
         "time_bucket": {
             "type": "string",
             "enum": ["day", "month"],
-            "description": "Tool-controlled time grouping for a metric with an explicit or governed time field.",
+            "description": "Tool-controlled time grouping. Follow the selected metric allowed_time_buckets when present; an empty list forbids this parameter. A calendar month window does not itself require time_bucket.",
         },
         "comparison": {
             "type": "object",

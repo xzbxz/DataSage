@@ -23,10 +23,12 @@ def _business_today() -> date:
 
 
 class AnalysisQueryError(ValueError):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, *, path: str | None = None, hint: str | None = None):
         super().__init__(message)
         self.code = code
         self.message = message
+        self.path = path
+        self.hint = hint
 
 
 def _max_group_dimensions(metric: Mapping[str, Any]) -> int:

@@ -2,6 +2,7 @@
 No freezing, source writes, lifecycle inference or independent flow formula.
 """
 from datetime import date,datetime
+from .capability_contract import MONTHLY_SLOW_FORBIDDEN_PARAMETERS
 from .analytical_queries import (AnalysisQueryError,_dataset,_approved,_quote_table,
     _add_months,_value_filter,_entity_bindings,_bound_value,
     _pool_comparison_query,_frozen_pool_net_outbound_query)
@@ -27,8 +28,10 @@ def scope_filter(request,params,alias):
     return ' AND '.join(clauses) or '1=1'
 
 def monthly_cohort(request,metric,datasets,observed_on):
-    if any(request.get(k) is not None for k in ('baseline_week','comparison','time_bucket','order_by')):
-        raise AnalysisQueryError('INVALID_PLAN','独立月报使用完整日历月和月初池，不接受周基线、通用比较或排序。')
+    invalid = next((k for k in MONTHLY_SLOW_FORBIDDEN_PARAMETERS if request.get(k) is not None), None)
+    if invalid is not None:
+        raise AnalysisQueryError('INVALID_PLAN','独立月报使用完整日历月和月初池，不接受周基线、通用比较或排序。',
+            path=invalid, hint='该月报不接受 '+invalid+'；删除该参数后仍须通过其他独立校验。')
     window=request.get('time_range')
     try:
         start=date.fromisoformat(window['start']) if window else date(observed_on.year,observed_on.month,1)

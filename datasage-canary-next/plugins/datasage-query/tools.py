@@ -384,7 +384,7 @@ def _validate_detail_request_capabilities(
     except capability_contract.CapabilityContractError as exc:
         raise QueryFailure(exc.code,exc.message) from exc
     if grouping and requested_dimensions and not set(grouping['required'])<=set(requested_dimensions)<=set(grouping['allowed']):
-        raise QueryFailure('UNSUPPORTED_DIMENSION','该指标分组组合不受支持；可筛选维度不等于可分组维度。',stage='input_validation')
+        raise QueryFailure('UNSUPPORTED_DIMENSION','该指标分组组合不受支持；可筛选维度不等于可分组维度。',stage='input_validation',path='dimensions',hint='必需分组：'+', '.join(grouping['required'])+'；允许分组：'+', '.join(grouping['allowed'])+'。')
     if not {*requested_dimensions, *requested_filters}.issubset(allowed_dimensions):
         raise QueryFailure(
             "UNSUPPORTED_DIMENSION",
@@ -3437,11 +3437,9 @@ def _build_metric_query(
         if request.get("comparison") is not None:
             raise QueryFailure("INVALID_PLAN", "该分析指标暂不接受通用比较参数。")
         time_bucket = request.get("time_bucket")
-        if time_bucket is not None and (
-            metric.get("query_kind") not in {"target_completion", "allocated_amount", "pattern_matching", "fabric_source"}
-            or time_bucket != "month"
-        ):
-            raise QueryFailure("INVALID_PLAN", "该分析指标不支持请求中的时间分组参数。")
+        if time_bucket is not None and time_bucket not in capability_contract.analytical_time_buckets(metric):
+            raise QueryFailure("INVALID_PLAN", "该分析指标不支持请求中的时间分组参数。",
+                path="time_bucket", hint="核对该指标 allowed_time_buckets；空列表表示不接受 time_bucket。这次错误仅标识该字段；其他参数是否有效仍须分别验证。")
         try:
             sql, params, scope = build_analytical_metric_query(
                 request,
@@ -3454,7 +3452,7 @@ def _build_metric_query(
             scope["inventory_scope"] = applied_inventory_scope
             return sql, params, scope
         except AnalysisQueryError as exc:
-            raise QueryFailure(exc.code, exc.message) from exc
+            raise QueryFailure(exc.code, exc.message, path=exc.path, hint=exc.hint) from exc
 
     if request.get("comparison") is not None:
         return _build_comparison_metric_query(
@@ -7297,11 +7295,7 @@ def _failure_result(
         "DATA_RECONCILIATION_REQUIRED",
         "SEMANTIC_UNIT_RECONCILIATION_REQUIRED",
     }
-    error = {
-        "code": failure.code,
-        "message": failure.message,
-        **_caller_retry_metadata(failure),
-    }
+    error = _public_error(failure)
     result = {
         "request_id": request_id,
         "status": "timeout" if failure.timeout else "failed",
