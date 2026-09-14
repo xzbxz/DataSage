@@ -82,66 +82,19 @@ Read time, business time and row ETL time are distinct and do not attest an
 atomic ETL batch. The two sources cannot establish barcode lifecycle or causal
 responsibility.
 
-## Time
+## Time and governed inventory metrics
 
-For on-demand slow-moving progress, reuse the inventory catalog's registered
-pool, frozen-baseline comparison and baseline-product net-outbound capabilities.
-They answer different questions: current membership, recorded baseline versus
-current membership/quantity, and recorded outbound less returns in a fixed
-product scope. Inventory changes are not sales, and Exited does not mean sold
-out. Source ADS labels remain a separate population.
+For slow-moving and inventory questions, select an exact registered metric from
+the inventory catalog. Its detail provides the declared grouping, legal
+parameters, business definition and required answer boundaries before querying.
+Read the returned evidence for actual windows, units, missing data and coverage;
+catalog definitions alone are not observed business results.
 
-A net-outbound request without a period retains its frozen-at-to-read default.
-An explicit "this week" request must name the actual current baseline week; the
-latest-recorded default is not proof that this week exists. Do not create or
-refreeze a baseline to answer a read-only request.
-For an explicit date range or calendar month, select exactly one existing
-`baseline_week`. The range must start on or after its actual freeze; never
-substitute a later baseline or sum weekly cohorts into a monthly denominator.
-An ongoing period reports its actual end at the database read time and retains
-the requested end. A future period fails. For example, a cohort frozen in
-August may define September flows only when that cohort is explicitly chosen;
-it does not become a proven September opening pool.
-
-Keep quantity grouped by inventory unit. Product, source SKU, warehouse
-department and each flow's own salesperson can be added to the flow breakdown.
-Sales product groups overlap and repeated unit totals are not additive across
-rows. Use returned coverage and identity states, including unknown sales and
-negative net returns. Independent calls have their own clocks/snapshots; only
-claim reconciliations established by the returned evidence.
-
-The independent monthly report uses the previous month's physical inventory
-snapshot for its opening pool, with the confirmed label/organization/warehouse/
-department rules and quantity >10 AFTER four-key aggregation. Its current-month
-closing pool uses current registered rows with the original row-level >10 rule;
-historical closing uses the target month's physical snapshot. BOTH ends exclude
-one current whitelist keyed by product, SKU, warehouse department and inventory
-unit. Recalculating historical scope with today's whitelist is the accepted
-policy, not a reason to demand a new month-start freeze. New closing items enter
-movement totals but not opening-pool achievements.
-
-Weekly and monthly achievements provide ordinary net outbound rolls and high-price
-net rolls: outbound price strictly >75% of DDP, less ALL qualified returns. Exactly
-75% does not qualify as high-price outbound. No extra positive-DDP rule is implied.
-Keep negative/fractional results and zero ordinary net with nonzero high-price net.
-Use the returned roll fields and their units, not the quantity primary value.
-In monthly-report context, ordinary wording such as "handled this month" or
-"high-price sales" refers to these confirmed achievements; briefly state the
-threshold and net basis. An explicit >=DDP condition is a different request and
-must not be silently replaced with 75%; unsupported custom conditions remain
-explicitly unsupported. Do not implement keyword routing or rewrite final strings.
-
-Raw inventory flags, priority registered categories, and positive promotion-price
-coverage are different sets. The registered discountable category excludes rows
-assigned to the priority handing category, including overlapping raw flags.
-Promotion-price missing means NULL, not zero/nonpositive. Raw tag dimensions are
-not generally published in this batch; never substitute a category for a clearly
-requested raw flag. The source data is generated upstream; humans maintain only
-the whitelist, not inventory quantities or the entire pool.
-
-Missing historical closing data stays missing; independently supported period
-achievements remain usable. Net outbound is the accepted achievement observation,
-without claiming each original physical roll's lifecycle or calculating bonuses.
+Current inventory, weekly observations, independent monthly reports and historical
+customer relationships answer different questions. Select using the metric's
+declared scope instead of substituting another population, period or threshold.
+The canonical business definitions live in inventory-semantics.yaml; this reference
+does not duplicate its formulas, thresholds, pool filters or return policies.
 
 - Resolve omitted or imprecise time wording using the selected metric's published
   time policy, default, and legal windows. “最近” without a duration does not by
