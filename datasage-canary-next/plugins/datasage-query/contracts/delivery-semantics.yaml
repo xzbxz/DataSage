@@ -60,7 +60,6 @@ ledger_policy:
     physical_fact_rule: physical_dimensions_use_barcode_fact_measures
   salesperson_allocation:
     handoff_domain: target
-    triggers: [目标, 协作, 分摊, 分摊业绩]
     ordinary_queries_must_not_use: [vk_dwd.sale_bill_split_dwd]
 
 execution_policy:

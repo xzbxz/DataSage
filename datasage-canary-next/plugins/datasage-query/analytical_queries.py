@@ -1982,8 +1982,8 @@ def _registered_slow_pool_query(request, metric, datasets_contract, semantics, l
 def _frozen_pool_comparison_query(request, metric, datasets_contract, semantics, limit, *, observed_on=None):
     """Compare recorded baselines with current records, never physical-batch disposal."""
     import re
-    if any(request.get(k) is not None for k in ('time_range','calendar_month','comparison','time_bucket')):
-        raise AnalysisQueryError('INVALID_PLAN', '仅支持已有冻结时点到本次读取，不用当前池回填历史期末。')
+    from .analytical_handlers import validate_parameters
+    validate_parameters("frozen_pool_comparison", request)
     week = request.get('baseline_week')
     today = observed_on or _business_today()
     iso = today.isocalendar()
@@ -2112,7 +2112,8 @@ def _pool_comparison_query(request,metric,ctes,params,source_tables,limit,*,mont
         for k in ['opening_missing_quantity_rows','closing_missing_quantity_rows','opening_missing_roll_rows','closing_missing_roll_rows','opening_unknown_class_rows','closing_unknown_class_rows','opening_uncertain_membership_rows','closing_uncertain_membership_rows','opening_unknown_key_rows','closing_unknown_key_rows','opening_unknown_unit_rows','closing_unknown_unit_rows','closing_unknown_whitelist_rows','identity_uncertain']:aggregates.append(f'SUM({k}) AS {k}')
         ctes.append('display_rows AS (SELECT '+','.join(aggregates)+',COUNT(*) AS __matched_row_count FROM classified GROUP BY '+cols+')')
         outputs=grouping;ordering=' ORDER BY '+','.join('d.'+k for k in grouping)
-    if request.get('order_by') is not None:raise AnalysisQueryError('INVALID_PLAN','基线比较使用稳定键排序，不跨单位按数量排名。')
+    from .analytical_handlers import validate_parameters
+    validate_parameters("monthly_slow_pool" if monthly else "frozen_pool_comparison", request)
     sql='WITH '+',\n'.join(ctes)+' SELECT d.*,m.*,clock.*,totals.*,0 AS missing_value_count,COALESCE(d.metric_value,0) AS known_value_count,1 AS value_coverage_rate FROM meta m CROSS JOIN clock CROSS JOIN totals LEFT JOIN display_rows d ON TRUE'+ordering+' LIMIT %s'
     params.append(limit+1)
     return sql,params,{'metric':request.get('metric'),'dataset':None,'source_datasets':source_tables,'dimension_outputs':outputs,'effective_dimensions':effective_dimensions,'filters':filters,'time_range':{'source':'frozen_baseline_to_current'},'warnings':[metric.get('answer_note','')],'_validate_frozen_pool':not monthly,'_validate_monthly_pool':monthly,'_monthly_flow':False}
@@ -2205,8 +2206,8 @@ def frozen_baseline_cohort(metric, datasets_contract, week, current_week):
 def _frozen_pool_net_outbound_query(request, metric, datasets_contract, semantics, limit, *, observed_on=None, cohort=None):
     """Recorded flows in unique frozen business keys; never frozen physical-batch disposal."""
     import re
-    if any(request.get(k) is not None for k in ('comparison', 'time_bucket', 'movement_state', 'order_by')):
-        raise AnalysisQueryError('INVALID_PLAN', '基线产品范围净出库按稳定键排序，不接受状态筛选、时间分组或通用比较。')
+    from .analytical_handlers import validate_parameters
+    validate_parameters("frozen_pool_net_outbound", request)
     window=request.get('time_range') if cohort is None else None
     if window is not None and request.get('baseline_week') is None:
         raise AnalysisQueryError('BASELINE_WEEK_REQUIRED','指定流水期间时须明确一个现存基线周；不会自动合并多周或选择月初池。')
@@ -2248,8 +2249,12 @@ def _frozen_pool_net_outbound_query(request, metric, datasets_contract, semantic
         for field in columns: _approved(field, ds)
         if name in {'outbound','returns'}:
             for field in ('sales_id','sales_name'): _approved(field,ds)
-    if metric.get('high_price_policy') != {'kind':'slow_achievement','factor':0.75,'operator':'gt'}:
-        raise AnalysisQueryError('CONTRACT_UNAVAILABLE','高折战果口径未固定。')
+    high_policy = metric.get('high_price_policy')
+    factor = high_policy.get('factor') if isinstance(high_policy, Mapping) else None
+    if (not isinstance(high_policy, Mapping) or set(high_policy) != {'kind', 'factor', 'operator'}
+            or high_policy.get('kind') != 'slow_achievement' or high_policy.get('operator') != 'gt'
+            or type(factor) not in (int, float) or not 0 < factor <= 1):
+        raise AnalysisQueryError('CONTRACT_UNAVAILABLE','高折战果缺少有效的受控严格折扣比例。')
     calculation_columns=_dataset(tables['outbound'],datasets_contract).get('calculation_columns',{}).get('slow_achievement',[])
     if set(calculation_columns) != {'deal_price','ddp_price'}:
         raise AnalysisQueryError('COLUMN_NOT_ALLOWED','高折价格字段仅允许已登记的受控计算。')
@@ -2298,7 +2303,7 @@ def _frozen_pool_net_outbound_query(request, metric, datasets_contract, semantic
             sales_filter = _value_filter('f',sales_filter_column,filters_sales,filter_params)
             # The SQL placeholders occur after the legacy predicate in SELECT.
             sales_condition = f' AND ({sales_filter} OR f.sales_id IS NULL)'
-        high_columns=("CASE WHEN f.deal_price IS NULL OR f.ddp_price IS NULL THEN NULL WHEN f.deal_price>0.75*f.ddp_price THEN 1 ELSE 0 END AS high_qualifies,CASE WHEN f.ddp_price<=0 OR f.deal_price<0 THEN 1 ELSE 0 END AS price_anomaly," if outgoing else '')
+        high_columns=(f"CASE WHEN f.deal_price IS NULL OR f.ddp_price IS NULL THEN NULL WHEN f.deal_price>{factor}*f.ddp_price THEN 1 ELSE 0 END AS high_qualifies,CASE WHEN f.ddp_price<=0 OR f.deal_price<0 THEN 1 ELSE 0 END AS price_anomaly," if outgoing else '')
         ctes.append(f"{side}_raw AS (SELECT {high_columns}f.sales_id,NULLIF(f.sales_name,'') COLLATE utf8mb4_bin AS sales_name,f.goods_id,f.goods_sku_id,NULLIF(f.whse_dept,'') COLLATE utf8mb4_bin AS whse_dept,{unit('f.unit')} AS unit,f.{qty} AS qty,f.{rolls} AS rolls,f.{time_field} AS event_at,{legacy} AS document_ok,{predicate} AS valid_ok,{warehouse_ok} AS warehouse_ok,CASE WHEN f.{bill} IS NULL OR f.{bill} NOT IN ('bulk','sq') THEN 1 ELSE 0 END AS unknown_document FROM {qt[side]} f WHERE {candidate} AND (f.{time_field} IS NULL OR (f.{time_field}>={flow_start} AND f.{time_field}<{flow_end})){sales_condition})")
         if filters_sales is not None: params.extend(filter_params)
         match = ' AND '.join(f'k.{key}=r.{key}' for key in ('goods_id','goods_sku_id','whse_dept','unit'))
@@ -2378,9 +2383,10 @@ def build_analytical_metric_query(
     query_observed_on = observed_on or _business_today()
     kind = metric.get("query_kind")
     _ensure_available(metric)
-    if kind == "slow_customer_history":
-        from .customer_history import build_history_query
-        return build_history_query(request, metric, datasets_contract, semantics, limit, observed_on=query_observed_on)
+    from .analytical_handlers import get_handler
+    handler = get_handler(kind)
+    if handler is not None and handler.builder is not None:
+        return handler.resolve("builder")(request, metric, datasets_contract, semantics, limit, observed_on=query_observed_on)
     if kind == "monthly_slow_pool":
         from .monthly_slow_pool import build_monthly_query
         return build_monthly_query(request, metric, datasets_contract, semantics, limit, observed_on=query_observed_on)

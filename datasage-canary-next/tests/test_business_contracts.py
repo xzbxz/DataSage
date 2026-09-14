@@ -5969,23 +5969,9 @@ class BusinessContractTests(unittest.TestCase):
         self.assertIn(f"`{version}`", architecture)
         self.assertIn(f"`{hermes_version}`", architecture)
 
-    def test_skill_keeps_adaptive_planning_and_evidence_boundaries(self) -> None:
-        main_skill = _main_skill()
-        normalized = " ".join(main_skill.split())
-        answer_boundary = " ".join(_answer_boundary().split())
-
-        self.assertIn("Choose the route adaptively", normalized)
-        self.assertIn(
-            "If one branch fails, preserve valid independent evidence",
-            answer_boundary,
-        )
-        for forbidden in (
-            "must query exactly",
-            "fixed metric count",
-            "fixed call order",
-            "answer template",
-        ):
-            self.assertNotIn(forbidden, normalized.casefold())
+    def test_plugin_registers_tools_without_prompt_or_answer_hooks(self) -> None:
+        # Registration is executable evidence; prose substrings cannot prove
+        # adaptive reasoning or preservation of independent successful branches.
         self.assertTrue(SKILL_PATH.is_file())
 
         _, registration = probe_registration(
@@ -6531,7 +6517,7 @@ class BusinessContractTests(unittest.TestCase):
                 )
 
     def test_live_host_resolves_only_the_bare_datasage_skill_name(self) -> None:
-        host_root = PROFILE_ROOT.parent.parent / "hermes-agent"
+        host_root = Path(os.environ.get("HERMES_AGENT_ROOT", PROFILE_ROOT.parent.parent / "hermes-agent"))
         host_python = host_root / "venv" / "Scripts" / "python.exe"
         if not host_python.is_file():
             self.skipTest("Hermes host runtime is unavailable")

@@ -133,3 +133,8 @@ datasage-canary-next/*
 
 !datasage-canary-next/plugins/datasage-query/customer_history.py
 !datasage-canary-next/tests/test_customer_history.py
+
+!datasage-canary-next/plugins/datasage-query/analytical_handlers.py
+!datasage-canary-next/tests/test_analytical_handlers.py
+!datasage-canary-next/tests/test_catalog_business_definitions.py
+!datasage-canary-next/tests/test_host_tool_schema.py

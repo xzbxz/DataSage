@@ -1,8 +1,7 @@
 """Independent public-boundary regressions for R-01/R-02/R-03; no real data/model."""
 from pathlib import Path
 import unittest,json,sys
-if 'datasage-canary-next' not in str(Path(__file__).resolve()):
-    sys.path.insert(0,'C:/Users/10192/AppData/Local/hermes/profiles/datasage-canary-next/tests')
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_slow_baseline_comparison as baseline
 import test_slow_baseline_net_outbound as net
 import test_registered_slow_pool as pool

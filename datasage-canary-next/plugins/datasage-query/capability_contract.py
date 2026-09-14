@@ -16,7 +16,7 @@ import math
 import re
 from typing import Any
 
-from . import request_contract
+from . import analytical_handlers, request_contract
 
 
 DOMAIN_SOURCES: dict[str, dict[str, str]] = {
@@ -542,15 +542,14 @@ def effective_dimension_definitions(
     return effective
 
 
-MONTHLY_SLOW_FORBIDDEN_PARAMETERS = ('baseline_week', 'comparison', 'time_bucket', 'order_by')
-HISTORY_FORBIDDEN_PARAMETERS = ('time_range','calendar_month','time_bucket','comparison','order_by','movement_state','inventory_scope')
-
-
 def analytical_time_buckets(metric: Mapping[str, Any]) -> list[str] | None:
     """Shared analytical-builder time-bucket gate; None leaves ordinary metrics alone."""
     kind = metric.get("query_kind")
     if kind is None:
         return None
+    handler = analytical_handlers.get_handler(kind)
+    if handler is not None and "time_bucket" in handler.forbidden_parameters:
+        return []
     if kind == "fabric_source" and metric.get("fabric_side") != "delivery":
         return []
     return ["month"] if kind in {"target_completion", "allocated_amount", "pattern_matching", "fabric_source"} else []

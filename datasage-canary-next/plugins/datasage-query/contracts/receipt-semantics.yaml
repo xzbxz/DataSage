@@ -35,7 +35,6 @@ ledger_policy:
     salesperson_rule: each_fact_uses_final_sales_id
   salesperson_allocation:
     handoff_domain: target
-    triggers: [目标, 协作, 分摊, 分摊业绩]
     positive_fact: vk_dwd.receive_bill_split_dwd
     negative_fact: vk_dwd.receive_return_bill_split_dwd
 

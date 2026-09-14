@@ -209,7 +209,7 @@ class DeliveryL3CatalogTests(unittest.TestCase):
             ][0]["metric"]["scope_flags"]["completed_returns_only"]
         )
 
-    def test_answer_boundaries_survive_all_catalog_projections_without_physical_names(
+    def test_exact_boundaries_and_catalog_views_do_not_expose_physical_names(
         self,
     ) -> None:
         physical_identifiers = (
@@ -247,7 +247,7 @@ class DeliveryL3CatalogTests(unittest.TestCase):
                 else:
                     for item in result["metrics"]:
                         expanded = {**result.get("metric_defaults", {}), **item}
-                        self.assertTrue(expanded["answer_boundary_summary"])
+                        self.assertNotIn("answer_boundary_summary", expanded)
 
     def test_deepseek_static_guards_match_canonical_catalog_and_delivery_scope(self) -> None:
         catalog_canonical = schemas.DATASAGE_CATALOG["parameters"]

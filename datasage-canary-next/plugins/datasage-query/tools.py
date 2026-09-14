@@ -45,6 +45,7 @@ from .db_security import (
     validate_mysql_source_evidence,
 )
 from . import (
+    analytical_handlers,
     capability_contract,
     contract_store,
     contracts,
@@ -3380,7 +3381,8 @@ def _build_metric_query(
     metric = metrics[metric_code]
     if not isinstance(metric, dict):
         raise QueryFailure("CONTRACT_UNAVAILABLE", "指标定义格式无效。")
-    if (request.get("baseline_week") is not None or request.get("movement_state") is not None) and metric.get("query_kind") not in {"frozen_pool_comparison", "frozen_pool_net_outbound", "slow_customer_history"}:
+    handler = analytical_handlers.get_handler(metric.get("query_kind"))
+    if (request.get("baseline_week") is not None or request.get("movement_state") is not None) and not (handler and handler.baseline_parameters):
         raise QueryFailure("INVALID_PLAN", "该指标不接受基线周或变化状态参数。")
     if request.get("pattern_time_basis") is not None and metric.get("query_kind") != "pattern_matching":
         raise QueryFailure("INVALID_PLAN", "该指标不接受找版时间口径参数。")
@@ -4536,8 +4538,7 @@ _PUBLIC_FACT_FIELDS = {
     "excluded_negative_bill_count",
     "excluded_open_balance_bill_count",
 }
-from .customer_history import FACT_FIELDS as _HISTORY_FACT_FIELDS
-_PUBLIC_FACT_FIELDS.update(_HISTORY_FACT_FIELDS)
+_PUBLIC_FACT_FIELDS.update(analytical_handlers.public_fact_fields())
 from .fabric_source_queries import FACT_FIELDS as _FABRIC_FACT_FIELDS
 _PUBLIC_FACT_FIELDS.update(_FABRIC_FACT_FIELDS)
 _PUBLIC_FACT_FIELDS.update({'high_net_rolls','high_known_net_rolls','high_gross_rolls','high_known_gross_rolls',
@@ -6962,8 +6963,9 @@ def _public_time_range(value: Any) -> dict[str, Any]:
             raise QueryFailure("CONTRACT_UNAVAILABLE", "查询时间范围来源无效。")
         return {"start": start, "end": end, "source": source}
     source = value.get("source")
-    if source == "fixed_12_calendar_month_customer_history":
-        return {k:v for k,v in value.items() if k.startswith('history_') or k in {'source','baseline_week','frozen_at','read_at','read_utc_at','observed_db_utc_offset_seconds','end_exclusive','window_anchor','matching'}}
+    handler = analytical_handlers.handler_for_time(source)
+    if handler is not None:
+        return handler.resolve("time_projection")(value)
     if source == "monthly_slow_pool_observation":
         return {k:v for k,v in value.items() if k in {"source","closing_basis","whitelist_basis"} or k.startswith("monthly_")}
     if source == "frozen_baseline_recorded_window":
@@ -7209,8 +7211,9 @@ def _scope_texts(value: Any) -> list[str]:
             return []
     source = value.get("source")
     as_of_date = value.get("as_of_date")
-    if source == "fixed_12_calendar_month_customer_history":
-        return [f"既有周基线{value.get('baseline_week')}（冻结{value.get('frozen_at')}）；同产品同仓库部门历史出库客户；固定12个日历月{value.get('history_start')}至{value.get('history_end')}（结束不含），数据库业务时钟UTC偏移{value.get('observed_db_utc_offset_seconds')}秒；全退客户关系保留、退货独立"]
+    handler = analytical_handlers.handler_for_time(source)
+    if handler is not None:
+        return handler.resolve("time_description")(value)
     if source == "monthly_slow_pool_observation":
         closing = "本次当前登记池" if value.get("closing_basis")=="current_ods" else f"{value.get('monthly_month')}物理月末快照"
         return [f"独立月报{value.get('monthly_month')}；期初{value.get('monthly_opening_month')}物理快照、期末{closing}；两端使用本次同一库存单位白名单组合；流水{value.get('monthly_window_start')}至{value.get('monthly_window_end')}（结束不含），读取{value.get('monthly_read_at')}；当月不代表完整月结"]
@@ -9206,7 +9209,8 @@ def _run_one(
         current_stage = "business_sql"
         business_sql_attempted_count = 1
         executor = execute_query or _execute_with_source
-        if (scope.get("_validate_frozen_pool") is True or scope.get("_validate_monthly_pool") is True or scope.get("_validate_pattern_observation") is True or scope.get("_validate_customer_history") is True) and execute_query is None:
+        handler = analytical_handlers.get_handler(semantics["metrics"][request["metric"]].get("query_kind"))
+        if (scope.get("_validate_frozen_pool") is True or scope.get("_validate_monthly_pool") is True or scope.get("_validate_pattern_observation") is True or (handler is not None and handler.consistent_snapshot)) and execute_query is None:
             with _ConsistentSnapshotExecutor(deadline_at=deadline_at) as snapshot:
                 rows, truncated, business_source_evidence_ref = snapshot.execute(
                     sql, params, limit, deadline_at=deadline_at
@@ -9251,15 +9255,10 @@ def _run_one(
                 scope["time_range"] = applied_time_range
             except AnalysisQueryError as error:
                 raise QueryFailure(error.code, error.message, stage="baseline_validation") from error
-        if scope.get("_validate_customer_history") is True:
-            from .customer_history import history_observation
+        if handler is not None and handler.observer is not None:
             try:
-                applied_time_range = history_observation(rows)
+                applied_time_range = handler.resolve("observer")(rows)
                 scope["time_range"] = applied_time_range
-                for row in rows:
-                    if row.get("__matched_row_count"):
-                        for role, value in (("customer",row['customer_id']),("product",row['goods_id']),("relation",(row['customer_id'],row['goods_id'],row['whse_dept']))):
-                            row['history_'+role+'_ref'] = role+'_'+hashlib.sha256(str(value).encode('utf-8')).hexdigest()[:16]
             except AnalysisQueryError as error:
                 raise QueryFailure(error.code,error.message,stage="result_validation") from error
         if scope.get("_validate_pattern_observation") is True:

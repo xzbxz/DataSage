@@ -14,7 +14,7 @@ from .capability_contract import (
     SNAPSHOT_MONTHS_BEFORE_COMPARISON,
     assert_capability_boundary,
 )
-from . import capability_contract, contract_store
+from . import analytical_handlers, capability_contract, contract_store
 from .scorecard import performance_scorecard_manifest
 
 _MODEL_PROJECTION_VERSION = "datasage-model-semantic-projection/v5"
@@ -693,7 +693,7 @@ def _delivery_scope_flags(
     }
 
 
-def _delivery_answer_boundary_summary(
+def _answer_boundary_summary(
     definition: Mapping[str, Any],
     semantics: Mapping[str, Any],
     physical_identifiers: set[str],
@@ -772,7 +772,7 @@ def _pending_capability_projection(
         state = activation_gate.get("state")
         if isinstance(state, str) and state:
             result["activation_gate"] = state
-    answer_boundary_summary = _delivery_answer_boundary_summary(
+    answer_boundary_summary = _answer_boundary_summary(
         definition, semantics, physical_identifiers
     )
     if answer_boundary_summary:
@@ -1027,9 +1027,8 @@ def _model_semantic_projection(
         if grouping is not None:item['grouping']=grouping
         buckets = capability_contract.analytical_time_buckets(definition)
         if buckets is not None:item['allowed_time_buckets']=buckets
-        if definition.get('query_kind') == 'monthly_slow_pool' and 'order_by' in capability_contract.MONTHLY_SLOW_FORBIDDEN_PARAMETERS:
-            item['ordering'] = {'fields': [], 'directions': []}
-        if definition.get('query_kind') == 'slow_customer_history' and 'order_by' in capability_contract.HISTORY_FORBIDDEN_PARAMETERS:
+        handler = analytical_handlers.get_handler(definition.get('query_kind'))
+        if handler is not None and 'order_by' in handler.forbidden_parameters:
             item['ordering'] = {'fields': [], 'directions': []}
         if definition.get("query_kind") == "target_completion":
             item["period_summary_fields"] = ["target_amount_rmb", "actual_amount_rmb", "gap_amount_rmb"]
@@ -1133,11 +1132,11 @@ def _model_semantic_projection(
             item["scope_flags"] = _delivery_scope_flags(
                 code, definition, semantics
             )
-            answer_boundary_summary = _delivery_answer_boundary_summary(
-                definition, semantics, physical_identifiers
-            )
-            if answer_boundary_summary:
-                item["answer_boundary_summary"] = answer_boundary_summary
+        answer_boundary_summary = _answer_boundary_summary(
+            definition, semantics, physical_identifiers
+        )
+        if answer_boundary_summary:
+            item["answer_boundary_summary"] = answer_boundary_summary
         projected_metrics.append(item)
 
     executable_dimension_codes = {
@@ -1331,7 +1330,6 @@ def _catalog_summary(domain: str, planner: Mapping[str, Any]) -> dict[str, Any]:
                 "grouping",
                 "delivery_scope_policy",
                 "scope_flags",
-                "answer_boundary_summary",
             )
             if raw.get(key) is not None
         }
@@ -1408,7 +1406,6 @@ def _catalog_expert_index(domain: str, planner: Mapping[str, Any]) -> dict[str, 
                 "target_gap_decomposition",
                 "delivery_scope_policy",
                 "scope_flags",
-                "answer_boundary_summary",
             )
             if raw.get(key) is not None
         }

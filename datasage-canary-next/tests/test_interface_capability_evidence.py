@@ -15,8 +15,7 @@ class InterfaceCapabilityTests(unittest.TestCase):
                 item=compact['metric'] if 'metric' in compact else next(m for m in compact['metrics'] if m['code']==code)
                 self.assertEqual(['unit'],item['grouping']['required'])
                 self.assertEqual([],item['allowed_time_buckets'])
-                if code == 'registered_slow_monthly_net_outbound':
-                    self.assertEqual([],item['ordering']['fields'])
+                self.assertEqual([],item['ordering']['fields'])
 
     def test_builder_bucket_capability_keeps_existing_month_gate(self):
         gate=plugin.capability_contract.analytical_time_buckets
@@ -32,10 +31,11 @@ class InterfaceCapabilityTests(unittest.TestCase):
 
     def test_rejected_fields_survive_public_wire_without_sql(self):
         h=weekly.BaselineNetTests();h.setUp();self.addCleanup(h.doCleanups)
-        for field,kwargs in [('time_bucket',{'time_bucket':'month'}),('dimensions',{'dimensions':['salesperson']}),('order_by',{'order_by':{'field':'metric_value','direction':'desc'}})]:
-            with self.subTest(field=field):
+        for code, period in [('registered_slow_monthly_net_outbound', {'month':'2026-09'}), ('registered_slow_pool_baseline_net_outbound', {'month':None,'baseline_week':'2026-W37'})]:
+          for field,kwargs in [('time_bucket',{'time_bucket':'month'}),('dimensions',{'dimensions':['salesperson']}),('order_by',{'order_by':{'field':'metric_value','direction':'desc'}})]:
+            with self.subTest(metric=code,field=field):
                 before=len(h.sql_trace)
-                result=h.query(metric('registered_slow_monthly_net_outbound','inventory',month='2026-09',**kwargs))
+                result=h.query(metric(code,'inventory',**period,**kwargs))
                 compact=plugin.wire.compact_query_payload(result)
                 error=compact['results'][0]['error']
                 self.assertEqual(field,error['path'])

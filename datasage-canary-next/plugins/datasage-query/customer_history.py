@@ -1,10 +1,14 @@
 """Read-only product/department purchase relationships in an explicit existing weekly pool."""
 from datetime import date, datetime
 from calendar import monthrange
-from .capability_contract import HISTORY_FORBIDDEN_PARAMETERS
+import hashlib
+from collections.abc import Mapping
+from .analytical_handlers import validate_parameters
 from .analytical_queries import (AnalysisQueryError, _dataset, _approved, _quote_table,
     _value_filter, _entity_bindings, _bound_value, frozen_baseline_cohort,
     recorded_flow_predicates, validate_frozen_pool_rows)
+
+TIME_SOURCE = 'fixed_12_calendar_month_customer_history'
 
 FACT_FIELDS = {'history_customer_no','history_known_first_outbound_at','history_known_last_outbound_at','history_known_order_count','history_customer_ref','history_product_ref','history_relation_ref',
     'history_first_outbound_at','history_last_outbound_at','history_order_count',
@@ -19,11 +23,7 @@ FACT_FIELDS = {'history_customer_no','history_known_first_outbound_at','history_
 
 
 def build_history_query(request, metric, datasets, semantics, limit, *, observed_on):
-    for field in HISTORY_FORBIDDEN_PARAMETERS:
-        if request.get(field) is not None:
-            if field in {'time_range','calendar_month'}:
-                raise AnalysisQueryError('HISTORY_FIXED_WINDOW','历史购买固定为本次观察时点前12个日历月，不接受自定义购买期间。',path=field)
-            raise AnalysisQueryError('HISTORY_PARAMETER_UNSUPPORTED','历史客户关联不支持参数 '+field+'；按固定关系单位粒度和稳定身份顺序返回。',path=field)
+    validate_parameters(metric.get('query_kind'), request)
     week=request.get('baseline_week')
     try:
         if not isinstance(week,str) or len(week)!=8 or week[4:6]!='-W':raise ValueError()
@@ -36,7 +36,15 @@ def build_history_query(request, metric, datasets, semantics, limit, *, observed
     filters=request.get('metric_filters') or {}
     if not set(filters)<={'customer','product','warehouse_department','unit'}:
         raise AnalysisQueryError('UNSUPPORTED_DIMENSION','首批仅支持客户、产品、仓库部门、记录单位筛选。')
-    base=semantics['metrics'][metric['pool_metric']]
+    base = metric.get('pool_definition')
+    if (not isinstance(base, Mapping) or set(base) != {'table', 'baseline_source_table', 'flow_sources'}
+            or not all(isinstance(base.get(k), str) and base[k] for k in ('table', 'baseline_source_table'))
+            or not isinstance(base.get('flow_sources'), Mapping)
+            or set(base['flow_sources']) != {'outbound', 'returns', 'sales', 'warehouses'}
+            or not all(isinstance(v, str) and v for v in base['flow_sources'].values())
+            or metric.get('table') != base['table']):
+        raise AnalysisQueryError('CONTRACT_UNAVAILABLE', '历史客户缺少一致的受控池来源定义。')
+    _dataset(base['baseline_source_table'], datasets)
     ctes,params=frozen_baseline_cohort(base,datasets,week,week)
     bindings=_entity_bindings(request)
     def condition(alias,fields):
@@ -100,7 +108,7 @@ def build_history_query(request, metric, datasets, semantics, limit, *, observed
     complete="oq.history_outbound_unknown_rows=0 AND rq.history_returns_unknown_rows=0 AND COALESCE(o.missing_qty,0)+COALESCE(o.missing_rolls,0)+COALESCE(r.missing_qty,0)+COALESCE(r.missing_rolls,0)=0 AND g.unit IS NOT NULL AND b.history_missing_order_rows=0"
     sql='WITH '+',\n'.join(ctes)+f" SELECT clock.*,meta.*,hc.*,oq.*,rq.*,hp.*,dp.*,g.*,CASE WHEN oq.history_outbound_unknown_rows=0 THEN b.history_first_outbound_at ELSE NULL END AS history_first_outbound_at,CASE WHEN oq.history_outbound_unknown_rows=0 THEN b.history_last_outbound_at ELSE NULL END AS history_last_outbound_at,CASE WHEN oq.history_outbound_unknown_rows=0 AND b.history_missing_order_rows=0 THEN b.history_order_count ELSE NULL END AS history_order_count,b.history_first_outbound_at AS history_known_first_outbound_at,b.history_last_outbound_at AS history_known_last_outbound_at,b.history_order_count AS history_known_order_count,b.history_missing_order_rows,b.history_customer_name_variants,COALESCE(cl.current_customer_name,b.historical_customer_name) AS customer_name,cl.history_current_owner,cl.history_customer_no,COALESCE(cl.history_customer_master_rows,0) AS history_customer_master_rows,CASE WHEN cl.current_customer_name IS NULL OR cl.history_current_owner IS NULL OR cl.history_customer_no IS NULL THEN 1 ELSE 0 END AS history_customer_details_missing,pl.goods_name,pl.history_product_name_variants,{fields_sql},CASE WHEN oq.history_outbound_unknown_rows=0 THEN hp.history_known_relations ELSE NULL END AS history_scope_relations,CASE WHEN oq.history_outbound_unknown_rows=0 THEN hp.history_known_customers ELSE NULL END AS history_scope_customers,CASE WHEN {complete} THEN 'complete' ELSE 'incomplete' END AS metric_data_state,CASE WHEN oq.history_outbound_unknown_rows=0 THEN COALESCE(o.n,0) ELSE NULL END AS metric_value,COALESCE(o.n,0) AS known_subset_value,COALESCE(o.n,0) AS known_value_count,oq.history_outbound_unknown_rows AS missing_value_count,CASE WHEN g.customer_id IS NULL THEN 0 ELSE 1 END AS __matched_row_count FROM clock CROSS JOIN meta CROSS JOIN history_clock hc CROSS JOIN outbound_quality oq CROSS JOIN returns_quality rq CROSS JOIN history_population hp CROSS JOIN display_population dp LEFT JOIN display_keys g ON TRUE LEFT JOIN relations b ON {relation_join} LEFT JOIN outbound_grouped o ON {join('o')} LEFT JOIN returns_grouped r ON {join('r')} LEFT JOIN customer_labels cl ON cl.customer_id=g.customer_id LEFT JOIN product_labels pl ON pl.goods_id=g.goods_id ORDER BY g.customer_id,g.goods_id,g.whse_dept,g.unit LIMIT %s"
     params.append(limit+1)
-    return sql,params,{'metric':request['metric'],'dataset':None,'source_datasets':[base['table'],*sources.values()], 'dimension_outputs':['customer_id','customer_name','goods_id','goods_name','whse_dept','unit'],'effective_dimensions':chosen,'filters':filters,'time_range':{'source':'fixed_12_calendar_month_customer_history'},'_validate_customer_history':True,'warnings':[metric['answer_note']]}
+    return sql,params,{'metric':request['metric'],'dataset':None,'source_datasets':[base['table'],*sources.values()], 'dimension_outputs':['customer_id','customer_name','goods_id','goods_name','whse_dept','unit'],'effective_dimensions':chosen,'filters':filters,'time_range':{'source':TIME_SOURCE},'warnings':[metric['answer_note']]}
 
 
 def history_observation(rows):
@@ -121,4 +129,27 @@ def history_observation(rows):
         if (read-utc).total_seconds()!=offset or abs(offset)>14*3600 or offset%60:raise ValueError()
     except (ValueError,TypeError,KeyError):raise AnalysisQueryError('HISTORY_EVIDENCE_INVALID','固定12个月窗口或数据库业务时钟证据无效。')
     zone=f"UTC{'+' if offset>=0 else '-'}{abs(offset)//3600:02d}:{abs(offset)%3600//60:02d}"
-    return {**metadata,**{k:rows[0].get(k) for k in ('history_scope_relations','history_scope_customers','history_known_relations','history_known_customers','history_display_groups','history_outbound_unknown_rows','history_returns_unknown_rows')},'source':'fixed_12_calendar_month_customer_history','history_start':rows[0]['history_start'],'history_end':rows[0]['history_end'],'history_business_timezone_at_read':zone,'end_exclusive':True,'window_anchor':'database_read_clock','matching':'same_product_same_warehouse_department_not_sku'}
+    return {**metadata,**{k:rows[0].get(k) for k in ('history_scope_relations','history_scope_customers','history_known_relations','history_known_customers','history_display_groups','history_outbound_unknown_rows','history_returns_unknown_rows')},'source':TIME_SOURCE,'history_start':rows[0]['history_start'],'history_end':rows[0]['history_end'],'history_business_timezone_at_read':zone,'end_exclusive':True,'window_anchor':'database_read_clock','matching':'same_product_same_warehouse_department_not_sku'}
+
+
+def observe_history_result(rows):
+    observation = history_observation(rows)
+    for row in rows:
+        if row.get('__matched_row_count'):
+            for role, value in (
+                ('customer', row['customer_id']), ('product', row['goods_id']),
+                ('relation', (row['customer_id'], row['goods_id'], row['whse_dept'])),
+            ):
+                row['history_' + role + '_ref'] = role + '_' + hashlib.sha256(str(value).encode('utf-8')).hexdigest()[:16]
+    return observation
+
+
+def public_history_time(value):
+    return {k: v for k, v in value.items() if k.startswith('history_') or k in {
+        'source', 'baseline_week', 'frozen_at', 'read_at', 'read_utc_at',
+        'observed_db_utc_offset_seconds', 'end_exclusive', 'window_anchor', 'matching',
+    }}
+
+
+def describe_history_time(value):
+    return [f"既有周基线{value.get('baseline_week')}（冻结{value.get('frozen_at')}）；同产品同仓库部门历史出库客户；固定12个日历月{value.get('history_start')}至{value.get('history_end')}（结束不含），数据库业务时钟UTC偏移{value.get('observed_db_utc_offset_seconds')}秒；全退客户关系保留、退货独立"]
