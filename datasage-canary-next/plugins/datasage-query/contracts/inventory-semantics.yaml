@@ -1,4 +1,4 @@
-version: datasage-mini-inventory-semantics/v20
+version: datasage-mini-inventory-semantics/v21
 domain: inventory
 contract_role: plugin_physical_execution
 business_name: 库存事实、未动销与周转分析
@@ -49,6 +49,22 @@ currency_policy_templates:
     never_sum_mixed_currency: true
 
 dimensions:
+  customer:
+    label: 客户
+    entity: customer
+    source:
+      type: fact
+    columns:
+    - customer_id
+    - customer_name
+    filter_column: customer_name
+    identity_filter:
+      entity_type: customer
+      value_field: canonical_id
+      column: customer_id
+    value_contract:
+      kind: entity_exact
+      model_rule: 保留用户明确提供的精确实体 token；由工具做实体预检和稳定身份绑定，不得猜测。
   salesperson:
     label: 流水销售归属
     entity: transaction_salesperson
@@ -1613,3 +1629,82 @@ metrics:
     - HN-HT
     - IDK-HT
     - BKK-HT
+
+  registered_slow_historical_customers:
+    dimension_overrides:
+      unit:
+        label: 历史记录计量单位
+        columns: [unit]
+        filter_column: unit
+        value_contract: *vc_inventory_unit
+    label: 周冻结池·固定近12个月历史出库客户
+    business_definition: 明确既有周冻结池内同产品、同仓库部门的历史有效出库客户，非SKU/色号购买证明。购买窗口固定本次数据库观察时点前12个日历月，结束不含；全退仍保留出库关系，退货按自身时间单列。主值为单位切片有效出库明细条数，客户与关系去重总数另列。
+    query_kind: slow_customer_history
+    table: vk_ai.slow_moving_baseline
+    time_policy: fixed_customer_history
+    unit: 有效出库明细条
+    pool_metric: registered_slow_pool_baseline_net_outbound
+    customer_table: vk_dwd.customer_dwd
+    product_table: vk_dwd.goods_detail_dwd
+    allowed_dimensions:
+    - customer
+    - product
+    - warehouse_department
+    - unit
+    max_group_dimensions: 4
+    grouping:
+      allowed:
+      - customer
+      - product
+      - warehouse_department
+      - unit
+      required:
+      - customer
+      - product
+      - warehouse_department
+      - unit
+      default:
+      - customer
+      - product
+      - warehouse_department
+      - unit
+    answer_note: 只读显式周基线；固定观察前12个日历月，不接受购买期间/月参数或排序；关系粒度客户×产品×仓库部门，单位行重复的首末日期、订单数与范围总量不能再相加。不是SKU购买、持有量、意愿评分或任务归属。
+    disclosures:
+    - id: inventory.customer-history.scope
+      mode: required_always
+      text: 必须显式选择已存在周基线，不猜默认池、不创建或改写基线。产品池时点与购买窗口分开：历史固定为同次数据库业务时钟前12个日历月，结束不含，不是365天、不从冻结时点倒推；不接受自定义期间。
+    - id: inventory.customer-history.match
+      mode: required_always
+      text: 仅按稳定产品身份及同仓库部门匹配，不限制为同SKU、颜色、批次或同一实物。按现有HT后缀或大货范围、非内部客户、唯一已完成销售明细确定出库；客户来自该销售明细的受控身份。曾有有效出库即保留，零数量或全退不删关系。
+    - id: inventory.customer-history.return
+      mode: required_always
+      text: 退货按各自实际退货时间、客户及仓库部门和已结单有效退货条件，使用同一观察窗口，独立展示；不证明该批出库已闭合退回，不产生净持有量。只退过、未找到窗口内有效出库的客户不作为已买过名单。
+    - id: inventory.customer-history.grain
+      mode: required_always
+      text: 客户×产品×仓库部门是去重关系，数量按记录单位分列；相同关系的首末出库时间、订单数、当前负责人及范围总数在不同单位行重复，不可相加。客户数和关系数在截断前计算，行数是单位切片数。稳定身份排序不是购买意愿排名；同库存匹配多个客户，不重复计算库存量。
+    - id: inventory.customer-history.quality
+      mode: required_always
+      text: 同名客户按不同稳定身份保留；当前客户资料和当前负责人不是历史交易归属，缺失或多条主数据保留缺口，不因缺企微账号删除客户。只有已记录且可判定的历史；未知身份/时间/单据归属或缺数量单列，已知客户/关系数不得冒充完整数，重复明细身份失败关闭。
+    result_fact_units:
+      history_outbound_rows: 条
+      history_return_rows: 条
+      history_outbound_missing_qty: 条
+      history_return_missing_qty: 条
+      history_outbound_missing_rolls: 条
+      history_return_missing_rolls: 条
+      history_missing_order_rows: 条
+      history_order_count: 单
+      history_known_order_count: 已知单
+      history_outbound_quantity: 数量（见本行历史记录计量单位）
+      history_return_quantity: 数量（见本行历史记录计量单位）
+      history_outbound_known_quantity: 已知数量（见本行历史记录计量单位）
+      history_return_known_quantity: 已知数量（见本行历史记录计量单位）
+      history_scope_relations: 客户产品部门关系
+      history_known_relations: 已知客户产品部门关系
+      history_scope_customers: 客户
+      history_known_customers: 已知客户
+      history_display_groups: 单位分列组
+      history_outbound_rolls: 卷
+      history_return_rolls: 卷
+      history_outbound_known_rolls: 卷
+      history_return_known_rolls: 卷

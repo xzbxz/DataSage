@@ -34,6 +34,7 @@ entity_types:
       target: [customer]
       profit: [customer]
       pattern_matching: [customer]
+      inventory: [customer]
   salesperson:
     input_filter_roles: [executor, salesperson, occurrence_salesperson, snapshot_salesperson, credit_salesperson]
     roles_by_domain:

@@ -2173,6 +2173,35 @@ def validate_frozen_pool_rows(rows):
     return metadata
 
 
+def recorded_flow_predicates(outgoing, tables, alias="f"):
+    """Current governed completed-delivery / valid-return and HT-or-bulk rules."""
+    bill = "bill_type" if outgoing else "sale_bill_type"
+    whse = "whse_id" if outgoing else "in_whse_id"
+    legacy = f"({alias}.whse_dept LIKE %s OR {alias}.{bill}=%s)"
+    valid = (f"(SELECT CASE WHEN COUNT(*)=1 AND COUNT(bill_status)=1 THEN MAX(bill_status)=6 ELSE NULL END FROM {tables['sales']} s WHERE s.goods_detail_id={alias}.sale_bill_goods_id)"
+             if outgoing else f"({alias}.status=4 AND {alias}.complnt_type=1 AND {alias}.channel_type=1)")
+    predicate = f"({alias}.is_inner_cus='n' AND {valid})"
+    warehouse = f"(SELECT CASE WHEN COUNT(*)=1 AND COUNT(dept_name)=1 THEN MAX(dept_name)={alias}.whse_dept ELSE NULL END FROM {tables['warehouses']} w WHERE w.whse_id={alias}.{whse})"
+    return legacy, predicate, warehouse
+
+
+def frozen_baseline_cohort(metric, datasets_contract, week, current_week):
+    """Existing complete weekly baseline selection, shared by read-only consumers."""
+    base = metric["table"]
+    ds = _dataset(base, datasets_contract)
+    for field in ("week_label","source_row_id","frozen_at","baseline_version","source_table","goods_id","goods_sku_id","whse_dept","source_unit"):
+        _approved(field, ds)
+    unit = lambda col: f"(CASE WHEN LOWER(TRIM({col}))='m' THEN 'm' ELSE NULLIF(TRIM({col}),'') END) COLLATE utf8mb4_bin"
+    qb = _quote_table(base)
+    params = [week if week is not None else current_week]
+    choice = '%s' if week is not None else f"(SELECT MAX(week_label) FROM {qb} WHERE week_label<=%s AND week_label REGEXP '^[0-9]{{4}}-W[0-9]{{2}}$')"
+    ctes = [f"clock AS (SELECT {choice} AS baseline_week,NOW(6) AS closing_read_at,UTC_TIMESTAMP(6) AS closing_utc_at,TIMESTAMPDIFF(SECOND,UTC_TIMESTAMP(6),NOW(6)) AS observed_clock_offset_seconds)"]
+    ctes.append(f"base_raw AS (SELECT week_label,source_row_id,frozen_at,baseline_version,source_table,goods_id,goods_sku_id,whse_dept,{unit('source_unit')} AS normalized_unit FROM {qb} WHERE week_label=(SELECT baseline_week FROM clock))")
+    ctes.append("meta AS (SELECT COUNT(*) AS __baseline_rows,COUNT(DISTINCT source_row_id) AS __baseline_ids,COUNT(frozen_at) AS __baseline_timed_rows,COUNT(DISTINCT frozen_at) AS __baseline_times,MIN(frozen_at) AS baseline_frozen_at,COALESCE(SUM(CASE WHEN baseline_version=2 AND source_table=%s THEN 0 ELSE 1 END),0) AS __baseline_bad_source,COALESCE(SUM(CASE WHEN goods_id IS NOT NULL AND goods_sku_id IS NOT NULL AND NULLIF(whse_dept,'') IS NOT NULL AND normalized_unit IN ('m','y','kg','Pcs') THEN 0 ELSE 1 END),0) AS __baseline_bad_keys FROM base_raw)")
+    params.append(metric.get('baseline_source_table'))
+    return ctes, params
+
+
 def _frozen_pool_net_outbound_query(request, metric, datasets_contract, semantics, limit, *, observed_on=None, cohort=None):
     """Recorded flows in unique frozen business keys; never frozen physical-batch disposal."""
     import re
@@ -2227,13 +2256,7 @@ def _frozen_pool_net_outbound_query(request, metric, datasets_contract, semantic
     qt = {k: _quote_table(v) for k,v in tables.items()}
     unit = lambda col: f"(CASE WHEN LOWER(TRIM({col}))='m' THEN 'm' ELSE NULLIF(TRIM({col}),'') END) COLLATE utf8mb4_bin"
     if cohort is None:
-        qb = _quote_table(base)
-        params = [week if week is not None else current_week]
-        choice = '%s' if week is not None else f"(SELECT MAX(week_label) FROM {qb} WHERE week_label<=%s AND week_label REGEXP '^[0-9]{{4}}-W[0-9]{{2}}$')"
-        ctes = [f"clock AS (SELECT {choice} AS baseline_week,NOW(6) AS closing_read_at,UTC_TIMESTAMP(6) AS closing_utc_at,TIMESTAMPDIFF(SECOND,UTC_TIMESTAMP(6),NOW(6)) AS observed_clock_offset_seconds)"]
-        ctes.append(f"base_raw AS (SELECT week_label,source_row_id,frozen_at,baseline_version,source_table,goods_id,goods_sku_id,whse_dept,{unit('source_unit')} AS normalized_unit FROM {qb} WHERE week_label=(SELECT baseline_week FROM clock))")
-        ctes.append("meta AS (SELECT COUNT(*) AS __baseline_rows,COUNT(DISTINCT source_row_id) AS __baseline_ids,COUNT(frozen_at) AS __baseline_timed_rows,COUNT(DISTINCT frozen_at) AS __baseline_times,MIN(frozen_at) AS baseline_frozen_at,COALESCE(SUM(CASE WHEN baseline_version=2 AND source_table=%s THEN 0 ELSE 1 END),0) AS __baseline_bad_source,COALESCE(SUM(CASE WHEN goods_id IS NOT NULL AND goods_sku_id IS NOT NULL AND NULLIF(whse_dept,'') IS NOT NULL AND normalized_unit IN ('m','y','kg','Pcs') THEN 0 ELSE 1 END),0) AS __baseline_bad_keys FROM base_raw)")
-        params.append(metric.get('baseline_source_table'))
+        ctes, params = frozen_baseline_cohort(metric, datasets_contract, week, current_week)
         if window is not None:
             # Explicit periods select flows in ONE fixed cohort. A period still in
             # progress ends at the database read clock and is disclosed as partial.
@@ -2266,10 +2289,8 @@ def _frozen_pool_net_outbound_query(request, metric, datasets_contract, semantic
         outgoing = side == 'outbound'
         time_field,whse,bill,qty,rolls = ('delivery_time','whse_id','bill_type','goods_num','piece_num') if outgoing else ('statement_time','in_whse_id','sale_bill_type','return_goods_num','return_piece_num')
         # Keep the legacy predicate on source collation: HT is unrestricted, including NULL types.
-        legacy = f"(f.whse_dept LIKE %s OR f.{bill}=%s)"
+        legacy, predicate, warehouse_ok = recorded_flow_predicates(outgoing, qt)
         params.extend(['%-HT','bulk'])
-        valid = f"(SELECT CASE WHEN COUNT(*)=1 AND COUNT(bill_status)=1 THEN MAX(bill_status)=6 ELSE NULL END FROM {qt['sales']} s WHERE s.goods_detail_id=f.sale_bill_goods_id)" if outgoing else '(f.status=4 AND f.complnt_type=1 AND f.channel_type=1)'
-        predicate = f"(f.is_inner_cus='n' AND {valid})"
         candidate = "EXISTS(SELECT 1 FROM keys_b k WHERE (f.goods_id IS NULL OR f.goods_id=k.goods_id) AND (f.goods_sku_id IS NULL OR f.goods_sku_id=k.goods_sku_id))"
         sales_condition = ''
         if filters_sales is not None:
@@ -2277,7 +2298,6 @@ def _frozen_pool_net_outbound_query(request, metric, datasets_contract, semantic
             sales_filter = _value_filter('f',sales_filter_column,filters_sales,filter_params)
             # The SQL placeholders occur after the legacy predicate in SELECT.
             sales_condition = f' AND ({sales_filter} OR f.sales_id IS NULL)'
-        warehouse_ok = f"(SELECT CASE WHEN COUNT(*)=1 AND COUNT(dept_name)=1 THEN MAX(dept_name)=f.whse_dept ELSE NULL END FROM {qt['warehouses']} w WHERE w.whse_id=f.{whse})"
         high_columns=("CASE WHEN f.deal_price IS NULL OR f.ddp_price IS NULL THEN NULL WHEN f.deal_price>0.75*f.ddp_price THEN 1 ELSE 0 END AS high_qualifies,CASE WHEN f.ddp_price<=0 OR f.deal_price<0 THEN 1 ELSE 0 END AS price_anomaly," if outgoing else '')
         ctes.append(f"{side}_raw AS (SELECT {high_columns}f.sales_id,NULLIF(f.sales_name,'') COLLATE utf8mb4_bin AS sales_name,f.goods_id,f.goods_sku_id,NULLIF(f.whse_dept,'') COLLATE utf8mb4_bin AS whse_dept,{unit('f.unit')} AS unit,f.{qty} AS qty,f.{rolls} AS rolls,f.{time_field} AS event_at,{legacy} AS document_ok,{predicate} AS valid_ok,{warehouse_ok} AS warehouse_ok,CASE WHEN f.{bill} IS NULL OR f.{bill} NOT IN ('bulk','sq') THEN 1 ELSE 0 END AS unknown_document FROM {qt[side]} f WHERE {candidate} AND (f.{time_field} IS NULL OR (f.{time_field}>={flow_start} AND f.{time_field}<{flow_end})){sales_condition})")
         if filters_sales is not None: params.extend(filter_params)
@@ -2358,6 +2378,9 @@ def build_analytical_metric_query(
     query_observed_on = observed_on or _business_today()
     kind = metric.get("query_kind")
     _ensure_available(metric)
+    if kind == "slow_customer_history":
+        from .customer_history import build_history_query
+        return build_history_query(request, metric, datasets_contract, semantics, limit, observed_on=query_observed_on)
     if kind == "monthly_slow_pool":
         from .monthly_slow_pool import build_monthly_query
         return build_monthly_query(request, metric, datasets_contract, semantics, limit, observed_on=query_observed_on)

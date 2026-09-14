@@ -87,7 +87,7 @@ REQUEST = {
             ),
         },
         "pattern_time_basis": {"type": "string", "enum": ["current_observation", "task_created", "execution_completed", "linked_delivery"], "description": "Only pattern_matching metrics. Default current_observation has no historical window. For a period explicitly choose task_created or execution_completed; linked_delivery is only for linked amounts and uses the verified source delivery time. Month grouping observes current records by that business month, not a historical snapshot."},
-        "baseline_week": {"type": "string", "pattern": r"^[0-9]{4}-W[0-9]{2}$", "description": "Only frozen-pool comparison or baseline net-outbound metrics: select an existing baseline week. Omit to choose the latest recorded week no later than the current business week; never creates a baseline."},
+        "baseline_week": {"type": "string", "pattern": r"^[0-9]{4}-W[0-9]{2}$", "description": "Select an existing baseline week for frozen-pool metrics. Historical-customer lookup requires an explicit week and has its own fixed 12-calendar-month purchase window; no custom purchase dates. For the other frozen-pool metrics, omission chooses the latest recorded week no later than the current business week; never creates a baseline."},
         "movement_state": {"type": "string", "enum": ["New", "Exited", "Reduced", "No Change", "Increased", "Unassessable"], "description": "Only frozen-pool comparison group details: filter the displayed state; population counts retain the full requested product/department/unit scope."},
         "metric_filters": {
             "type": "object",

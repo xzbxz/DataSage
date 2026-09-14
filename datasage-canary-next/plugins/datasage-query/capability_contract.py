@@ -543,6 +543,7 @@ def effective_dimension_definitions(
 
 
 MONTHLY_SLOW_FORBIDDEN_PARAMETERS = ('baseline_week', 'comparison', 'time_bucket', 'order_by')
+HISTORY_FORBIDDEN_PARAMETERS = ('time_range','calendar_month','time_bucket','comparison','order_by','movement_state','inventory_scope')
 
 
 def analytical_time_buckets(metric: Mapping[str, Any]) -> list[str] | None:

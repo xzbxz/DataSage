@@ -1380,7 +1380,7 @@ class BusinessContractTests(unittest.TestCase):
             )
         )["results"][0]
         self.assertEqual(
-            "datasage-mini-inventory-semantics/v20",
+            "datasage-mini-inventory-semantics/v21",
             detail["source_versions"]["semantics"],
         )
         self.assertEqual(
