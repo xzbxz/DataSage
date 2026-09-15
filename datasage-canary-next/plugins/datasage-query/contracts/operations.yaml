@@ -23,6 +23,7 @@ event_labels:
   new_baseline_candidate: 新出现，仅作为基线候选
   recovered_baseline_candidate: 恢复可比较，仅作为基线候选
   price_changed: 同口径价格发生变化
+  recorded_quote_changed: 记录采购报价变化；有效性未确认，不等于当前可执行采购价
   basis_changed: 币种、单位或税口径变化，不直接计算涨跌
   validity_changed: 有效期条件变化
   absent_from_selection: 当前选中范围中未见，不证明撤销或售罄
@@ -57,7 +58,7 @@ purchase:
   basis: [currency_no, unit_cuur]
   parent_org_ids: /0/2172/2225/
   cancelled_ready_type: 取消备货
-  meaning: 四区域备货与有效主推的产品集合，按原组织范围取最新采购报价；含税与未税分别比较，供应商或颜色不同不是同一报价。最新记录是否在有效期内单列，不自动回退旧报价。
+  meaning: 四区域备货与有效主推的产品集合，按原组织范围取最新采购报价；含税与未税分别比较，供应商或颜色不同不是同一报价。最新记录是否在有效期内单列，不自动回退旧报价。有效期缺失时只跟踪同币种单位的记录报价变化，不称当前可执行采购价。
 tracking:
   first_observation: baseline_candidate_not_price_change
   disappearance: absent_from_current_selection_not_proven_cancelled

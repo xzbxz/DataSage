@@ -38,6 +38,13 @@ class PriceOperationsTests(unittest.TestCase):
         row=self.row(expiration_date='2026-09-15 10:00:00')
         self.assertEqual('expired',ops.classify_prices('sales',[row],datetime(2026,9,15,12))[0]['state'])
         self.assertEqual('validity_boundary',ops.classify_prices('sales',[row],datetime(2026,9,15,10))[0]['state'])
+    def test_purchase_missing_validity_is_only_recorded_quote_change(self):
+        a=self.classify('purchase',effective_date=None)
+        b=self.classify('purchase',effective_date=None,tax_inclue_price='12')
+        self.assertEqual('recorded_quote_only',a[0]['state'])
+        self.assertEqual('unknown_validity',a[0]['validity_state'])
+        self.assertEqual('recorded_quote_changed',ops.compare(a,b)[0]['event'])
+        self.assertEqual('unknown_validity',self.classify(effective_date=None)[0]['state'])
     def test_idk_null_zero_negative_and_no_identity_expansion(self):
         rows=[self.row(id=i,promotion_price=p,source_unit='m') for i,p in enumerate([None,'0','-1'])]
         result=ops.classify_idk(rows)

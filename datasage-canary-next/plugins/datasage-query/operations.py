@@ -144,7 +144,9 @@ def classify_prices(side,rows,observed_on):
                 elif end and end<observation:state='expired'
                 elif end and end==observation:state='validity_boundary'
             except (KeyError,ValueError,TypeError):state='unknown_validity'
-        record={'key':list(key),'state':state,'candidate_rows':len(items),'prices':{k:str(_number(row[k])) if _number(row.get(k)) is not None else None for k in c['prices']},'basis':{k:row.get(k) for k in c['basis']},'validity':{k:str(row[k]) if row.get(k) is not None else None for k in ('effective_date','expiration_date')},'labels':{k:row.get(k) for k in ('goods_no','goods_name','supplier_name') if k in row}}
+        validity_state=state if state in ('invalid_validity','unknown_validity','not_yet_effective','expired','validity_boundary') else 'within_recorded_bounds' if state=='comparable' else 'not_assessed'
+        if side=='purchase' and state=='unknown_validity':state='recorded_quote_only'
+        record={'key':list(key),'state':state,'validity_state':validity_state,'candidate_rows':len(items),'prices':{k:str(_number(row[k])) if _number(row.get(k)) is not None else None for k in c['prices']},'basis':{k:row.get(k) for k in c['basis']},'validity':{k:str(row[k]) if row.get(k) is not None else None for k in ('effective_date','expiration_date')},'labels':{k:row.get(k) for k in ('goods_no','goods_name','supplier_name') if k in row}}
         # An ambiguous source is not made precise by whichever SQL row arrived first.
         if len(items)>1:record.update(prices={},basis={},validity={},labels={})
         result.append(record)
@@ -162,12 +164,12 @@ def compare(previous,current):
     for key in sorted(old.keys()|new.keys()):
         before=old.get(key);after=new.get(key)
         if after is None:kind='absent_from_selection'
-        elif after['state']!='comparable':kind='unresolved'
+        elif after['state'] not in ('comparable','recorded_quote_only'):kind='unresolved'
         elif before is None:kind='new_baseline_candidate'
-        elif before['state']!='comparable':kind='recovered_baseline_candidate'
+        elif before['state'] not in ('comparable','recorded_quote_only'):kind='recovered_baseline_candidate'
         elif before['basis']!=after['basis']:kind='basis_changed'
         elif before['validity']!=after['validity']:kind='validity_changed'
-        elif any(_number(before['prices'].get(f))!=_number(v) for f,v in after['prices'].items()):kind='price_changed'
+        elif any(_number(before['prices'].get(f))!=_number(v) for f,v in after['prices'].items()):kind='recorded_quote_changed' if 'recorded_quote_only' in (before['state'],after['state']) else 'price_changed'
         else:kind='unchanged'
         events.append({'key':json.loads(key),'event':kind,'before':before,'after':after})
     return events
@@ -241,12 +243,12 @@ def render(document):
     records=[]
     for r in document.get('records',[]):
         if 'price_state' in r:records.append({k:v for k,v in r.items() if k not in ('source_ref','sku_ref')})
-        else:records.append({**r.get('labels',{}),'状态':r['state'],**r['prices'],**r['basis'],**r['validity'],'候选记录数':r['candidate_rows']})
+        else:records.append({**r.get('labels',{}),'状态':r['state'],'有效性':r.get('validity_state'),**r['prices'],**r['basis'],**r['validity'],'候选记录数':r['candidate_rows']})
     body+=table(records) if 'records' in document else ''
     if document.get('events'):
         body+='<h2>差异状态</h2>'+table([{'状态':events.get(e['event'],e['event']),'数量':n} for e,n in (({'event':k},v) for k,v in document.get('event_counts',{}).items())])
         for event in document['events']:
-            if event['event'] not in ('price_changed','basis_changed','validity_changed'):continue
+            if event['event'] not in ('price_changed','recorded_quote_changed','basis_changed','validity_changed'):continue
             body+='<h3>'+escape(events[event['event']])+'</h3>'+table([{'观察':'之前',**(event['before'] or {}).get('labels',{}),**(event['before'] or {}).get('prices',{}),**(event['before'] or {}).get('basis',{})},{'观察':'本次',**(event['after'] or {}).get('labels',{}),**(event['after'] or {}).get('prices',{}),**(event['after'] or {}).get('basis',{})}])
     for packet in document.get('query_packets',[]):
         body+='<h2>'+escape(packet.get('answer_scope_line','受控查询结果'))+'</h2>'

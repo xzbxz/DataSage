@@ -74,6 +74,9 @@ current-week upstream artifact is a failure requiring operator attention.
   whether the selected quote is currently effective. It does not silently pick
   an older quote instead. An absent end date means no recorded expiry; missing
   effective date is unknown.
+- When purchase validity is missing but identity, currency/unit and numeric
+  prices are present, only recorded-quote evolution is compared. Such a change
+  is `recorded_quote_changed`, never a confirmed currently executable price.
 - Old snapshots remain untouched. Sales snapshots lack unit/tax basis, so they
   are not automatically imported as a fully comparable local baseline.
 - Old promotion membership uses the recorded dates and regions without a
