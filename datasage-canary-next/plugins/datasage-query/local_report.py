@@ -260,11 +260,20 @@ def main(profile, argv=None):
     from hermes_constants import get_hermes_home
     parser=argparse.ArgumentParser(description='Local trusted slow report; no scheduling or sending.')
     parser.add_argument('--report-id')
+    parser.add_argument('--legacy-preview', choices=['slow_task','slow_report','idk','sales_price','purchase_price','fabric'])
     parser.add_argument('--accept-snapshot', help='Explicitly accept a reviewed local observation digest; never writes the business database.')
     args=parser.parse_args(argv)
     try:
         if Path(get_hermes_home()).resolve()!=profile.resolve():raise ReportError('REPORT_PROFILE_MISMATCH')
         _assert_local_context()
+        if args.legacy_preview:
+            if args.report_id or args.accept_snapshot:raise ReportError('WORKFLOW_PREVIEW_ARGUMENT_CONFLICT')
+            from .legacy_workflow import preview_from_file,WorkflowError
+            try:
+                path=preview_from_file(profile,args.legacy_preview)
+                print('LOCAL_PREVIEW_ONLY '+str(path));return 0
+            except WorkflowError as exc:
+                print(str(exc),file=sys.stderr);return 2
         bindings=load_bindings(profile)
         selected,operation=_select_binding(bindings,args.report_id)
         if isinstance(operation,dict) and 'kind' in operation:

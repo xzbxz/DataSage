@@ -1,0 +1,194 @@
+{
+  "version": 1,
+  "reference": "3fd38fcb803307e1688688ca1dfbde271131157a",
+  "enabled": false,
+  "timezone": "Asia/Shanghai",
+  "regions": {
+    "HCM": {
+      "departments": [
+        "HCM"
+      ],
+      "task_sales_departments": [
+        "HCM Sales",
+        "HCM Customer service"
+      ]
+    },
+    "HN": {
+      "departments": [
+        "HN"
+      ],
+      "task_sales_departments": [
+        "HN Sales",
+        "HN Customer service"
+      ]
+    },
+    "BKK": {
+      "departments": [
+        "BKK"
+      ],
+      "task_sales_departments": [
+        "BKK Sales",
+        "BKK Assistant"
+      ]
+    },
+    "IDK": {
+      "departments": [
+        "IDK"
+      ],
+      "task_sales_departments": [
+        "IDK Sales",
+        "IDK Customer service"
+      ]
+    },
+    "HCM-HT": {
+      "departments": [
+        "HCM-HT"
+      ],
+      "task_sales_departments": [
+        "HT-HCM"
+      ]
+    },
+    "HN-HT": {
+      "departments": [
+        "HN-HT"
+      ],
+      "task_sales_departments": [
+        "HT-HN"
+      ]
+    },
+    "IDK-HT": {
+      "departments": [
+        "IDK-HT"
+      ],
+      "task_sales_departments": [
+        "HT-IDK"
+      ]
+    },
+    "BKK-HT": {
+      "departments": [
+        "BKK-HT"
+      ],
+      "task_sales_departments": [
+        "HT-BKK"
+      ]
+    }
+  },
+  "jobs": {
+    "slow_task": {
+      "report_id": "legacy-slow-task",
+      "schedule": "0 9 * * 2",
+      "refreeze": true,
+      "force_resend": true,
+      "sequence": [
+        "task_text",
+        "task_xlsx",
+        "customer_summary",
+        "customer_zip",
+        "dispatch_audit"
+      ]
+    },
+    "slow_report": {
+      "report_id": "legacy-slow-report",
+      "schedule": "0 19 * * 6",
+      "force_resend": false,
+      "monthly_follows": true,
+      "monthly_force_resend": true,
+      "sequence": [
+        "weekly_text",
+        "weekly_xlsx",
+        "monthly_text",
+        "monthly_xlsx"
+      ]
+    },
+    "idk": {
+      "report_id": "legacy-idk",
+      "schedule": "0 19 * * 1",
+      "sequence": [
+        "idk_text"
+      ],
+      "recipients": "configured_IDK_executors",
+      "repeat": "all_current_unpriced_each_scheduled_run"
+    },
+    "sales_price": {
+      "report_id": "legacy-sales-price",
+      "schedule": "hourly",
+      "sequence": [
+        "sales_text",
+        "buyer_xlsx_if_any",
+        "manager_text_and_xlsx_if_buyers"
+      ],
+      "new_key": "baseline_only"
+    },
+    "purchase_price": {
+      "report_id": "legacy-purchase-price",
+      "schedule": null,
+      "sequence": [
+        "decreases_then_increases_text"
+      ],
+      "new_key": "baseline_only",
+      "target": "runtime_webhook_or_recipient_unresolved"
+    },
+    "fabric": {
+      "report_id": "legacy-fabric",
+      "schedule": null,
+      "sequence": [
+        "workbook"
+      ],
+      "note": "No proved scheduled legacy job"
+    }
+  },
+  "freeze": {
+    "source_table": "vk_ods.slow_moving_goods_ods",
+    "target_table": "vk_ai.slow_moving_baseline",
+    "threshold_exclusive": 10,
+    "whitelist": "n",
+    "grain": "source_row_id",
+    "version": 2,
+    "empty": "fail_keep_existing",
+    "repeated_week": "reuse_unless_refreeze; scheduled_task_requests_refreeze",
+    "write": "transaction_replace_requested_week_only",
+    "missing_source_unit": "blocked_current_policy_no_promotion_fallback",
+    "missing_rolls": "blocked_current_policy_no_zero_fallback"
+  },
+  "customer_artifacts": {
+    "headers": [
+      "Item No",
+      "Color",
+      "Stock Rolls"
+    ],
+    "column_widths": [
+      180,
+      130,
+      100
+    ],
+    "one_png_per_customer": true,
+    "one_zip_per_sales": true,
+    "max_zip_bytes": 20000000,
+    "cross_region_images": true,
+    "filename": "customer_no_customer_name.png",
+    "audit": "one_sheet_per_sales"
+  },
+  "delivery_progress": {
+    "scope": [
+      "mode",
+      "period",
+      "region",
+      "account",
+      "component"
+    ],
+    "components": [
+      "text",
+      "file"
+    ],
+    "known_success": "official_provider_accepted_not_proof_of_human_read",
+    "unknown": "hold_for_review_even_when_force_resend",
+    "failure": "retry_only_unconfirmed_component",
+    "old_http_attempts": 3,
+    "old_backoff_seconds": [
+      1,
+      2
+    ],
+    "old_catch_scope": "all_RequestException_not_only_transient",
+    "new_transport": "Hermes_official_only_no_local_sender"
+  }
+}

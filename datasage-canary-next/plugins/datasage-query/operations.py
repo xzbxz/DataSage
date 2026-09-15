@@ -154,7 +154,7 @@ def classify_prices(side,rows,observed_on):
             except (KeyError,ValueError,TypeError):state='unknown_validity'
         validity_state=state if state in ('invalid_validity','unknown_validity','not_yet_effective','expired','validity_boundary') else 'within_recorded_bounds' if state=='comparable' else 'not_assessed'
         if side=='purchase' and state=='unknown_validity':state='recorded_quote_only'
-        record={'key':list(key),'state':state,'validity_state':validity_state,'candidate_rows':len(items),'prices':{k:str(_number(row[k])) if _number(row.get(k)) is not None else None for k in c['prices']},'basis':{k:row.get(k) for k in c['basis']},'validity':{k:str(row[k]) if row.get(k) is not None else None for k in ('effective_date','expiration_date')},'labels':{k:row.get(k) for k in ('goods_no','goods_name','supplier_name') if k in row}}
+        record={'key':list(key),'state':state,'validity_state':validity_state,'candidate_rows':len(items),'source_modified_at':row.get('gmt_modified'),'prices':{k:str(_number(row[k])) if _number(row.get(k)) is not None else None for k in c['prices']},'basis':{k:row.get(k) for k in c['basis']},'validity':{k:str(row[k]) if row.get(k) is not None else None for k in ('effective_date','expiration_date')},'labels':{k:row.get(k) for k in ('goods_no','goods_name','supplier_name') if k in row}}
         # An ambiguous source is not made precise by whichever SQL row arrived first.
         if len(items)>1:record.update(prices={},basis={},validity={},labels={})
         result.append(record)

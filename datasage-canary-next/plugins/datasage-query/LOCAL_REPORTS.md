@@ -1,5 +1,9 @@
 # Local trusted slow reports
 
+Legacy schedule behavior, fixed disabled adapters and actual attachment previews
+are documented in [LEGACY_WORKFLOWS.md](LEGACY_WORKFLOWS.md). They do not enable
+freezing, delivery or price-baseline acceptance.
+
 Additional migrated IDK, price observation, slow assignment review and fabric
 report modes share this entrypoint and binding file; see [OPERATIONS.md](OPERATIONS.md).
 They remain unconfigured by default and do not enable scheduling or delivery.

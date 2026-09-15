@@ -49,6 +49,7 @@ PINNED_CONTRACT_PATHS = tuple(
         (
             _DATASETS_CONTRACT_PATH,
             "plugins/datasage-query/contracts/operations.yaml",
+            "plugins/datasage-query/contracts/legacy-workflows.json",
             capability_contract.QUERY_POLICY_PATH,
             *(
                 source["semantics"]

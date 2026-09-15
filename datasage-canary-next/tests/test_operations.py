@@ -18,6 +18,8 @@ class PriceOperationsTests(unittest.TestCase):
         self.assertEqual('new_baseline_candidate',ops.compare(None,a)[0]['event'])
         self.assertEqual('unchanged',ops.compare(a,b)[0]['event'])
         self.assertEqual('price_changed',ops.compare(a,self.classify(ddp_price='10.0000001'))[0]['event'])
+        dated=self.classify(gmt_modified='2026-09-10T09:00:00')
+        self.assertEqual('2026-09-10T09:00:00',dated[0]['source_modified_at']);self.assertEqual('unchanged',ops.compare(a,dated)[0]['event'])
     def test_unrelated_policy_or_labels_do_not_invalidate_baseline(self):
         binding={'kind':'idk_unpriced','limit':10}
         original=ops.scope_fingerprint(binding);cfg=deepcopy(ops.policy())
