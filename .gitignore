@@ -160,3 +160,9 @@ datasage-canary-next/scripts/*
 !datasage-canary-next/scripts/datasage_legacy_sales_price.py
 !datasage-canary-next/scripts/datasage_legacy_purchase_price.py
 !datasage-canary-next/scripts/datasage_legacy_fabric.py
+
+!datasage-canary-next/plugins/datasage-query/workflow_io.py
+!datasage-canary-next/plugins/datasage-query/workflow_inputs.py
+!datasage-canary-next/plugins/datasage-query/fabric_report.py
+!datasage-canary-next/plugins/datasage-query/WORKFLOW_IO.md
+!datasage-canary-next/tests/test_workflow_io.py

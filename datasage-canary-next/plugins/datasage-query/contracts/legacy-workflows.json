@@ -1,7 +1,6 @@
 {
   "version": 1,
   "reference": "3fd38fcb803307e1688688ca1dfbde271131157a",
-  "enabled": false,
   "timezone": "Asia/Shanghai",
   "regions": {
     "HCM": {
@@ -190,5 +189,6 @@
     ],
     "old_catch_scope": "all_RequestException_not_only_transient",
     "new_transport": "Hermes_official_only_no_local_sender"
-  }
+  },
+  "activation_location": "local-report-bindings.json; all action gates default false"
 }

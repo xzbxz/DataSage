@@ -168,6 +168,15 @@ def price_recipients(region_map,employees,regions,fixed_managers):
 def report_recipients(region_map,region):
     return sorted({e['account'] for e in region_map[region].get('executors',[])}|set(region_map[region].get('managers',[])))
 
+def audit_groups(packages,statuses,recipient_map,accepted):
+    groups=[]
+    for region in dict.fromkeys(p['region'] for p in packages):
+        regional=[p for p in packages if p['region']==region];good=[p for p in regional if statuses.get(p['account']) in accepted];failed=[p for p in regional if p not in good]
+        targets={e['account'] for e in recipient_map[region].get('executors',[])}
+        if not good:targets.update(recipient_map[region].get('managers',[]))
+        groups.append({'region':region,'regional':regional,'confirmed':good,'unconfirmed':failed,'selected':good or failed,'targets':sorted(targets)})
+    return groups
+
 def delivery_preview(mode,period,region,account,components,receipts=(),*,force=False):
     """Project official receipt evidence into intended actions; no sending or state writes."""
     if type(force) is not bool:raise WorkflowError('INVALID_FORCE_RESEND')
@@ -201,7 +210,7 @@ def official_receipt(send_result,component_key):
     elif field('success') is True and (message_id or raw):status='provider_accepted'
     elif field('success') is True:status='unverified_success'
     else:status='unknown'
-    return {'component_key':component_key,'status':status,'evidence':'official_adapter_result','human_received':'unknown'}
+    return {'component_key':component_key,'status':status,'evidence':'official_adapter_result','provider_message_id':message_id,'api_errcode':raw.get('errcode') if isinstance(raw,dict) else None,'human_received':'unknown'}
 
 def contact_plan(baseline,mapping):
     """Per-customer PNG and per-sales ZIP membership, using supplied reviewed identities."""
@@ -306,6 +315,9 @@ def customer_zip(package,outdir,week):
     if path.stat().st_size>policy()['customer_artifacts']['max_zip_bytes']:raise WorkflowError('ZIP_SIZE_LIMIT_EXCEEDED')
     return path
 
+def customer_package_message(package,week):
+    return f"Sales owner: {', '.join(package['sales_names'])}\nSlow sales-stock Products - Customer Package\n\nBaseline week: {week}\nCustomers: {len(package['customers'])}. One image per customer in one ZIP."
+
 def price_draft(side,changes):
     """Presentation of explicit changes only; initial observations are not fabricated changes."""
     if not changes:return 'No price-change notification: no confirmed comparable change in this preview.'
@@ -385,7 +397,7 @@ def build_preview(job,data,out):
         if plan['status']=='ready':
             baseline=plan['insert_rows'] if plan['action']!='reuse_existing' else [r for r in data['existing_rows'] if r['week_label']==week]
             by_region={r:[v for v in baseline if v['whse_dept']==r] for r in dict.fromkeys(v['whse_dept'] for v in baseline)}
-            extra['task_targets']=task_recipients(data['recipient_map'],data['employees'],list(by_region))
+            extra['task_targets']=data.get('resolved_task_targets') or task_recipients(data['recipient_map'],data['employees'],list(by_region))
             extra['recipient_plan_behavior']={'preview':recipient_plan_decision(week,extra['task_targets'],data.get('existing_recipient_plan'),preview=True),'non_preview':recipient_plan_decision(week,extra['task_targets'],data.get('existing_recipient_plan'),preview=False) if 'existing_recipient_plan' in data else {'action':'existing_week_plan_state_not_supplied; do not assume absent'}}
             extra['customer_plan_behavior']=customer_plan_decision(week,digest(baseline),data.get('existing_customer_plan'),rebuild=data.get('refreeze',True),preview=True)
             extra['component_actions']=[]
@@ -394,16 +406,15 @@ def build_preview(job,data,out):
                 path=out/f'{week}_{safe_name(task_region)}_Products.xlsx';gen_workbook_xlsx([sheet],path);files.append(path.name)
                 for target in extra['task_targets'][task_region]:
                     extra['component_actions'].append({'mode':'task','region':task_region,'account':target['account'],'components':delivery_preview('task',week,task_region,target['account'],['text','file'],data.get('receipts',[]),force=data.get('force_resend',True))})
-            contacts=contact_plan(baseline,data.get('customer_mapping',{}));extra['contact_plan']=contacts
+            contacts=data.get('resolved_contact_plan') or contact_plan(baseline,data.get('customer_mapping',{}));extra['contact_plan']=contacts
             for package in contacts['sales_packages']:
                 path=customer_zip(package,out,week);files.append(path.name)
-                messages.append(f"Sales owner: {', '.join(package['sales_names'])}\nSlow sales-stock Products - Customer Package\n\nBaseline week: {week}\nCustomers: {len(package['customers'])}. One image per customer in one ZIP.")
+                messages.append(customer_package_message(package,week))
                 content=digest({'week':week,'account':package['account'],'customers':package['customers']})
                 extra['component_actions'].append({'mode':'customer-zip','account':package['account'],'components':delivery_preview('customer-zip',week,'all',package['account'],['summary:'+content,'zip:'+content],data.get('receipts',[]),force=data.get('force_resend',True))})
-            for sales_region in dict.fromkeys(p['region'] for p in contacts['sales_packages']):
-                packages=[p for p in contacts['sales_packages'] if p['region']==sales_region]
-                good=[p for p in packages if data.get('simulated_zip_status',{}).get(p['account'],'Planned') in ('Planned','Sent to Sales','Already Sent to Sales')]
-                failed=[p for p in packages if p not in good];selected=good or failed;all_failed=not good
+            statuses={p['account']:data.get('simulated_zip_status',{}).get(p['account'],'Planned') for p in contacts['sales_packages']}
+            for group in audit_groups(contacts['sales_packages'],statuses,data['recipient_map'],{'Planned','Sent to Sales','Already Sent to Sales'}):
+                sales_region=group['region'];good=group['confirmed'];failed=group['unconfirmed'];selected=group['selected'];all_failed=not good
                 sheets=[]
                 for package in selected:
                     customers=sorted({(r['customer_no'],r['customer_name']) for r in package['customers']})
@@ -412,9 +423,7 @@ def build_preview(job,data,out):
                     suffix='Failure' if all_failed else 'Dispatch'
                     path=out/f'{week}_{safe_name(sales_region)}_Customer_Image_{suffix}.xlsx';gen_workbook_xlsx(sheets,path);files.append(path.name)
                     messages.append(f'Slow sales-stock Customer Image {suffix} PREVIEW\nRegion: {sales_region}\nWeek: {week}\nIncluded sales owners: {len(selected)}\nSimulated failed owners: {len(failed)}\nThe workbook has one sheet per sales owner. Nothing has been dispatched in this preview.')
-                    targets={e['account'] for e in data['recipient_map'][sales_region].get('executors',[])}
-                    if all_failed:targets.update(data['recipient_map'][sales_region].get('managers',[]))
-                    extra.setdefault('audit_targets',{})[sales_region]=sorted(targets)
+                    extra.setdefault('audit_targets',{})[sales_region]=group['targets']
     elif job=='slow_report':
         groups=data['region_reports'] if 'region_reports' in data else {region:data}
         if not isinstance(groups,dict) or not groups or any(r not in policy()['regions'] for r in groups):raise WorkflowError('REPORT_REGIONS_INVALID')
@@ -467,4 +476,4 @@ def build_preview(job,data,out):
     prefix='[SYNTHETIC PREVIEW — NOT SENT]\n' if data['evidence_origin']=='synthetic' else '[EXISTING LOCAL OBSERVATION — NOT SENT]\n'
     for i,message in enumerate(messages):
         path=out/f'message-{i+1:02d}.txt';path.write_text(prefix+message,encoding='utf-8');files.append(path.name)
-    return {'job':job,'status':'blocked' if extra.get('freeze_plan',{}).get('status')=='blocked' else 'preview_ready','fixed_report_id':policy()['jobs'][job]['report_id'],'evidence_origin':data['evidence_origin'],'legacy_reference':policy()['reference'],'files':files,'schedule_candidate':policy()['jobs'][job]['schedule'],'timezone':policy()['timezone'],'enabled':False,'sent':False,'frozen':False,'price_baseline_accepted':False,'transport':'Hermes official; not invoked',**extra}
+    return {'job':job,'status':'blocked' if extra.get('freeze_plan',{}).get('status')=='blocked' else 'preview_ready','fixed_report_id':policy()['jobs'][job]['report_id'],'evidence_origin':data['evidence_origin'],'legacy_reference':policy()['reference'],'files':files,'message_bodies':messages,'schedule_candidate':policy()['jobs'][job]['schedule'],'timezone':policy()['timezone'],'enabled':False,'sent':False,'frozen':False,'price_baseline_accepted':False,'transport':'Hermes official; not invoked',**extra}

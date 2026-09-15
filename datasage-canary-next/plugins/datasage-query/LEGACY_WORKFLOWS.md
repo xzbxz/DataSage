@@ -1,5 +1,9 @@
 # Legacy workflow review and fixed adapters
 
+Execution development has advanced: see [WORKFLOW_IO.md](WORKFLOW_IO.md).
+The preview behavior below is retained; production I/O now has separate, default-off
+per-job gates, concrete adapters and the documented official transport blockers.
+
 Behavior baseline: local Git object `3fd38fcb803307e1688688ca1dfbde271131157a`
 (`release/datasage-0.2.0`). No historical script with import-time side effects is
 imported. `contracts/legacy-workflows.json` holds the extracted schedules, regions
@@ -8,9 +12,10 @@ and workflow facts; actual receiver identifiers remain outside Git.
 ## Execution boundary
 
 All six fixed script adapters default to exit 2, `WORKFLOW_EXECUTION_NOT_ENABLED`.
-Setting a JSON flag does not enable sending or freezing. Nothing registers cron
-jobs, invokes a sender, accepts a real price baseline, or supplies a MySQL writer.
-The freeze transaction simulator accepts only in-memory `sqlite3.Connection`.
+The reference policy does not activate execution. Preview calls register no jobs,
+invoke no sender, accept no real price baseline and perform no MySQL writes.
+The preview freeze simulator still accepts only in-memory `sqlite3.Connection`;
+the separate gated production writer is documented in WORKFLOW_IO.md.
 The public query executor's SELECT-only policy is unchanged.
 
 These are fixed report-ID adapters for the official script/no_agent path, not

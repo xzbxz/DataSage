@@ -23,6 +23,11 @@ def main():
 def fixed_workflow_main(job):
     # Official cron cannot pass report-id arguments. Each tiny adapter binds one
     # ID here. Its default path remains disabled even if accidentally invoked.
+    if not sys.argv[1:]:
+        if not (PROFILE/'local-report-bindings.json').is_file():
+            print('WORKFLOW_EXECUTION_NOT_ENABLED',file=sys.stderr);return 2
+        sys.argv=[sys.argv[0],'--legacy-run',job]
+        return main()
     if sys.argv[1:] != ['--preview']:
         print('WORKFLOW_EXECUTION_NOT_ENABLED',file=sys.stderr)
         return 2

@@ -58,7 +58,7 @@ def gen_workbook_xlsx(
                     style = ' s="3"' if row_index == 1 else ' s="2"'
                 else:
                     style = ' s="1"' if row_index == 1 else ""
-                if row_index > 1 and formats.get(column_index) == 'percent' and isinstance(value,(int,float,Decimal)):
+                if row_index > 1 and formats.get((row_index-1,column_index),formats.get(column_index)) == 'percent' and isinstance(value,(int,float,Decimal)):
                     style = ' s="5"' if borders else ' s="4"'
                 if isinstance(value, (int, float, Decimal)) and not isinstance(value, bool):
                     if not (value.is_finite() if isinstance(value,Decimal) else math.isfinite(value)):

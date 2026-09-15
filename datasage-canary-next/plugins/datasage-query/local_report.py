@@ -261,11 +261,22 @@ def main(profile, argv=None):
     parser=argparse.ArgumentParser(description='Local trusted slow report; no scheduling or sending.')
     parser.add_argument('--report-id')
     parser.add_argument('--legacy-preview', choices=['slow_task','slow_report','idk','sales_price','purchase_price','fabric'])
+    parser.add_argument('--legacy-run', choices=['slow_task','slow_report','idk','sales_price','purchase_price','fabric'])
     parser.add_argument('--accept-snapshot', help='Explicitly accept a reviewed local observation digest; never writes the business database.')
     args=parser.parse_args(argv)
     try:
         if Path(get_hermes_home()).resolve()!=profile.resolve():raise ReportError('REPORT_PROFILE_MISMATCH')
         _assert_local_context()
+        if args.legacy_run:
+            if args.legacy_preview or args.report_id or args.accept_snapshot:raise ReportError('WORKFLOW_ARGUMENT_CONFLICT')
+            from .workflow_io import run_bound,IOErrorBoundary
+            try:
+                result=run_bound(profile,args.legacy_run)
+                if result.get('status')!='success':
+                    print('WORKFLOW_QUERY_INCOMPLETE',file=sys.stderr);return 3
+                print('WORKFLOW_COMPLETED '+str(result.get('status')));return 0
+            except IOErrorBoundary as exc:
+                print(str(exc),file=sys.stderr);return 2
         if args.legacy_preview:
             if args.report_id or args.accept_snapshot:raise ReportError('WORKFLOW_PREVIEW_ARGUMENT_CONFLICT')
             from .legacy_workflow import preview_from_file,WorkflowError
