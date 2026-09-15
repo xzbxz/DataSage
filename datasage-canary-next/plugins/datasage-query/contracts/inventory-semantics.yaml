@@ -997,7 +997,7 @@ metrics:
       unit_high_price_anomaly_rows: 条
     high_price_policy: &slow_achievement_high_price_policy {kind: slow_achievement, factor: 0.75, operator: gt}
     label: 登记滞销池·周基线净出库与高折战果
-    business_definition: 同时提供普通净出库卷数与高折净出库卷数，作为已确认销售战果；数量和卷数分别计量。基于现存完整冻结业务键集合，默认统计记录冻结时点至本次读取的已记录物理出库和有效退货；显式指定一个基线周后，也可查询冻结之后的日期区间或月份，未完成期间仅截至读取时点；默认按库存单位汇总，可附加产品、规格、仓库部门及流水销售归属。不代表冻结旧批次实际去化。
+    business_definition: 度量现存周冻结池业务键范围内的已记录出退货净流量，分别返回净数量、普通净出库卷数和高折净出库卷数；数量和卷数分别计量，不是两端库存状态之差。母集为现存完整冻结业务键集合，默认统计记录冻结时点至本次读取的已记录物理出库和有效退货；显式指定一个基线周后，也可查询冻结之后的日期区间或月份，未完成期间仅截至读取时点；默认按库存单位汇总，可附加产品、规格、仓库部门及流水销售归属。不代表冻结旧批次实际去化。
     query_kind: frozen_pool_net_outbound
     table: &slow_baseline_table vk_ai.slow_moving_baseline
     time_policy: frozen_baseline_recorded_window
@@ -1292,7 +1292,7 @@ metrics:
       default:
       - unit
     label: 滞销独立月报·总体变化
-    business_definition: 月初取上月物理快照按旧范围四键汇总后数量大于10；当月期末取当前ODS源行门槛，历史期末取目标月物理快照；两端同步排除同次当前库存单位白名单组合。返回两端总体与变化，New参加期末及总体变化；不把库存变化当销售量。
+    business_definition: 度量独立月报期初与期末的库存状态及其变化，返回两端总体和变化分类；New参加期末及总体变化，不把库存变化当作已记录出退货净流量或销售量。期初母集取上月物理快照，按旧范围四键汇总后数量大于10；当月期末取当前ODS源行门槛，历史期末取目标月物理快照；两端同步排除同次当前库存单位白名单组合。
     unit: 候选比较组（含未判定）
     query_kind: monthly_slow_pool
     table: vk_dw.inventory_barcode_detail_bymonth_dw
@@ -1392,7 +1392,7 @@ metrics:
       unit_high_price_anomaly_rows: 条
     high_price_policy: *slow_achievement_high_price_policy
     label: 滞销独立月报·普通与高折净出库战果
-    business_definition: 月初取上月物理快照按旧范围四键汇总后数量大于10；当月期末取当前ODS源行门槛，历史期末取目标月物理快照；两端同步排除同次当前库存单位白名单组合。仅月初池参与普通和高折净出库战果，New不纳入；双方实际时间和自身销售归属。
+    business_definition: 度量月初池业务键范围内所选自然月已记录的出退货净流量，分别返回净数量、普通净出库卷数和高折净出库卷数；这不是两端库存状态之差，New不纳入月初池战果。月初母集取上月物理快照，按旧范围四键汇总后数量大于10；当月期末取当前ODS源行门槛，历史期末取目标月物理快照，两端同步排除同次当前库存单位白名单组合。流水按双方实际时间和自身销售归属计算。
     query_kind: monthly_slow_pool
     table: vk_dw.inventory_barcode_detail_bymonth_dw
     time_policy: monthly_slow_pool
