@@ -48,6 +48,7 @@ PINNED_CONTRACT_PATHS = tuple(
     dict.fromkeys(
         (
             _DATASETS_CONTRACT_PATH,
+            "plugins/datasage-query/contracts/operations.yaml",
             capability_contract.QUERY_POLICY_PATH,
             *(
                 source["semantics"]

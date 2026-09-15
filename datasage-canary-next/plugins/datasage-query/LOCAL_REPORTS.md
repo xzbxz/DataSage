@@ -1,5 +1,9 @@
 # Local trusted slow reports
 
+Additional migrated IDK, price observation, slow assignment review and fabric
+report modes share this entrypoint and binding file; see [OPERATIONS.md](OPERATIONS.md).
+They remain unconfigured by default and do not enable scheduling or delivery.
+
 This is an operator entrypoint, not a registered model tool. Public DataSage
 admission still requires the existing bound identity. The report entrypoint
 does not set WeCom or replay identities and does not register jobs or send

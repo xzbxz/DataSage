@@ -252,6 +252,47 @@ current_inventory_scope_disclosures:
     text: "在途库存范围仅包含在途状态。"
 
 metrics:
+  idk_unpriced_pool:
+    label: IDK未定促销价候选池
+    business_definition: 当前IDK未定促销价源行数，按库存单位分列；附加NULL价、零价、负价行数及库存数量和卷数。包含历史遗留，不等于唯一产品数或已发送提醒次数。
+    unit: 候选源行
+    query_kind: idk_unpriced
+    table: vk_ods.slow_moving_goods_ods
+    time_policy: current_snapshot
+    max_group_dimensions: 1
+    allowed_dimensions: [unit]
+    grouping: {allowed: [unit], required: [unit], default: [unit]}
+    dimension_overrides:
+      unit:
+        label: 源库存数量单位
+        columns: [unit]
+        filter_column: unit
+        value_contract: {kind: source_exact, model_rule: 仅用明确源单位，不跨单位换算或相加；未记录单列。}
+    result_fact_units:
+      idk_null_price_rows: 源行
+      idk_zero_price_rows: 源行
+      idk_negative_price_rows: 源行
+      idk_rolls: 卷
+      idk_known_rolls: 卷
+      idk_scope_rows: 源行
+      idk_identity_errors: 源行
+    result_fields:
+      metric_value: {meaning: 当前单位内候选源行数；不是产品去重数。源身份不完整时为空。}
+      idk_null_price_rows: {meaning: 促销价格NULL的源行数，与零价和负价分别计数。}
+      idk_zero_price_rows: {meaning: 促销价格为零的源行数。}
+      idk_negative_price_rows: {meaning: 促销价格为负的源行数；不自动修正价格。}
+      idk_quantity: {unit: 本行源库存数量单位, meaning: 当前单位库存数量；不跨单位相加。}
+      idk_known_quantity: {unit: 本行源库存数量单位, meaning: 已知数量部分，不补齐未知的完整值。}
+      idk_rolls: {meaning: 候选库存卷数；身份或卷数缺失时完整值为空。}
+      idk_known_rolls: {meaning: 已知卷数部分，不冒充完整卷数。}
+      idk_scope_rows: {meaning: 本次筛选范围截断前候选源行数；重复展示只取一次。}
+    disclosures:
+      - id: inventory.idk-unpriced.basis
+        mode: required_always
+        text: 基于旧版IDK提醒规则，当前IDK源行数量大于10、明确不在白名单且促销价NULL或非正；NULL、零、负分别返回。默认含历史遗留，不限定最近新增。主值为源行数，不是唯一产品数；多个颜色或规格可能属于同一产品。源创建时间不证明首次被提醒，最新修改时间也不证明ETL刷新完成。本查询不发送提醒。
+      - id: inventory.idk-unpriced.coverage
+        mode: required_always
+        text: 各数量单位分开，未知单位单列。源身份或卷数缺失时完整量未知；已知部分不填零补齐。只返回部分行时以截断前总体计数为准，不重复相加；不返回原始促销价或DDP报价。
   current_inventory_quantity:
     disclosures:
       - *inventory_current_scope_total

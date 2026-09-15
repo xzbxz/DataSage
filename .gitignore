@@ -140,3 +140,8 @@ datasage-canary-next/*
 !datasage-canary-next/tests/test_host_tool_schema.py
 
 !datasage-canary-next/tests/test_governed_scope_names.py
+
+!datasage-canary-next/plugins/datasage-query/operations.py
+!datasage-canary-next/plugins/datasage-query/contracts/operations.yaml
+!datasage-canary-next/plugins/datasage-query/OPERATIONS.md
+!datasage-canary-next/tests/test_operations.py

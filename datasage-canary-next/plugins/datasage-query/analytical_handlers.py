@@ -43,6 +43,11 @@ class QueryHandler:
 
 
 _HANDLERS = MappingProxyType({
+    'idk_unpriced': QueryHandler(
+        forbidden_parameters=('time_range','calendar_month','time_bucket','baseline_week','comparison','order_by','movement_state','inventory_scope'),
+        parameter_message='IDK未定价查询为当前源池观察；不接受历史回填、周基线、比较或排序。',
+        module='operations',builder='build_idk_query',public_fields='FACT_FIELDS',
+    ),
     'slow_customer_history': QueryHandler(
         forbidden_parameters=('time_range', 'calendar_month', 'time_bucket', 'comparison', 'order_by', 'movement_state', 'inventory_scope'),
         baseline_parameters=True,

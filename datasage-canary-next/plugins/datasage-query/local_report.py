@@ -50,7 +50,7 @@ def load_bindings(profile: Path):
         raise ReportError('REPORT_BINDINGS_INVALID') from exc
 
 
-def resolve_binding(bindings, report_id=None):
+def _select_binding(bindings, report_id=None):
     if (not isinstance(bindings, dict) or set(bindings) != {'version','default_report','reports'}
             or type(bindings['version']) is not int or bindings['version'] != 1
             or not isinstance(bindings['reports'], dict)):
@@ -60,6 +60,11 @@ def resolve_binding(bindings, report_id=None):
         raise ReportError('REPORT_ID_INVALID')
     binding = bindings['reports'].get(report_id)
     if binding is None: raise ReportError('REPORT_ID_NOT_CONFIGURED')
+    return report_id,binding
+
+
+def resolve_binding(bindings, report_id=None):
+    report_id,binding=_select_binding(bindings,report_id)
     required = {'department','views','limit'}
     optional = {'baseline_week','max_baseline_age_days','time_range','calendar_month'}
     if not isinstance(binding, dict) or not required <= set(binding) or set(binding)-required-optional:
@@ -255,11 +260,38 @@ def main(profile, argv=None):
     from hermes_constants import get_hermes_home
     parser=argparse.ArgumentParser(description='Local trusted slow report; no scheduling or sending.')
     parser.add_argument('--report-id')
+    parser.add_argument('--accept-snapshot', help='Explicitly accept a reviewed local observation digest; never writes the business database.')
     args=parser.parse_args(argv)
     try:
         if Path(get_hermes_home()).resolve()!=profile.resolve():raise ReportError('REPORT_PROFILE_MISMATCH')
         _assert_local_context()
         bindings=load_bindings(profile)
+        selected,operation=_select_binding(bindings,args.report_id)
+        if isinstance(operation,dict) and 'kind' in operation:
+            from . import operations
+            try:
+                operations.validate_binding(operation)
+                if args.accept_snapshot:
+                    import hashlib
+                    expected=hashlib.sha256(operations._json({'binding':operation,'policy':operations.policy()}).encode()).hexdigest()
+                    operations.accept_snapshot(profile,selected,args.accept_snapshot,expected_scope=expected)
+                    print('SNAPSHOT_ACCEPTED_LOCALLY; delivery remains not_requested')
+                    return 0
+                configure_runtime(profile)
+                document=operations.execute(profile,selected,operation)
+                artifact=operations.save_observation(profile,selected,document)
+                html_path=artifact.with_suffix('.html')
+                if html_path.is_symlink():raise operations.OperationError('REPORT_PATH_INVALID')
+                html_path.write_text(operations.render(document),encoding='utf-8')
+                if document['status']!='success':
+                    print('REPORT_QUERY_INCOMPLETE',file=sys.stderr);return 3
+                print('业务产物已生成；尚未投递。')
+                print('本地观察标识：'+artifact.stem)
+                print('状态计数：'+json.dumps(document.get('event_counts',{}),ensure_ascii=False))
+                return 0
+            except operations.OperationError as exc:
+                print(str(exc),file=sys.stderr);return 2
+        if args.accept_snapshot:raise ReportError('REPORT_SNAPSHOT_UNSUPPORTED')
         resolve_binding(bindings,args.report_id) # Fail before loading credentials/runtime.
         configure_runtime(profile)
         report=execute_report(bindings,args.report_id)

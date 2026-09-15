@@ -1,0 +1,67 @@
+version: datasage-operations/v1
+legacy_reference: release/datasage-0.2.0
+delivery: official_hermes_only
+field_labels:
+  ddp_price: 销售DDP报价
+  tax_inclue_price: 含税采购报价
+  tax_exclue_price: 未税采购报价
+  currency_no: 币种
+  unit: 源单位
+  unit_cuur: 源计价单位
+  is_inclue_tax: 源税口径
+  goods_no: 产品编号
+  goods_name: 产品名称
+  supplier_name: 供应商名称
+  source_ref: 源行引用
+  product: 产品编号
+  product_name: 产品名称
+  color: 颜色
+  quantity: 库存数量
+  rolls: 库存卷数
+  price_state: 未定价状态
+event_labels:
+  new_baseline_candidate: 新出现，仅作为基线候选
+  recovered_baseline_candidate: 恢复可比较，仅作为基线候选
+  price_changed: 同口径价格发生变化
+  basis_changed: 币种、单位或税口径变化，不直接计算涨跌
+  validity_changed: 有效期条件变化
+  absent_from_selection: 当前选中范围中未见，不证明撤销或售罄
+  unresolved: 当前证据不足
+  unchanged: 同口径未变
+  new_candidate: 新出现未定价源行
+  still_unpriced: 仍未定价，不等于已重复发送
+regions: [HCM, HN, BKK, IDK]
+organizations:
+  HCM: 越鑫国际贸易有限公司
+  HN: 越鑫国际贸易有限公司
+  BKK: Thai Kim textile company
+  IDK: Indonesia Kim Company
+idk:
+  table: vk_ods.slow_moving_goods_ods
+  department: IDK
+  minimum_quantity_exclusive: 10
+  whitelist_value: n
+  fields: [id, goods_id, goods_no, goods_name, goods_sku_id, attr_val, color_label, source_unit, goods_num, piece_num, promotion_price, gmt_create, gmt_modified]
+  meaning: 当前IDK源行数量大于10且明确不在白名单；未定价包含NULL、零、负数，分别列出。默认包含历史遗留；创建时间不是首次提醒时间，一行不是唯一产品。
+sales:
+  sources: {ready: vk_dwd.ready_goods_dwd, promotion: data_assistant.push_goods_report, prices: vk_dwd.sale_price_bill_detail_dwd}
+  key: [goods_id, dept, customer_grade, color_label]
+  prices: [ddp_price]
+  basis: [currency_no, unit, unit_cuur, is_inclue_tax]
+  cancelled_ready_type: 取消备货
+  meaning: 备货及当前有效主推池；区域价格优先、组织价格兜底，最新修改价格记录。相同时点多条候选不任选。币种、两种源单位或税口径变化单列，不视为纯涨跌价；有效期改变单列条件变化。
+purchase:
+  sources: {ready: vk_dwd.ready_goods_dwd, promotion: data_assistant.push_goods_report, prices: vk_dwd.purchase_price_bill_detail_dwd}
+  key: [goods_no, color_label, supplier_no]
+  prices: [tax_inclue_price, tax_exclue_price]
+  basis: [currency_no, unit_cuur]
+  parent_org_ids: /0/2172/2225/
+  cancelled_ready_type: 取消备货
+  meaning: 四区域备货与有效主推的产品集合，按原组织范围取最新采购报价；含税与未税分别比较，供应商或颜色不同不是同一报价。最新记录是否在有效期内单列，不自动回退旧报价。
+tracking:
+  first_observation: baseline_candidate_not_price_change
+  disappearance: absent_from_current_selection_not_proven_cancelled
+  missing: unknown_not_zero
+  duplicates: ambiguous_not_arbitrary_latest
+  persistence: local_review_then_explicit_accept
+  delivery_state: not_requested
