@@ -272,6 +272,8 @@ metrics:
       idk_null_price_rows: 源行
       idk_zero_price_rows: 源行
       idk_negative_price_rows: 源行
+      idk_quantity: 本行源库存数量单位
+      idk_known_quantity: 本行源库存数量单位
       idk_rolls: 卷
       idk_known_rolls: 卷
       idk_scope_rows: 源行
