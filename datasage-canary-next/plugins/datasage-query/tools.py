@@ -4686,13 +4686,14 @@ def _public_scope_entities(
         }
         for raw_name in raw_names:
             display_name = _safe_display_value(raw_name)
+            name_values = {str(raw_name), display_name}
             if (
                 safe_label is None
                 or display_name is None
                 or (
-                    display_name in internal_values
+                    bool(name_values.intersection(internal_values))
                     and not (
-                        display_name not in execution_values
+                        not name_values.intersection(execution_values)
                         and entities.is_governed_display_name(raw_name, resolved, definition)
                     )
                 )

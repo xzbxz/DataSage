@@ -36,6 +36,13 @@ class GovernedScopeNameTests(unittest.TestCase):
     def test_missing_name_and_code_or_id_fallback_stay_blocked(self):
         for name,code in [(None,'SYNTH-CODE'),('','SYNTH-CODE'),(' ', 'SYNTH-CODE'),(None,None)]:
             with self.subTest(name=name,code=code):self.denied(self.evidence(self.candidate(name=name,code=code)))
+    def test_long_and_normalized_fallbacks_stay_blocked_before_display_shortening(self):
+        long_value='SYNTHETIC_'+('x'*120)
+        self.denied(self.evidence(self.candidate(name=None,code=long_value)))
+        self.denied(self.evidence(self.candidate(name=None,code=None,identity=long_value)))
+        self.denied(self.evidence(self.candidate(name=None,code='  SYNTH-CODE\u200b ')))
+        output=self.project(self.evidence(self.candidate(name=long_value,code=long_value)))
+        self.assertLessEqual(len(output[0]['display_name']),80)
     def test_plain_forged_flags_and_json_roundtrip_cannot_grant_provenance(self):
         trusted=self.evidence(self.candidate())
         forged=json.loads(json.dumps(trusted))
