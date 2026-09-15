@@ -57,6 +57,53 @@ _PUBLIC_CANDIDATE_TEXT_FIELDS = (
 )
 _PUBLIC_CANDIDATE_LIST_FIELDS = ("filter_values", "filter_role_candidates")
 
+# Process-private provenance through the existing binder. JSON does not carry
+# this type, and user-supplied trust flags cannot create it.
+_DISPLAY_NAME_ISSUER = object()
+
+
+class _GovernedDisplayName(str):
+    __slots__ = ("_origin",)
+
+    def __new__(cls, value: str, issuer=None, origin=None):
+        if issuer is not _DISPLAY_NAME_ISSUER:
+            raise ValueError("governed names are issued only by the entity reader")
+        result = super().__new__(cls, value)
+        object.__setattr__(result, "_origin", origin)
+        return result
+
+    def __setattr__(self, key, value):
+        raise AttributeError("governed display provenance is immutable")
+
+    def __copy__(self):
+        return self
+
+    def __deepcopy__(self, memo):
+        return self
+
+
+def is_governed_display_name(value: Any, resolved=None, definition=None) -> bool:
+    """Only a non-fallback name from the governed master-data reader qualifies."""
+    if type(value) is not _GovernedDisplayName:
+        return False
+    if resolved is None:
+        return True
+    if not isinstance(resolved, Mapping) or not isinstance(definition, Mapping):
+        return False
+    entity_type, canonical_id, canonical_code, source_table, display_column = value._origin
+    source = _registry()["candidate_sources"].get(entity_type, {})
+    identity = definition.get("identity_filter") or {}
+    return (
+        resolved.get("entity_type") == entity_type
+        and identity.get("entity_type") == entity_type
+        and source.get("table") == source_table
+        and source.get("display_column") == display_column
+        and display_column not in {source.get("id_column"), source.get("code_column")}
+        and canonical_id in {str(v) for v in resolved.get("canonical_ids", []) if v is not None}
+        and canonical_code in {str(v) for v in resolved.get("canonical_codes", []) if v is not None}
+    )
+
+
 
 class EntityFailure(Exception):
     def __init__(self, code: str, message: str):
@@ -935,6 +982,19 @@ def _candidate_rows(
         canonical_id = str(row.get("canonical_id") or "")
         canonical_code = str(row.get("canonical_code") or "")
         display_name = str(row.get("display_name") or canonical_code or canonical_id)
+        if not public:
+            source = _registry()["candidate_sources"].get(entity_type, {})
+            raw_name = row.get("display_name")
+            if (
+                isinstance(raw_name, str) and raw_name.strip()
+                and isinstance(source.get("display_column"), str)
+                and source["display_column"] not in {source.get("id_column"), source.get("code_column")}
+            ):
+                display_name = _GovernedDisplayName(
+                    raw_name, _DISPLAY_NAME_ISSUER,
+                    (entity_type, canonical_id, canonical_code, source["table"], source["display_column"]),
+                )
+
         try:
             rank = int(row.get("match_rank", 2))
         except (TypeError, ValueError, OverflowError):

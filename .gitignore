@@ -138,3 +138,5 @@ datasage-canary-next/*
 !datasage-canary-next/tests/test_analytical_handlers.py
 !datasage-canary-next/tests/test_catalog_business_definitions.py
 !datasage-canary-next/tests/test_host_tool_schema.py
+
+!datasage-canary-next/tests/test_governed_scope_names.py

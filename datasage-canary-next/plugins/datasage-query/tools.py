@@ -4678,12 +4678,24 @@ def _public_scope_entities(
             if value is not None
         }
         accepted = 0
+        execution_values = {
+            str(value)
+            for key in ("canonical_ids", "filter_values")
+            for value in (resolved.get(key) if isinstance(resolved.get(key), list) else [])
+            if value is not None
+        }
         for raw_name in raw_names:
             display_name = _safe_display_value(raw_name)
             if (
                 safe_label is None
                 or display_name is None
-                or display_name in internal_values
+                or (
+                    display_name in internal_values
+                    and not (
+                        display_name not in execution_values
+                        and entities.is_governed_display_name(raw_name, resolved, definition)
+                    )
+                )
             ):
                 continue
             key = (role, display_name)
