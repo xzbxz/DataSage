@@ -41,6 +41,14 @@ def _table(value):
 def _json(value):
     return json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':'),default=str)
 
+def scope_fingerprint(binding):
+    """Only this observation's selection/comparison contract invalidates its baseline."""
+    cfg=policy();kind=binding['kind']
+    side={'idk_unpriced':'idk','sales_prices':'sales','purchase_prices':'purchase'}.get(kind)
+    definition={k:v for k,v in cfg.get(side,{}).items() if k!='meaning'} if side else {}
+    if side=='sales':definition['organizations']={r:cfg['organizations'][r] for r in binding['regions']}
+    return hashlib.sha256(_json({'snapshot_format':1,'binding':binding,'definition':definition}).encode()).hexdigest()
+
 def _number(value):
     if value is None or isinstance(value,bool):return None
     try:
@@ -264,7 +272,7 @@ def execute(profile,report_id,binding):
     from . import tools
     from .local_report import _assert_local_context
     _assert_local_context();binding=validate_binding(binding)
-    scope_hash=hashlib.sha256(_json({'binding':binding,'policy':policy()}).encode()).hexdigest()
+    scope_hash=scope_fingerprint(binding)
     previous=load_baseline(profile,report_id,scope_hash)
     if binding['kind'] in ('fabric_review','slow_assignment'):
         return execute_governed(profile,report_id,binding,scope_hash)

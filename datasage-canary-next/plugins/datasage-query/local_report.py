@@ -272,8 +272,7 @@ def main(profile, argv=None):
             try:
                 operations.validate_binding(operation)
                 if args.accept_snapshot:
-                    import hashlib
-                    expected=hashlib.sha256(operations._json({'binding':operation,'policy':operations.policy()}).encode()).hexdigest()
+                    expected=operations.scope_fingerprint(operation)
                     operations.accept_snapshot(profile,selected,args.accept_snapshot,expected_scope=expected)
                     print('SNAPSHOT_ACCEPTED_LOCALLY; delivery remains not_requested')
                     return 0

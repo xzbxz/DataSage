@@ -18,6 +18,13 @@ class PriceOperationsTests(unittest.TestCase):
         self.assertEqual('new_baseline_candidate',ops.compare(None,a)[0]['event'])
         self.assertEqual('unchanged',ops.compare(a,b)[0]['event'])
         self.assertEqual('price_changed',ops.compare(a,self.classify(ddp_price='10.0000001'))[0]['event'])
+    def test_unrelated_policy_or_labels_do_not_invalidate_baseline(self):
+        binding={'kind':'idk_unpriced','limit':10}
+        original=ops.scope_fingerprint(binding);cfg=deepcopy(ops.policy())
+        cfg['purchase']['meaning']='unrelated';cfg['event_labels']['unchanged']='label change'
+        with patch.object(ops,'policy',return_value=cfg):self.assertEqual(original,ops.scope_fingerprint(binding))
+        cfg['idk']['minimum_quantity_exclusive']=20
+        with patch.object(ops,'policy',return_value=cfg):self.assertNotEqual(original,ops.scope_fingerprint(binding))
     def test_unknown_basis_expiry_duplicates_and_absence_are_not_price_changes(self):
         a=self.classify()
         for values,state in [({'ddp_price':None},'missing_price'),({'ddp_price':'-1'},'negative_price'),({'unit':None},'unknown_basis'),({'expiration_date':'2026-01-02'},'expired'),({'effective_date':'2027-01-01'},'invalid_validity'),({'effective_date':None},'unknown_validity')]:
