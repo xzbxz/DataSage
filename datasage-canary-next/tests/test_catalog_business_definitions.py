@@ -32,6 +32,83 @@ def catalog(request: dict) -> dict:
     return json.loads(contracts.datasage_catalog(request))
 
 
+class ResultFieldSemanticsTests(unittest.TestCase):
+    def setUp(self):
+        from test_remediation_remaining_cases import plugin
+        self.plugin = plugin
+        self.datasets, self.semantics = plugin.contracts.execution_contracts('inventory')
+        self.codes = ['registered_slow_'+prefix+suffix for prefix in ('pool_baseline_', 'monthly_') for suffix in ('summary', 'groups', 'net_outbound')]
+
+    def test_exact_wire_fields_are_permitted_and_indexes_stay_small(self):
+        for code in self.codes:
+            detail = wire.compact_catalog_payload(catalog({'requests':[{'domain':'inventory','metric':code}]}))['results'][0]['metric']
+            fields = detail['result_fields']
+            self.assertEqual(set(self.semantics['metrics'][code]['result_fields']), set(fields))
+            self.assertLessEqual(set(fields), self.plugin.tools._PUBLIC_FACT_FIELDS)
+            self.assertEqual('main', fields['metric_value']['role'])
+            self.assertEqual(detail['unit'], fields['metric_value']['unit'])
+            if code.endswith('net_outbound'):
+                self.assertEqual('卷', fields['net_rolls']['unit'])
+                self.assertNotEqual(fields['net_rolls']['unit'], fields['metric_value']['unit'])
+            else:
+                self.assertNotEqual(fields['comparable_quantity_delta']['unit'], fields['metric_value']['unit'])
+        for view in ('summary', 'expert_index'):
+            request={'domain':'inventory'}
+            if view!='summary':request['view']=view
+            payload=wire.compact_catalog_payload(catalog({'requests':[request]}))
+            self.assertNotIn('result_fields', json.dumps(payload))
+
+    def test_semantics_and_units_cannot_grant_fact_permission(self):
+        from copy import deepcopy
+        definition=deepcopy(self.semantics['metrics'][self.codes[0]])
+        before=set(self.plugin.tools._PUBLIC_FACT_FIELDS)
+        for name in ('goods_id', 'ddp_price', 'private_secret'):
+            changed=deepcopy(definition)
+            changed['result_fields'][name]={'unit':'元','meaning':'Unapproved field'}
+            changed['result_fact_units']={name:'元'}
+            with self.assertRaises(contracts.ContractFailure):
+                contracts._result_fields_projection(changed,set())
+            ledger=self.plugin.tools._claim_ledger('r','x','x','组',[],{},'s','p',False,[{'metric_value':1,name:123}],fact_units=changed['result_fact_units'])
+            self.assertNotIn(name,ledger[0]['facts'])
+        self.assertEqual(before,self.plugin.tools._PUBLIC_FACT_FIELDS)
+
+    def test_semantic_metadata_does_not_change_six_query_plans(self):
+        from copy import deepcopy
+        from datetime import date
+        from test_remediation_remaining_cases import metric
+        stripped=deepcopy(self.semantics)
+        for definition in stripped['metrics'].values():definition.pop('result_fields',None)
+        for code in self.codes:
+            request=metric(code,'inventory',month='2026-08' if 'monthly_' in code else None,**({} if 'monthly_' in code else {'baseline_week':'2026-W37'}))
+            args=(request,self.datasets)
+            actual=self.plugin.tools._build_metric_query(*args,self.semantics,19,observed_on=date(2026,9,15))
+            old=self.plugin.tools._build_metric_query(*args,stripped,19,observed_on=date(2026,9,15))
+            self.assertEqual(old,actual,code)
+
+    def test_synthetic_registered_results_have_distinct_counts_quantities_and_signed_delta(self):
+        from test_monthly_slow_pool import MonthlyTests
+        h=MonthlyTests();h.setUp();self.addCleanup(h.doCleanups)
+        h.snap(qty=30,rolls=3);h.current(qty=20,rolls=2)
+        h.current(id=2,goods=2,sku=22,qty=40,rolls=4)
+        h.out(qty=10,rolls=2);h.ret(qty=3,rolls=1)
+        summary=h.f();flow=h.f('net_outbound')
+        self.assertEqual(2,summary['metric_value'])
+        self.assertEqual(30,summary['opening_quantity'])
+        self.assertEqual(60,summary['closing_quantity'])
+        self.assertEqual(-10,summary['comparable_quantity_delta'])
+        self.assertEqual(7,flow['metric_value']);self.assertEqual(1,flow['net_rolls'])
+        new=next(row for row in h.result('groups')['rows'] if row['states']['pool_movement_state']=='New')
+        self.assertIsNone(new['facts']['comparable_quantity_delta'])
+        self.assertIsNone(new['facts']['opening_quantity'])
+        # Logical equality example on actual synthetic handler output: no flow,
+        # no inventory movement. Equal zero does not make their definitions equal.
+        h.h.conn.execute('DELETE FROM vk_dwd.delivery_bill_barcode_detail_dwd')
+        h.h.conn.execute('DELETE FROM vk_dwd.delivery_return_detail_dwd')
+        h.h.conn.execute('UPDATE vk_ods.slow_moving_goods_ods SET goods_num=30 WHERE goods_id=1')
+        self.assertEqual(0,h.f()['comparable_quantity_delta'])
+        self.assertEqual(0,h.f('net_outbound')['metric_value'])
+
+
 class CatalogBusinessDefinitionTests(unittest.TestCase):
     def test_exact_inventory_detail_exposes_existing_boundaries(self) -> None:
         raw = catalog(

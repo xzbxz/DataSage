@@ -819,6 +819,57 @@ metrics:
     disclosures: *slow_pool_disclosures
     answer_note: *id002
   registered_slow_pool_baseline_groups:
+    result_fields: &comparison_result_fields
+      metric_value:
+        meaning: 当前明细行代表一个候选比较组，含未判定组；来源完整时为1，来源不完整时可为空。不是产品数、库存数量或卷数。
+      opening_quantity:
+        meaning: 期初数量；本端数量、身份或纳入范围不可确认时为空，不以已知部分冒充完整量。
+        unit: 来源库存数量单位；按返回行的单位分别计量，不能跨单位相加
+      closing_quantity:
+        meaning: 期末数量；本端数量、身份或纳入范围不可确认时为空。两端分别覆盖本端池，不能把缺失端补成0。
+        unit: 来源库存数量单位；按返回行的单位分别计量，不能跨单位相加
+      opening_known_quantity:
+        meaning: 期初已知数量部分；不代表缺失部分为0，也不是额外一份库存。
+        unit: 来源库存数量单位；按返回行的单位分别计量，不能跨单位相加
+      closing_known_quantity:
+        meaning: 期末已知数量部分；不代表完整期末数量，不与完整量重复相加。
+        unit: 来源库存数量单位；按返回行的单位分别计量，不能跨单位相加
+      comparable_quantity_delta:
+        meaning: 仅共有且可判定组（Reduced、No Change、Increased）的期末减期初；正数增加，负数减少。New、Exited及Unassessable不参与，没有可比组时为空。不是两端全池总差，更不是已记录净出库。
+        unit: 来源库存数量单位；按返回行的单位分别计量，不能跨单位相加
+      opening_rolls:
+        meaning: 期初卷数；对应身份、来源、纳入范围及卷数覆盖可确认时才完整，不把数量单位换算成卷。
+        unit: 卷
+      closing_rolls:
+        meaning: 期末卷数；相应覆盖不完整时为空，不能用已知卷数补成完整量。
+        unit: 卷
+      opening_known_rolls:
+        meaning: 期初可见卷数部分，可能不完整；不能与完整期初卷数重复相加。
+        unit: 卷
+      closing_known_rolls:
+        meaning: 期末可见卷数部分，可能不完整；不能与完整期末卷数重复相加。
+        unit: 卷
+      population_union_groups:
+        meaning: 截断前总体候选比较组数；随明细行重复展示，只取一次，不能逐行求和。
+        unit: 组
+      population_new_group_count:
+        meaning: 截断前总体的new分类组数；重复展示只取一次，不能逐行累加。
+        unit: 组
+      population_exited_group_count:
+        meaning: 截断前总体的exited分类组数；重复展示只取一次，不能逐行累加。
+        unit: 组
+      population_reduced_group_count:
+        meaning: 截断前总体的reduced分类组数；重复展示只取一次，不能逐行累加。
+        unit: 组
+      population_unchanged_group_count:
+        meaning: 截断前总体的unchanged分类组数；重复展示只取一次，不能逐行累加。
+        unit: 组
+      population_increased_group_count:
+        meaning: 截断前总体的increased分类组数；重复展示只取一次，不能逐行累加。
+        unit: 组
+      population_unassessable_group_count:
+        meaning: 截断前总体的unassessable分类组数；重复展示只取一次，不能逐行累加。
+        unit: 组
     grouping:
       allowed:
       - product
@@ -891,6 +942,28 @@ metrics:
     quantity_scale: 4
     baseline_view: groups
   registered_slow_pool_baseline_summary:
+    result_fields: &summary_result_fields
+      <<: *comparison_result_fields
+      metric_value:
+        meaning: 当前汇总行的候选比较组数，含未判定；来源不完整时可为空。不是产品数、库存数量或卷数。附加量按本行分组汇总；数量变化只汇总共有可判定组，不能由两端全池数量直接替代。
+      new_group_count:
+        meaning: 当前汇总行的new分类组数，与重复展示的总体分类计数区别。
+        unit: 组
+      exited_group_count:
+        meaning: 当前汇总行的exited分类组数，与重复展示的总体分类计数区别。
+        unit: 组
+      reduced_group_count:
+        meaning: 当前汇总行的reduced分类组数，与重复展示的总体分类计数区别。
+        unit: 组
+      unchanged_group_count:
+        meaning: 当前汇总行的unchanged分类组数，与重复展示的总体分类计数区别。
+        unit: 组
+      increased_group_count:
+        meaning: 当前汇总行的increased分类组数，与重复展示的总体分类计数区别。
+        unit: 组
+      unassessable_group_count:
+        meaning: 当前汇总行的unassessable分类组数，与重复展示的总体分类计数区别。
+        unit: 组
     grouping:
       allowed:
       - unit
@@ -956,6 +1029,62 @@ metrics:
     baseline_view: summary
 
   registered_slow_pool_baseline_net_outbound:
+    result_fields: &flow_result_fields
+      metric_value:
+        meaning: 当前分组的已记录出库数量减退货数量；正数净出库，负数净退货，覆盖不足时为空。与净卷数独立，不是候选组数或库存状态变化。
+      known_subset_value:
+        meaning: 本组已知出库数量减已知退货数量，仅已知部分，不补齐完整主值。
+        unit: 来源库存数量单位；按返回行的单位分别计量，不能跨单位相加
+      gross_quantity:
+        meaning: 本组合格毛出库数量；数量或候选覆盖不完整时为空。
+        unit: 来源库存数量单位；按返回行的单位分别计量，不能跨单位相加
+      return_quantity:
+        meaning: 本组合格退货数量；数量或候选覆盖不完整时为空。
+        unit: 来源库存数量单位；按返回行的单位分别计量，不能跨单位相加
+      net_rolls:
+        meaning: 本组普通毛出库卷数减合格退货卷数；覆盖不足时为空，负数保留。
+      known_net_rolls:
+        meaning: 本组普通净卷数的已知部分；不能当作完整净卷数。
+      gross_rolls:
+        meaning: 本组合格毛出库卷数，独立检查卷数覆盖。
+      return_rolls:
+        meaning: 本组合格退货卷数，独立检查卷数覆盖。
+      high_net_rolls:
+        meaning: 本组满足合同高折条件的毛出库卷数减全部合格退货卷数；覆盖不足为空，负数保留。不是普通净卷数的明细子集，不与普通净卷数相加。
+      high_known_net_rolls:
+        meaning: 本组高折净卷数的已知部分，不等于完整高折净卷数。
+      high_gross_rolls:
+        meaning: 本组满足合同高折条件的毛出库卷数，未扣退货；价格或卷数等覆盖不足时为空。
+      unit_net_quantity:
+        meaning: 同单位截断前总体净数量，可能随多行重复，只取一次；不可跨单位相加。
+        unit: 来源库存数量单位；按返回行的单位分别计量，不能跨单位相加
+      unit_known_net_quantity:
+        meaning: 同单位截断前总体净数量的已知部分，重复展示只取一次。
+        unit: 来源库存数量单位；按返回行的单位分别计量，不能跨单位相加
+      scope_net_rolls:
+        meaning: 当前请求范围跨数量单位的截断前总体普通净卷数；可能在多行重复，只取一次，不与本组值重复相加。已知部分不代表完整；完整值覆盖不足为空。
+      scope_known_net_rolls:
+        meaning: 当前请求范围跨数量单位的截断前总体普通净卷数已知部分；可能在多行重复，只取一次，不与本组值重复相加。已知部分不代表完整；完整值覆盖不足为空。
+      scope_high_net_rolls:
+        meaning: 当前请求范围跨数量单位的截断前总体高折净卷数；可能在多行重复，只取一次，不与本组值重复相加。已知部分不代表完整；完整值覆盖不足为空。
+      scope_high_known_net_rolls:
+        meaning: 当前请求范围跨数量单位的截断前总体高折净卷数已知部分；可能在多行重复，只取一次，不与本组值重复相加。已知部分不代表完整；完整值覆盖不足为空。
+      unit_net_rolls:
+        meaning: 同库存数量单位的截断前总体普通净卷数；可能在多行重复，只取一次，不与本组值重复相加。已知部分不代表完整；完整值覆盖不足为空。
+      unit_known_net_rolls:
+        meaning: 同库存数量单位的截断前总体普通净卷数已知部分；可能在多行重复，只取一次，不与本组值重复相加。已知部分不代表完整；完整值覆盖不足为空。
+      unit_high_net_rolls:
+        meaning: 同库存数量单位的截断前总体高折净卷数；可能在多行重复，只取一次，不与本组值重复相加。已知部分不代表完整；完整值覆盖不足为空。
+      unit_high_known_net_rolls:
+        meaning: 同库存数量单位的截断前总体高折净卷数已知部分；可能在多行重复，只取一次，不与本组值重复相加。已知部分不代表完整；完整值覆盖不足为空。
+      sales_net_rolls:
+        meaning: 按销售分组时同一稳定销售身份跨数量单位的截断前总体普通净卷数；可能在多行重复，只取一次，不与本组值重复相加。已知部分不代表完整；完整值覆盖不足为空。
+      sales_known_net_rolls:
+        meaning: 按销售分组时同一稳定销售身份跨数量单位的截断前总体普通净卷数已知部分；可能在多行重复，只取一次，不与本组值重复相加。已知部分不代表完整；完整值覆盖不足为空。
+      sales_high_net_rolls:
+        meaning: 按销售分组时同一稳定销售身份跨数量单位的截断前总体高折净卷数；可能在多行重复，只取一次，不与本组值重复相加。已知部分不代表完整；完整值覆盖不足为空。
+      sales_high_known_net_rolls:
+        meaning: 按销售分组时同一稳定销售身份跨数量单位的截断前总体高折净卷数已知部分；可能在多行重复，只取一次，不与本组值重复相加。已知部分不代表完整；完整值覆盖不足为空。
     grouping:
       allowed: [product, pool_sku, warehouse_department, unit, salesperson]
       required: [unit]
@@ -1203,6 +1332,7 @@ metrics:
     status_table: vk_dw.inventory_barcode_detail_dw
 
   registered_slow_monthly_groups:
+    result_fields: *comparison_result_fields
     monthly_scope_policy: &monthly_scope_policy
       excluded_warehouse_type: CCBS仓
       excluded_organizations: [五点中国公司, 缅鑫国际贸易有限公司]
@@ -1282,6 +1412,7 @@ metrics:
     - IDK-HT
     - BKK-HT
   registered_slow_monthly_summary:
+    result_fields: *summary_result_fields
     monthly_scope_policy: *monthly_scope_policy
     grouping:
       allowed:
@@ -1350,6 +1481,7 @@ metrics:
     - IDK-HT
     - BKK-HT
   registered_slow_monthly_net_outbound:
+    result_fields: *flow_result_fields
     grouping:
       allowed: [product, pool_sku, warehouse_department, unit, salesperson]
       required: [unit]

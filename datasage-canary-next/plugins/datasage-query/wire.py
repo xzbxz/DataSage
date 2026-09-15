@@ -45,6 +45,7 @@ _CATALOG_METRIC_FIELDS = (
     "delivery_scope_policy",
     "scope_flags",
     "answer_boundary_summary",
+    "result_fields",
     "status",
     "reason",
     "error",

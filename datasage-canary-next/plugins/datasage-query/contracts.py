@@ -1441,6 +1441,31 @@ def _catalog_expert_index(domain: str, planner: Mapping[str, Any]) -> dict[str, 
     return result
 
 
+def _result_fields_projection(definition: Mapping[str, Any], physical: set[str]) -> dict[str, Any]:
+    """Describe declared facts; the existing fact allowlist remains the authority."""
+    raw = definition.get("result_fields")
+    if raw is None:
+        return {}
+    # Lazy import avoids a module initialization cycle with the executor.
+    from .tools import _PUBLIC_FACT_FIELDS
+    if not isinstance(raw, Mapping) or not raw or "metric_value" not in raw:
+        raise ContractFailure("CONTRACT_UNAVAILABLE", "Invalid result field semantics.")
+    result = {}
+    units = definition.get("result_fact_units") or {}
+    for field, spec in raw.items():
+        if field not in _PUBLIC_FACT_FIELDS or not isinstance(spec, Mapping):
+            raise ContractFailure("CONTRACT_UNAVAILABLE", "Result field is not publicly permitted.")
+        if set(spec) - {"meaning", "unit"} or not isinstance(spec.get("meaning"), str) or not spec["meaning"].strip():
+            raise ContractFailure("CONTRACT_UNAVAILABLE", "Invalid result field description.")
+        unit = definition.get("unit") if field == "metric_value" else units.get(field, spec.get("unit"))
+        if not isinstance(unit, str) or not unit.strip():
+            raise ContractFailure("CONTRACT_UNAVAILABLE", "Result field unit is unavailable.")
+        item = {"role": "main" if field == "metric_value" else "additional", "unit": unit, "meaning": spec["meaning"]}
+        _assert_business_safe_tree(item, context="result field semantics", physical_identifiers=physical)
+        result[field] = item
+    return result
+
+
 def _catalog_metric_detail(
     domain: str,
     metric_code: str,
@@ -1516,6 +1541,9 @@ def _catalog_metric_detail(
         for code in allowed_dimensions if code in effective
     }
     metric["allowed_dimensions"] = allowed_dimensions
+    result_fields = _result_fields_projection(semantic_contract["metrics"][metric_code], physical)
+    if result_fields:
+        metric["result_fields"] = result_fields
     if metric.get("change_decomposition_dimensions"):
         metric["change_decomposition_policy"] = (
             "structural_contribution_after_reconciled_full_rows_or_same_statement_full_partition_aggregate_proof_with_bounded_claims"
