@@ -1,6 +1,6 @@
 version: datasage-operations/v1
 legacy_reference: release/datasage-0.2.0
-delivery: official_hermes_only
+delivery: hermes_runtime_with_profile_finite_http_adapters
 field_labels:
   ddp_price: 销售DDP报价
   tax_inclue_price: 含税采购报价

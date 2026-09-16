@@ -1,13 +1,12 @@
 # Migrated operational observations
 
 This extends the existing local report entrypoint, not the public admission or
-the official scheduler. No bindings, recipients, schedules or active jobs are
-installed. Prices and customer evidence never belong in Git. Reports and
+the official scheduler. Production bindings, recipients, schedules and jobs remain disabled; the separately authorized test-only delivery configuration is documented in REMINDER_ACCEPTANCE.md. Prices and customer evidence never belong in Git. Reports and
 accepted local snapshots use Git-ignored `report_runs/operations/<report-id>/`.
 
 Business rules and source roles live in `contracts/operations.yaml`; the existing
 contract snapshot pins this file. Implementations are in `operations.py`. The
-existing local report binding is still the only operator configuration file.
+existing local report binding configures production local observations; test-only delivery uses its separate ignored runtime configuration and progress.
 There is no new general SQL tool or runtime rule language.
 
 ## Public query
@@ -29,9 +28,7 @@ python scripts/datasage_slow_report.py --report-id <approved-report-id>
 python scripts/datasage_slow_report.py --report-id <approved-report-id> --accept-snapshot <reviewed-observation-sha256>
 ```
 
-The second command is an explicit local baseline acceptance, not a database
-write or delivery acknowledgement. First observations never create a price
-change alert. Failed/truncated source reads cannot advance the baseline.
+The second command applies only to the separate local-observation mode. It is an explicit local baseline acceptance, not a database write or delivery acknowledgement. Original legacy sales/purchase reminder jobs now default to `reference_source: legacy_database`, reading the existing vk_ai price snapshot tables. Their observations cannot be accepted as new local baselines. See LEGACY_PRICE_REFERENCE.md. A genuinely new key without an old reference is not a price-change alert. Failed/truncated source reads cannot advance the baseline.
 Acceptance uses an exclusive lock, verifies document digest and expected prior
 baseline, and refuses stale concurrent candidates. Re-accepting the same digest
 is harmless. Never infer receipt from generated stdout or an accepted snapshot.
@@ -43,8 +40,8 @@ Existing six weekly/monthly views keep their original validation and behavior.
 | kind | Required additional binding | Output and boundary |
 |---|---|---|
 | idk_unpriced | limit; optional window_days 0–366 | IDK product/color candidate records; NULL/zero/negative separated. Default window 0 includes legacy stock. A source row absent next time is not proof it was priced or sold. |
-| sales_prices | regions, limit | Current ready/promoted sales price identities; region source preferred over organization fallback. Latest-time ties stay ambiguous. Currency, source units, tax and validity changes are separate from price changes. |
-| purchase_prices | regions, limit | Product/color/supplier identities; included/excluded tax prices remain separate. Legacy organization scope retained. Missing source quote stays visible. |
+| sales_prices | regions, limit; reference_source=legacy_database for legacy reminders | Current ready/promoted sales price identities; region source preferred over organization fallback. Latest-time ties stay ambiguous. Currency, source units, tax and validity changes are separate from price changes. |
+| purchase_prices | regions, limit; reference_source=legacy_database for legacy reminders | Product/color/supplier identities; included/excluded tax prices remain separate. Legacy organization scope retained. Missing source quote stays visible. |
 | slow_assignment | department, baseline_week, max_baseline_age_days, products, include_customer_cards, limit | Existing weekly pool evidence plus optional existing historical-customer packets and local HTML cards. Products must be explicit, 1–10; customer scope must be explicitly true/false. No automatic recipient/owner assignment or responsibility inference. |
 | fabric_review | time_range with start/end, inventory_scope total/on_hand, limit | Existing delivery/inventory source summaries, channels and formation review in one local artifact; keeps individual observation clocks and source evidence. Not a new responsibility model. |
 
@@ -81,8 +78,7 @@ current-week upstream artifact is a failure requiring operator attention.
   are not automatically imported as a fully comparable local baseline.
 - Old promotion membership uses the recorded dates and regions without a
   deletion-flag interpretation; the legacy rule is preserved pending that policy.
-- No old sender, database snapshot rewrite, lock service, runtime patch,
-  permission synchronizer, recipient mapping or cron registration is copied.
+- Database snapshot rewrites, external lock services, official runtime patches and permission synchronizers are not copied. Finite app/webhook adapters and old recipient rules are documented separately in REMINDER_ACCEPTANCE.md; production cron registration remains off.
 
 ## Still not enabled or proven
 
@@ -96,9 +92,5 @@ assignment. Existing source-label summaries and coverage remain usable; source
 “unique responsibility” does not prove actual fault. We do not restore the old
 template's unrestricted responsibility ranking or mislabel DDP differences as loss.
 
-Automatic task assignment, customer image/ZIP delivery and recipient selection
-are not enabled. The HTML packets are corresponding local review artifacts, not
-claims that the former customer image workflow has been fully reproduced.
-Official Hermes cron/no_agent should own scheduling, run status and delivery when
-the operator supplies approved timing, scope and recipients. Delivery failures and
+Production task assignment and scheduling remain disabled. Customer PNG/ZIP and role-based review artifacts have been implemented and exercised through the separately approved test-only delivery mode; this does not mean production recipients were contacted. Official Hermes cron/no_agent owns scheduling and run status; the documented finite Profile HTTP adapters bridge the legacy application/webhook media capabilities. Delivery failures and
 unknown outcomes must be investigated; do not automatically resend an entire batch.
