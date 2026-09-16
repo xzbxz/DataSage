@@ -1,0 +1,15 @@
+{
+  "mode": "real_source_acceptance",
+  "enabled": true,
+  "instance": "live-v1",
+  "database": "vk_ai",
+  "prefix": "ds_test_live_v1_",
+  "owner": "257c7e85-c3c8-4a1b-99ad-4b042dd45cf0",
+  "server_uuid": "4d705dec-f28f-11ef-9b1d-00163e016c40",
+  "account": "Cody@%",
+  "credential_source": "explicit_existing_DATA_QUERY_MYSQL",
+  "production_writes": false,
+  "clock": "database_observation",
+  "max_logical_notifications_per_invocation": 2,
+  "schedule_enabled": false
+}

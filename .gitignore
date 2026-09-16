@@ -211,3 +211,18 @@ datasage-canary-next/scripts/*
 !datasage-canary-next/tests/test_installed_workflow.py
 !datasage-canary-next/docs/workflow-runtime.example.json
 !datasage-canary-next/docs/workflow-runtime-acceptance.md
+
+# Real-source acceptance workflow
+!datasage-canary-next/plugins/datasage-query/workflow_live_store.py
+!datasage-canary-next/plugins/datasage-query/workflow_live_prices.py
+!datasage-canary-next/plugins/datasage-query/workflow_live_slow.py
+!datasage-canary-next/plugins/datasage-query/workflow_live_runner.py
+!datasage-canary-next/plugins/datasage-query/workflow_schedule.py
+!datasage-canary-next/scripts/datasage_live_sales.py
+!datasage-canary-next/scripts/datasage_live_purchase.py
+!datasage-canary-next/scripts/datasage_live_slow_task.py
+!datasage-canary-next/scripts/datasage_live_slow_report.py
+!datasage-canary-next/docs/workflow-live-runtime.example.json
+!datasage-canary-next/tests/test_live_workflow.py
+!datasage-canary-next/plugins/datasage-query/LIVE_WORKFLOW.md
+!datasage-canary-next/docs/workflow-live-acceptance.md

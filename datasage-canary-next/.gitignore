@@ -80,3 +80,6 @@ skills/business-analytics/datasage/references/*
 
 # Explicit local workflow activation; credentials remain in existing safe config.
 workflow-runtime.json
+
+workflow-live-runtime.json
+workflow-schedule-acceptance.json

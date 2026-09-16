@@ -43,3 +43,5 @@ python <profile>/scripts/datasage_workflow.py --mode test status
 运行证据及写入日志保存在 `report_runs/workflow_v1/`；附件在既有验收私有根的 `wv1/`；模拟投递状态在 `report_runs/wv1_fault/`。既有验收资料、旧 unknown 和正式进度不清理。所有通知仅代表平台接收，人工已读未知。
 
 未注册定时任务，未重载网关，未改官方源码，未写生产冻结或价格快照。后续小时调度及生产适配需独立落实，不由测试开关自动启用。
+
+另有真实来源验收 `--mode live`，仍非生产模式，见 [LIVE_WORKFLOW.md](LIVE_WORKFLOW.md)。本页的 seed、change-fixture 和受控 tick 仅属于原合成测试实例。

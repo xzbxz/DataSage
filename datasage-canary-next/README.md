@@ -119,3 +119,7 @@ pattern_time_basis默认current_observation。指定期间须选task_created、e
 ## 本机固定工作流测试入口
 
 `scripts/datasage_workflow.py --mode test` 提供独立测试表上的持久化价格循环及滞销完整阶段编排，复用正式比较、查询、模板和投递状态机。初始化、重跑、故障恢复与配置见 [WORKFLOW_RUNTIME.md](plugins/datasage-query/WORKFLOW_RUNTIME.md)。运行不依赖外部验收脚本；生产模式和定时任务仍未启用。
+
+## 真实来源验收
+
+`--mode live` 使用真实源与数据库时间，仍仅写独立测试表。普通小时观察、手动新观察和发送分离；各部门按周/代次去重。配置、阻断和未开启的有界调度方案见 [LIVE_WORKFLOW.md](plugins/datasage-query/LIVE_WORKFLOW.md)，实际覆盖见 [workflow-live-acceptance.md](docs/workflow-live-acceptance.md)。

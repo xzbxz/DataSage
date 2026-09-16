@@ -6,6 +6,7 @@ from . import workflow_storage as storage,legacy_price_bridge as bridge
 from . import acceptance_delivery as delivery,workflow_io as io,legacy_workflow as wf
 
 SCOPES=('main','fault-partial','fault-unknown','fault-interrupt','fault-beforecommit','fault-aftercommit')
+class DeliveryDeferred(ValueError):pass
 def payload(row):return json.loads(row['payload']) if isinstance(row['payload'],str) else row['payload']
 def clean(rows):return [{k:v for k,v in r.items() if k!='test_scope'} for r in rows]
 def snapshot_digest(side,rows):return storage.digest(storage.normalized(side+'_snapshot',clean(rows)))
@@ -84,11 +85,17 @@ def advance(store,side,scope,*,send=None,fault=None):
         data={'document':doc,'current':current,'before_digest':snapshot_digest(side,before),'after':projected,'after_digest':snapshot_digest(side,projected),'notices':notices(key,doc) if doc['deliverable_event_count'] else [],'real_transport':send is None}
         persist(store,key,scope,'planned',data);state='planned'
         if fault:fault('planned',key)
-    if snapshot_digest(side,store.rows(side+'_snapshot',scope))!=data['before_digest']:raise ValueError('TEST_BASELINE_MOVED')
+    return complete_plan(store,side,scope,key,data,state,send=send,fault=fault)
+
+def complete_plan(store,side,scope,key,data,state,*,send=None,fault=None,hasher=snapshot_digest,dispatcher=dispatch,saver=storage.save):
+    if hasher(side,store.rows(side+'_snapshot',scope))!=data['before_digest']:raise ValueError('TEST_BASELINE_MOVED')
     if state!='delivered':
         if data['notices']:
             if state!='sending':persist(store,key,scope,'sending',data)
-            try:receipt=dispatch(key,data['notices'],state,send)
+            try:receipt=dispatcher(key,data['notices'],state,send)
+            except DeliveryDeferred:
+                persist(store,key,scope,'planned',data)
+                return {'status':'delivery_pending','cycle':key,'test_snapshot_advanced':False}
             except Exception as exc:
                 status='failed' if str(exc)=='DELIVERY_COMPONENT_FAILED' else 'unknown'
                 persist(store,key,scope,status,{**data,'delivery_error':str(exc) if isinstance(exc,(ValueError,io.IOErrorBoundary)) else type(exc).__name__})
@@ -99,9 +106,9 @@ def advance(store,side,scope,*,send=None,fault=None):
         if fault:fault('delivered',key)
     with store.transaction():
         store.replace_snapshot(side,scope,data['after'])
-        if snapshot_digest(side,store.rows(side+'_snapshot',scope))!=data['after_digest']:raise ValueError('SNAPSHOT_READBACK_FAILED')
+        if hasher(side,store.rows(side+'_snapshot',scope))!=data['after_digest']:raise ValueError('SNAPSHOT_READBACK_FAILED')
         store.cycle(key,scope,'committed',data)
         if fault:fault('before_commit',key)
     if fault:fault('after_commit',key)
     result={'cycle':key,'events':data['document']['event_counts'],'delivery':data['receipt'],'test_snapshot_advanced':True,'snapshot_digest':data['after_digest'],'real_transport':data['real_transport']}
-    storage.save(key+'-result.json',result);return result
+    saver(key+'-result.json',result);return result

@@ -41,11 +41,23 @@ def status():
     finally:store.close()
 def main(profile,argv):
     parser=argparse.ArgumentParser(description='Profile fixed workflow entry; production mode unavailable.')
-    parser.add_argument('--mode',required=True,choices=['test'])
-    parser.add_argument('action',choices=['init','seed','slow','prices','change-fixture','status','recovery-check','fault-exit'])
+    parser.add_argument('--mode',required=True,choices=['test','live'])
+    parser.add_argument('action',choices=['init','seed','slow','prices','change-fixture','status','recovery-check','fault-exit','observe-prices','deliver-prices','slow-prepare','slow-preview','slow-deliver','slow-new-generation','schedule-plan','scheduled-tick','lock-check'])
+    parser.add_argument('--department',choices=['HCM','HN','BKK','IDK','HCM-HT','HN-HT','BKK-HT','IDK-HT'])
+    parser.add_argument('--job',choices=['sales','purchase','slow-task','slow-report'])
+    parser.add_argument('--reason')
     args=parser.parse_args(argv)
     local_report._assert_local_context()
     if profile.resolve()!=storage.profile().resolve():raise ValueError('WORKFLOW_PROFILE_MISMATCH')
+    if args.mode=='live':
+        from . import workflow_live_store as live,workflow_live_runner
+        path=live.binding()
+        if path.is_symlink() or not path.is_file():raise ValueError('LIVE_BINDING_REQUIRED')
+        live.validate_binding(json.loads(path.read_text(encoding='utf-8')))
+        local_report.configure_runtime(profile)
+        result=workflow_live_runner.run(args.action,department=args.department,job=args.job,reason=args.reason)
+        print(json.dumps(result,ensure_ascii=False,default=str));return 0
+    if args.action not in ('init','seed','slow','prices','change-fixture','status','recovery-check','fault-exit') or any((args.department,args.job,args.reason)):raise ValueError('FIXTURE_ACTION_REJECTED')
     # Fail closed before credentials/DB; init uses the same explicit binding.
     path=storage.binding_path()
     if path.is_symlink() or not path.is_file():raise ValueError('TEST_BINDING_REQUIRED')

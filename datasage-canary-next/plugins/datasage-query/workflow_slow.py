@@ -35,15 +35,15 @@ def freeze(store,seed):
         data={'week':week,'month':seed['month'],'baseline':saved,'freeze_digest':s.digest(s.normalized('slow_baseline',saved)),'frozen_at':str(saved[0]['frozen_at']),'phase_index':0,'phases':{},'scope':'HCM bounded test subset','seed':seed}
         store.cycle(key,'main','planned',data)
     return key,'planned',data
-def build(phase,key,data):
-    rows=data['baseline'];week=data['week'];folder=artifact_root()/uuid.uuid4().hex[:8];folder.mkdir()
+def build(phase,key,data,*,snapshots=None,saver=s.save):
+    rows=data['baseline'];week=data['week'];folder=artifact_root()/uuid.uuid4().hex[:8];folder.mkdir();region=data.get('department','HCM')
     ref=session._reference(s.profile())
     if phase=='task':
         with s.tools._ConsistentSnapshotExecutor(deadline_at=s.tools._call_deadline(None)) as db:
-            depts=ref['regions']['HCM']['dynamic_sales_departments']
-            employees=inputs.complete(db,"SELECT region,main_dept,person_name,wecom_account,position,is_delete,wecom_status FROM vk_dwd.employee_dwd WHERE is_delete='n' AND wecom_status='payroll' AND COALESCE(wecom_account,'')<>'' AND region=%s AND main_dept IN ("+','.join('%s' for _ in depts)+') ORDER BY wecom_account LIMIT 10001',['HCM',*depts])
-        targets=wf.task_recipients(ref['regions'],employees,['HCM'])['HCM']
-        periods=wf.legacy_periods(io.at_utc8(week));body,sheet=wf.task_draft('HCM',week,periods['planned_start'][:10],periods['planned_end'][:10],rows)
+            depts=ref['regions'][region]['dynamic_sales_departments']
+            employees=inputs.complete(db,"SELECT region,main_dept,person_name,wecom_account,position,is_delete,wecom_status FROM vk_dwd.employee_dwd WHERE is_delete='n' AND wecom_status='payroll' AND COALESCE(wecom_account,'')<>'' AND region=%s AND main_dept IN ("+','.join('%s' for _ in depts)+') ORDER BY wecom_account LIMIT 10001',[region,*depts])
+        targets=wf.task_recipients(ref['regions'],employees,[region])[region]
+        periods=wf.legacy_periods(io.at_utc8(week));body,sheet=wf.task_draft(region,week,periods['planned_start'][:10],periods['planned_end'][:10],rows)
         path=folder/'Test_Products.xlsx';gen_workbook_xlsx([sheet],path)
         notices=[notice(key+'-task',body,[path])];evidence={'frozen_rows':len(rows),'original_role_count':len(targets),'actual_delivery':'approved_test_member_only'}
     elif phase=='customer':
@@ -60,16 +60,18 @@ def build(phase,key,data):
         notices=[notice(key+'-audit-'+str(i),a['text'],[a['path']]) for i,a in enumerate(audits)]
         evidence={'receipt_meaning':'test target provider acceptance, not original salesperson or customer receipt','selected_packages':len(packages)}
     else:
+        original_report_roles=wf.report_recipients(ref['regions'],region)
+        if not original_report_roles:raise ValueError('REPORT_ROLE_PLAN_EMPTY')
         period=week if phase=='weekly' else data['month']
-        ev,labels=reports.collect('HCM',period,phase,week,snapshots=s.Snapshot)
-        ev['physical_test_mapping']={k:s.TABLES[v] for k,v in s.MAP.items()};ev['storage_mode']='isolated_acceptance'
-        s.save(key+'-'+phase+'-query.json',ev)
-        adapted=inputs.legacy_report_packet(ev['packets']['pool'],ev['packets']['flow'],labels,'HCM',period,evidence=ev)
+        ev,labels=reports.collect(region,period,phase,week,snapshots=snapshots or s.Snapshot)
+        ev['physical_test_mapping']=data.get('physical_test_mapping') or {k:s.TABLES[v] for k,v in s.MAP.items()};ev['storage_mode']='isolated_acceptance'
+        saver(key+'-'+phase+'-query.json',ev)
+        adapted=inputs.legacy_report_packet(ev['packets']['pool'],ev['packets']['flow'],labels,region,period,evidence=ev)
         if not adapted['label_coverage']['complete']:raise ValueError('REPORT_LABEL_COVERAGE_INCOMPLETE')
-        s.save(key+'-'+phase+'-validation.json',adapted)
-        body=wf.report_draft('HCM',period,adapted['summary'],adapted['sales_rows'],monthly=phase=='monthly')
+        saver(key+'-'+phase+'-validation.json',adapted)
+        body=wf.report_draft(region,period,adapted['summary'],adapted['sales_rows'],monthly=phase=='monthly')
         path=folder/('Test_'+phase+'.xlsx');gen_workbook_xlsx([('Detail',wf.REPORT_HEADERS,adapted['detail_rows'])],path,borders=True,landscape=True)
-        notices=[notice(key+'-'+phase,body,[path],'markdown')];evidence={'summary':adapted['summary'],'completeness':adapted['completeness'],'label_coverage':adapted['label_coverage']}
+        notices=[notice(key+'-'+phase,body,[path],'markdown')];evidence={'summary':adapted['summary'],'completeness':adapted['completeness'],'label_coverage':adapted['label_coverage'],'original_report_role_count':len(original_report_roles),'delivery_route':'approved test member only; same report merged for role acceptance'}
     return {'notices':notices,'notice_digest':s.digest(notices),'files':{p:hashlib.sha256(Path(p).read_bytes()).hexdigest() for n in notices for p in n['attachments']},'evidence':evidence}
 def verify_artifacts(manifest):
     if s.digest(manifest['notices'])!=manifest['notice_digest']:raise ValueError('STAGED_NOTICE_CHANGED')

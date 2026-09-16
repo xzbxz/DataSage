@@ -185,7 +185,7 @@ def prepare(profile,case):
                 {'origin':'synthetic','original_recipients':['zhangzhengwei'],'purpose':'legacy failure message, no intentional production failure'})
         raise IOErrorBoundary('ACCEPTANCE_CASE_NOT_IMPLEMENTED')
 
-def prepare_price_events(profile,case,document,data,reference,folder):
+def price_event_plan(profile,case,document,data,reference,folder,*,all_notices=False):
     """Old role and buyer logic first; at most two whole logical notices sampled."""
     from . import tools
     changes=data['changes'];notices=[]
@@ -227,6 +227,7 @@ def prepare_price_events(profile,case,document,data,reference,folder):
         other=next((s for s in specs[1:] if s['role']!=selected[0]['role']),None)
         if other is not None:selected.append(other)
         elif len(specs)>1:selected.append(specs[1])
+        if all_notices:selected=specs
         for index,spec in enumerate(selected):
             build=folder/('event-'+str(index));build.mkdir(exist_ok=True)
             bundle=wf.build_preview('sales_price',{'evidence_origin':'existing_local_observation','customer_mapping_complete':True,**spec},build)
@@ -234,9 +235,13 @@ def prepare_price_events(profile,case,document,data,reference,folder):
             notices.append(_notice('sales-'+spec['region']+'-'+spec['role']+'-'+wf.account_token(spec['account'])[:12],
                 spec['region']+'原'+spec['role']+'角色；仅证实名义DDP字段变化，历史单位/税标记未存储，不将当前字段补为历史',body,[build/f for f in bundle['files'] if f.endswith('.xlsx')]))
         original_count=len(specs)
-    return stage(profile,case,notices,{'origin':'current_readonly','baseline_source':'legacy_database','reference':document['reference'],
+    return notices,{'origin':'current_readonly','baseline_source':document.get('baseline_source','legacy_database'),'reference':document['reference'],
         'observed_at':document['observed_at'],'deliverable_events':document['deliverable_event_count'],
-        'original_logical_notification_count':original_count,'selected_logical_notifications':len(notices),'comparison_disclosure':document['scope_notice']})
+        'original_logical_notification_count':original_count,'selected_logical_notifications':len(notices),'comparison_disclosure':document['scope_notice']}
+
+def prepare_price_events(profile,case,document,data,reference,folder):
+    notices,evidence=price_event_plan(profile,case,document,data,reference,folder)
+    return stage(profile,case,notices,evidence)
 
 def send(profile,case):
     from .local_report import _assert_local_context

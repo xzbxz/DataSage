@@ -75,42 +75,44 @@ def map_sql(sql):
         return TABLES[MAP[key]] if key in MAP else value
     return token.sub(sub,sql)
 class Store:
+    tables=TABLES;prefix=PREFIX;owner=OWNER;server=SERVER
+    definitions=staticmethod(ddl);binding=staticmethod(binding_path);validate_binding=staticmethod(assert_binding);save=staticmethod(save)
     def __init__(self,*,bootstrap=False):
-        path=binding_path()
+        path=self.binding()
         if path.is_symlink() or not path.is_file():raise ValueError('TEST_BINDING_REQUIRED')
-        assert_binding(json.loads(path.read_text(encoding='utf-8')))
+        self.validate_binding(json.loads(path.read_text(encoding='utf-8')))
         self.conn=runtime.connect();self.conn.select_db('vk_ai');self.audit=[];self.audit_name='write-audit-'+str(__import__('time').time_ns())+'.json'
         identity=self._read('SELECT CURRENT_USER() AS account,@@server_uuid AS server_uuid,DATABASE() AS db')[0]
-        if identity!={'account':'Cody@%','server_uuid':SERVER,'db':'vk_ai'}:self.close();raise ValueError('TEST_SERVER_IDENTITY_MISMATCH')
+        if identity!={'account':'Cody@%','server_uuid':self.server,'db':'vk_ai'}:self.close();raise ValueError('TEST_SERVER_IDENTITY_MISMATCH')
         if not bootstrap:
             try:self.verify()
             except BaseException:self.conn.close();raise
     def _read(self,sql,args=()):
         with self.conn.cursor() as c:c.execute(sql,args);return list(c.fetchall())
     def verify(self):
-        rows=self._read('SELECT table_name,table_comment,engine FROM information_schema.tables WHERE table_schema=%s AND table_name IN ('+','.join(['%s']*len(ROLES))+')',['vk_ai']+[PREFIX+r for r in ROLES])
-        if len(rows)!=len(ROLES) or any(r['TABLE_COMMENT']!='datasage-acceptance-owner:'+OWNER or r['ENGINE']!='InnoDB' for r in rows):raise ValueError('TEST_OBJECT_OWNERSHIP_MISMATCH')
-        registry=self._read('SELECT * FROM '+TABLES['registry'])
-        if registry!=[{'id':1,'owner_id':OWNER,'manifest_hash':digest(ddl())}]:raise ValueError('TEST_REGISTRY_MISMATCH')
-        actual=self._read('SELECT table_name,column_name,column_type FROM information_schema.columns WHERE table_schema=%s AND table_name IN ('+','.join(['%s']*len(ROLES))+')',['vk_ai']+[PREFIX+r for r in ROLES])
+        rows=self._read('SELECT table_name,table_comment,engine FROM information_schema.tables WHERE table_schema=%s AND table_name IN ('+','.join(['%s']*len(ROLES))+')',['vk_ai']+[self.prefix+r for r in ROLES])
+        if len(rows)!=len(ROLES) or any(r['TABLE_COMMENT']!='datasage-acceptance-owner:'+self.owner or r['ENGINE']!='InnoDB' for r in rows):raise ValueError('TEST_OBJECT_OWNERSHIP_MISMATCH')
+        registry=self._read('SELECT * FROM '+self.tables['registry'])
+        if registry!=[{'id':1,'owner_id':self.owner,'manifest_hash':digest(self.definitions())}]:raise ValueError('TEST_REGISTRY_MISMATCH')
+        actual=self._read('SELECT table_name,column_name,column_type FROM information_schema.columns WHERE table_schema=%s AND table_name IN ('+','.join(['%s']*len(ROLES))+')',['vk_ai']+[self.prefix+r for r in ROLES])
         expected={}
-        for role,sql in ddl().items():
+        for role,sql in self.definitions().items():
             fields=sql.split(' (',1)[1].rsplit(') ENGINE=',1)[0]
-            expected[PREFIX+role]={m.group(1) or m.group(2):m.group(3).lower() for m in re.finditer(r'(?:^|,)(?:`([a-z_]+)`|([a-z_]+))\s+((?:var)?char\(\d+\)|decimal\(\d+,\d+\)|datetime(?:\(6\))?|bigint|int|json)(?=[ ,]|$)',fields,re.I)}
-        found={PREFIX+r:{} for r in ROLES}
+            expected[self.prefix+role]={m.group(1) or m.group(2):m.group(3).lower() for m in re.finditer(r'(?:^|,)(?:`([a-z_]+)`|([a-z_]+))\s+((?:var)?char\(\d+\)|decimal\(\d+,\d+\)|datetime(?:\(6\))?|bigint|int|json)(?=[ ,]|$)',fields,re.I)}
+        found={self.prefix+r:{} for r in ROLES}
         for r in actual:found[r['TABLE_NAME']][r['COLUMN_NAME']]=r['COLUMN_TYPE'].lower()
         if found!=expected:raise ValueError('TEST_SCHEMA_DRIFT')
-        triggers=self._read('SELECT trigger_name FROM information_schema.triggers WHERE event_object_schema=%s AND event_object_table IN ('+','.join(['%s']*len(ROLES))+')',['vk_ai']+[PREFIX+r for r in ROLES])
+        triggers=self._read('SELECT trigger_name FROM information_schema.triggers WHERE event_object_schema=%s AND event_object_table IN ('+','.join(['%s']*len(ROLES))+')',['vk_ai']+[self.prefix+r for r in ROLES])
         if triggers:raise ValueError('TEST_TRIGGER_SIDE_EFFECT_REJECTED')
     def _write(self,sql,args=(),*,creating=False):
         if creating:
-            if sql not in ddl().values():raise ValueError('TEST_DDL_NOT_ALLOWLISTED')
+            if sql not in self.definitions().values():raise ValueError('TEST_DDL_NOT_ALLOWLISTED')
         else:
             # Only complete generated INSERT/UPDATE/DELETE statements; no SELECT subqueries or multi-statements.
             m=re.match(r'^(?:INSERT INTO|UPDATE|DELETE FROM) (`vk_ai`\.`[a-z0-9_]+`)(?: |\()',sql)
-            if not m or m[1] not in TABLES.values() or ';' in sql or re.search(r'\b(?:SELECT|JOIN|TRUNCATE|DROP|ALTER)\b',sql,re.I):raise ValueError('TEST_WRITE_TARGET_REJECTED')
+            if not m or m[1] not in self.tables.values() or ';' in sql or re.search(r'\b(?:SELECT|JOIN|TRUNCATE|DROP|ALTER)\b',sql,re.I):raise ValueError('TEST_WRITE_TARGET_REJECTED')
         self.audit.append({'sql':sql,'parameter_count':len(args),'parameter_digest':digest(args)})
-        save(self.audit_name,self.audit)
+        self.save(self.audit_name,self.audit)
         with self.conn.cursor() as c:c.execute(sql,args);return c.rowcount
     @contextmanager
     def transaction(self):
@@ -119,31 +121,34 @@ class Store:
         except BaseException:self.conn.rollback();raise
     def insert(self,role,rows):
         if role not in ROLES or not rows:raise ValueError('TEST_INSERT_SCOPE_REQUIRED')
-        for row in rows:
-            if any(not re.fullmatch(r'[a-z_]+',k) for k in row):raise ValueError('TEST_COLUMN_REJECTED')
-            self._write('INSERT INTO '+TABLES[role]+' ('+','.join('`'+k+'`' for k in row)+') VALUES ('+','.join(['%s']*len(row))+')',list(row.values()))
+        columns=list(rows[0])
+        if any(not re.fullmatch(r'[a-z_]+',k) for k in columns) or any(list(row)!=columns for row in rows):raise ValueError('TEST_COLUMN_REJECTED')
+        marks='('+','.join(['%s']*len(columns))+')'
+        for offset in range(0,len(rows),200):
+            batch=rows[offset:offset+200]
+            self._write('INSERT INTO '+self.tables[role]+' ('+','.join('`'+k+'`' for k in columns)+') VALUES '+','.join([marks]*len(batch)),[row[k] for row in batch for k in columns])
     def rows(self,role,scope=None):
         if role not in ROLES:raise ValueError('TEST_ROLE_REJECTED')
-        sql='SELECT * FROM '+TABLES[role];args=[]
+        sql='SELECT * FROM '+self.tables[role];args=[]
         if scope is not None:
-            if role not in ('sales_snapshot','purchase_snapshot','price_input','cycles'):raise ValueError('TEST_SCOPE_REJECTED')
+            if role=='registry':raise ValueError('TEST_SCOPE_REJECTED')
             sql+=' WHERE test_scope=%s';args=[scope]
         return self._read(sql,args)
     def replace_snapshot(self,side,scope,rows):
         if side not in ('sales','purchase') or not re.fullmatch(r'[a-z0-9_-]{1,48}',scope):raise ValueError('TEST_PRICE_SCOPE_REJECTED')
         role=side+'_snapshot'
-        self._write('DELETE FROM '+TABLES[role]+' WHERE test_scope=%s',[scope])
+        self._write('DELETE FROM '+self.tables[role]+' WHERE test_scope=%s',[scope])
         self.insert(role,[{**r,'test_scope':scope} for r in rows])
     def cycle(self,key,scope,status,payload):
-        if not re.fullmatch(r'[a-z0-9-]{1,64}',key) or status not in ('planned','sending','failed','unknown','delivered','committed'):raise ValueError('CYCLE_ID_OR_STATE_INVALID')
-        existing=self._read('SELECT cycle_id,test_scope FROM '+TABLES['cycles']+' WHERE cycle_id=%s',[key])
+        if not re.fullmatch(r'[a-z0-9-]{1,64}',key) or status not in ('planned','sending','failed','unknown','delivered','committed','blocked','observed'):raise ValueError('CYCLE_ID_OR_STATE_INVALID')
+        existing=self._read('SELECT cycle_id,test_scope FROM '+self.tables['cycles']+' WHERE cycle_id=%s',[key])
         if existing:
             if existing[0]['test_scope']!=scope:raise ValueError('CYCLE_SCOPE_COLLISION')
-            self._write('UPDATE '+TABLES['cycles']+' SET status=%s,payload=%s WHERE cycle_id=%s AND test_scope=%s',[status,canonical(payload),key,scope])
+            self._write('UPDATE '+self.tables['cycles']+' SET status=%s,payload=%s WHERE cycle_id=%s AND test_scope=%s',[status,canonical(payload),key,scope])
         else:self.insert('cycles',[{'cycle_id':key,'test_scope':scope,'status':status,'payload':canonical(payload)}])
     def close(self):
         if hasattr(self,'conn'):self.conn.close()
-        if getattr(self,'audit',None):save(self.audit_name,self.audit)
+        if getattr(self,'audit',None):self.save(self.audit_name,self.audit)
 class Snapshot:
     def __enter__(self):
         checked=Store();checked.close()
