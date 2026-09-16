@@ -8,7 +8,7 @@ from .workflow_io import IOErrorBoundary,private_root,run_lock
 WEEK='2026-W38';MONTH='2026-09'
 CASES=('idk-current','hcm-task','hcm-weekly','hcm-monthly','sales-observation','purchase-observation',
        'sales-personalized-synthetic','sales-manager-no-buyers-synthetic','purchase-private-group-synthetic',
-       'failure-synthetic','hcm-customer-packages','customer-package-audit-synthetic')
+       'failure-synthetic','hcm-customer-packages','hcm-dispatch-audit','customer-package-audit-synthetic')
 
 def _root(profile):return private_root(delivery.runtime_home(profile))
 def _case(profile,case):
@@ -119,6 +119,21 @@ def prepare(profile,case):
                 archive=wf.customer_zip(package,build,WEEK)
                 notices.append(_notice('sales-'+wf.account_token(package['account'])[:12],'原销售客户包，HCM范围；仅抽验前'+str(len(packages))+'个完整逻辑包，共'+str(len(plan['sales_packages']))+'个待验',wf.customer_package_message(package,WEEK),[archive]))
             return stage(profile,case,notices,{'origin':'current_readonly','scope':'HCM baseline products, existing 12-calendar-month buyer rules','total_logical_packages':len(plan['sales_packages']),'selected_original_accounts':[p['account'] for p in packages]})
+        if case=='hcm-dispatch-audit':
+            source=_case(profile,'hcm-customer-packages')
+            if not (source/'send-result.json').exists() or _read(source/'send-result.json').get('status')!='provider_accepted_not_human_read':
+                raise IOErrorBoundary('ACCEPTANCE_CUSTOMER_STAGE_NOT_ACCEPTED')
+            manifest=_read(source/'manifest.json');plan=_read(source/'full-hcm-plan.json')
+            accounts=manifest['evidence']['selected_original_accounts']
+            packages=[p for p in plan['sales_packages'] if p['account'] in accounts]
+            if not 1<=len(packages)<=2 or len(packages)!=len(set(accounts)):raise IOErrorBoundary('ACCEPTANCE_AUDIT_SAMPLE_MISMATCH')
+            build=folder/('build-'+uuid.uuid4().hex);build.mkdir()
+            audits=delivery.workflow.dispatch_audits(packages,{p['account']:'provider_accepted' for p in packages},reference['regions'],WEEK,build)
+            notices=[_notice('sample-dispatch-'+str(i),'所选客户包派发核对；回执仅代表测试成员接收，非原销售/客户接收；其余'+str(len(plan['sales_packages'])-len(packages))+'包未抽验',
+                audit['text'],[audit['path']]) for i,audit in enumerate(audits)]
+            return stage(profile,case,notices,{'origin':'current_readonly','source_customer_case':'hcm-customer-packages',
+                'selected_packages':len(packages),'unselected_packages_not_attempted':len(plan['sales_packages'])-len(packages),
+                'original_audit_roles':[audit['targets'] for audit in audits],'actual_recipient':'zhangzhengwei','human_receipt':'unknown'})
         if case=='sales-personalized-synthetic':
             change={'goods_no':'SYN-ONLY-001','dept':'HCM','customer_grade':'A','color_label':'Red','old_ddp_price':12,'new_ddp_price':10,'currency_no':'CNY'}
             notices=[]

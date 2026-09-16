@@ -58,6 +58,19 @@ class ReminderAcceptanceTests(unittest.TestCase):
     def test_monthly_send_cannot_precede_weekly_acceptance(self):
         with patch.object(a,'deliver_batch',side_effect=AssertionError('send')):
             with self.assertRaisesRegex(io.IOErrorBoundary,'WEEKLY_STAGE'):r.send(self.profile,'hcm-monthly')
+
+    def test_real_audit_only_covers_selected_accepted_packages(self):
+        (self.home/'legacy-recipient-reference.json').write_text(json.dumps({'regions':{'HCM':{'executors':[{'account':'exec'}],'managers':['manager']}}}),encoding='utf-8')
+        folder=r._case(self.profile,'hcm-customer-packages')
+        packages=[{'account':str(i),'region':'HCM','sales_name':'Synthetic '+str(i),'sales_names':['Synthetic '+str(i)],
+            'customers':[{'customer_no':'SYN-'+str(i),'customer_name':'Synthetic'}]} for i in range(3)]
+        for name,value in [('send-result.json',{'status':'provider_accepted_not_human_read'}),
+            ('manifest.json',{'evidence':{'selected_original_accounts':['0','1']}}),('full-hcm-plan.json',{'sales_packages':packages})]:
+            (folder/name).write_text(json.dumps(value),encoding='utf-8')
+        value=r.prepare(self.profile,'hcm-dispatch-audit')
+        self.assertEqual(2,value['evidence']['selected_packages']);self.assertEqual(1,value['evidence']['unselected_packages_not_attempted'])
+        self.assertEqual(1,len(value['notices']));self.assertIn('2 sales owners',value['notices'][0]['body'])
+        self.assertIn('非原销售/客户接收',value['notices'][0]['role'])
     def test_unregistered_modes_and_production_actions_are_rejected(self):
         with patch.object(r,'prepare',side_effect=AssertionError('prepare')),patch.object(r,'send',side_effect=AssertionError('send')):
             for argv in ([],['--enable'],['--send','all'],['--prepare','qc'],['--prepare','floating_ball'],['--send','hcm-weekly','--force']):self.assertEqual(2,r.main(self.profile,argv))
