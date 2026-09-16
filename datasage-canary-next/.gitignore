@@ -77,3 +77,6 @@ skills/business-analytics/datasage/references/*
 !skills/business-analytics/datasage/references/answer-boundary.md
 !skills/business-analytics/datasage/references/entity-guidance.md
 !skills/business-analytics/datasage/references/query-rules.md
+
+# Explicit local workflow activation; credentials remain in existing safe config.
+workflow-runtime.json

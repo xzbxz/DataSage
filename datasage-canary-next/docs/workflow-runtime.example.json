@@ -1,0 +1,12 @@
+{
+  "mode": "isolated_acceptance",
+  "enabled": true,
+  "instance": "profile-v1",
+  "database": "vk_ai",
+  "prefix": "ds_test_profile_v1_",
+  "owner": "b80f997a-e964-47c8-bdde-bdc58d32bf59",
+  "server_uuid": "4d705dec-f28f-11ef-9b1d-00163e016c40",
+  "account": "Cody@%",
+  "credential_source": "explicit_existing_DATA_QUERY_MYSQL",
+  "production_writes": false
+}

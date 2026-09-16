@@ -1,0 +1,444 @@
+{
+  "columns": {
+    "stock_input": [
+      {
+        "COLUMN_NAME": "id",
+        "COLUMN_TYPE": "bigint",
+        "IS_NULLABLE": "NO"
+      },
+      {
+        "COLUMN_NAME": "whse_dept",
+        "COLUMN_TYPE": "varchar(32)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "goods_id",
+        "COLUMN_TYPE": "bigint",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "goods_sku_id",
+        "COLUMN_TYPE": "bigint",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "source_unit",
+        "COLUMN_TYPE": "varchar(8)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "unit",
+        "COLUMN_TYPE": "varchar(8)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "goods_no",
+        "COLUMN_TYPE": "varchar(64)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "goods_name",
+        "COLUMN_TYPE": "varchar(128)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "attr_val",
+        "COLUMN_TYPE": "varchar(128)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "color_label",
+        "COLUMN_TYPE": "varchar(64)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "slow_label",
+        "COLUMN_TYPE": "varchar(32)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "goods_num",
+        "COLUMN_TYPE": "decimal(20,4)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "piece_num",
+        "COLUMN_TYPE": "decimal(20,4)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "currency_no",
+        "COLUMN_TYPE": "varchar(16)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "ddp_price",
+        "COLUMN_TYPE": "decimal(20,6)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "promotion_price",
+        "COLUMN_TYPE": "decimal(20,6)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "promotion_currency_no",
+        "COLUMN_TYPE": "varchar(16)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "creator_id",
+        "COLUMN_TYPE": "bigint",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "gmt_create",
+        "COLUMN_TYPE": "datetime",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "modifier_id",
+        "COLUMN_TYPE": "bigint",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "gmt_modified",
+        "COLUMN_TYPE": "datetime",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "remarks",
+        "COLUMN_TYPE": "varchar(500)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "is_whitelist",
+        "COLUMN_TYPE": "char(1)",
+        "IS_NULLABLE": "YES"
+      }
+    ],
+    "monthly_stock_input": [
+      {
+        "COLUMN_NAME": "id",
+        "COLUMN_TYPE": "int",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "goods_id",
+        "COLUMN_TYPE": "int",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "goods_no",
+        "COLUMN_TYPE": "varchar(64)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "goods_name",
+        "COLUMN_TYPE": "varchar(64)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "goods_sku_id",
+        "COLUMN_TYPE": "int",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "attr_val",
+        "COLUMN_TYPE": "varchar(64)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "piece_num",
+        "COLUMN_TYPE": "int",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "goods_num",
+        "COLUMN_TYPE": "decimal(20,2)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "whse_dept",
+        "COLUMN_TYPE": "varchar(64)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "whse_org",
+        "COLUMN_TYPE": "varchar(64)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "whse_type",
+        "COLUMN_TYPE": "varchar(64)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "unit",
+        "COLUMN_TYPE": "varchar(16)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "is_handing_sales",
+        "COLUMN_TYPE": "char(1)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "is_discountable",
+        "COLUMN_TYPE": "char(1)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "month_date",
+        "COLUMN_TYPE": "varchar(7)",
+        "IS_NULLABLE": "YES"
+      }
+    ],
+    "slow_baseline": [
+      {
+        "COLUMN_NAME": "id",
+        "COLUMN_TYPE": "bigint",
+        "IS_NULLABLE": "NO"
+      },
+      {
+        "COLUMN_NAME": "week_label",
+        "COLUMN_TYPE": "varchar(16)",
+        "IS_NULLABLE": "NO"
+      },
+      {
+        "COLUMN_NAME": "goods_id",
+        "COLUMN_TYPE": "bigint",
+        "IS_NULLABLE": "NO"
+      },
+      {
+        "COLUMN_NAME": "goods_sku_id",
+        "COLUMN_TYPE": "bigint",
+        "IS_NULLABLE": "NO"
+      },
+      {
+        "COLUMN_NAME": "goods_no",
+        "COLUMN_TYPE": "varchar(64)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "goods_name",
+        "COLUMN_TYPE": "varchar(256)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "attr_val",
+        "COLUMN_TYPE": "varchar(128)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "whse_dept",
+        "COLUMN_TYPE": "varchar(64)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "unit",
+        "COLUMN_TYPE": "varchar(16)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "total_qty",
+        "COLUMN_TYPE": "decimal(20,4)",
+        "IS_NULLABLE": "NO"
+      },
+      {
+        "COLUMN_NAME": "total_piece",
+        "COLUMN_TYPE": "decimal(20,4)",
+        "IS_NULLABLE": "NO"
+      },
+      {
+        "COLUMN_NAME": "frozen_at",
+        "COLUMN_TYPE": "datetime",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "source_row_id",
+        "COLUMN_TYPE": "bigint",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "source_unit",
+        "COLUMN_TYPE": "varchar(8)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "promotion_unit",
+        "COLUMN_TYPE": "varchar(8)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "slow_label",
+        "COLUMN_TYPE": "varchar(32)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "currency_no",
+        "COLUMN_TYPE": "varchar(16)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "ddp_price",
+        "COLUMN_TYPE": "decimal(20,6)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "promotion_price",
+        "COLUMN_TYPE": "decimal(20,6)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "promotion_currency_no",
+        "COLUMN_TYPE": "varchar(16)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "remarks",
+        "COLUMN_TYPE": "varchar(500)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "source_creator_id",
+        "COLUMN_TYPE": "bigint",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "source_created_at",
+        "COLUMN_TYPE": "datetime",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "source_modifier_id",
+        "COLUMN_TYPE": "bigint",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "source_modified_at",
+        "COLUMN_TYPE": "datetime",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "source_table",
+        "COLUMN_TYPE": "varchar(64)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "baseline_version",
+        "COLUMN_TYPE": "int",
+        "IS_NULLABLE": "NO"
+      },
+      {
+        "COLUMN_NAME": "color_label",
+        "COLUMN_TYPE": "varchar(64)",
+        "IS_NULLABLE": "YES"
+      }
+    ],
+    "sales_snapshot": [
+      {
+        "COLUMN_NAME": "id",
+        "COLUMN_TYPE": "bigint",
+        "IS_NULLABLE": "NO"
+      },
+      {
+        "COLUMN_NAME": "goods_id",
+        "COLUMN_TYPE": "int",
+        "IS_NULLABLE": "NO"
+      },
+      {
+        "COLUMN_NAME": "dept",
+        "COLUMN_TYPE": "varchar(128)",
+        "IS_NULLABLE": "NO"
+      },
+      {
+        "COLUMN_NAME": "customer_grade",
+        "COLUMN_TYPE": "varchar(12)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "color_label",
+        "COLUMN_TYPE": "varchar(16)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "ddp_price",
+        "COLUMN_TYPE": "decimal(20,2)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "currency_no",
+        "COLUMN_TYPE": "varchar(64)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "matched_detail_id",
+        "COLUMN_TYPE": "int",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "snapshot_at",
+        "COLUMN_TYPE": "datetime",
+        "IS_NULLABLE": "YES"
+      }
+    ],
+    "purchase_snapshot": [
+      {
+        "COLUMN_NAME": "id",
+        "COLUMN_TYPE": "bigint",
+        "IS_NULLABLE": "NO"
+      },
+      {
+        "COLUMN_NAME": "goods_no",
+        "COLUMN_TYPE": "varchar(64)",
+        "IS_NULLABLE": "NO"
+      },
+      {
+        "COLUMN_NAME": "color_label",
+        "COLUMN_TYPE": "varchar(16)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "supplier_no",
+        "COLUMN_TYPE": "varchar(64)",
+        "IS_NULLABLE": "NO"
+      },
+      {
+        "COLUMN_NAME": "supplier_name",
+        "COLUMN_TYPE": "varchar(128)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "goods_name",
+        "COLUMN_TYPE": "varchar(128)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "tax_inclue_price",
+        "COLUMN_TYPE": "decimal(20,6)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "tax_exclue_price",
+        "COLUMN_TYPE": "decimal(20,6)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "currency_no",
+        "COLUMN_TYPE": "varchar(64)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "unit_cuur",
+        "COLUMN_TYPE": "varchar(16)",
+        "IS_NULLABLE": "YES"
+      },
+      {
+        "COLUMN_NAME": "snapshot_at",
+        "COLUMN_TYPE": "datetime",
+        "IS_NULLABLE": "YES"
+      }
+    ]
+  }
+}

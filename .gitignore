@@ -197,3 +197,17 @@ datasage-canary-next/scripts/*
 !datasage-canary-next/tests/test_ht_high_quantity.py
 
 !datasage-canary-next/plugins/datasage-query/LEGACY_PRICE_REFERENCE.md
+
+# Installed bounded workflow runtime
+!datasage-canary-next/plugins/datasage-query/workflow_storage.py
+!datasage-canary-next/plugins/datasage-query/workflow_cycle.py
+!datasage-canary-next/plugins/datasage-query/workflow_fixture.py
+!datasage-canary-next/plugins/datasage-query/workflow_slow.py
+!datasage-canary-next/plugins/datasage-query/workflow_recovery_check.py
+!datasage-canary-next/plugins/datasage-query/workflow_runner.py
+!datasage-canary-next/plugins/datasage-query/WORKFLOW_RUNTIME.md
+!datasage-canary-next/plugins/datasage-query/contracts/workflow-test-store.json
+!datasage-canary-next/scripts/datasage_workflow.py
+!datasage-canary-next/tests/test_installed_workflow.py
+!datasage-canary-next/docs/workflow-runtime.example.json
+!datasage-canary-next/docs/workflow-runtime-acceptance.md
