@@ -99,6 +99,14 @@ class WeeklyAcceptanceTests(unittest.TestCase):
         e=copy.deepcopy(self.evidence);self.rows('pool',e)[0]['states']['pool_movement_state']='Unassessable'
         with self.assertRaises(io.IOErrorBoundary):self.adapt(e)
 
+    def test_mysql_decimal_strings_are_numeric_not_unknown_counts(self):
+        e=copy.deepcopy(self.evidence)
+        for packet in e['packets'].values():
+            for row in packet['results'][0]['rows']:
+                row['facts']={key:str(value) if type(value) in (int,float) else value for key,value in row['facts'].items()}
+        result=self.adapt(e);self.assertTrue(result['detail_complete'])
+        self.assertEqual(0.75,result['summary']['net_outbound_rolls'])
+
     def test_period_region_and_no_snapshot_rejected(self):
         e=copy.deepcopy(self.evidence);e['snapshot_marker']=None
         with self.assertRaisesRegex(io.IOErrorBoundary,'SNAPSHOT'):self.adapt(e)

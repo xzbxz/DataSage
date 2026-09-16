@@ -180,3 +180,7 @@ datasage-canary-next/scripts/*
 !datasage-canary-next/plugins/datasage-query/acceptance_delivery.py
 !datasage-canary-next/plugins/datasage-query/REMINDER_ACCEPTANCE.md
 !datasage-canary-next/tests/test_acceptance_delivery.py
+
+!datasage-canary-next/plugins/datasage-query/reminder_acceptance.py
+!datasage-canary-next/scripts/datasage_reminder_acceptance.py
+!datasage-canary-next/tests/test_reminder_acceptance.py

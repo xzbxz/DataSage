@@ -224,7 +224,7 @@ def validate(evidence):
         for row in rows:
             equal(row['facts'].get('unit_display_groups'),len(rows))
             equal(row['facts'].get('unit_net_quantity'),total['metric_value'])
-        if total.get('outbound_unknown_rows')!=0 or total.get('returns_unknown_rows')!=0:
+        if num(total.get('outbound_unknown_rows'))!=0 or num(total.get('returns_unknown_rows'))!=0:
             raise IOErrorBoundary('REPORT_FLOW_SCOPE_UNKNOWN')
     net=sum((num(t['net_rolls']) for t in nets.values()),num(0));high=sum((num(t['high_net_rolls']) for t in nets.values()),num(0))
     equal(shared(totals,'scope_net_rolls'),net);equal(shared(totals,'scope_high_net_rolls'),high)
