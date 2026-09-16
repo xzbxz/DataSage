@@ -456,7 +456,8 @@ def build_preview(job,data,out):
             manager_sheets=[(goods,['Sales','Customer No','Customer'],rows) for goods,rows in data.get('manager_rows_by_goods',{}).items() if rows]
             if manager_sheets:
                 path=out/f'customer_list_{safe_name(region)}.xlsx';gen_workbook_xlsx(manager_sheets,path);files.append(path.name)
-                messages.append('Ready Goods Price Change — Regional Customer Summary\nThe attachment lists buyers by product and sales owner for this changed region.')
+                from .legacy_message_templates import sales as manager_message
+                messages.append(manager_message(changes,manager=True,region=region)+"\n\nSee attachment for all sales' customers across this region (one Sheet per product).")
         extra['targets']=data.get('targets',[]) if changes else []
         extra['customer_mapping_state']='declared_complete' if data.get('customer_mapping_complete') is True else 'not_confirmed_complete'
         extra['initial_observation_only']=not bool(changes)

@@ -22,4 +22,10 @@ class LegacyTemplateTests(unittest.TestCase):
                                       {'goods_no':'SYN','customer_grade':'B','color_label':'Blue','old_ddp_price':8,'new_ddp_price':9,'currency_no':'CNY'}])
         self.assertIn('Ready Product Price Adjustment',text);self.assertIn('1 product(s) price changed:',text)
         self.assertIn('12 -> 10 (-2.00) CNY',text);self.assertIn('8 -> 9 (+1.00) CNY',text)
+
+    def test_production_components_preserve_legacy_message_types(self):
+        workflow=importlib.import_module(base.TEST_PACKAGE+'.workflow_io')
+        for stage in ('weekly_text','monthly_text','idk','purchase'):
+            self.assertEqual('markdown',workflow.component('account','text','body','period',stage)['message_format'])
+        self.assertNotIn('message_format',workflow.component('account','text','body','period','task_text'))
 if __name__=='__main__':unittest.main()

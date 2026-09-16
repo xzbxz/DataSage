@@ -305,6 +305,7 @@ def create_paused_official_job(job,*,enabled=False):
 def component(account,kind,payload,scope,stage):
     item={'account':account,'kind':kind,'stage':stage,'key':wf.digest([scope,account,kind,stage]),'notification_key':wf.digest([scope,account])}
     item['path' if kind=='file' else 'text']=str(payload)
+    if kind=='text' and stage in ('weekly_text','monthly_text','idk','purchase'):item['message_format']='markdown'
     return item
 
 def run_bound(profile,job,*,transport=None,writer_factory=None,snapshot_factory=None):
@@ -464,8 +465,10 @@ def _produce_and_execute(profile,job,binding,out,week,month,progress,snapshots,t
                         components += [component(target['account'],'file',folder/f,scope,'sales_file') for f in b['files'] if f.endswith('.xlsx')]
                     if buyers:
                         folder=out/(region+'-managers');folder.mkdir();b=wf.build_preview(job,{**data,'region':region,'changes':regional,'manager_rows_by_goods':buyers},folder);scope=wf.digest([regional,buyers])
+                        from .legacy_message_templates import sales as manager_message
+                        manager_text=manager_message(regional,manager=True,region=region)+"\n\nSee attachment for all sales' customers across this region (one Sheet per product)."
                         for target in target_plan[region]['managers']:
-                            components.append(component(target,'text',wf.price_draft('sales',regional),scope,'manager_text'))
+                            components.append(component(target,'text',manager_text,scope,'manager_text'))
                             components += [component(target,'file',folder/f,scope,'manager_file') for f in b['files'] if f.endswith('.xlsx')]
             elif changes:
                 wf.build_preview(job,{**data,'customers_by_goods':{},'customer_mapping_complete':False},out)
