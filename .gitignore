@@ -176,3 +176,7 @@ datasage-canary-next/scripts/*
 !datasage-canary-next/plugins/datasage-query/WEEKLY_ACCEPTANCE.md
 !datasage-canary-next/scripts/datasage_weekly_acceptance.py
 !datasage-canary-next/tests/test_weekly_acceptance.py
+
+!datasage-canary-next/plugins/datasage-query/acceptance_delivery.py
+!datasage-canary-next/plugins/datasage-query/REMINDER_ACCEPTANCE.md
+!datasage-canary-next/tests/test_acceptance_delivery.py

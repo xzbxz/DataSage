@@ -1,11 +1,67 @@
 """Fixed legacy report evidence on the existing governed read-only executor.
 
-Not a model tool or general query entry. No paging, DML, delivery or credentials.
+Not a model tool or general query entry. Finite snapshot pages, no DML/delivery.
 """
 from datetime import datetime
-import json,time
+import json,time,re,hashlib,copy
 from . import tools,wire,legacy_workflow as wf
 from .workflow_io import IOErrorBoundary
+
+PAGE_SIZE=100
+MAX_PAGES=20
+
+class ReportEvidenceError(IOErrorBoundary):
+    def __init__(self,code,**evidence):super().__init__(code);self.evidence=evidence
+
+def clock_parameters(sql,params,at,utc):
+    """Bind only known compiler clock calls; preserve the original bind order."""
+    values=iter(params);bound=[]
+    def replace(match):
+        token=match.group()
+        if token=='%s':
+            try:bound.append(next(values))
+            except StopIteration:raise IOErrorBoundary('REPORT_PARAMETER_SHAPE_CHANGED') from None
+        else:bound.append(at if token=='NOW(6)' else utc)
+        return '%s'
+    rewritten=re.sub(r'(?<!%)%s|NOW\(6\)|UTC_TIMESTAMP\(6\)',replace,sql)
+    if next(values,Ellipsis) is not Ellipsis:raise IOErrorBoundary('REPORT_PARAMETER_SHAPE_CHANGED')
+    return rewritten,bound
+
+def collect_pages(request,plan,db,deadline,observed,at,utc):
+    pages=[];merged=None;signature=None
+    for index in range(MAX_PAGES):
+        def execute(sql,params,limit,**kwargs):
+            nonlocal signature
+            # This adapter sees only compiler output for the four fixed requests.
+            # Never accept an unordered result, arbitrary SQL or user page offset.
+            if not sql.startswith('WITH ') or not re.search(r' ORDER BY [^;]+ LIMIT %s$',sql):
+                raise IOErrorBoundary('REPORT_STABLE_ORDER_REQUIRED')
+            if limit!=PAGE_SIZE or params[-1]!=PAGE_SIZE+1:raise IOErrorBoundary('REPORT_PAGE_LIMIT_CHANGED')
+            fingerprint=hashlib.sha256((sql+json.dumps(params,default=str)).encode()).hexdigest()
+            if signature is not None and signature!=fingerprint:raise IOErrorBoundary('REPORT_PAGE_QUERY_CHANGED')
+            signature=fingerprint
+            pinned,args=clock_parameters(sql,params,at,utc)
+            return db.execute(pinned+' OFFSET %s',[*args,index*PAGE_SIZE],limit,**kwargs)
+        result=tools._run_one(request,prepared=plan,execute_query=execute,
+            snapshot_group_marker=db.marker,deadline_at=deadline,period_observed_on=observed)
+        if result.get('status')!='success':
+            raise ReportEvidenceError('REPORT_QUERY_FAILED',request_id=request['request_id'],source_error=(result.get('error') or {}).get('code'),page=index)
+        if result.get('_snapshot_group_marker')!=db.marker:raise IOErrorBoundary('REPORT_SNAPSHOT_MISMATCH')
+        def payload(_args):return json.dumps({'status':result['status'],'results':[result]},ensure_ascii=False,default=str)
+        packet=json.loads(wire.bounded_json_handler('datasage_query',payload)({}))
+        if packet.get('status')!='success' or len(packet.get('results',[]))!=1:
+            raise IOErrorBoundary('REPORT_PAGE_WIRE_INCOMPLETE')
+        rowset=packet['results'][0];rows=rowset.get('rows')
+        if rowset.get('status')!='success' or not isinstance(rows,list) or rowset.get('row_count')!=len(rows) or len(rows)>PAGE_SIZE or type(rowset.get('truncated')) is not bool:
+            raise IOErrorBoundary('REPORT_PAGE_WIRE_INCOMPLETE')
+        pages.append({'offset':index*PAGE_SIZE,'row_count':len(rows),'truncated':rowset['truncated'],'snapshot_marker':db.marker,'query_signature':signature})
+        if merged is None:merged=copy.deepcopy(packet)
+        else:merged['results'][0]['rows'].extend(rows)
+        if not rowset['truncated']:
+            value=merged['results'][0];value['row_count']=len(value['rows']);value['truncated']=False
+            return merged,pages
+        if len(rows)!=PAGE_SIZE:raise IOErrorBoundary('REPORT_NONFINAL_PAGE_SHORT')
+    raise ReportEvidenceError('REPORT_PAGE_BUDGET_EXCEEDED',request_id=request['request_id'],max_rows=PAGE_SIZE*MAX_PAGES)
 
 def requests(region,period,phase):
     if region not in wf.policy()['regions'] or phase not in ('weekly','monthly'):
@@ -36,17 +92,15 @@ def collect(region,period,phase,week,*,snapshots=None):
         factory=snapshots or (lambda:tools._ConsistentSnapshotExecutor(deadline_at=deadline))
         with factory() as db:
             if not getattr(db,'marker',None):raise IOErrorBoundary('REPORT_SNAPSHOT_REQUIRED')
-            packets={};members={}
+            clocks,cut,_=db.execute('SELECT NOW(6) AS report_at,UTC_TIMESTAMP(6) AS report_utc',[],1,deadline_at=deadline)
+            if cut or len(clocks)!=1:raise IOErrorBoundary('REPORT_CLOCK_MISSING')
+            at=str(clocks[0]['report_at']);utc=str(clocks[0]['report_utc'])
+            datetime.fromisoformat(at);datetime.fromisoformat(utc)
+            packets={};members={};page_proof={}
             for request,plan in zip(fixed,prepared):
-                result=tools._run_one(request,prepared=plan,execute_query=db.execute,
-                    snapshot_group_marker=db.marker,deadline_at=deadline,period_observed_on=observed)
-                if result.get('status')!='success' or result.get('truncated') is not False:
-                    raise IOErrorBoundary('REPORT_QUERY_FAILED_OR_TRUNCATED')
-                if result.get('_snapshot_group_marker')!=db.marker:raise IOErrorBoundary('REPORT_SNAPSHOT_MISMATCH')
+                packet,pages=collect_pages(request,plan,db,deadline,observed,at,utc)
                 members[request['request_id']]=db.marker
-                # Same bounded wire transport as other local operator reports.
-                def payload(_args):return json.dumps({'status':result['status'],'results':[result]},ensure_ascii=False,default=str)
-                packets[request['request_id']]=json.loads(wire.bounded_json_handler('datasage_query',payload)({}))
+                packets[request['request_id']]=packet;page_proof[request['request_id']]=pages
             # Only labels for this department. No employee/customer/price fields.
             labels=[]
             for sql,args in (
@@ -56,7 +110,9 @@ def collect(region,period,phase,week,*,snapshots=None):
                 if cut or len(rows)>10000:raise IOErrorBoundary('REPORT_LABEL_INPUT_TRUNCATED')
                 labels.extend(rows)
             evidence={'region':region,'period':period,'phase':phase,'snapshot_marker':db.marker,
-                      'evidence_origin':'governed_readonly_snapshot','snapshot_members':members,'partitioned':False,'row_limit':100,'packets':packets}
+                      'evidence_origin':'governed_readonly_snapshot','snapshot_members':members,
+                      'partitioned':any(len(p)>1 for p in page_proof.values()),'page_proof':page_proof,
+                      'row_limit':PAGE_SIZE,'max_pages':MAX_PAGES,'report_at':at,'report_utc':utc,'packets':packets}
             return evidence,labels
     finally:tools._release_query_slot()
 
@@ -84,7 +140,7 @@ def shared(rows,field):
 def validate(evidence):
     region,period,phase=(evidence[k] for k in ('region','period','phase'))
     fixed=requests(region,period,phase)
-    if not evidence.get('snapshot_marker') or evidence.get('partitioned') is not False:
+    if not evidence.get('snapshot_marker') or type(evidence.get('partitioned')) is not bool:
         raise IOErrorBoundary('REPORT_SNAPSHOT_REQUIRED')
     expected={r['request_id']:r for r in fixed};packets=evidence.get('packets',{})
     if evidence.get('snapshot_members')!={name:evidence['snapshot_marker'] for name in expected}:
@@ -95,8 +151,17 @@ def validate(evidence):
         results=packet.get('results',[])
         if packet.get('status')!='success' or len(results)!=1:raise IOErrorBoundary('REPORT_PACKET_FAILED')
         result=results[0];rows=result.get('rows')
-        if result.get('status')!='success' or result.get('truncated') is not False or not isinstance(rows,list) or result.get('row_count')!=len(rows) or len(rows)>100:
+        if result.get('status')!='success' or result.get('truncated') is not False or not isinstance(rows,list) or result.get('row_count')!=len(rows) or len(rows)>(PAGE_SIZE*MAX_PAGES if evidence['partitioned'] else PAGE_SIZE):
             raise IOErrorBoundary('REPORT_PACKET_INCOMPLETE_OR_TRUNCATED')
+        if evidence['partitioned'] or 'page_proof' in evidence:
+            pages=evidence.get('page_proof',{}).get(name,[])
+            if not pages or len(pages)>MAX_PAGES or len({p.get('query_signature') for p in pages})!=1 or not pages[0].get('query_signature'):
+                raise IOErrorBoundary('REPORT_PAGE_PROOF_INVALID')
+            if sum(p.get('row_count',-10000) for p in pages)!=len(rows):raise IOErrorBoundary('REPORT_PAGE_COVERAGE_MISMATCH')
+            for index,page in enumerate(pages):
+                last=index==len(pages)-1
+                if page.get('offset')!=index*PAGE_SIZE or page.get('snapshot_marker')!=evidence['snapshot_marker'] or page.get('truncated') is not (not last) or not 0<=page.get('row_count',-1)<=PAGE_SIZE or not last and page['row_count']!=PAGE_SIZE:
+                    raise IOErrorBoundary('REPORT_PAGE_PROOF_INVALID')
         if result.get('request_id')!=name:raise IOErrorBoundary('REPORT_PACKET_ID_MISMATCH')
         timing=result.get('applied_time_range',{})
         if timing.get('baseline_week' if phase=='weekly' else 'monthly_month')!=period:
@@ -105,6 +170,8 @@ def validate(evidence):
         except Exception:raise IOErrorBoundary('REPORT_OBSERVATION_TIME_MISSING') from None
         if phase=='weekly':freeze.append(timing.get('frozen_at'))
         groups[name]=rows
+    if evidence.get('report_at') and any(t!=datetime.fromisoformat(evidence['report_at']) for t in times):
+        raise IOErrorBoundary('REPORT_FIXED_CLOCK_MISMATCH')
     if phase=='weekly' and (not all(freeze) or len(set(freeze))!=1):raise IOErrorBoundary('REPORT_BASELINE_MISMATCH')
     pool,flow,summary,totals=(groups[k] for k in ('pool','flow','summary','flow_total'))
     if not pool or not summary or not totals:raise IOErrorBoundary('REPORT_EMPTY_POPULATION_NOT_PROVEN')

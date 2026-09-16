@@ -92,14 +92,17 @@ def file_snapshot(path, profile):
 class AppTransport:
     def __init__(self, job, profile, *, app_loader=load_apps, client_factory=None):
         self.job, self.profile = job, Path(profile)
-        self.target_map = deepcopy(workflow.require_action(job, 'send_enabled').get('target_map') or {})
+        self.target_map = deepcopy(self._binding().get('target_map') or {})
         self.app_loader, self.client_factory = app_loader, client_factory
         self.targets, self.apps, self.files, self.media = {}, {}, {}, {}
         self.tokens = {}
         self.client = None
 
+    def _binding(self):
+        return workflow.require_action(self.job,'send_enabled')
+
     def _gate(self):
-        if workflow.require_action(self.job, 'send_enabled').get('target_map') != self.target_map:
+        if self._binding().get('target_map') != self.target_map:
             raise workflow.IOErrorBoundary('DELIVERY_CONFIGURATION_CHANGED')
 
     def normalize(self, components, progress):
@@ -207,7 +210,7 @@ class AppTransport:
 
     def _request(self, method, endpoint, **kwargs):
         self._gate()
-        if endpoint not in {'gettoken', 'user/get', 'appchat/get', 'media/upload', 'message/send', 'appchat/send'}:
+        if endpoint not in {'gettoken', 'user/get', 'appchat/get', 'media/upload', 'message/send', 'appchat/send','webhook/upload_media','webhook/send'}:
             raise workflow.IOErrorBoundary('APPLICATION_ENDPOINT_INVALID')
         if self.client is None:
             if self.client_factory is None:

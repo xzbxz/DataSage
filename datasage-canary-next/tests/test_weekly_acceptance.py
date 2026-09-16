@@ -179,10 +179,39 @@ class WeeklyAcceptanceTests(unittest.TestCase):
         with patch.object(importlib.import_module(PACKAGE+'.runtime_health'),'query_readiness_status',return_value={'ready':True}),patch.object(importlib.import_module(PACKAGE+'.local_report'),'_assert_local_context'):
             evidence,labels=proof.collect('HCM','2026-W38','weekly','2026-W38',snapshots=snapshots)
         result=self.adapt(evidence,labels)
-        self.assertTrue(result['detail_complete']);self.assertEqual(6,len(calls))
+        self.assertTrue(result['detail_complete']);self.assertEqual(7,len(calls))
         self.assertTrue(all(sql.startswith(('WITH','SELECT')) for sql,args in calls))
-        self.assertTrue(all('HCM' in args for sql,args in calls))
+        self.assertTrue(all('HCM' in args for sql,args in calls if 'report_at' not in sql))
         self.assertFalse(any('employee' in sql or 'customer' in sql or 'INSERT ' in sql for sql,args in calls))
+
+    def test_snapshot_pages_are_complete_stable_and_missing_page_is_rejected(self):
+        h=self.h
+        h.conn.execute('DELETE FROM vk_dwd.delivery_bill_barcode_detail_dwd')
+        h.conn.execute('DELETE FROM vk_dwd.delivery_return_detail_dwd')
+        for i in range(105):h.outgoing(1,rolls=1,dept='HCM',when='2026-09-16T09:00:00',sales_id=2000+i)
+        calls=[]
+        class DB:
+            marker='synthetic-page-snapshot'
+            def execute(self,sql,params,limit,**kwargs):
+                calls.append((sql,params))
+                if sql.startswith('SELECT goods_sku_id'):return self_labels,False,{}
+                return h.execute(sql,params,limit)
+        self_labels=self.labels
+        @contextmanager
+        def snapshots():yield DB()
+        with patch.object(importlib.import_module(PACKAGE+'.runtime_health'),'query_readiness_status',return_value={'ready':True}),patch.object(importlib.import_module(PACKAGE+'.local_report'),'_assert_local_context'):
+            e,labels=proof.collect('HCM','2026-W38','weekly','2026-W38',snapshots=snapshots)
+            self.assertTrue(e['partitioned']);self.assertEqual([100,5],[p['row_count'] for p in e['page_proof']['flow']])
+            result=self.adapt(e,labels);self.assertTrue(result['detail_complete']);self.assertEqual(105,result['summary']['net_outbound_rolls'])
+            bad=copy.deepcopy(e);bad['page_proof']['flow'].pop()
+            with self.assertRaisesRegex(io.IOErrorBoundary,'PAGE'):self.adapt(bad,labels)
+            bad=copy.deepcopy(e);bad['page_proof']['flow'][1]['snapshot_marker']='other'
+            with self.assertRaisesRegex(io.IOErrorBoundary,'PAGE'):self.adapt(bad,labels)
+            with patch.object(proof,'MAX_PAGES',1):
+                with self.assertRaisesRegex(io.IOErrorBoundary,'BUDGET'):proof.collect('HCM','2026-W38','weekly','2026-W38',snapshots=snapshots)
+        pages=[(sql,args) for sql,args in calls if sql.startswith('WITH')]
+        self.assertTrue(all('NOW(6)' not in sql and 'UTC_TIMESTAMP(6)' not in sql for sql,args in pages))
+        self.assertTrue(all(args[-2]==101 for sql,args in pages))
 
     def test_production_keeps_all_weekly_before_monthly_and_gates_labels(self):
         adapted=self.adapt();events=[]
