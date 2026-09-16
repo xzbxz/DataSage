@@ -74,8 +74,9 @@ def legacy_report_packet(pool_packet,flow_packet,label_rows,region,period,*,evid
     _,sem=contracts.execution_contracts('inventory')
     pool_metric='registered_slow_monthly_groups' if len(period)==7 else 'registered_slow_pool_baseline_groups'
     flow_metric='registered_slow_monthly_net_outbound' if len(period)==7 else 'registered_slow_pool_baseline_net_outbound'
+    dimension_labels={metric:{code:value['label'] for code,value in capability_contract.effective_dimension_definitions(sem,metric).items()} for metric in (pool_metric,flow_metric)}
     def dim(row,code,metric):
-        label=capability_contract.effective_dimension_definitions(sem,metric)[code]['label']
+        label=dimension_labels[metric][code]
         values=[d.get('value') for d in row.get('dimensions',[]) if d.get('label')==label]
         return values[0] if len(values)==1 else None
     pool=pool_packet['results'][0]['rows'];flow=flow_packet['results'][0]['rows'];labels=defaultdict(set)

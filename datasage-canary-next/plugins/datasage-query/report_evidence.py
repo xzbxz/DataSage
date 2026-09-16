@@ -83,7 +83,8 @@ def monthly_labels(db,region,period,pool_packet,deadline):
     """
     opening=(datetime.fromisoformat(period+'-01')-timedelta(days=1)).strftime('%Y-%m')
     rows=pool_packet.get('results',[{}])[0].get('rows',[])
-    identities=sorted({dimension(row,'pool_sku','registered_slow_monthly_groups') for row in rows})
+    read_dimension=dimension_reader('registered_slow_monthly_groups')
+    identities=sorted({read_dimension(row,'pool_sku') for row in rows})
     if len(identities)>PAGE_SIZE*MAX_PAGES or any(not re.fullmatch(r'\d+',sku) for sku in identities):
         raise IOErrorBoundary('REPORT_MONTHLY_LABEL_IDENTITY_INVALID')
     labels=[]
@@ -141,13 +142,17 @@ def collect(region,period,phase,week,*,snapshots=None):
             return evidence,labels
     finally:tools._release_query_slot()
 
-def dimension(row,code,metric):
+def dimension_reader(metric):
     from . import contracts,capability_contract
     _,sem=contracts.execution_contracts('inventory')
-    label=capability_contract.effective_dimension_definitions(sem,metric)[code]['label']
-    values=[d.get('value') for d in row.get('dimensions',[]) if d.get('label')==label]
-    if len(values)!=1 or values[0] in (None,''):raise IOErrorBoundary('REPORT_DIMENSION_MISSING')
-    return str(values[0])
+    labels={code:value['label'] for code,value in capability_contract.effective_dimension_definitions(sem,metric).items()}
+    def read(row,code):
+        values=[d.get('value') for d in row.get('dimensions',[]) if d.get('label')==labels[code]]
+        if len(values)!=1 or values[0] in (None,''):raise IOErrorBoundary('REPORT_DIMENSION_MISSING')
+        return str(values[0])
+    return read
+
+def dimension(row,code,metric):return dimension_reader(metric)(row,code)
 
 def num(value):
     number=wf.number(value)
@@ -201,7 +206,8 @@ def validate(evidence):
     pool,flow,summary,totals=(groups[k] for k in ('pool','flow','summary','flow_total'))
     if not pool or not summary or not totals:raise IOErrorBoundary('REPORT_EMPTY_POPULATION_NOT_PROVEN')
     metrics={k:v['metric'] for k,v in expected.items()}
-    def dim(row,code,name):return dimension(row,code,metrics[name])
+    readers={name:dimension_reader(metric) for name,metric in metrics.items()}
+    def dim(row,code,name):return readers[name](row,code)
     def key(row,name):
         if dim(row,'warehouse_department',name)!=region:raise IOErrorBoundary('REPORT_REGION_MISMATCH')
         return (dim(row,'pool_sku',name),dim(row,'unit',name))
