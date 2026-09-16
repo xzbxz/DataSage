@@ -64,6 +64,10 @@ def sales(changes,*,manager=False,region=None):
     for product,rows in grouped.items():
         for row in rows:
             old=number(row.get('old_ddp_price'));new=number(row.get('new_ddp_price'))
-            delta='Unknown' if old is None or new is None else ('+' if new-old>=0 else '')+format(new-old,'.2f')
+            if old is None or new is None:delta='Unknown'
+            else:
+                difference=new-old;rounded=format(difference,'.2f')
+                shown=rounded if Decimal(rounded)==difference else display(difference)
+                delta=('+' if difference>=0 else '')+shown
             lines.append(f'- {product} ({row.get("customer_grade") or "-"}/{row.get("color_label") or "-"}): {display(old)} -> {display(new)} ({delta}) {row.get("currency_no") or ""}')
     return '\n'.join(lines)

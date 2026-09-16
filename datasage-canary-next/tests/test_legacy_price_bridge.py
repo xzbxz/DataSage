@@ -26,6 +26,19 @@ class LegacyPriceBridgeTests(unittest.TestCase):
         self.assertEqual('legacy_nominal_price_changed',doc['events'][0]['event'])
         self.assertIn('unverified',doc['events'][0]['comparison_level'])
         change=b.changes(doc)[0];self.assertEqual('10.0001',change['new_ddp_price']);self.assertEqual('10',change['old_ddp_price'])
+
+    def test_missing_current_unit_or_expired_record_does_not_hide_nominal_field_change(self):
+        row=sales();row.update(unit=None,is_inclue_tax=None,ddp_price='11',expiration_date='2026-08-31')
+        doc=b.compare('sales',[old_sales()],[row],NOW)
+        self.assertEqual(1,doc['deliverable_event_count']);self.assertIn('不据此认定',doc['scope_notice'])
+        self.assertNotIn('unit',doc['events'][0]['before']['basis'])
+
+    def test_reference_disclosure_is_separate_and_once_per_logical_notification(self):
+        io=importlib.import_module(base.TEST_PACKAGE+'.workflow_io')
+        parts=[io.component('a','text','old body','scope','sales_text'),io.component('a','file','file.xlsx','scope','sales_file')]
+        result=io.price_reference_disclosures(parts,'historical unit not recorded')
+        self.assertEqual(3,len(result));self.assertEqual('legacy_reference_disclosure',result[0]['stage'])
+        self.assertEqual('old body',result[1]['text']);self.assertEqual(parts[0]['notification_key'],result[0]['notification_key'])
     def test_purchase_keeps_two_tax_sides_and_validity_unknown(self):
         row=purchase();row['tax_exclue_price']='9'
         doc=b.compare('purchase',[old_purchase()],[row],NOW)

@@ -309,6 +309,19 @@ def component(account,kind,payload,scope,stage):
     if kind=='text' and stage in ('weekly_text','monthly_text','idk','purchase'):item['message_format']='markdown'
     return item
 
+def price_reference_disclosures(components,note):
+    if not note:return components
+    seen=set();result=[]
+    for item in components:
+        identity=item['notification_key']
+        if identity not in seen:
+            result.append({'account':item['account'],'kind':'text','stage':'legacy_reference_disclosure',
+                'key':wf.digest([identity,'legacy_reference_disclosure']),'notification_key':identity,
+                'text':'【价格参考口径】'+note})
+            seen.add(identity)
+        result.append(item)
+    return result
+
 def run_bound(profile,job,*,transport=None,writer_factory=None,snapshot_factory=None):
     """Production input -> existing rules/artifacts -> separately permitted I/O."""
     from .contract_store import profile_root
@@ -474,6 +487,7 @@ def _produce_and_execute(profile,job,binding,out,week,month,progress,snapshots,t
                             components += [component(target,'file',folder/f,scope,'manager_file') for f in b['files'] if f.endswith('.xlsx')]
             elif changes:
                 wf.build_preview(job,{**data,'customers_by_goods':{},'customer_mapping_complete':False},out)
+        components=price_reference_disclosures(components,data.get('comparison_disclosure'))
         if components and binding.get('send_enabled'):deliver_components(components,transport,progress,enabled=True,force=job=='idk')
         if binding.get('price_accept_enabled'):
             operations.accept_snapshot(profile,wf.policy()['jobs'][job]['report_id'],raw_path.stem,expected_scope=operations.scope_fingerprint(op))

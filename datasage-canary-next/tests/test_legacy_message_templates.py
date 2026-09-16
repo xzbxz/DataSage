@@ -28,4 +28,8 @@ class LegacyTemplateTests(unittest.TestCase):
         for stage in ('weekly_text','monthly_text','idk','purchase'):
             self.assertEqual('markdown',workflow.component('account','text','body','period',stage)['message_format'])
         self.assertNotIn('message_format',workflow.component('account','text','body','period','task_text'))
+
+    def test_confirmed_small_price_change_is_not_displayed_as_zero(self):
+        text=templates.sales([{'goods_no':'SYN','old_ddp_price':'10','new_ddp_price':'10.0001','currency_no':'USD'}])
+        self.assertIn('(+0.0001)',text);self.assertNotIn('(+0.00)',text)
 if __name__=='__main__':unittest.main()

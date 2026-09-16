@@ -72,7 +72,10 @@ def compare(side,old_rows,current_rows,observed_at):
         seen.add(key);before=old.get(key)
         event={'key':list(key),'before':before,'after':after,'deliverable':False,
             'comparison_level':'nominal_ddp_historical_unit_tax_unverified' if side=='sales' else 'recorded_tax_price_same_currency_unit_validity_unverified'}
-        if after['state'] not in ('comparable','recorded_quote_only'):
+        raw=raw_by_key.get(key,[])
+        current_readable=(len(raw)==1 and raw[0].get('detail_id') is not None and
+            after.get('candidate_rows')==1 and all(op._number(after['prices'].get(name)) is not None and op._number(after['prices'][name])>=0 for name in SPECS[side]['prices']))
+        if not current_readable:
             event['event']='unresolved_current_record'
         elif before is None:event['event']='new_key_without_legacy_reference'
         elif before['state']!='legacy_record':event['event']='unresolved_legacy_price'
@@ -102,7 +105,8 @@ def compare(side,old_rows,current_rows,observed_at):
         'source_rows':len(current_rows),'records':current,'events':events,'event_counts':dict(Counter(e['event'] for e in events)),
         'deliverable_event_count':sum(e['deliverable'] for e in events),'production_baseline_accepted':False,
         'baseline_state':'existing_legacy_database_reference_readonly',
-        'scope_notice':'Sales historical unit/tax/validity are not recorded. Purchase inc/exc fields remain separate; validity is not proven. No historical fields are copied from current rows.'}
+        'scope_notice':('旧销售快照未记录历史库存单位、计价单位、税口径及有效期；以下只核验同币种名义DDP字段变化，不将当前字段补为历史，也不据此认定同口径涨跌或当前可执行报价。' if side=='sales' else
+            '旧采购快照的币种和计价单位已逐项比较，含税价与未税价分开核验；历史有效期未记录，以下属于报价记录变化，不保证当前可执行。')}
 
 def observe(binding,*,snapshots=None):
     from . import tools
