@@ -63,6 +63,12 @@ class AppNotificationTests(unittest.TestCase):
         self.assertEqual('provider_accepted',self.progress.status('notification-'+self.parts[0]['notification_key']))
         self.assertEqual('unknown',self.progress.data['components'][self.parts[0]['key']]['human_received'])
 
+    def test_application_legacy_markdown_payload_is_preserved(self):
+        self.parts[0]['message_format']='markdown'
+        self.parts[0]['text']='**旧版格式测试**'
+        self.deliver()
+        self.assertEqual('markdown',self.bodies[0]['msgtype']);self.assertEqual('**旧版格式测试**',self.bodies[0]['markdown']['content'])
+
     def test_upload_failure_sends_nothing_and_can_retry(self):
         self.fail_at='upload'
         with self.assertRaisesRegex(io.IOErrorBoundary,'UPLOAD_FAILED'):self.deliver()

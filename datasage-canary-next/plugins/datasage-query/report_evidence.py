@@ -2,7 +2,7 @@
 
 Not a model tool or general query entry. Finite snapshot pages, no DML/delivery.
 """
-from datetime import datetime
+from datetime import datetime,timedelta
 import json,time,re,hashlib,copy
 from . import tools,wire,legacy_workflow as wf
 from .workflow_io import IOErrorBoundary
@@ -75,6 +75,28 @@ def requests(region,period,phase):
                 ('flow','net_outbound',['product','pool_sku','warehouse_department','unit','salesperson']),
                 ('summary','summary',['unit']),('flow_total','net_outbound',['unit']))]
 
+def monthly_labels(db,region,period,pool_packet,deadline):
+    """Historical labels from the same physical snapshots used by the month pool.
+
+    Query only the report's SKU identities, bounded in batches; retain conflicts.
+    No current product-master inference or silent overwrite of historical labels.
+    """
+    opening=(datetime.fromisoformat(period+'-01')-timedelta(days=1)).strftime('%Y-%m')
+    rows=pool_packet.get('results',[{}])[0].get('rows',[])
+    identities=sorted({dimension(row,'pool_sku','registered_slow_monthly_groups') for row in rows})
+    if len(identities)>PAGE_SIZE*MAX_PAGES or any(not re.fullmatch(r'\d+',sku) for sku in identities):
+        raise IOErrorBoundary('REPORT_MONTHLY_LABEL_IDENTITY_INVALID')
+    labels=[]
+    for start in range(0,len(identities),PAGE_SIZE):
+        batch=identities[start:start+PAGE_SIZE]
+        sql='SELECT goods_sku_id,goods_no,attr_val,whse_dept FROM vk_dw.inventory_barcode_detail_bymonth_dw WHERE month_date IN (%s,%s) AND whse_dept=%s AND goods_sku_id IN ('+','.join('%s' for _ in batch)+') GROUP BY goods_sku_id,goods_no,attr_val,whse_dept ORDER BY goods_sku_id,goods_no,attr_val LIMIT 10001'
+        found,cut,_=db.execute(sql,[opening,period,region,*batch],10000,deadline_at=deadline)
+        if cut or len(found)>10000:raise IOErrorBoundary('REPORT_HISTORICAL_LABELS_TRUNCATED')
+        if any(str(row.get('goods_sku_id')) not in batch or row.get('whse_dept')!=region for row in found):
+            raise IOErrorBoundary('REPORT_HISTORICAL_LABEL_SCOPE_MISMATCH')
+        labels.extend(found)
+    return labels
+
 def collect(region,period,phase,week,*,snapshots=None):
     from .local_report import _assert_local_context
     from . import runtime_health
@@ -109,10 +131,13 @@ def collect(region,period,phase,week,*,snapshots=None):
                 rows,cut,_=db.execute(sql,args,10000,deadline_at=deadline)
                 if cut or len(rows)>10000:raise IOErrorBoundary('REPORT_LABEL_INPUT_TRUNCATED')
                 labels.extend(rows)
+            historical=monthly_labels(db,region,period,packets['pool'],deadline) if phase=='monthly' else []
+            labels.extend(historical)
             evidence={'region':region,'period':period,'phase':phase,'snapshot_marker':db.marker,
                       'evidence_origin':'governed_readonly_snapshot','snapshot_members':members,
                       'partitioned':any(len(p)>1 for p in page_proof.values()),'page_proof':page_proof,
-                      'row_limit':PAGE_SIZE,'max_pages':MAX_PAGES,'report_at':at,'report_utc':utc,'packets':packets}
+                      'row_limit':PAGE_SIZE,'max_pages':MAX_PAGES,'report_at':at,'report_utc':utc,'packets':packets,
+                      'historical_label_rows':len(historical)}
             return evidence,labels
     finally:tools._release_query_slot()
 

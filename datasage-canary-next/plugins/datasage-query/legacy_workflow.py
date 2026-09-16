@@ -260,14 +260,9 @@ def task_draft(region,week,start,end,rows):
     return text,('Products',TASK_HEADERS,values)
 
 def report_draft(region,period,summary,sales_rows,*,monthly=False):
-    heading='Monthly' if monthly else 'Weekly'
-    text=[f'**{region} Slow-moving Inventory {heading} Report | {period}**','', '**1. Key Metrics**',f"SKUs: {show(summary.get('opening_skus'))} -> {show(summary.get('closing_skus'))}",f"Rolls: {show(summary.get('opening_rolls'))} -> {show(summary.get('closing_rolls'))}",f"New SKUs: {show(summary.get('new'))}",f"Exited SKUs: {show(summary.get('exited'))}",'','**2. Sold This '+('Month' if monthly else 'Week')+'**',f"Total: {show(summary.get('net_outbound_rolls'))} rolls",f"High-Discount: {show(summary.get('high_net_rolls'))} rolls",'','**3. Sold by Sales**']
-    text += [str(r.get('sales_name','Unknown'))+': '+show(r.get('net_rolls'))+' rolls' for r in sales_rows] or ['(none)']
-    if region.endswith('-HT'):
-        def qty_text(values):return ' | '.join(str(unit)+': '+show(value) for unit,value in sorted(values.items())) if isinstance(values,dict) and values else 'Unknown'
-        text=[('Total: '+qty_text(summary.get('net_outbound_qty_by_unit'))) if line.startswith('Total: ') else ('High-Discount: '+qty_text(summary.get('high_net_qty_by_unit'))) if line.startswith('High-Discount: ') else line for line in text]
-    text+=['','Detailed SKU list is in the attachment.','Inventory state changes and recorded net outbound are separate measures.']
-    return '\n'.join(text)
+    from .legacy_message_templates import report
+    return report(region,period,summary,sales_rows,monthly=monthly)
+
 
 def validate_complete_detail(packet):
     if packet.get('detail_complete') is not True:return {'checked':[],'not_checked':['detail_population_not_declared_complete']}
@@ -339,7 +334,8 @@ def price_draft(side,changes):
             groups[group].append('\n'.join(parts))
         header='**采购报价变更提醒**\n调整日期：'+'、'.join(sorted({str(r.get('adjust_date') or 'Unknown')[:10] for r in changes}))
         return header+'\n\n'+'\n\n**————————————**\n\n'.join('**'+k+'（'+str(len(v))+'条）**\n\n'+'\n\n────────────\n\n'.join(v) for k,v in groups.items() if v)
-    return '**Ready Goods Price Change**\n\n'+'\n\n'.join(f"{show(r.get('goods_no'))} | {show(r.get('dept'))} | {show(r.get('customer_grade'))} | {show(r.get('color_label'))}\nDDP: {show(r.get('old_ddp_price'))} -> {show(r.get('new_ddp_price'))} {show(r.get('currency_no'))}" for r in changes)
+    from .legacy_message_templates import sales
+    return sales(changes)
 
 def operation_preview_input(job,document):
     """Translate existing local observations; never manufacture a first-run change."""

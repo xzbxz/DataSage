@@ -108,14 +108,15 @@ class AppTransport:
     def normalize(self, components, progress):
         result=[]
         for item in components:
-            if item['kind']!='text' or len(item['text'].encode('utf-8'))<=2048:
+            limit=4096 if item.get('message_format')=='markdown' else 2048
+            if item['kind']!='text' or len(item['text'].encode('utf-8'))<=limit:
                 result.append(item);continue
             if progress.status(item['key'])!='not_attempted':
                 raise workflow.IOErrorBoundary('LEGACY_TEXT_PROGRESS_REQUIRES_REVIEW')
             chunks=[];chunk='';size=0
             for char in item['text']:
                 width=len(char.encode('utf-8'))
-                if size+width>2048:chunks.append(chunk);chunk='';size=0
+                if size+width>limit:chunks.append(chunk);chunk='';size=0
                 chunk+=char;size+=width
             if chunk:chunks.append(chunk)
             result.extend({**item,'text':chunk,'key':workflow.wf.digest([item['key'],'utf8-part',index]),
@@ -149,7 +150,8 @@ class AppTransport:
             self.apps[app_key] = matches[0]
             self.targets[item['account']] = dict(target)
             if item['kind'] == 'text':
-                if len(item.get('text', '').encode('utf-8')) > 2048:
+                if item.get('message_format','text') not in ('text','markdown'):raise workflow.IOErrorBoundary('APPLICATION_MESSAGE_FORMAT_INVALID')
+                if len(item.get('text', '').encode('utf-8')) > (4096 if item.get('message_format')=='markdown' else 2048):
                     raise workflow.IOErrorBoundary('APPLICATION_TEXT_BYTE_LIMIT_EXCEEDED')
             elif item['kind'] == 'file':
                 # Coarse preflight before business reads/freezing has no path yet.
@@ -180,7 +182,7 @@ class AppTransport:
 
     def fingerprint(self, item):
         content = self.files[item['key']][3] if item['kind'] == 'file' else item['text']
-        return workflow.wf.digest([self.target_key(item['account']), item['kind'], content])
+        return workflow.wf.digest([self.target_key(item['account']), item['kind'], content,item.get('message_format','text')])
 
     def _fence_path(self, item):
         return workflow.private_root(self.profile)/('notification-target-'+self.target_key(item['account'])+'.json')
@@ -302,7 +304,9 @@ class AppTransport:
         else:
             payload.update(touser=target['target_id'], agentid=int(target['agent_id']))
         if item['kind'] == 'text':
-            payload['text'] = {'content': item['text']}
+            kind=item.get('message_format','text')
+            if kind not in ('text','markdown'):raise workflow.IOErrorBoundary('APPLICATION_MESSAGE_FORMAT_INVALID')
+            payload['msgtype']=kind;payload[kind]={'content':item['text']}
         else:
             payload['file'] = {'media_id': self.media[item['key']]}
         value = self._request('POST', 'appchat/send' if group else 'message/send',

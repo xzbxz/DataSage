@@ -7,7 +7,8 @@ from .workflow_io import IOErrorBoundary,private_root,run_lock
 
 WEEK='2026-W38';MONTH='2026-09'
 CASES=('idk-current','hcm-task','hcm-weekly','hcm-monthly','sales-observation','purchase-observation',
-       'sales-personalized-synthetic','purchase-private-group-synthetic','failure-synthetic','hcm-customer-packages')
+       'sales-personalized-synthetic','sales-manager-no-buyers-synthetic','purchase-private-group-synthetic',
+       'failure-synthetic','hcm-customer-packages','customer-package-audit-synthetic')
 
 def _root(profile):return private_root(delivery.runtime_home(profile))
 def _case(profile,case):
@@ -65,7 +66,7 @@ def prepare(profile,case):
                 operations._atomic(folder/'manifest.json',manifest);return manifest
             bundle=wf.build_preview('idk',data,folder)
             recipients=[r['account'] for r in reference['regions']['IDK']['executors']]
-            return stage(profile,case,[_notice('idk-executors-same-content','IDK原执行人（同文合并'+str(len(recipients))+'人）',bundle['message_bodies'][0])],
+            return stage(profile,case,[_notice('idk-executors-same-content','IDK原执行人（同文合并'+str(len(recipients))+'人）',bundle['message_bodies'][0],message_format='markdown')],
                 {'origin':'current_readonly','scope':'IDK all current unpriced source rows','observed_at':doc['observed_at'],'source_rows':doc['source_rows'],'original_recipients':recipients})
         if case in ('hcm-weekly','hcm-monthly'):
             phase='weekly' if case=='hcm-weekly' else 'monthly';period=WEEK if phase=='weekly' else MONTH
@@ -80,7 +81,7 @@ def prepare(profile,case):
             recipients=wf.report_recipients(reference['regions'],'HCM')
             role='HCM原执行人及管理层（同文合并'+str(len(recipients))+'人）；截至'+adapted['completeness']['observed_to']+'，非期末最终结果'
             if not adapted['label_coverage']['complete']:role+='；标签Unknown待核验，不称完整可上线报表'
-            return stage(profile,case,[_notice(case+'-roles',role,text,[file])],{'origin':'current_readonly','period':period,
+            return stage(profile,case,[_notice(case+'-roles',role,text,[file],message_format='markdown')],{'origin':'current_readonly','period':period,
                 'observed_at':adapted['completeness']['observed_to'],'numeric_complete':True,'label_coverage':adapted['label_coverage'],
                 'original_recipients':recipients,'read_only_existing_baseline':True})
         if case=='hcm-task':
@@ -128,10 +129,29 @@ def prepare(profile,case):
                 bundle=wf.build_preview('sales_price',data,sub)
                 notices.append(_notice('synthetic-sales-'+code,'销售个性化客户清单合成演练，非真实变价',bundle['message_bodies'][0],[sub/f for f in bundle['files'] if f.endswith('.xlsx')]))
             return stage(profile,case,notices,{'origin':'synthetic','purpose':'same actual recipient, distinct logical users and personalized attachments'})
+        if case=='sales-manager-no-buyers-synthetic':
+            from .legacy_message_templates import sales
+            change={'goods_no':'SYN-ONLY-002','dept':'HCM','customer_grade':'A','color_label':'Blue','old_ddp_price':10,'new_ddp_price':11,'currency_no':'CNY'}
+            file=folder/'Synthetic_HCM_Manager_Customers.xlsx'
+            gen_workbook_xlsx([('SYN-ONLY-002',['Sales','Customer No','Customer'],[['Synthetic Sales A','SYN-C-A','合成客户A'],['Synthetic Sales B','SYN-C-B','合成客户B']])],file)
+            manager=sales([change],manager=True,region='HCM')+'\n\nSee attachment for all sales\' customers across this region (one Sheet per product).'
+            no_buyers=sales([change])+'\n\nYou have no customers who purchased these products, so no attachment is included.'
+            return stage(profile,case,[_notice('synthetic-region-manager','区域管理层跨销售清单合成演练，非真实变价',manager,[file]),
+                _notice('synthetic-sales-no-buyers','区域内销售无关联买客合成演练，仍发正文且无附件',no_buyers)],{'origin':'synthetic','purpose':'regional manager columns versus no-buyer sales message'})
+        if case=='customer-package-audit-synthetic':
+            package={'account':'synthetic-sales','sales_name':'Synthetic Sales','sales_names':['Synthetic Sales'],'region':'HCM',
+                'customers':[{'customer_id':'SYN-1','customer_no':'SYN-C1','customer_name':'合成客户甲','products':[['SYN-ONLY-001','Red',3]]}]}
+            build=folder/('build-'+uuid.uuid4().hex);build.mkdir()
+            archive=wf.customer_zip(package,build,WEEK)
+            audits=delivery.workflow.dispatch_audits([package],{'synthetic-sales':'provider_accepted'},
+                {'HCM':{'executors':[{'account':'synthetic-exec','name':'Executor'}],'managers':['synthetic-manager']}},WEEK,build)
+            return stage(profile,case,[_notice('synthetic-customer-package','销售客户图片ZIP合成演练，一客一图，不含真实客户',wf.customer_package_message(package,WEEK),[archive]),
+                _notice('synthetic-dispatch-audit','区域派发核对合成演练，回执为模拟，不表示真实客户触达',audits[0]['text'],[audits[0]['path']])],
+                {'origin':'synthetic','purpose':'one PNG per customer / ZIP per sales / regional audit schema','simulated_receipts':True})
         if case=='purchase-private-group-synthetic':
             changes=[{'goods_no':'SYN-ONLY-'+str(n),'goods_name':'合成面料','supplier_no':'SYN-S','supplier_name':'合成供应商','color_label':'Red','old_inc':old,'new_inc':new,'old_exc':old-2,'new_exc':new-2,'currency_no':'CNY','unit_cuur':'m','adjust_date':'2026-09-16'} for n,old,new in [(1,12,10),(2,10,13)]]
             body=wf.price_draft('purchase',changes)
-            return stage(profile,case,[_notice('synthetic-purchase-private','采购报价私信格式合成演练，非真实变价',body),
+            return stage(profile,case,[_notice('synthetic-purchase-private','采购报价私信格式合成演练，非真实变价',body,message_format='markdown'),
                 _notice('synthetic-purchase-group','采购报价群Markdown及单独@all合成演练，非真实变价',body,channel='group',message_format='markdown',mention_all=True)],
                 {'origin':'synthetic','old_external_schedule_and_target':'not_in_git_not_invented','purpose':'old dual transport format and decrease-before-increase'})
         if case=='failure-synthetic':
@@ -143,6 +163,9 @@ def prepare(profile,case):
 def send(profile,case):
     from .local_report import _assert_local_context
     _assert_local_context();folder=_case(profile,case)
+    if case=='hcm-monthly':
+        previous=_case(profile,'hcm-weekly')/'send-result.json'
+        if not previous.exists() or _read(previous).get('status')!='provider_accepted_not_human_read':raise IOErrorBoundary('ACCEPTANCE_WEEKLY_STAGE_NOT_ACCEPTED')
     manifest=_read(folder/'manifest.json')
     if manifest.get('status')!='prepared':return {'case_id':case,'status':manifest.get('status'),'sent':False}
     if manifest.get('case_id')!=case or wf.digest(manifest['notices'])!=manifest['source_content_digest']:

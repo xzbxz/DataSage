@@ -184,3 +184,6 @@ datasage-canary-next/scripts/*
 !datasage-canary-next/plugins/datasage-query/reminder_acceptance.py
 !datasage-canary-next/scripts/datasage_reminder_acceptance.py
 !datasage-canary-next/tests/test_reminder_acceptance.py
+
+!datasage-canary-next/plugins/datasage-query/legacy_message_templates.py
+!datasage-canary-next/tests/test_legacy_message_templates.py

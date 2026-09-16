@@ -121,6 +121,16 @@ class WeeklyAcceptanceTests(unittest.TestCase):
         e=copy.deepcopy(self.evidence);e['snapshot_members']['flow']='other-snapshot'
         with self.assertRaisesRegex(io.IOErrorBoundary,'SNAPSHOT'):self.adapt(e)
 
+    def test_historical_label_lookup_is_bound_to_month_department_and_report_skus(self):
+        calls=[]
+        class DB:
+            def execute(self,sql,args,limit,**kwargs):
+                calls.append((sql,args,limit));return [{'goods_sku_id':11,'goods_no':'HIST','attr_val':'Red','whse_dept':'HCM'}],False,{}
+        labels=proof.monthly_labels(DB(),'HCM','2026-09',self.evidence['packets']['pool'],None)
+        self.assertEqual('HIST',labels[0]['goods_no']);self.assertEqual(['2026-08','2026-09','HCM','11'],calls[0][1])
+        self.assertIn('GROUP BY goods_sku_id,goods_no,attr_val,whse_dept',calls[0][0])
+        self.assertEqual(10000,calls[0][2])
+
     def test_real_query_truncation_at_existing_100_row_boundary(self):
         self.h.conn.execute('DELETE FROM vk_dwd.delivery_bill_barcode_detail_dwd')
         self.h.conn.execute('DELETE FROM vk_dwd.delivery_return_detail_dwd')

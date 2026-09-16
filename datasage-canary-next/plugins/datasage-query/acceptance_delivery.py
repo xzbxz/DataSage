@@ -67,7 +67,7 @@ class _Webhook(_Private):
             if item['account'] not in self.target_map:raise workflow.IOErrorBoundary('ACCEPTANCE_GROUP_NOT_MAPPED')
             self.targets[item['account']]=self.target_map[item['account']]
             if item['kind']=='file':self.files[item['key']]=file_snapshot(item['path'],self.profile)
-            elif item['kind']!='text' or len(item['text'].encode())>2048:
+            elif item['kind']!='text' or len(item['text'].encode())>(4096 if item.get('message_format')=='markdown' else 2048):
                 raise workflow.IOErrorBoundary('ACCEPTANCE_GROUP_COMPONENT_INVALID')
             if item['kind']=='text' and (item.get('message_format','text') not in ('text','markdown') or item.get('mention_all') and item.get('message_format','text')!='text'):
                 raise workflow.IOErrorBoundary('ACCEPTANCE_GROUP_COMPONENT_INVALID')
