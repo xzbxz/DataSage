@@ -55,7 +55,14 @@ No GRANT, credential installation or connection-policy change is performed.
 Database-side writer permission provisioning remains an external prerequisite;
 the adapter does not claim those privileges already exist.
 
-## Official delivery and progress
+## Delivery and progress
+
+The finite Profile application HTTP transport is now implemented; see
+[APP_NOTIFICATIONS.md](APP_NOTIFICATIONS.md). Set an explicit `wecom_app_http`
+target mapping to use application text and media delivery from script children.
+This bypasses the live-gateway requirement without modifying Hermes or starting
+a WebSocket. The limitations below apply only to the retained OfficialTransport.
+
 
 `OfficialTransport` calls the official live adapter's `send` / `send_document`
 through Hermes' own `_dispatch_on_gateway_loop`, retaining its queue and rate
@@ -132,10 +139,10 @@ against real cron state in this implementation batch.
 ## Explicit remaining gaps
 
 Real freeze, send, price-acceptance and scheduler activation are untested and off.
-The supported live-gateway delivery bridge is implemented, but the current
-official out-of-process scheduling/media architecture blocks full automated
-legacy delivery without an upstream-supported integration or separately reviewed
-channel/configuration choice. Callback file sending is not implemented upstream.
+The supported live-gateway delivery bridge retains its upstream limitations.
+The Profile application HTTP bridge now implements child-process text/file sending
+via the old application API. It is disabled and untested against real recipients;
+explicit existing-app target configuration and scoped acceptance are still needed.
 Full-scale report partitioning and historical missing display-label recovery
 are not claimed complete. Mixed-success customer audits now select confirmed
 versus unconfirmed packages using the shared executor/manager recipient rule.
@@ -148,5 +155,5 @@ Production task delivery precedes customer lookup/package execution; all weekly
 delivery precedes monthly input execution. Same-week recipient and customer plans
 are persisted privately. Customer plans rebuild after an enabled re-freeze or fail
 when the accepted source baseline no longer matches. This local envelope does not
-claim old runtime cache files were imported. A production adapter remains blocked
-by current official channel limitations even when its I/O code is implemented.
+claim old runtime cache files were imported. The new app HTTP path is no longer blocked by live-gateway media support, but
+production activation and scoped real acceptance remain outstanding.

@@ -2,7 +2,8 @@
 
 Execution development has advanced: see [WORKFLOW_IO.md](WORKFLOW_IO.md).
 The preview behavior below is retained; production I/O now has separate, default-off
-per-job gates, concrete adapters and the documented official transport blockers.
+per-job gates and concrete adapters. APP_NOTIFICATIONS.md describes the added
+Profile application HTTP path, including text/file recovery and target ordering.
 
 Behavior baseline: local Git object `3fd38fcb803307e1688688ca1dfbde271131157a`
 (`release/datasage-0.2.0`). No historical script with import-time side effects is
@@ -119,22 +120,17 @@ name is not replaced by a raw internal ID; current stock-state precision/presenc
 rules and exact high-net-roll values remain intact. These are disclosed differences,
 not silent changes to freeze selectors or schedule times.
 
-The old sender used a WeCom self-built-app API / webhook. Official Hermes `wecom`
-is Smart Robot WebSocket; `wecom_callback` is the existing self-built-app platform.
-These target namespaces are not automatically interchangeable. WebSocket group
-sends require a cached passive-reply req_id in the inspected official version.
-The official per-chat queue owns rate limits. No old HTTP sender, token loader,
-Hermes patch, retry engine or permission synchronizer is copied.
-
-Live write and delivery integration is deliberately not open in these adapters;
-they provide concrete source specs, plans, routing/receipt logic and attachment
-generation for review. Current data-source connections, callback authentication,
-target resolution and official receipt granularity must be validated before an
-explicitly authorized live integration. The old HTTP helper retried all
-RequestException failures, despite narrower retry commentary. Current unknown
-outcomes are held for review, including during forced re-send, rather than blindly
-replaying an entire batch. Official transport behavior is not claimed identical
-without an end-to-end test.
+The old sender used a WeCom self-built-app API / webhook. The Profile now has a
+finite, unified application HTTP transport for text and files, documented in
+APP_NOTIFICATIONS.md. It reuses the official configuration loader and existing
+business progress/locks. It does not start a gateway or WebSocket or copy a
+scheduler, platform, webhook sender, retry engine or permission synchronizer.
+Explicit application/user or application-owned-group mappings are required.
+All pending attachments are uploaded before text. Incomplete notifications resume
+only missing components even under force; unknown outcomes stop for review.
+Completed legacy forced resend scenarios remain distinct from failure recovery.
+Real sending remains disabled and untested; this is an implemented migration
+path, not a claim of production acceptance or atomic text/file delivery.
 
 Missing historical material: purchase scheduled wrapper/runtime cadence and
 webhook/user target settings are not in the referenced tree; no secret URL was

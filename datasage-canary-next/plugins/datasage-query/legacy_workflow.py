@@ -206,7 +206,7 @@ def official_receipt(send_result,component_key):
     def field(key):return send_result.get(key) if isinstance(send_result,dict) else getattr(send_result,key,None)
     raw=field('raw_response');message_id=field('message_id')
     if field('delivered') is False:status='not_delivered'
-    elif isinstance(raw,dict) and raw.get('errcode') not in (None,0):status='failed'
+    elif isinstance(raw,dict) and (raw.get('errcode') not in (None,0) or raw.get('invalid_recipient')):status='failed'
     elif field('success') is True and (message_id or raw):status='provider_accepted'
     elif field('success') is True:status='unverified_success'
     else:status='unknown'

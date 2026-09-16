@@ -166,3 +166,7 @@ datasage-canary-next/scripts/*
 !datasage-canary-next/plugins/datasage-query/fabric_report.py
 !datasage-canary-next/plugins/datasage-query/WORKFLOW_IO.md
 !datasage-canary-next/tests/test_workflow_io.py
+
+!datasage-canary-next/plugins/datasage-query/wecom_app_transport.py
+!datasage-canary-next/plugins/datasage-query/APP_NOTIFICATIONS.md
+!datasage-canary-next/tests/test_app_notification.py

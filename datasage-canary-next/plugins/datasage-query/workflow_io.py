@@ -1,10 +1,10 @@
 """Finite legacy I/O adapters. Activation is separate from preview and default off.
 
-No generic SQL/target endpoint, no new HTTP client or message queue. Business
-progress is local, scoped and crash-conservative; official adapters own sending.
+No generic SQL/target endpoint or message queue. Business progress is local,
+scoped and crash-conservative; the finite app HTTP path also works in cron children.
 """
 from pathlib import Path
-from contextlib import contextmanager
+from contextlib import contextmanager,nullcontext
 from datetime import datetime
 import json,os,uuid,time
 from . import legacy_workflow as wf,operations
@@ -135,23 +135,83 @@ class OfficialTransport:
 
 def deliver_components(components,transport,progress,*,enabled=False,force=False):
     if enabled is not True:raise IOErrorBoundary('WORKFLOW_SEND_NOT_ENABLED')
+    if hasattr(transport,'normalize'):components=transport.normalize(components,progress)
     if len({i['key'] for i in components})!=len(components):raise IOErrorBoundary('DUPLICATE_DELIVERY_COMPONENT')
     if any(progress.status(i['key']) in ('in_flight','unknown','unverified_success','not_delivered') for i in components):raise IOErrorBoundary('DELIVERY_UNKNOWN_REVIEW_REQUIRED')
     transport.preflight(components) # All capabilities/targets checked before the first send.
+    lock=transport.delivery_lock(progress) if hasattr(transport,'delivery_lock') else nullcontext()
+    with lock:
+        return _deliver_notifications(components,transport,progress,force=force)
+
+
+def _deliver_notifications(components,transport,progress,*,force=False):
     intent=[{k:item[k] for k in ('account','kind','stage','key')} for item in components]
     operations._atomic(progress.root/('intent-'+wf.digest(intent)+'.json'),{'scope':progress.scope,'components':intent,'purpose':'audit_manifest_not_a_send_queue'})
-    failed=False
+    groups={}
+    # An incomplete generation is a recovery run, not a new business force run.
+    # Do not resend its already completed notifications while repairing another.
+    force=force and not any(len(k)==64 and v.get('status')=='failed' for k,v in progress.data['components'].items())
     for item in components:
-        key=item['key'];previous=progress.status(key)
-        if previous in ('in_flight','unknown','unverified_success','not_delivered'):raise IOErrorBoundary('DELIVERY_UNKNOWN_REVIEW_REQUIRED')
-        if previous=='provider_accepted' and not force:continue
-        progress.set(key,'in_flight') # Crash after this point is ambiguous, never auto-replayed.
-        try:receipt=wf.official_receipt(transport.send(item),key)
-        except Exception:receipt={'status':'unknown','human_received':'unknown'}
-        progress.set(key,receipt['status'],human_received='unknown',provider_message_id=receipt.get('provider_message_id'),api_errcode=receipt.get('api_errcode'))
-        if receipt['status'] in ('unknown','unverified_success','not_delivered'):raise IOErrorBoundary('DELIVERY_UNKNOWN_REVIEW_REQUIRED')
-        failed |= receipt['status']!='provider_accepted'
+        groups.setdefault(item.get('notification_key') or wf.digest([item['account']]),[]).append(item)
+    pending=[];fingerprints={}
+    for notification,items in groups.items():
+        items.sort(key=lambda i:i['kind']!='text')
+        complete=all(progress.status(i['key'])=='provider_accepted' for i in items)
+        same_run=getattr(progress,'run_id',None) is not None and all(progress.data['components'].get(i['key'],{}).get('run_id')==progress.run_id for i in items)
+        resend=bool(force and complete and not same_run)
+        for item in items:
+            old=progress.data['components'].get(item['key'],{})
+            fingerprint=transport.fingerprint(item) if hasattr(transport,'fingerprint') else None
+            fingerprints[item['key']]=fingerprint
+            # A regenerated report/changed destination must not be combined with
+            # an already accepted component of an incomplete notification.
+            if (not complete and old.get('fingerprint') and old['fingerprint']!=fingerprint):
+                raise IOErrorBoundary('NOTIFICATION_CONTENT_CHANGED_REVIEW_REQUIRED')
+        if hasattr(transport,'fingerprint'):
+            manifest=wf.digest([[i['key'],fingerprints[i['key']]] for i in items])
+            manifests=progress.data.setdefault('notification_manifests',{})
+            if notification in manifests and manifests[notification]!=manifest and not resend:
+                raise IOErrorBoundary('NOTIFICATION_CONTENT_CHANGED_REVIEW_REQUIRED')
+            manifests[notification]=manifest
+        if resend:
+            history=progress.data.setdefault('notification_history',[])
+            history.append({'notification':notification,'components':{i['key']:progress.data['components'][i['key']] for i in items}})
+            # Persist the entire new generation before its first send. A crash or
+            # failed file in this generation must not reuse last generation's file.
+            for item in items:progress.data['components'][item['key']]={'status':'not_attempted','run_id':getattr(progress,'run_id',None)}
+            operations._atomic(progress.path,progress.data)
+        pending.extend(i for i in items if progress.status(i['key'])!='provider_accepted')
+    operations._atomic(progress.path,progress.data)
+    if pending and hasattr(transport,'prepare'):transport.prepare(pending,progress)
+    failed=False
+    for notification,items in groups.items():
+        if not any(progress.status(i['key'])!='provider_accepted' for i in items):continue
+        if hasattr(transport,'begin_notification'):transport.begin_notification(items,progress)
+        notification_status='provider_accepted'
+        for item in items:
+            key=item['key']
+            if progress.status(key)=='provider_accepted':continue
+            progress.set(key,'in_flight',fingerprint=fingerprints[key])
+            try:receipt=wf.official_receipt(transport.send(item),key)
+            except Exception:receipt={'status':'unknown','human_received':'unknown'}
+            progress.set(key,receipt['status'],fingerprint=fingerprints[key],human_received='unknown',provider_message_id=receipt.get('provider_message_id'),api_errcode=receipt.get('api_errcode'))
+            if receipt['status']!='provider_accepted':
+                notification_status=receipt['status'];failed=True
+                break # A failed/unknown text must never be followed by its file.
+        progress.set('notification-'+notification,notification_status,human_received='unknown',component_keys=[i['key'] for i in items])
+        if hasattr(transport,'finish_notification'):transport.finish_notification(items,progress,notification_status)
+        if notification_status in ('unknown','unverified_success','not_delivered'):raise IOErrorBoundary('DELIVERY_UNKNOWN_REVIEW_REQUIRED')
     if failed:raise IOErrorBoundary('DELIVERY_COMPONENT_FAILED')
+
+
+def make_transport(profile,job,binding):
+    targets=binding.get('target_map') or {}
+    platforms={t.get('platform') for t in targets.values() if isinstance(t,dict)}
+    if 'wecom_app_http' in platforms:
+        if platforms!={'wecom_app_http'}:raise IOErrorBoundary('MIXED_DELIVERY_TRANSPORTS_NOT_ALLOWED')
+        from .wecom_app_transport import AppTransport
+        return AppTransport(job,profile)
+    return OfficialTransport(job)
 
 def open_freeze_writer(*,enabled=False):
     if enabled is not True:raise IOErrorBoundary('FREEZE_NOT_ENABLED')
@@ -243,7 +303,7 @@ def create_paused_official_job(job,*,enabled=False):
     return cronjob(action='create',name=spec['report_id'],schedule=schedule,script=f'datasage_legacy_{job}.py',no_agent=True,deliver='local',failure_deliver=binding.get('failure_deliver'),paused=True,paused_reason='Awaiting individual business acceptance')
 
 def component(account,kind,payload,scope,stage):
-    item={'account':account,'kind':kind,'stage':stage,'key':wf.digest([scope,account,kind,stage])}
+    item={'account':account,'kind':kind,'stage':stage,'key':wf.digest([scope,account,kind,stage]),'notification_key':wf.digest([scope,account])}
     item['path' if kind=='file' else 'text']=str(payload)
     return item
 
@@ -256,7 +316,7 @@ def run_bound(profile,job,*,transport=None,writer_factory=None,snapshot_factory=
     from . import tools,wire,workflow_inputs as inputs
     configure_runtime(profile)
     snapshot_factory=snapshot_factory or (lambda:tools._ConsistentSnapshotExecutor(deadline_at=time.monotonic()+120))
-    transport=transport or (OfficialTransport(job) if binding.get('send_enabled') else None)
+    transport=transport or (make_transport(profile,job,binding) if binding.get('send_enabled') else None)
     if binding.get('send_enabled'):
         # Avoid committing a freeze before discovering the official transport cannot
         # deliver the necessary file type or target namespace.
@@ -416,7 +476,8 @@ def _produce_and_execute(profile,job,binding,out,week,month,progress,snapshots,t
         files=export_report(doc,out)
         if doc['status']=='success' and binding.get('send_enabled'):
             scope=wf.digest([op,doc])
-            components=[component(a,'file',files[0],scope,'fabric_workbook') for a in binding['target_map']]
+            text='货源分析报告已生成，详见随附工作簿。报告保留各来源观察时间；未知项不视为零，接口接受不代表人工已读。'
+            components=[part for a in binding['target_map'] for part in (component(a,'text',text,scope,'fabric_text'),component(a,'file',files[0],scope,'fabric_workbook'))]
             deliver_components(components,transport,progress,enabled=True)
         return {'status':doc['status'],'job':job,'artifacts':files,'delivery':'provider_accepted_not_human_read' if doc['status']=='success' and binding.get('send_enabled') else 'not_requested'}
     raise IOErrorBoundary('WORKFLOW_KIND_UNSUPPORTED')
