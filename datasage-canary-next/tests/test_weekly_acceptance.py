@@ -49,6 +49,19 @@ class WeeklyAcceptanceTests(unittest.TestCase):
             self.assertEqual('local_review_ready',result['status']);self.assertFalse(result['sent']);self.assertFalse(result['monthly_executed'])
             self.assertIn('非全周最终结果',(Path(tmp)/'report/message.txt').read_text(encoding='utf-8'))
 
+    def test_ht_adapter_exposes_high_quantity_and_each_sales_unit_quantity(self):
+        e=copy.deepcopy(self.evidence);e['region']='HCM-HT'
+        for packet in e['packets'].values():
+            for row in packet['results'][0]['rows']:
+                for dim in row['dimensions']:
+                    if dim['label']=='仓库部门':dim['value']='HCM-HT'
+        labels=[{**self.labels[0],'whse_dept':'HCM-HT'}]
+        value=inputs.legacy_report_packet(e['packets']['pool'],e['packets']['flow'],labels,'HCM-HT','2026-W38',evidence=e)
+        self.assertEqual(7,value['summary']['high_net_qty_by_unit']['m'])
+        self.assertEqual([-3,10],sorted(v['net_quantity_by_unit']['m'] for v in value['sales_rows']))
+        text=io.wf.report_draft('HCM-HT','2026-W38',value['summary'],value['sales_rows'])
+        self.assertIn('High-Discount: **m: 7**',text);self.assertNotIn('High-Discount: **Unknown**',text)
+
     def test_missing_packet_truncated_or_missing_truncation_flag_rejected(self):
         for mode in ['packet','truncated','missing_flag']:
             e=copy.deepcopy(self.evidence)

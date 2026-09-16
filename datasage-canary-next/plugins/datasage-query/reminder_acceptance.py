@@ -45,23 +45,33 @@ def prepare(profile,case):
     if tools._business_today().isocalendar()[:2]!=(2026,38):raise IOErrorBoundary('ACCEPTANCE_CYCLE_EXPIRED')
     folder=_case(profile,case)
     with run_lock(delivery.runtime_home(profile),'prepare-'+case):
-        if (folder/'manifest.json').exists():return _read(folder/'manifest.json')
+        if (folder/'manifest.json').exists():
+            previous=_read(folder/'manifest.json')
+            if case in ('sales-observation','purchase-observation') and previous.get('status')=='no_accepted_price_reference_no_alert':
+                if (folder/'send-result.json').exists():raise IOErrorBoundary('OLD_PRICE_CASE_HAS_DELIVERY_STATE')
+                operations._atomic(folder/'manifest.before-legacy-database-reference.json',previous)
+            else:return previous
         reference=_reference(profile)
         if case in ('idk-current','sales-observation','purchase-observation'):
             old_name={'idk-current':'idk','sales-observation':'sales_price','purchase-observation':'purchase_price'}[case]
             cached=_root(profile)/('observation-'+old_name)/'observation.json'
             if (folder/'observation.json').exists():cached=folder/'observation.json'
             kind={'idk-current':'idk_unpriced','sales-observation':'sales_prices','purchase-observation':'purchase_prices'}[case]
-            if cached.exists():doc=_read(cached)
+            legacy_path=_root(profile)/'legacy-database-price-reference'/('sales-observation.json' if case=='sales-observation' else 'purchase-observation.json')
+            if case!='idk-current' and legacy_path.exists():doc=_read(legacy_path)
+            elif case=='idk-current' and cached.exists():doc=_read(cached)
             else:
-                binding={'kind':kind,'limit':10000,**({} if case=='idk-current' else {'regions':['HCM','HN','BKK','IDK']})}
+                binding={'kind':kind,'limit':10000,**({} if case=='idk-current' else {'regions':['HCM','HN','BKK','IDK'],'reference_source':'legacy_database'})}
                 doc=operations.execute(delivery.runtime_home(profile),'acceptance-'+old_name,binding)
+            if case!='idk-current' and (folder/'observation.json').exists():
+                old_doc=_read(folder/'observation.json')
+                if old_doc.get('baseline_source')!='legacy_database':operations._atomic(folder/'observation.before-legacy-database-reference.json',old_doc)
             operations._atomic(folder/'observation.json',doc)
             data=wf.operation_preview_input(old_name,doc)
             if case!='idk-current':
-                if data['changes']:raise IOErrorBoundary('PRICE_EVENTS_REQUIRE_INDIVIDUAL_SOURCE_REVIEW')
-                manifest={'case_id':case,'status':'no_accepted_price_reference_no_alert','evidence':{'origin':'current_readonly',
-                    'observed_at':doc['observed_at'],'source_rows':doc['source_rows'],'event_counts':doc['event_counts']},
+                if data['changes']:return prepare_price_events(profile,case,doc,data,reference,folder)
+                manifest={'case_id':case,'status':'no_deliverable_price_change','evidence':{'origin':'current_readonly','baseline_source':doc.get('baseline_source'),
+                    'observed_at':doc['observed_at'],'source_rows':doc['source_rows'],'event_counts':doc['event_counts'],'reference':doc.get('reference')},
                     'price_baseline_accepted':False,'sent':False,'production_enabled':False}
                 operations._atomic(folder/'manifest.json',manifest);return manifest
             bundle=wf.build_preview('idk',data,folder)
@@ -174,6 +184,59 @@ def prepare(profile,case):
                 'DataSage slow-moving task failed. Please check the local cron log. Error: RuntimeError')],
                 {'origin':'synthetic','original_recipients':['zhangzhengwei'],'purpose':'legacy failure message, no intentional production failure'})
         raise IOErrorBoundary('ACCEPTANCE_CASE_NOT_IMPLEMENTED')
+
+def prepare_price_events(profile,case,document,data,reference,folder):
+    """Old role and buyer logic first; at most two whole logical notices sampled."""
+    from . import tools
+    changes=data['changes'];notices=[]
+    if case=='purchase-observation':
+        # The external old user/webhook selection is not in Git. This is a review
+        # notice to the approved member, not an invented production group route.
+        body=wf.price_draft('purchase',changes)
+        notices=[_notice('purchase-legacy-database-review','旧采购目标外部配置待核实；本次仅测试成员核验真实记录报价变化；有效期未证实',body,message_format='markdown')]
+        original_count=1
+    else:
+        affected=sorted({c['dept'] for c in changes})
+        if not set(affected)<=set(reference['regions']):raise IOErrorBoundary('PRICE_REGION_NOT_IN_LEGACY_RULES')
+        departments=sorted({d for region in affected for d in reference['regions'][region]['dynamic_sales_departments']})
+        with tools._ConsistentSnapshotExecutor(deadline_at=tools._call_deadline(None)) as db:
+            employees=workflow_inputs.complete(db,"SELECT region,main_dept,person_name,wecom_account,position,is_delete,wecom_status FROM vk_dwd.employee_dwd WHERE is_delete='n' AND wecom_status='payroll' AND COALESCE(wecom_account,'')<>'' AND region IN ("+','.join('%s' for _ in affected)+') AND main_dept IN ('+','.join('%s' for _ in departments)+') ORDER BY wecom_account LIMIT 10001',[*affected,*departments])
+            executors=sorted({e['account'] for region in affected for e in reference['regions'][region]['executors']})
+            if executors:employees+=workflow_inputs.complete(db,"SELECT wecom_account,position,is_delete FROM vk_dwd.employee_dwd WHERE is_delete='n' AND wecom_account IN ("+','.join('%s' for _ in executors)+') LIMIT 10001',executors)
+            mapping=workflow_inputs.customer_mapping(db,[(c['goods_no'],c['dept']) for c in changes])
+        plan=wf.price_recipients(reference['regions'],employees,affected,reference.get('price_manager_fixed',[]))
+        specs=[]
+        for region in affected:
+            regional=[c for c in changes if c['dept']==region];buyers={}
+            for cid,products in mapping['productsByCustomer'].items():
+                customer=mapping['customerInfo'].get(cid,{})
+                for c in regional:
+                    if customer.get('customer_no') and any(p['goods_no']==c['goods_no'] and p['whse_dept']==region for p in products):
+                        row=(customer.get('sales'),customer['customer_no'],customer.get('name'));items=buyers.setdefault(c['goods_no'],[])
+                        if any(v[1]==row[1] and v!=row for v in items):raise IOErrorBoundary('BUYER_CUSTOMER_NUMBER_AMBIGUOUS')
+                        if row not in items:items.append(row)
+            for target in plan[region]['sales']:
+                own={g:[[no,name] for owner,no,name in rows if mapping['wecomBySales'].get(owner)==target['account']] for g,rows in buyers.items()}
+                specs.append({'region':region,'account':target['account'],'role':'sales','changes':regional,'customers_by_goods':own,'sales_name':target['name']})
+            if buyers:
+                for account in plan[region]['managers']:specs.append({'region':region,'account':account,'role':'manager','changes':regional,'manager_rows_by_goods':buyers})
+        if not specs or len(specs)>200:raise IOErrorBoundary('LEGACY_PRICE_LOGICAL_PLAN_UNAVAILABLE_OR_TOO_LARGE')
+        operations._atomic(folder/'original-logical-plan.json',specs)
+        # Prefer one full sales notice and one full manager notice if present.
+        selected=specs[:1]
+        other=next((s for s in specs[1:] if s['role']!=selected[0]['role']),None)
+        if other is not None:selected.append(other)
+        elif len(specs)>1:selected.append(specs[1])
+        for index,spec in enumerate(selected):
+            build=folder/('event-'+str(index));build.mkdir(exist_ok=True)
+            bundle=wf.build_preview('sales_price',{'evidence_origin':'existing_local_observation','customer_mapping_complete':True,**spec},build)
+            body=bundle['message_bodies'][-1] if spec['role']=='manager' else bundle['message_bodies'][0]
+            notices.append(_notice('sales-'+spec['region']+'-'+spec['role']+'-'+wf.account_token(spec['account'])[:12],
+                spec['region']+'原'+spec['role']+'角色；仅证实名义DDP字段变化，历史单位/税标记未存储，不将当前字段补为历史',body,[build/f for f in bundle['files'] if f.endswith('.xlsx')]))
+        original_count=len(specs)
+    return stage(profile,case,notices,{'origin':'current_readonly','baseline_source':'legacy_database','reference':document['reference'],
+        'observed_at':document['observed_at'],'deliverable_events':document['deliverable_event_count'],
+        'original_logical_notification_count':original_count,'selected_logical_notifications':len(notices),'comparison_disclosure':document['scope_notice']})
 
 def send(profile,case):
     from .local_report import _assert_local_context

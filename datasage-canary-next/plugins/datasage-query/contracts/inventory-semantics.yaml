@@ -1073,6 +1073,18 @@ metrics:
 
   registered_slow_pool_baseline_net_outbound:
     result_fields: &flow_result_fields
+      high_net_quantity:
+        meaning: 本组满足既有高折条件的毛出库数量减全部合格退货数量；独立于卷数检查价格/数量/候选覆盖，不足为空，负值保留。按本行来源单位，不跨单位相加。
+      high_known_net_quantity:
+        meaning: 本组高折净数量的已知部分，不替代完整值，不与普通净数量相加。
+      high_gross_quantity:
+        meaning: 本组高折合格毛出库数量，未扣退货；价格或高折数量覆盖不足为空。
+      high_known_gross_quantity:
+        meaning: 本组已知高折毛出库数量；仅已知部分。
+      unit_high_net_quantity:
+        meaning: 当前筛选范围内该来源单位的截断前高折净数量，同单位多行重复，只取一次；不得跨单位相加。
+      unit_high_known_net_quantity:
+        meaning: 该来源单位高折净数量的已知部分，不能代替完整值。
       metric_value:
         meaning: 当前分组的已记录出库数量减退货数量；正数净出库，负数净退货，覆盖不足时为空。与净卷数独立，不是候选组数或库存状态变化。
       known_subset_value:
@@ -1133,6 +1145,15 @@ metrics:
       required: [unit]
       default: [unit]
     result_fact_units:
+      high_net_quantity: 本行来源数量单位，不跨单位相加
+      high_known_net_quantity: 本行来源数量单位，不跨单位相加
+      high_gross_quantity: 本行来源数量单位，不跨单位相加
+      high_known_gross_quantity: 本行来源数量单位，不跨单位相加
+      unit_high_net_quantity: 本行来源数量单位，不跨单位相加
+      unit_high_known_net_quantity: 本行来源数量单位，不跨单位相加
+      unit_high_known_gross_quantity: 本行来源数量单位，不跨单位相加
+      high_missing_quantity_rows: 条
+      unit_high_missing_quantity_rows: 条
       scope_net_rolls: 卷
       scope_known_net_rolls: 卷
       scope_high_net_rolls: 卷
@@ -1531,6 +1552,15 @@ metrics:
       default: [unit]
     monthly_scope_policy: *monthly_scope_policy
     result_fact_units:
+      high_net_quantity: 本行来源数量单位，不跨单位相加
+      high_known_net_quantity: 本行来源数量单位，不跨单位相加
+      high_gross_quantity: 本行来源数量单位，不跨单位相加
+      high_known_gross_quantity: 本行来源数量单位，不跨单位相加
+      unit_high_net_quantity: 本行来源数量单位，不跨单位相加
+      unit_high_known_net_quantity: 本行来源数量单位，不跨单位相加
+      unit_high_known_gross_quantity: 本行来源数量单位，不跨单位相加
+      high_missing_quantity_rows: 条
+      unit_high_missing_quantity_rows: 条
       scope_net_rolls: 卷
       scope_known_net_rolls: 卷
       scope_high_net_rolls: 卷

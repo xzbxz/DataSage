@@ -4554,6 +4554,8 @@ _PUBLIC_FACT_FIELDS.update({'scope_net_rolls', 'scope_high_known_net_rolls', 'un
 
 _PUBLIC_FACT_FIELDS.update({'scope_high_missing_price_rows','scope_high_missing_roll_rows','scope_missing_roll_rows','sales_missing_roll_rows'})
 
+_PUBLIC_FACT_FIELDS.update({'high_net_quantity','high_known_net_quantity','high_gross_quantity','high_known_gross_quantity','high_missing_quantity_rows','unit_high_net_quantity','unit_high_known_net_quantity','unit_high_known_gross_quantity','unit_high_missing_quantity_rows'})
+
 _PUBLIC_STATE_FIELDS = {
     "net_flow_state",
     "pool_movement_state",

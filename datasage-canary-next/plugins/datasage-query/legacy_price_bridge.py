@@ -138,7 +138,7 @@ def changes(document):
     for event in document['events']:
         if not event.get('deliverable'):continue
         old,new=event['before'],event['after'];key=event['key']
-        row={**new['labels'],**new['basis'],'comparison_level':event['comparison_level'],'baseline_snapshot_at':old['snapshot_at']}
+        row={**new['labels'],**new['basis'],'comparison_level':event['comparison_level'],'source_modified_at':event['current_source_modified_at']}
         if side=='sales':row.update(dept=key[1],customer_grade=key[2],color_label=key[3],old_ddp_price=old['prices']['ddp_price'],new_ddp_price=new['prices']['ddp_price'])
         else:row.update(goods_no=key[0],color_label=key[1],supplier_no=key[2],old_inc=old['prices']['tax_inclue_price'],new_inc=new['prices']['tax_inclue_price'],old_exc=old['prices']['tax_exclue_price'],new_exc=new['prices']['tax_exclue_price'],adjust_date=event['current_source_modified_at'],validity_state='unknown_validity')
         result.append(row)

@@ -32,6 +32,7 @@ def load_activation(profile,job,*,for_registration=False):
     elif binding.get('enabled') is not True or binding.get('read_enabled') is not True:raise IOErrorBoundary('WORKFLOW_EXECUTION_NOT_ENABLED')
     if binding.get('freeze_enabled') and job!='slow_task':raise IOErrorBoundary('FREEZE_ACTION_NOT_ALLOWED')
     if binding.get('price_accept_enabled') and job not in ('idk','sales_price','purchase_price'):raise IOErrorBoundary('PRICE_ACCEPT_ACTION_NOT_ALLOWED')
+    if binding.get('price_accept_enabled') and job in ('sales_price','purchase_price') and (binding.get('operation') or {}).get('reference_source','legacy_database')=='legacy_database':raise IOErrorBoundary('LEGACY_DATABASE_REFERENCE_IS_READ_ONLY')
     if binding.get('send_enabled') and job in ('slow_task','sales_price') and binding.get('customer_mapping_enabled') is not True:raise IOErrorBoundary('CUSTOMER_MAPPING_NOT_ENABLED_FOR_LEGACY_DELIVERY')
     return binding
 
@@ -429,6 +430,7 @@ def _produce_and_execute(profile,job,binding,out,week,month,progress,snapshots,t
     if job in ('idk','sales_price','purchase_price'):
         kind={'idk':'idk_unpriced','sales_price':'sales_prices','purchase_price':'purchase_prices'}[job]
         op=binding.get('operation') or {'kind':kind,'limit':10000,**({} if job=='idk' else {'regions':['HCM','HN','BKK','IDK']})}
+        if job in ('sales_price','purchase_price'):op={**op,'reference_source':op.get('reference_source','legacy_database')}
         if op.get('kind')!=kind:raise IOErrorBoundary('OPERATION_KIND_MISMATCH')
         raw_document=operations.execute(profile,wf.policy()['jobs'][job]['report_id'],op);raw_path=operations.save_observation(profile,wf.policy()['jobs'][job]['report_id'],raw_document)
         data=wf.operation_preview_input(job,raw_document);data['region']='IDK' if job=='idk' else 'HCM'

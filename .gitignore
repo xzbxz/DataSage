@@ -190,3 +190,10 @@ datasage-canary-next/scripts/*
 
 !datasage-canary-next/plugins/datasage-query/legacy_price_bridge.py
 !datasage-canary-next/tests/test_legacy_price_bridge.py
+
+!datasage-canary-next/plugins/datasage-query/regional_acceptance.py
+!datasage-canary-next/scripts/datasage_region_acceptance.py
+!datasage-canary-next/tests/test_regional_acceptance.py
+!datasage-canary-next/tests/test_ht_high_quantity.py
+
+!datasage-canary-next/plugins/datasage-query/LEGACY_PRICE_REFERENCE.md

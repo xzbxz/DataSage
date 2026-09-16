@@ -252,6 +252,9 @@ def validate(evidence):
         equal(total.get('baseline_scope_groups'),sum(k[1]==unit for k in opening))
         for field in ('metric_value','net_rolls','high_net_rolls','gross_flow_rows','return_flow_rows'):
             equal(total.get(field),sum((num(r['facts'].get(field)) for r in rows),num(0)))
+        if region.endswith('-HT'):
+            equal(total.get('high_net_quantity'),sum((num(r['facts'].get('high_net_quantity')) for r in rows),num(0)))
+            for row in rows:equal(row['facts'].get('unit_high_net_quantity'),total['high_net_quantity'])
         for row in rows:
             equal(row['facts'].get('unit_display_groups'),len(rows))
             equal(row['facts'].get('unit_net_quantity'),total['metric_value'])

@@ -34,12 +34,40 @@ class ReminderAcceptanceTests(unittest.TestCase):
             value=r.prepare(self.profile,'customer-package-audit-synthetic')
             self.assertEqual(2,len(value['notices']));self.assertTrue(value['evidence']['simulated_receipts'])
     def test_first_price_observation_does_not_alert_or_accept_baseline(self):
-        doc={'kind':'sales_prices','status':'success','baseline_id':None,'records':[],'events':[],
-             'event_counts':{},'observed_at':'2026-09-16T10:00:00','source_rows':0}
+        doc={'kind':'sales_prices','status':'success','baseline_source':'legacy_database','reference':{'rows':1},'records':[],'events':[],
+             'scope_notice':'historical basis not filled','event_counts':{},'observed_at':'2026-09-16T10:00:00','source_rows':0}
         with patch.object(r.operations,'execute',return_value=doc) as query,patch.object(r.operations,'accept_snapshot',side_effect=AssertionError('baseline')),patch.object(a,'deliver_batch',side_effect=AssertionError('send')):
             value=r.prepare(self.profile,'sales-observation')
-            self.assertEqual('no_accepted_price_reference_no_alert',value['status'])
+            self.assertEqual('no_deliverable_price_change',value['status'])
             self.assertNotEqual(self.profile,query.call_args.args[0]);self.assertFalse(r.send(self.profile,'sales-observation')['sent'])
+
+    def test_legacy_purchase_real_field_change_prepares_review_without_invented_group_route(self):
+        from test_legacy_price_bridge import b,old_purchase,purchase,NOW
+        current=purchase();current['tax_exclue_price']='9'
+        document=b.compare('purchase',[old_purchase()],[current],NOW)
+        with patch.object(r.operations,'execute',return_value=document):value=r.prepare(self.profile,'purchase-observation')
+        self.assertEqual('prepared',value['status']);self.assertEqual(1,len(value['notices']))
+        self.assertEqual('private',value['notices'][0]['channel']);self.assertIn('目标外部配置待核实',value['notices'][0]['role'])
+        self.assertIn('不含税价',value['notices'][0]['body'])
+
+    def test_legacy_sales_change_uses_original_sales_and_manager_buyer_rules(self):
+        from test_legacy_price_bridge import b,old_sales,sales,NOW
+        from contextlib import contextmanager
+        current=sales();current['ddp_price']='11';document=b.compare('sales',[old_sales()],[current],NOW)
+        reference={'regions':{'HCM':{'executors':[{'account':'exec'}],'managers':['manager'],'dynamic_sales_departments':['HCM Sales']}},'price_manager_fixed':['manager']}
+        (self.home/'legacy-recipient-reference.json').write_text(json.dumps(reference),encoding='utf-8')
+        employee={'region':'HCM','main_dept':'HCM Sales','person_name':'Sales A','wecom_account':'sales','position':'Sales','is_delete':'n','wecom_status':'payroll'}
+        class DB:
+            def execute(self,sql,args,limit,**kwargs):return [employee],False,{}
+        @contextmanager
+        def snapshots(**kwargs):yield DB()
+        mapping={'productsByCustomer':{'1':[{'goods_no':'SYN-1','whse_dept':'HCM'}]},
+            'customerInfo':{'1':{'customer_no':'SYN-C1','name':'Synthetic Customer','sales':'Sales A'}},'wecomBySales':{'Sales A':'sales'}}
+        with patch.object(r.operations,'execute',return_value=document),patch.object(r.report_evidence.tools,'_ConsistentSnapshotExecutor',side_effect=snapshots),patch.object(r.workflow_inputs,'customer_mapping',return_value=mapping):
+            value=r.prepare(self.profile,'sales-observation')
+        self.assertEqual(2,len(value['notices']));self.assertTrue(all(len(n['attachments'])==1 for n in value['notices']))
+        self.assertTrue(all('历史单位/税标记未存储' in n['role'] for n in value['notices']))
+        self.assertNotEqual(value['notices'][0]['logical_id'],value['notices'][1]['logical_id'])
     def test_idk_same_body_role_aggregation_preserves_old_recipients(self):
         doc={'kind':'idk_unpriced','status':'success','observed_at':'2026-09-16T10:00:00','source_rows':1,
              'records':[{'product':'SYN','color':'Red'}]}

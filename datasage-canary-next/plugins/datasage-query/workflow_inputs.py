@@ -116,6 +116,13 @@ def legacy_report_packet(pool_packet,flow_packet,label_rows,region,period,*,evid
         values=[wf.number(r[index]) for r in details if r[3]!=excluded]
         return None if any(v is None for v in values) else sum(values,wf.number(0))
     summary={'opening_skus':len(open_keys),'closing_skus':len(close_keys),'opening_rolls':sum_side(7,'New'),'closing_rolls':sum_side(8,'Exited'),'new':sum(r[3]=='New' for r in details),'exited':sum(r[3]=='Exited' for r in details),'net_outbound_rolls':proof['net_rolls'] if proof else unique('scope_net_rolls',flow),'high_net_rolls':proof['high_net_rolls'] if proof else unique('scope_high_net_rolls',flow),'net_outbound_qty_by_unit':{u:t['metric_value'] for u,t in proof['unit_totals'].items()} if proof else units}
+    if proof:
+        summary['high_net_qty_by_unit']={u:t.get('high_net_quantity') for u,t in proof['unit_totals'].items()}
+        for identity,sale in sales.items():
+            by_unit=defaultdict(list)
+            for row in flow:
+                if row['facts'].get('sales_identity_ref')==identity:by_unit[dim(row,'unit',flow_metric)].append(row['facts'])
+            sale['net_quantity_by_unit']={u:sum((wf.number(v['metric_value']) for v in values),wf.number(0)) if all(wf.number(v.get('metric_value')) is not None for v in values) else None for u,values in by_unit.items()}
     result={'period':period,'summary':summary,'sales_rows':list(sales.values()),'detail_rows':details,'detail_complete':proof is not None,
         'label_coverage':{'total_groups':len(details),'missing_groups':missing_count,'ambiguous_groups':ambiguous_count,'complete':not(missing_count or ambiguous_count)},
         'completeness':proof or {'population_complete':False,'quantities_complete':False,'reason':'no_independent_evidence'},
