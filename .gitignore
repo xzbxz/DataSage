@@ -170,3 +170,9 @@ datasage-canary-next/scripts/*
 !datasage-canary-next/plugins/datasage-query/wecom_app_transport.py
 !datasage-canary-next/plugins/datasage-query/APP_NOTIFICATIONS.md
 !datasage-canary-next/tests/test_app_notification.py
+
+!datasage-canary-next/plugins/datasage-query/report_evidence.py
+!datasage-canary-next/plugins/datasage-query/weekly_acceptance.py
+!datasage-canary-next/plugins/datasage-query/WEEKLY_ACCEPTANCE.md
+!datasage-canary-next/scripts/datasage_weekly_acceptance.py
+!datasage-canary-next/tests/test_weekly_acceptance.py

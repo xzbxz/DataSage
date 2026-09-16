@@ -208,7 +208,7 @@ class WorkflowIOTests(unittest.TestCase):
         result=inputs.legacy_report_packet(pool,flow,[{'goods_sku_id':11,'whse_dept':'HCM','goods_no':'SYN','attr_val':'Red'}],'HCM','2026-W38')
         self.assertEqual('SYN',result['detail_rows'][0][0]);self.assertEqual(4,result['detail_rows'][0][10]);self.assertEqual(1,result['summary']['opening_skus'])
         unknown=inputs.legacy_report_packet(pool,flow,[],'HCM','2026-W38')
-        self.assertEqual('Unknown',unknown['detail_rows'][0][0]);self.assertIsNone(unknown['summary']['opening_skus'])
+        self.assertEqual('Unknown',unknown['detail_rows'][0][0]);self.assertEqual(1,unknown['summary']['opening_skus']);self.assertFalse(unknown['detail_complete'])
 
     def test_dynamic_task_chain_and_failed_zip_audit_use_real_adapters_with_fake_io(self):
         baseline=wf.freeze_plan([source()],[],'2026-W38','2026-W38')['insert_rows']

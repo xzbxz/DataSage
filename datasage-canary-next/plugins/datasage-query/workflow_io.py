@@ -406,15 +406,20 @@ def _produce_and_execute(profile,job,binding,out,week,month,progress,snapshots,t
         if package_errors:raise IOErrorBoundary('CUSTOMER_DELIVERY_PARTIAL_OR_UNKNOWN')
         return {'status':'success','job':job,'artifacts':outputs,'freeze_status':progress.status('freeze'),'delivery':'provider_accepted_not_human_read' if binding.get('send_enabled') else 'not_requested'}
     if job=='slow_report':
-        handler=wire.bounded_json_handler('datasage_query',tools.runtime_guarded_datasage_query)
-        with snapshots() as db:
-            specs=wf.source_query_specs(week)
-            label_rows=inputs.complete(db,specs[0]['sql'],specs[0]['params'])+inputs.complete(db,specs[1]['sql'],specs[1]['params'])
+        from . import report_evidence
         for period_name in ('weekly','monthly'):
-            collected={region:inputs.report_inputs(handler,region,week,month,phase=period_name) for region in wf.policy()['regions']}
-            for region,packets in collected.items():
-                adapted=inputs.legacy_report_packet(packets[period_name+'_pool'],packets[period_name+'_flow'],label_rows,region,month if period_name=='monthly' else week)
+            period=month if period_name=='monthly' else week
+            collected={region:report_evidence.collect(region,period,period_name,week,snapshots=snapshots) for region in wf.policy()['regions']}
+            # Validate every region of this phase before its first artifact/send.
+            reports={}
+            for region,(evidence,label_rows) in collected.items():
+                packets=evidence['packets']
+                reports[region]=inputs.legacy_report_packet(packets['pool'],packets['flow'],label_rows,region,period,evidence=evidence)
+                if not reports[region]['label_coverage']['complete']:raise IOErrorBoundary('REPORT_LABEL_REVIEW_REQUIRED')
+            for region,adapted in reports.items():
                 text=wf.report_draft(region,adapted['period'],adapted['summary'],adapted['sales_rows'],monthly=period_name=='monthly')
+                text+='\n'+adapted['completeness']['as_of_label']+'：'+adapted['completeness']['observed_to']+'\nSKU counts use registered SKU/department/unit groups.'
+                operations._atomic(out/(region+'_'+period_name+'_evidence.json'),adapted)
                 path=out/f'{region}_{period_name}.xlsx';gen_workbook_xlsx([('Detail',wf.REPORT_HEADERS,adapted['detail_rows'])],path,borders=True,landscape=True);outputs.append(str(path))
                 for target in wf.report_recipients(recipients['regions'],region):
                     components=[component(target,'text',text,(month if period_name=='monthly' else week)+region,period_name+'_text'),component(target,'file',path,(month if period_name=='monthly' else week)+region,period_name+'_file')]

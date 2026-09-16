@@ -56,15 +56,21 @@ def report_inputs(handler,region,week,month,*,phase=None):
         ('monthly_pool','registered_slow_monthly_groups',['product','pool_sku','warehouse_department','unit'],{'calendar_month':month}),
         ('monthly_flow','registered_slow_monthly_net_outbound',['product','pool_sku','warehouse_department','unit','salesperson'],{'calendar_month':month})):
         if phase and not name.startswith(phase):continue
-        request={'request_id':name,'domain':'inventory','mode':'metric','metric':metric,'dimensions':dimensions,'metric_filters':{'warehouse_department':region},'limit':1000,**period}
+        request={'request_id':name,'domain':'inventory','mode':'metric','metric':metric,'dimensions':dimensions,'metric_filters':{'warehouse_department':region},'limit':100,**period}
         packet=json.loads(handler({'requests':[request]}))
         if packet.get('status')!='success' or len(packet.get('results',[]))!=1 or packet['results'][0].get('status')!='success' or packet['results'][0].get('truncated'):raise IOErrorBoundary('GOVERNED_REPORT_INCOMPLETE')
         result[name]=packet
     return result
 
-def legacy_report_packet(pool_packet,flow_packet,label_rows,region,period):
+def legacy_report_packet(pool_packet,flow_packet,label_rows,region,period,*,evidence=None):
     """Map complete governed facts into old Detail columns; never invent missing labels."""
     from . import contracts,capability_contract,legacy_workflow as wf
+    from . import report_evidence
+    proof=None
+    if evidence is not None:
+        if evidence.get('region')!=region or evidence.get('period')!=period or evidence.get('packets',{}).get('pool')!=pool_packet or evidence['packets'].get('flow')!=flow_packet:
+            raise IOErrorBoundary('REPORT_EVIDENCE_SCOPE_MISMATCH')
+        proof=report_evidence.validate(evidence)
     _,sem=contracts.execution_contracts('inventory')
     pool_metric='registered_slow_monthly_groups' if len(period)==7 else 'registered_slow_pool_baseline_groups'
     flow_metric='registered_slow_monthly_net_outbound' if len(period)==7 else 'registered_slow_pool_baseline_net_outbound'
@@ -90,21 +96,28 @@ def legacy_report_packet(pool_packet,flow_packet,label_rows,region,period):
         if unit is not None:
             if str(unit) in units and wf.number(units[str(unit)])!=wf.number(f.get('unit_net_quantity')):raise IOErrorBoundary('REPORT_UNIT_TOTAL_CONFLICT')
             units[str(unit)]=f.get('unit_net_quantity')
-    details=[];open_keys=set();close_keys=set();missing_labels=False
+    details=[];open_keys=set();close_keys=set();missing_labels=False;missing_count=0;ambiguous_count=0
     for r in pool:
         f=r['facts'];sku=str(dim(r,'pool_sku',pool_metric));unit=str(dim(r,'unit',pool_metric));state=r.get('states',{}).get('pool_movement_state','Unassessable')
         options=labels.get((sku,region),set());item,color=next(iter(options)) if len(options)==1 else (None,None)
+        if len(options)>1:ambiguous_count+=1
+        elif not item or not color:missing_count+=1
         if item is None or state=='Unassessable':missing_labels=True
-        key=(item,color,region)
+        key=(sku,unit,region)
         if state!='New':open_keys.add(key)
         if state!='Exited':close_keys.add(key)
         matched=grouped.get((sku,unit),[]);numbers=[wf.number(v['facts'].get('net_rolls')) for v in matched]
-        net=None if state=='New' or any(v is None for v in numbers) else sum(numbers,wf.number(0)) if numbers else wf.number(0) if unique('scope_net_rolls',flow) is not None else None
+        net=None if state=='New' or any(v is None for v in numbers) else sum(numbers,wf.number(0)) if numbers else wf.number(0) if proof is not None or unique('scope_net_rolls',flow) is not None else None
         old=wf.number(f.get('opening_rolls'));new=wf.number(f.get('closing_rolls'));delta=new-old if old is not None and new is not None else None
         names=sorted({str(dim(v,'salesperson',flow_metric) or 'Unknown') for v in matched})
         details.append([item or 'Unknown',color or 'Unknown',region,state,f.get('opening_quantity'),unit,f.get('closing_quantity'),old,new,delta,net,', '.join(names) if state!='New' else None])
     def sum_side(index,excluded):
         values=[wf.number(r[index]) for r in details if r[3]!=excluded]
         return None if any(v is None for v in values) else sum(values,wf.number(0))
-    summary={'opening_skus':None if missing_labels else len(open_keys),'closing_skus':None if missing_labels else len(close_keys),'opening_rolls':sum_side(7,'New'),'closing_rolls':sum_side(8,'Exited'),'new':sum(r[3]=='New' for r in details),'exited':sum(r[3]=='Exited' for r in details),'net_outbound_rolls':unique('scope_net_rolls',flow),'high_net_rolls':unique('scope_high_net_rolls',flow),'net_outbound_qty_by_unit':units}
-    return {'period':period,'summary':summary,'sales_rows':list(sales.values()),'detail_rows':details,'detail_complete':False,'mapping_note':'Source labels missing/ambiguous remain Unknown; summary scope quantities are not recomputed from truncated lists.'}
+    summary={'opening_skus':len(open_keys),'closing_skus':len(close_keys),'opening_rolls':sum_side(7,'New'),'closing_rolls':sum_side(8,'Exited'),'new':sum(r[3]=='New' for r in details),'exited':sum(r[3]=='Exited' for r in details),'net_outbound_rolls':proof['net_rolls'] if proof else unique('scope_net_rolls',flow),'high_net_rolls':proof['high_net_rolls'] if proof else unique('scope_high_net_rolls',flow),'net_outbound_qty_by_unit':{u:t['metric_value'] for u,t in proof['unit_totals'].items()} if proof else units}
+    result={'period':period,'summary':summary,'sales_rows':list(sales.values()),'detail_rows':details,'detail_complete':proof is not None,
+        'label_coverage':{'total_groups':len(details),'missing_groups':missing_count,'ambiguous_groups':ambiguous_count,'complete':not(missing_count or ambiguous_count)},
+        'completeness':proof or {'population_complete':False,'quantities_complete':False,'reason':'no_independent_evidence'},
+        'mapping_note':'Counts use stable SKU/department/unit groups, never display names. Missing/ambiguous labels stay Unknown.'}
+    if proof:result['detail_reconciliation']=wf.validate_complete_detail(result)
+    return result
