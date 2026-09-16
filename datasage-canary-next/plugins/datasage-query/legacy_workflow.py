@@ -341,6 +341,11 @@ def operation_preview_input(job,document):
     """Translate existing local observations; never manufacture a first-run change."""
     expected={'idk':'idk_unpriced','sales_price':'sales_prices','purchase_price':'purchase_prices'}
     if document.get('kind')!=expected.get(job) or document.get('status')!='success':raise WorkflowError('OBSERVATION_KIND_OR_STATUS_INVALID')
+    if document.get('baseline_source')=='legacy_database':
+        from .legacy_price_bridge import changes
+        return {'evidence_origin':'existing_local_observation','observed_at':document['observed_at'],'changes':changes(document),
+                'baseline_state':'existing_legacy_database_reference_readonly','reference':document['reference'],
+                'comparison_disclosure':document['scope_notice'],'customer_mapping_complete':False}
     result={'evidence_origin':'existing_local_observation','observed_at':document.get('observed_at')}
     if job=='idk':return {**result,'region':'IDK','records':document['records']}
     changes=[]

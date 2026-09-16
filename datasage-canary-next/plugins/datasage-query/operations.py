@@ -61,8 +61,8 @@ def validate_binding(binding):
     common={'kind','limit'}
     options={
         'idk_unpriced':{'window_days'},
-        'sales_prices':{'regions'},
-        'purchase_prices':{'regions'},
+        'sales_prices':{'regions','reference_source'},
+        'purchase_prices':{'regions','reference_source'},
         'fabric_review':{'time_range','inventory_scope'},
         'slow_assignment':{'department','baseline_week','max_baseline_age_days','products','include_customer_cards'},
     }
@@ -70,6 +70,7 @@ def validate_binding(binding):
     if kind not in options or set(binding)-common-options[kind] or type(binding.get('limit')) is not int or not 1<=binding['limit']<=10000:
         raise OperationError('OPERATION_BINDING_INVALID')
     if kind in ('sales_prices','purchase_prices'):
+        if 'reference_source' in binding and binding['reference_source']!='legacy_database':raise OperationError('OPERATION_REFERENCE_SOURCE_INVALID')
         regions=binding.get('regions')
         if not isinstance(regions,list) or not regions or len(set(regions))!=len(regions) or not set(regions)<=set(policy()['regions']):
             raise OperationError('OPERATION_REGIONS_INVALID')
@@ -225,6 +226,7 @@ def accept_snapshot(profile,report_id,digest,expected_scope=None):
     if path.is_symlink():raise OperationError('SNAPSHOT_PATH_INVALID')
     document=json.loads(path.read_text(encoding='utf-8'))
     if hashlib.sha256(_json(document).encode()).hexdigest()!=digest:raise OperationError('SNAPSHOT_DIGEST_INVALID')
+    if document.get('baseline_source')=='legacy_database':raise OperationError('LEGACY_DATABASE_REFERENCE_IS_READ_ONLY')
     if document.get('status')!='success' or document.get('kind') not in ('sales_prices','purchase_prices','idk_unpriced'):raise OperationError('SNAPSHOT_NOT_ACCEPTABLE')
     if expected_scope is not None and document.get('scope_hash')!=expected_scope:raise OperationError('SNAPSHOT_SCOPE_CHANGED')
     lock=root/'accept.lock'
@@ -272,6 +274,9 @@ def execute(profile,report_id,binding):
     from . import tools
     from .local_report import _assert_local_context
     _assert_local_context();binding=validate_binding(binding)
+    if binding.get('reference_source')=='legacy_database':
+        from .legacy_price_bridge import observe
+        return observe(binding)
     scope_hash=scope_fingerprint(binding)
     previous=load_baseline(profile,report_id,scope_hash)
     if binding['kind'] in ('fabric_review','slow_assignment'):

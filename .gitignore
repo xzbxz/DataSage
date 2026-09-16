@@ -187,3 +187,6 @@ datasage-canary-next/scripts/*
 
 !datasage-canary-next/plugins/datasage-query/legacy_message_templates.py
 !datasage-canary-next/tests/test_legacy_message_templates.py
+
+!datasage-canary-next/plugins/datasage-query/legacy_price_bridge.py
+!datasage-canary-next/tests/test_legacy_price_bridge.py
