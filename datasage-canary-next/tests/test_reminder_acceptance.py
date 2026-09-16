@@ -52,4 +52,25 @@ class ReminderAcceptanceTests(unittest.TestCase):
     def test_cycle_expiry_stops_before_business_query(self):
         with patch.object(r.report_evidence.tools,'_business_today',return_value=date(2026,9,23)),patch.object(r.operations,'execute',side_effect=AssertionError('query')):
             with self.assertRaisesRegex(io.IOErrorBoundary,'CYCLE_EXPIRED'):r.prepare(self.profile,'idk-current')
+
+    def test_task_uses_aware_legacy_week_period_with_naive_database_timestamp(self):
+        from contextlib import contextmanager
+        from test_legacy_workflow import source
+        reference={'regions':{'HCM':{'executors':[{'account':'original-exec','name':'Exec'}],
+            'managers':['original-manager'],'dynamic_sales_departments':['HCM Sales']}}}
+        (self.home/'legacy-recipient-reference.json').write_text(json.dumps(reference),encoding='utf-8')
+        rows=r.wf.freeze_plan([source()],[],r.WEEK,r.WEEK)['insert_rows']
+        rows[0]['frozen_at']='2026-09-15 09:00:00'
+        class DB:
+            def execute(self,sql,args,limit,**kwargs):
+                assert sql.startswith('SELECT')
+                if 'slow_moving_baseline' in sql:return rows,False,{}
+                if 'NOW(6)' in sql:return [{'at':'2026-09-16 10:00:00'}],False,{}
+                return [{'region':'HCM','main_dept':'HCM Sales','is_delete':'n','wecom_status':'payroll','wecom_account':'original-sales','person_name':'Synthetic Sales','position':'Sales'}],False,{}
+        @contextmanager
+        def snapshots(**kwargs):yield DB()
+        with patch.object(r.report_evidence.tools,'_ConsistentSnapshotExecutor',side_effect=snapshots):
+            value=r.prepare(self.profile,'hcm-task')
+        self.assertEqual('prepared',value['status']);self.assertFalse(value['evidence']['frozen'])
+        self.assertIn('Period:',value['notices'][0]['body'])
 if __name__=='__main__':unittest.main()

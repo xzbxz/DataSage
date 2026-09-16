@@ -97,7 +97,7 @@ def prepare(profile,case):
             if checked['status']!='ready':raise IOErrorBoundary('ACCEPTANCE_BASELINE_FIELDS_INCOMPLETE')
             operations._atomic(folder/'baseline.json',baseline)
             targets=wf.task_recipients(reference['regions'],employees,['HCM'])['HCM']
-            periods=wf.legacy_periods(datetime.fromisoformat(str(baseline[0]['frozen_at'])))
+            periods=wf.legacy_periods(delivery.workflow.at_utc8(WEEK))
             text,sheet=wf.task_draft('HCM',WEEK,periods['planned_start'][:10],periods['planned_end'][:10],baseline)
             file=folder/('HCM_'+WEEK+'_Products.xlsx');gen_workbook_xlsx([sheet],file)
             return stage(profile,case,[_notice('hcm-task-all-roles','HCM原执行人/在职销售客服/管理层（同文合并'+str(len(targets))+'人），使用已有冻结，未重冻',text,[file])],
