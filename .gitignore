@@ -235,3 +235,10 @@ datasage-canary-next/scripts/*
 !datasage-canary-next/tests/test_delivery_review.py
 !datasage-canary-next/docs/price-continuity-acceptance-20260917.md
 !datasage-canary-next/docs/hourly-acceptance-proposal-20260917.json
+
+# Manual customer package coverage and period proof
+!datasage-canary-next/plugins/datasage-query/workflow_customer_audit.py
+!datasage-canary-next/plugins/datasage-query/workflow_manual_boundaries.py
+!datasage-canary-next/tests/test_customer_audit.py
+!datasage-canary-next/tests/test_manual_boundaries.py
+!datasage-canary-next/docs/manual-acceptance-checklist-20260917.md

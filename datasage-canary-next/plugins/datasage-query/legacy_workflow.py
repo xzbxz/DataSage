@@ -280,6 +280,20 @@ def validate_complete_detail(packet):
     if any(number(summary[k])!=number(v) for k,v in checks.items()):raise WorkflowError('SUMMARY_DETAIL_MISMATCH')
     return {'checked':list(checks),'not_checked':unverified}
 
+def card_lines(value,font,max_width):
+    from PIL import Image,ImageDraw
+    measure=ImageDraw.Draw(Image.new('RGB',(1,1)));lines=[]
+    for paragraph in show(value).split('\n'):
+        line=''
+        for char in paragraph:
+            trial=line+char
+            if measure.textbbox((0,0),trial,font=font)[2]>max_width:
+                if not line:raise WorkflowError('CUSTOMER_IMAGE_GLYPH_TOO_WIDE')
+                lines.append(line);line=char
+            else:line=trial
+        lines.append(line)
+    return lines or ['']
+
 def card_png(customer,path):
     from PIL import Image,ImageDraw,ImageFont
     cfg=policy()['customer_artifacts'];widths=cfg['column_widths'];width=sum(widths)+16;rows=customer['products']
@@ -288,15 +302,25 @@ def card_png(customer,path):
     font=ImageFont.truetype(str(font_path),13) if font_path.exists() else ImageFont.load_default()
     title_font=ImageFont.truetype(str(font_path),15) if font_path.exists() else font
     title=str(customer['customer_name']);title_lines=[title[i:i+24] for i in range(0,len(title),24)] or ['Unknown']
-    top=12+len(title_lines)*23;image=Image.new('RGB',(width,top+30+26*len(rows)+8),'white');draw=ImageDraw.Draw(image)
+    top=12+len(title_lines)*23;layout=[]
+    for index,row in enumerate([cfg['headers'],*rows]):
+        cells=[card_lines(value,font,cw-12) for value,cw in zip(row,widths)]
+        height=max(30 if index==0 else 26,max(len(lines) for lines in cells)*18+8)
+        layout.append((cells,height))
+    height=top+sum(h for _,h in layout)+8
+    if width*height>60000000:raise WorkflowError('CUSTOMER_IMAGE_PIXEL_BUDGET_EXCEEDED')
+    image=Image.new('RGB',(width,height),'white');draw=ImageDraw.Draw(image)
     for i,line in enumerate(title_lines):draw.text((8,8+i*23),line,font=title_font,fill='#172533')
-    for ri,row in enumerate([cfg['headers'],*rows]):
-        y=top+(0 if ri==0 else 30+(ri-1)*26);height=30 if ri==0 else 26;x=8
-        for value,cw in zip(row,widths):
-            text=show(value)
-            if draw.textbbox((0,0),text,font=font)[2]>cw-12:raise WorkflowError('CUSTOMER_IMAGE_CELL_TOO_LONG')
-            draw.rectangle((x,y,x+cw,y+height),fill='#e9eff5' if ri==0 else 'white',outline='#8998a8');draw.text((x+6,y+5),text,font=font,fill='#172533');x+=cw
+    y=top
+    for index,(cells,height) in enumerate(layout):
+        x=8
+        for lines,cw in zip(cells,widths):
+            draw.rectangle((x,y,x+cw,y+height),fill='#e9eff5' if index==0 else 'white',outline='#8998a8')
+            for line_index,text in enumerate(lines):draw.text((x+6,y+5+line_index*18),text,font=font,fill='#172533')
+            x+=cw
+        y+=height
     image.save(path,'PNG')
+
 
 def customer_zip(package,outdir,week):
     token=account_token(package['account'])[:12];folder=outdir/('images_'+token);folder.mkdir()

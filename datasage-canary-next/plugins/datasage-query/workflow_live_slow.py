@@ -27,6 +27,15 @@ def latest(store,department,week):
     rows=[r for r in store.rows('cycles') if r['cycle_id'].startswith('ls-'+prefix)]
     return max(rows,key=lambda r:cycle.payload(r)['generation']) if rows else None
 def persist(store,key,data,status='planned'):cycle.persist(store,key,data['scope'],status,data)
+def generation_number(previous,*,force=False,reason=None):
+    if force and (not isinstance(reason,str) or not 5<=len(reason.strip())<=120):raise ValueError('EXPLICIT_GENERATION_REASON_REQUIRED')
+    if previous is None:return 0
+    number=cycle.payload(previous)['generation']
+    if force:
+        if previous['status']!='committed':raise ValueError('INCOMPLETE_GENERATION_CANNOT_BE_BYPASSED')
+        number+=1
+    if type(number) is not int or not 0<=number<=999:raise ValueError('GENERATION_BUDGET_EXCEEDED')
+    return number
 def install_input(store,scope,stock,monthly):
     for role,rows in [('stock_input',stock),('monthly_stock_input',monthly)]:
         store.replace_scope(role,scope,rows)
@@ -34,7 +43,7 @@ def install_input(store,scope,stock,monthly):
         if base.normalized(role,actual)!=base.normalized(role,rows):raise ValueError('LIVE_INPUT_READBACK_MISMATCH')
 def prepare(department,*,new_generation=False,reason=None,reports=True):
     if department not in live.DEPARTMENTS:raise ValueError('LIVE_DEPARTMENT_REJECTED')
-    if new_generation and (not isinstance(reason,str) or not 5<=len(reason.strip())<=120):raise ValueError('EXPLICIT_GENERATION_REASON_REQUIRED')
+    generation_number(None,force=new_generation,reason=reason)
     store=live.Store()
     try:
         with live.lock(store,'slow-'+department.lower()):
@@ -58,9 +67,7 @@ def prepare(department,*,new_generation=False,reason=None,reports=True):
                     data['report_observation']=evidence;persist(store,key,data)
                 if all(p in data['phases'] for p in ('weekly','monthly')) or not reports:return summary(old,data,unchanged=True)
             else:
-                if old and old['status']!='committed':raise ValueError('INCOMPLETE_GENERATION_CANNOT_BE_BYPASSED')
-                generation=cycle.payload(old)['generation']+1 if old else 0
-                if generation>999:raise ValueError('GENERATION_BUDGET_EXCEEDED')
+                generation=generation_number(old,force=new_generation,reason=reason)
                 scope=department.lower()+'-'+week.lower()+'-g'+str(generation);key='ls-'+scope
                 stock,monthly,evidence=observe_department(department)
                 if evidence['week']!=week:raise ValueError('WEEK_CHANGED_DURING_OBSERVATION')

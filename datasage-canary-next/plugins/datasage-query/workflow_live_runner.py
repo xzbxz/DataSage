@@ -4,7 +4,7 @@ import json
 from . import workflow_live_store as live,workflow_storage as base,workflow_cycle as cycle
 from . import workflow_live_prices as prices,workflow_live_slow as slow,workflow_schedule as schedule
 
-ACTIONS=('init','prices','observe-prices','deliver-prices','anomaly-evidence','continuity-replay','slow-prepare','slow-preview','slow-deliver','slow-new-generation','status','schedule-plan','scheduled-tick','lock-check')
+ACTIONS=('customer-audit','customer-coverage','customer-repair','customer-samples','customer-sample-send','init','prices','observe-prices','deliver-prices','anomaly-evidence','continuity-replay','slow-prepare','slow-preview','slow-deliver','slow-new-generation','status','schedule-plan','scheduled-tick','lock-check')
 def status():
     from . import reminder_acceptance
     reference=reminder_acceptance._reference(base.profile())
@@ -74,6 +74,9 @@ def lock_check():
 def run(action,*,department=None,job=None,reason=None):
     if action not in ACTIONS:raise ValueError('LIVE_ACTION_REJECTED')
     if action.startswith('slow-') and department not in live.DEPARTMENTS:raise ValueError('LIVE_DEPARTMENT_REQUIRED')
+    if action in ('customer-audit','customer-coverage','customer-repair','customer-samples','customer-sample-send'):
+        from . import workflow_customer_audit as audit
+        return {'customer-audit':audit.run,'customer-coverage':audit.compact_and_summarize,'customer-repair':audit.repair_artifacts,'customer-samples':audit.prepare_samples,'customer-sample-send':audit.send_samples}[action]()
     if action=='init':return live.bootstrap()
     if action in ('anomaly-evidence','continuity-replay'):
         from . import workflow_price_diagnostics
