@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import OrderedDict
+import threading
 import time
 import unicodedata
 from functools import lru_cache
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from . import contract_store, contracts, db_runtime, sql_identifiers
 from .capability_contract import (
@@ -62,6 +64,9 @@ _PUBLIC_CANDIDATE_LIST_FIELDS = ("filter_values", "filter_role_candidates")
 _DISPLAY_NAME_ISSUER = object()
 _ENTITY_REF_PREFIX = "entity_ref_v1_"
 _ENTITY_REF_HEX_LENGTH = 64
+_OPAQUE_REF_CACHE_MAX_ENTRIES = 512
+_OPAQUE_REF_CACHE: OrderedDict[str, tuple[str, str]] = OrderedDict()
+_OPAQUE_REF_CACHE_LOCK = threading.RLock()
 
 
 def opaque_entity_ref(entity_type: str, canonical_value: Any) -> str:
@@ -74,6 +79,40 @@ def opaque_entity_ref(entity_type: str, canonical_value: Any) -> str:
         + str(canonical_value)
     )
     return _ENTITY_REF_PREFIX + hashlib.sha256(material.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def remember_opaque_entity_ref(
+    logical_role: str,
+    canonical_value: Any,
+) -> str:
+    """Remember a DB-issued ref for a best-effort same-process fast path.
+
+    The map is bounded, process-local, and never serialized.  Resolver SQL
+    still restricts the role/type/source through the registry and validates the
+    returned row against the v1 digest, so the map cannot authorize arbitrary
+    IDs or survive a process restart.
+    """
+
+    reference = opaque_entity_ref(logical_role, canonical_value)
+    role = str(logical_role)
+    value = str(canonical_value)
+    with _OPAQUE_REF_CACHE_LOCK:
+        _OPAQUE_REF_CACHE.pop(reference, None)
+        _OPAQUE_REF_CACHE[reference] = (role, value)
+        while len(_OPAQUE_REF_CACHE) > _OPAQUE_REF_CACHE_MAX_ENTRIES:
+            _OPAQUE_REF_CACHE.popitem(last=False)
+    return reference
+
+
+def _cached_opaque_entity_ref(token: str) -> tuple[str, str] | None:
+    """Return and refresh one process-local ref locator, if present."""
+
+    with _OPAQUE_REF_CACHE_LOCK:
+        entry = _OPAQUE_REF_CACHE.get(token)
+        if entry is None:
+            return None
+        _OPAQUE_REF_CACHE.move_to_end(token)
+        return entry
 
 
 def parse_opaque_entity_ref(token: str) -> str | None:
@@ -832,17 +871,17 @@ def _build_candidate_query(
     return sql, params
 
 
-def _build_opaque_reference_query(
-    digest: str,
+def _build_reference_query(
     entity_types: set[str],
     *,
-    logical_roles: Mapping[str, Sequence[str]] | None = None,
+    logical_roles: Mapping[str, Sequence[str]] | None,
+    match_builder: Callable[[str, str], tuple[str, Sequence[Any]]],
 ) -> tuple[str, list[Any]]:
-    """Build a bounded exact lookup for a Profile-issued reference.
+    """Build one registered candidate query with a caller-supplied match.
 
-    The query is assembled only from the registered candidate sources and their
-    declared identity columns. The caller supplies only the opaque digest; it
-    never supplies a table, column, or raw identity value.
+    Both the cold SHA2 and warm indexed paths use this constructor, so table,
+    identity-column, display-column, and fixed-filter validation cannot drift.
+    Only the final match predicate and its parameters differ.
     """
 
     branches: list[str] = []
@@ -882,8 +921,12 @@ def _build_opaque_reference_query(
         if not isinstance(roles, Sequence) or isinstance(roles, (str, bytes)) or not roles:
             roles = (entity_type,)
         for logical_role in dict.fromkeys(str(role) for role in roles):
-            for identity_column in identity_columns:
+            for identity_column in dict.fromkeys(identity_columns):
                 quoted_identity = raw_quote_identifier(identity_column)
+                match_sql, match_params = match_builder(
+                    logical_role,
+                    quoted_identity,
+                )
                 branches.append(
                     "SELECT %s AS entity_type, "
                     f"CAST({raw_quote_identifier(id_column)} AS CHAR) AS canonical_id, "
@@ -892,12 +935,11 @@ def _build_opaque_reference_query(
                     f"CAST({quoted_identity} AS CHAR) AS matched_value, "
                     "0 AS match_rank "
                     f"FROM {table} WHERE {quoted_identity} IS NOT NULL"
-                    f"{required_sql} AND SHA2(CONCAT(%s, %s, CHAR(0), "
-                    f"CAST({quoted_identity} AS CHAR)), 256) = %s"
+                    f"{required_sql} AND {match_sql}"
                 )
                 params.append(entity_type)
                 params.extend(required_params)
-                params.extend(["datasage-entity-ref/v1\0", logical_role, digest])
+                params.extend(match_params)
     if not branches:
         raise EntityFailure("ENTITY_REF_SCOPE_REQUIRED", "实体引用没有受控候选类型范围。")
     sql = (
@@ -907,6 +949,45 @@ def _build_opaque_reference_query(
     )
     params.append(51)
     return sql, params
+
+
+def _build_opaque_reference_query(
+    digest: str,
+    entity_types: set[str],
+    *,
+    logical_roles: Mapping[str, Sequence[str]] | None = None,
+) -> tuple[str, list[Any]]:
+    """Build the original bounded SHA2 lookup for a Profile-issued ref."""
+
+    def sha2_match(logical_role: str, quoted_identity: str):
+        return (
+            "SHA2(CONCAT(%s, %s, CHAR(0), "
+            f"CAST({quoted_identity} AS CHAR)), 256) = %s",
+            ["datasage-entity-ref/v1\0", logical_role, digest],
+        )
+
+    return _build_reference_query(
+        entity_types,
+        logical_roles=logical_roles,
+        match_builder=sha2_match,
+    )
+
+
+def _build_cached_reference_query(
+    logical_role: str,
+    canonical_value: str,
+    entity_types: set[str],
+) -> tuple[str, list[Any]]:
+    """Build an indexed recheck for a remembered canonical identity."""
+
+    def indexed_match(_logical_role: str, quoted_identity: str):
+        return f"{quoted_identity} = %s", [canonical_value]
+
+    return _build_reference_query(
+        entity_types,
+        logical_roles={entity_type: (logical_role,) for entity_type in entity_types},
+        match_builder=indexed_match,
+    )
 
 
 def _effective_dimensions(semantics, metric=None):
@@ -1159,6 +1240,57 @@ def _candidate_rows(
     return result
 
 
+def _opaque_reference_candidates(
+    rows: Sequence[Mapping[str, Any]],
+    token: str,
+    domain: str | None,
+    *,
+    metric: str | None,
+    attribution_mode: str | None,
+    semantics: Mapping[str, Any] | None,
+    logical_roles: Mapping[str, Sequence[str]],
+) -> list[dict[str, Any]]:
+    """Validate cached/hash rows and recover the ref's exact logical role."""
+
+    candidates = _candidate_rows(
+        rows,
+        domain,
+        metric=metric,
+        attribution_mode=attribution_mode,
+        semantics=semantics,
+        token=None,
+        public=False,
+    )
+    verified: list[dict[str, Any]] = []
+    for candidate in candidates:
+        roles = logical_roles.get(
+            str(candidate["entity_type"]),
+            (str(candidate["entity_type"]),),
+        )
+        matching_roles = [
+            logical_role
+            for logical_role in roles
+            if any(
+                opaque_entity_ref(logical_role, value) == token
+                for value in (
+                    candidate.get("canonical_id"),
+                    candidate.get("canonical_code"),
+                )
+                if value not in (None, "")
+            )
+        ]
+        if not matching_roles:
+            continue
+        if len(matching_roles) == 1:
+            # The reference namespace already selected the logical role.  A
+            # multi-role entity type therefore remains resolvable without
+            # turning a role-specific ref into an artificial ambiguity.
+            candidate["filter_role"] = matching_roles[0]
+            candidate.pop("filter_role_candidates", None)
+        verified.append(candidate)
+    return verified
+
+
 def datasage_entity_resolve(args: dict[str, Any], **_kwargs: Any) -> str:
     """Resolve registered aliases or return bounded, non-binding candidates."""
 
@@ -1254,65 +1386,58 @@ def datasage_entity_resolve(args: dict[str, Any], **_kwargs: Any) -> str:
                     "ENTITY_REF_SCOPE_REQUIRED",
                     "实体引用在当前业务范围没有受控实体来源。",
                 )
-            sql, params = _build_opaque_reference_query(
-                opaque_digest,
-                source_types,
-                logical_roles=logical_roles,
-            )
             deadline_at = _kwargs.get("deadline_at")
             if deadline_at is not None and time.monotonic() >= deadline_at:
                 raise EntityFailure("BATCH_DEADLINE_EXCEEDED", "实体解析已超过调用总时限。")
             execution_kwargs = {"deadline_at": deadline_at} if deadline_at is not None else {}
-            rows, truncated = db_runtime.execute(sql, params, 50, **execution_kwargs)
-            searched_types.update(source_types)
-            candidates = _candidate_rows(
-                rows,
-                domain,
-                metric=metric,
-                attribution_mode=attribution_mode,
-                semantics=semantics,
-                token=None,
-                public=False,
-            )
-            candidates = [
-                candidate
-                for candidate in candidates
-                if any(
-                    opaque_entity_ref(logical_role, value)
-                    == token
-                    for logical_role in logical_roles.get(
-                        str(candidate["entity_type"]),
-                        (str(candidate["entity_type"]),),
+            candidates: list[dict[str, Any]] = []
+            truncated = False
+            cached_locator = _cached_opaque_entity_ref(token)
+            if cached_locator is not None:
+                cached_role, cached_value = cached_locator
+                cached_source_types = {
+                    entity_type
+                    for entity_type in source_types
+                    if cached_role in logical_roles.get(entity_type, ())
+                }
+                if cached_source_types:
+                    sql, params = _build_cached_reference_query(
+                        cached_role,
+                        cached_value,
+                        cached_source_types,
                     )
-                    for value in (
-                        candidate.get("canonical_id"),
-                        candidate.get("canonical_code"),
+                    rows, truncated = db_runtime.execute(
+                        sql, params, 50, **execution_kwargs
                     )
-                    if value not in (None, "")
-                )
-            ]
-            for candidate in candidates:
-                matching_roles = [
-                    logical_role
-                    for logical_role in logical_roles.get(
-                        str(candidate["entity_type"]),
-                        (str(candidate["entity_type"]),),
-                    )
-                    if any(
-                        opaque_entity_ref(logical_role, value) == token
-                        for value in (
-                            candidate.get("canonical_id"),
-                            candidate.get("canonical_code"),
+                    if not truncated:
+                        candidates = _opaque_reference_candidates(
+                            rows,
+                            token,
+                            domain,
+                            metric=metric,
+                            attribution_mode=attribution_mode,
+                            semantics=semantics,
+                            logical_roles=logical_roles,
                         )
-                        if value not in (None, "")
-                    )
-                ]
-                if len(matching_roles) == 1:
-                    # The reference namespace already selected the logical
-                    # role.  Resolve that role without treating the entity
-                    # type's other valid roles as an ambiguity.
-                    candidate["filter_role"] = matching_roles[0]
-                    candidate.pop("filter_role_candidates", None)
+            if not candidates:
+                sql, params = _build_opaque_reference_query(
+                    opaque_digest,
+                    source_types,
+                    logical_roles=logical_roles,
+                )
+                rows, truncated = db_runtime.execute(
+                    sql, params, 50, **execution_kwargs
+                )
+                candidates = _opaque_reference_candidates(
+                    rows,
+                    token,
+                    domain,
+                    metric=metric,
+                    attribution_mode=attribution_mode,
+                    semantics=semantics,
+                    logical_roles=logical_roles,
+                )
+            searched_types.update(source_types)
             if candidates:
                 status, must_clarify = _exact_resolution_status(
                     candidates,

@@ -32,6 +32,13 @@ class ProfitContractTests(unittest.TestCase):
         self.assertFalse(self.sql_trace)
         self.assertNotIn("vk_ads.", json.dumps(data))
 
+    def test_profit_disclosures_bound_cross_ledger_causality_and_missing_values(self):
+        semantics=plugin.contract_store.read_yaml('plugins/datasage-query/contracts/profit-semantics.yaml')
+        defaults={item['id']:item['text'] for item in semantics['default_disclosures']}
+        self.assertIn('不能直接互相替代',defaults['profit.scope'])
+        self.assertIn('不能单独证明当次差额的原因或方向',defaults['profit.scope'])
+        self.assertIn('既不能解释为0，也不能据此断言为非0',defaults['profit.missing-fees'])
+
     def test_weighted_margin_sums_before_dividing_and_keeps_month_grain(self):
         self.customer_rows([('1','2026-08','1','A',100,30,2),('2','2026-08','1','A',300,30,3),('3','2026-09','1','A',900,900,4)])
         data=self.result(self.query(metric('customer_month_gross_margin','profit')))

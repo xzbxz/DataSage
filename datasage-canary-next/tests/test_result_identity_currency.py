@@ -242,6 +242,323 @@ class ResultIdentityCurrencyTests(unittest.TestCase):
             unknown["states"]["unclassified_amount_state"],
         )
 
+    def test_v1_ref_uses_process_local_index_hint_then_keeps_hash_fallback(self):
+        harness = self._profit_fixture()
+        harness.conn.create_function(
+            "SHA2",
+            2,
+            lambda value, _algorithm: None
+            if value is None
+            else sha256(str(value).encode("utf-8")).hexdigest(),
+        )
+        harness.insert(
+            "vk_dwd.customer_dwd",
+            "customer_id,customer_no,customer_name,is_delete,is_void",
+            [("customer-a", "CUS-A", "可回查客户", "n", "n")],
+        )
+        harness.customer_rows(
+            [("row-a", "2026-08", "customer-a", "可回查客户", 123, 30, 0)]
+        )
+        with plugin.entities._OPAQUE_REF_CACHE_LOCK:
+            plugin.entities._OPAQUE_REF_CACHE.clear()
+        self.addCleanup(plugin.entities._OPAQUE_REF_CACHE.clear)
+        result = harness.result(
+            harness.query(
+                metric(
+                    "customer_month_sales_revenue",
+                    "profit",
+                    dimensions=["customer"],
+                )
+            )
+        )
+        ref = next(
+            dimension["entity_ref"]
+            for dimension in result["rows"][0]["dimensions"]
+            if dimension["label"] == "利润报表客户"
+        )
+
+        def resolver_execute(sql, params, limit, *, deadline_at=None):
+            rows, truncated, _source = harness.execute(
+                sql,
+                params,
+                limit,
+                deadline_at=deadline_at,
+            )
+            return rows, truncated
+
+        with patch.object(plugin.entities.db_runtime, "execute", resolver_execute):
+            resolved = harness.invoke(
+                "datasage_entity_resolve",
+                {
+                    "token": ref,
+                    "entity_types": ["customer"],
+                    "domain": "profit",
+                    "metric": "customer_month_sales_revenue",
+                },
+            )
+        self.assertEqual("resolved", resolved["status"], resolved)
+        fast_sql = harness.sql_trace[-1]["sql"]
+        self.assertNotIn("SHA2(", fast_sql)
+        self.assertIn("`customer_id` = %s", fast_sql)
+
+        # A legacy v1 ref with no process-local entry still takes the original
+        # governed hash path; its format and resolution behavior remain valid.
+        with plugin.entities._OPAQUE_REF_CACHE_LOCK:
+            plugin.entities._OPAQUE_REF_CACHE.clear()
+        with patch.object(plugin.entities.db_runtime, "execute", resolver_execute):
+            resolved = harness.invoke(
+                "datasage_entity_resolve",
+                {
+                    "token": ref,
+                    "entity_types": ["customer"],
+                    "domain": "profit",
+                    "metric": "customer_month_sales_revenue",
+                },
+            )
+        self.assertEqual("resolved", resolved["status"], resolved)
+        self.assertIn("SHA2(", harness.sql_trace[-1]["sql"])
+
+    def test_warm_and_cold_v1_resolution_keep_id_code_collision_ambiguous(self):
+        harness = self._profit_fixture()
+        harness.conn.create_function(
+            "SHA2",
+            2,
+            lambda value, _algorithm: None
+            if value is None
+            else sha256(str(value).encode("utf-8")).hexdigest(),
+        )
+        harness.insert(
+            "vk_dwd.customer_dwd",
+            "customer_id,customer_no,customer_name,is_delete,is_void",
+            [
+                ("123", "CUS-A", "同一展示名", "n", "n"),
+                ("456", "123", "同一展示名", "n", "n"),
+            ],
+        )
+        harness.customer_rows(
+            [
+                ("row-a", "2026-08", "123", "同一展示名", 100, 30, 0),
+                ("row-b", "2026-08", "456", "同一展示名", 200, 50, 0),
+            ]
+        )
+        with plugin.entities._OPAQUE_REF_CACHE_LOCK:
+            plugin.entities._OPAQUE_REF_CACHE.clear()
+        self.addCleanup(plugin.entities._OPAQUE_REF_CACHE.clear)
+        result = harness.result(
+            harness.query(
+                metric(
+                    "customer_month_sales_revenue",
+                    "profit",
+                    dimensions=["customer"],
+                )
+            )
+        )
+        ref = plugin.entities.opaque_entity_ref("customer", "123")
+        self.assertIn(
+            ref,
+            {
+                dimension["entity_ref"]
+                for row in result["rows"]
+                for dimension in row["dimensions"]
+                if dimension["label"] == "利润报表客户"
+            },
+        )
+
+        def resolver_execute(sql, params, limit, *, deadline_at=None):
+            rows, truncated, _source = harness.execute(
+                sql,
+                params,
+                limit,
+                deadline_at=deadline_at,
+            )
+            return rows, truncated
+
+        resolver_args = {
+            "token": ref,
+            "entity_types": ["customer"],
+            "domain": "profit",
+            "metric": "customer_month_sales_revenue",
+        }
+        with patch.object(plugin.entities.db_runtime, "execute", resolver_execute):
+            warm = harness.invoke("datasage_entity_resolve", resolver_args)
+        self.assertEqual("ambiguous", warm["status"], warm)
+        self.assertEqual(2, warm["candidate_count"])
+        warm_sql = harness.sql_trace[-1]["sql"]
+        self.assertNotIn("SHA2(", warm_sql)
+        self.assertIn("`customer_id` = %s", warm_sql)
+        self.assertIn("`customer_no` = %s", warm_sql)
+
+        with plugin.entities._OPAQUE_REF_CACHE_LOCK:
+            plugin.entities._OPAQUE_REF_CACHE.clear()
+        with patch.object(plugin.entities.db_runtime, "execute", resolver_execute):
+            cold = harness.invoke("datasage_entity_resolve", resolver_args)
+        self.assertEqual("ambiguous", cold["status"], cold)
+        self.assertEqual(2, cold["candidate_count"])
+        cold_ids = {
+            candidate["canonical_id"] for candidate in cold["candidates"]
+        }
+        warm_ids = {
+            candidate["canonical_id"] for candidate in warm["candidates"]
+        }
+        self.assertEqual(cold_ids, warm_ids)
+        self.assertIn("SHA2(", harness.sql_trace[-1]["sql"])
+
+    def test_truncated_warm_locator_falls_back_to_hash_before_resolution(self):
+        harness = self._profit_fixture()
+        harness.conn.create_function(
+            "SHA2",
+            2,
+            lambda value, _algorithm: None
+            if value is None
+            else sha256(str(value).encode("utf-8")).hexdigest(),
+        )
+        master_rows = [("123", "CUS-A", "目标客户", "n", "n")]
+        master_rows.extend(
+            (f"other-{index}", "123", f"编码碰撞-{index}", "n", "n")
+            for index in range(60)
+        )
+        harness.insert(
+            "vk_dwd.customer_dwd",
+            "customer_id,customer_no,customer_name,is_delete,is_void",
+            master_rows,
+        )
+        harness.customer_rows(
+            [("row-a", "2026-08", "123", "目标客户", 123, 30, 0)]
+        )
+        with plugin.entities._OPAQUE_REF_CACHE_LOCK:
+            plugin.entities._OPAQUE_REF_CACHE.clear()
+        self.addCleanup(plugin.entities._OPAQUE_REF_CACHE.clear)
+        result = harness.result(
+            harness.query(
+                metric(
+                    "customer_month_sales_revenue",
+                    "profit",
+                    dimensions=["customer"],
+                )
+            )
+        )
+        ref = result["rows"][0]["dimensions"][0]["entity_ref"]
+
+        def resolver_execute(sql, params, limit, *, deadline_at=None):
+            rows, truncated, _source = harness.execute(
+                sql,
+                params,
+                limit,
+                deadline_at=deadline_at,
+            )
+            return rows, truncated
+
+        resolver_args = {
+            "token": ref,
+            "entity_types": ["customer"],
+            "domain": "profit",
+            "metric": "customer_month_sales_revenue",
+        }
+        with patch.object(plugin.entities.db_runtime, "execute", resolver_execute):
+            warm = harness.invoke("datasage_entity_resolve", resolver_args)
+        self.assertEqual("ambiguous", warm["status"], warm)
+        self.assertTrue(warm["truncated"])
+        self.assertIn("SHA2(", harness.sql_trace[-1]["sql"])
+        self.assertNotIn("SHA2(", harness.sql_trace[-2]["sql"])
+
+        with plugin.entities._OPAQUE_REF_CACHE_LOCK:
+            plugin.entities._OPAQUE_REF_CACHE.clear()
+        with patch.object(plugin.entities.db_runtime, "execute", resolver_execute):
+            cold = harness.invoke("datasage_entity_resolve", resolver_args)
+        self.assertEqual("ambiguous", cold["status"], cold)
+        self.assertTrue(cold["truncated"])
+        self.assertEqual(
+            {item["canonical_id"] for item in warm["candidates"]},
+            {item["canonical_id"] for item in cold["candidates"]},
+        )
+
+    def test_cached_ref_cannot_cross_role_scope_or_resurrect_deleted_source(self):
+        harness = self._profit_fixture()
+        harness.conn.create_function(
+            "SHA2",
+            2,
+            lambda value, _algorithm: None
+            if value is None
+            else sha256(str(value).encode("utf-8")).hexdigest(),
+        )
+        harness.insert(
+            "vk_dwd.customer_dwd",
+            "customer_id,customer_no,customer_name,is_delete,is_void",
+            [("customer-a", "CUS-A", "可回查客户", "n", "n")],
+        )
+        harness.customer_rows(
+            [("row-a", "2026-08", "customer-a", "可回查客户", 123, 30, 0)]
+        )
+        with plugin.entities._OPAQUE_REF_CACHE_LOCK:
+            plugin.entities._OPAQUE_REF_CACHE.clear()
+        self.addCleanup(plugin.entities._OPAQUE_REF_CACHE.clear)
+        result = harness.result(
+            harness.query(
+                metric(
+                    "customer_month_sales_revenue",
+                    "profit",
+                    dimensions=["customer"],
+                )
+            )
+        )
+        ref = result["rows"][0]["dimensions"][0]["entity_ref"]
+
+        def resolver_execute(sql, params, limit, *, deadline_at=None):
+            rows, truncated, _source = harness.execute(
+                sql,
+                params,
+                limit,
+                deadline_at=deadline_at,
+            )
+            return rows, truncated
+
+        with patch.object(plugin.entities.db_runtime, "execute", resolver_execute):
+            wrong_scope = harness.invoke(
+                "datasage_entity_resolve",
+                {
+                    "token": ref,
+                    "entity_types": ["customer"],
+                    "domain": "profit",
+                    "metric": "product_month_sales_revenue",
+                },
+            )
+        self.assertEqual("failed", wrong_scope["status"], wrong_scope)
+        self.assertEqual("UNSUPPORTED_ENTITY_ROLE", wrong_scope["error"]["code"])
+
+        harness.conn.execute(
+            "DELETE FROM vk_dwd.customer_dwd WHERE customer_id='customer-a'"
+        )
+        with patch.object(plugin.entities.db_runtime, "execute", resolver_execute):
+            deleted = harness.invoke(
+                "datasage_entity_resolve",
+                {
+                    "token": ref,
+                    "entity_types": ["customer"],
+                    "domain": "profit",
+                    "metric": "customer_month_sales_revenue",
+                },
+            )
+        self.assertEqual("not_found", deleted["status"], deleted)
+        self.assertEqual(0, deleted["candidate_count"])
+
+        harness.insert(
+            "vk_dwd.customer_dwd",
+            "customer_id,customer_no,customer_name,is_delete,is_void",
+            [("customer-a", "CUS-A", "可回查客户", "y", "n")],
+        )
+        with patch.object(plugin.entities.db_runtime, "execute", resolver_execute):
+            disabled = harness.invoke(
+                "datasage_entity_resolve",
+                {
+                    "token": ref,
+                    "entity_types": ["customer"],
+                    "domain": "profit",
+                    "metric": "customer_month_sales_revenue",
+                },
+            )
+        self.assertEqual("not_found", disabled["status"], disabled)
+        self.assertEqual(0, disabled["candidate_count"])
+
     def test_public_ref_resolves_then_reenters_existing_metric_filter_path(self):
         harness = self._profit_fixture()
         harness.conn.create_function(

@@ -9,6 +9,17 @@ import test_business_contracts as base
 
 
 class ProfileDiagnosticsTests(unittest.TestCase):
+    def test_code_fingerprint_ignores_serialization_context_but_preserves_behavior(self):
+        health=base.runtime_health
+        first=compile('def value():\n return (1, "text")\n','first.py','exec').co_consts[0]
+        second=compile('\n\ndef value():\n return (1, "text")\n','second.py','exec').co_consts[0]
+        changed=compile('def value():\n return (2, "text")\n','first.py','exec').co_consts[0]
+        before=health._code_fingerprint(first)
+        extra_references=[first,first.co_consts,first.co_names]
+        self.assertEqual(before,health._code_fingerprint(first))
+        self.assertEqual(before,health._code_fingerprint(second))
+        self.assertNotEqual(before,health._code_fingerprint(changed))
+
     def test_registration_log_identifies_emitting_process_and_pinned_contract(self):
         health=base.runtime_health
         snapshot={'current_process_contract_snapshot_loaded':True,'current_process_contract_snapshot_sha256':'pinned',
@@ -20,6 +31,7 @@ class ProfileDiagnosticsTests(unittest.TestCase):
         self.assertEqual(value['current_process_contract_snapshot_sha256'],'pinned')
         self.assertEqual(value['running_gateway_loaded_revision'],'not_observed')
         self.assertEqual(len(value['registration_code_sha256']),64)
+        self.assertEqual(value['registration_code_hash_basis'],'canonical-python-code/v1')
 
     def test_registration_diagnostic_failure_is_bounded_and_nonfatal(self):
         health=base.runtime_health

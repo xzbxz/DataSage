@@ -4850,7 +4850,10 @@ def _public_scope_entities(
                 if stable_values:
                     break
             entity_refs = [
-                entities.opaque_entity_ref(role, value)
+                entities.remember_opaque_entity_ref(
+                    role,
+                    value,
+                )
                 for value in dict.fromkeys(stable_values)
             ]
             identity_metadata = {
@@ -4950,7 +4953,7 @@ def _claim_entity_identity(
             continue
         if isinstance(raw_value, str) and not raw_value.strip():
             continue
-        return entities.opaque_entity_ref(
+        return entities.remember_opaque_entity_ref(
             str(binding.get("dimension") or "entity"),
             raw_value,
         ), "identified"

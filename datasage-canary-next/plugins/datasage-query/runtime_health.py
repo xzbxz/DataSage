@@ -6,12 +6,12 @@ from pathlib import Path
 import hashlib
 import json
 import logging
-import marshal
 import os
 import re
 import stat
 import subprocess
 from typing import Any
+from types import CodeType
 from datetime import datetime, timezone
 
 from agent.secret_scope import get_secret
@@ -315,6 +315,27 @@ def source_diagnostics() -> dict[str, Any]:
     }
 
 
+def _code_fingerprint(code: CodeType) -> str:
+    """Hash semantic code fields, not marshal reference flags or file paths."""
+    def canonical(value):
+        if isinstance(value, CodeType):
+            return {'code': value.co_code.hex(), 'exceptions': value.co_exceptiontable.hex(), 'name': value.co_name,
+                    'args': [value.co_argcount, value.co_posonlyargcount, value.co_kwonlyargcount],
+                    'flags': value.co_flags, 'names': value.co_names, 'variables': value.co_varnames,
+                    'freevars': value.co_freevars, 'cellvars': value.co_cellvars,
+                    'constants': [canonical(item) for item in value.co_consts]}
+        if isinstance(value, tuple):return {'tuple': [canonical(item) for item in value]}
+        if isinstance(value, frozenset):
+            items=[canonical(item) for item in value]
+            return {'frozenset': sorted(items,key=lambda item:json.dumps(item,sort_keys=True))}
+        if isinstance(value, bytes):return {'bytes': value.hex()}
+        if value is None or value is Ellipsis or type(value) in (bool,int,float,complex,str):
+            return {'type': type(value).__name__, 'value': repr(value)}
+        raise ValueError('unsupported_code_constant')
+    content=json.dumps(canonical(code),sort_keys=True,separators=(',',':')).encode('utf-8')
+    return hashlib.sha256(content).hexdigest()
+
+
 def record_plugin_initialization(registration_code) -> None:
     """Log this registering process's pinned identity, without runtime actions.
 
@@ -325,10 +346,11 @@ def record_plugin_initialization(registration_code) -> None:
     try:
         record = source_diagnostics()
         record.update(
-            event="datasage_plugin_initialized/v1",
+            event="datasage_plugin_initialized/v2",
             pid=os.getpid(),
             observed_at_utc=datetime.now(timezone.utc).isoformat(),
-            registration_code_sha256=hashlib.sha256(marshal.dumps(registration_code)).hexdigest(),
+            registration_code_sha256=_code_fingerprint(registration_code),
+            registration_code_hash_basis="canonical-python-code/v1",
         )
         logger.info("DATASAGE_PLUGIN_INITIALIZED %s", json.dumps(record, sort_keys=True))
     except Exception as exc:
