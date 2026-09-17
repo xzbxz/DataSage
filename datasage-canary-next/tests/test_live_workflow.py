@@ -13,35 +13,38 @@ runner=importlib.import_module(base.TEST_PACKAGE+'.workflow_live_runner')
 storage=importlib.import_module(base.TEST_PACKAGE+'.workflow_storage')
 bridge=importlib.import_module(base.TEST_PACKAGE+'.legacy_price_bridge')
 
+def key_issues(side,before,current,document):
+    return prices.continuity.plan(side,before,current,NOW)['document']['continuation']['anomaly_counts']
+
 class LiveWorkflowTests(unittest.TestCase):
     def test_namespace_does_not_adopt_fixture_or_production(self):
         live.validate_binding(live.expected_binding())
         for k,v in [('prefix',storage.PREFIX),('mode','production'),('owner',storage.OWNER),('enabled',1),('production_writes',0),('schedule_enabled',1)]:
             with self.assertRaises(ValueError):live.validate_binding({**live.expected_binding(),k:v})
         self.assertFalse(set(live.TABLES.values()) & set(storage.TABLES.values()))
-    def test_old_sales_missing_historical_units_blocks_without_backfill(self):
+    def test_old_sales_nominal_comparison_does_not_invent_history(self):
         before=[old_sales()];current=[sales()];doc=bridge.compare('sales',before,current,NOW)
-        self.assertEqual(prices.issues('sales',before,current,doc),{'legacy_historical_basis_missing':1})
+        self.assertEqual(key_issues('sales',before,current,doc),{})
         self.assertNotIn('unit',before[0])
     def test_recorded_purchase_basis_can_compare_without_inventing_validity(self):
         before=[old_purchase()];current=[purchase()];doc=bridge.compare('purchase',before,current,NOW)
-        self.assertEqual(prices.issues('purchase',before,current,doc),{})
+        self.assertEqual(key_issues('purchase',before,current,doc),{})
     def test_own_complete_sales_snapshot_checks_unit_tax_changes(self):
         original=sales();before=[{**old_sales(),'current_record':json.dumps(original),'reference_kind':'observed'}]
         for field in ('unit','unit_cuur','is_inclue_tax','currency_no'):
             current={**original,field:'CHANGED'};doc=bridge.compare('sales',before,[current],NOW)
-            self.assertIn('observed_unit_tax_currency_changed',prices.issues('sales',before,[current],doc))
+            self.assertIn('recorded_basis_changed' if field=='currency_no' else 'observed_unit_tax_changed_keep_reference',key_issues('sales',before,[current],doc))
     def test_own_complete_basis_unchanged_passes(self):
         current=sales();old={**old_sales(),'current_record':json.dumps(current),'reference_kind':'observed'}
-        self.assertEqual(prices.issues('sales',[old],[current],bridge.compare('sales',[old],[current],NOW)),{})
+        self.assertEqual(key_issues('sales',[old],[current],bridge.compare('sales',[old],[current],NOW)),{})
     def test_missing_current_basis_blocks_even_if_price_same(self):
         current=purchase();current['unit_cuur']=None
-        self.assertIn('current_basis_missing',prices.issues('purchase',[old_purchase()],[current],bridge.compare('purchase',[old_purchase()],[current],NOW)))
+        self.assertIn('unresolved_recorded_basis',key_issues('purchase',[old_purchase()],[current],bridge.compare('purchase',[old_purchase()],[current],NOW)))
     def test_absent_identity_and_duplicate_source_are_not_silent_advancement(self):
         old=old_purchase();doc=bridge.compare('purchase',[old],[],NOW)
-        self.assertEqual(prices.issues('purchase',[old],[],doc)['absent_from_current_selection'],1)
+        self.assertEqual(key_issues('purchase',[old],[],doc)['absent_selection_keep_reference'],1)
         current=purchase();doc=bridge.compare('purchase',[old],[current,current],NOW)
-        self.assertTrue(any(k.startswith('unresolved') for k in prices.issues('purchase',[old],[current,current],doc)))
+        self.assertTrue(any(k.startswith('unresolved') for k in key_issues('purchase',[old],[current,current],doc)))
     def test_scope_mapping_handles_optional_aliases_without_touching_literals(self):
         raw="SELECT b.id FROM `vk_ai`.`slow_moving_baseline` b WHERE b.source_table='vk_ods.slow_moving_goods_ods'"
         result=live.mapped(raw,'hcm-2026-w38-g0')
@@ -137,6 +140,6 @@ class LiveWorkflowTests(unittest.TestCase):
         current=sales();current['ddp_price']='10.001'
         old={**old_sales(),'current_record':json.dumps(sales()),'reference_kind':'observed'}
         doc=bridge.compare('sales',[old],[current],NOW)
-        self.assertIn('snapshot_decimal_precision_insufficient',prices.issues('sales',[old],[current],doc))
+        self.assertIn('snapshot_decimal_precision_insufficient',key_issues('sales',[old],[current],doc))
 
 if __name__=='__main__':unittest.main()

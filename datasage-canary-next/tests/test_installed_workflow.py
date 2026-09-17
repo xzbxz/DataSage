@@ -143,5 +143,11 @@ class InstalledWorkflowTests(unittest.TestCase):
         with patch.object(slow.delivery,'load_settings'),patch.object(slow.session,'_reference'),patch.object(slow.fixture,'seeded',return_value={'week':'2026-W38'}),patch.object(slow,'freeze',return_value=('slow-2026-w38','committed',{})),patch.object(slow,'build') as build,patch.object(c,'dispatch') as dispatch:
             self.assertEqual(slow.run()['status'],'already_completed_no_resend')
             build.assert_not_called();dispatch.assert_not_called()
+    def test_all_quarantined_observation_does_not_claim_reference_advance(self):
+        before=c.clean(self.db.rows('sales_snapshot','main'));fingerprint=c.snapshot_digest('sales',before)
+        data={'document':{'event_counts':{'unresolved':1},'continuation':{'advanced_keys':0}},'notices':[],'before_digest':fingerprint,'after_digest':fingerprint,'after':before,'real_transport':False}
+        with patch.object(self.db,'replace_snapshot',side_effect=AssertionError('same reference must not be rewritten')):
+            result=c.complete_plan(self.db,'sales','main','sales-main-0',data,'planned')
+        self.assertFalse(result['test_snapshot_advanced']);self.assertEqual(result['delivery']['components'],0)
 
 if __name__=='__main__':unittest.main()

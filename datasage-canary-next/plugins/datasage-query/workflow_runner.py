@@ -42,7 +42,7 @@ def status():
 def main(profile,argv):
     parser=argparse.ArgumentParser(description='Profile fixed workflow entry; production mode unavailable.')
     parser.add_argument('--mode',required=True,choices=['test','live'])
-    parser.add_argument('action',choices=['init','seed','slow','prices','change-fixture','status','recovery-check','fault-exit','observe-prices','deliver-prices','slow-prepare','slow-preview','slow-deliver','slow-new-generation','schedule-plan','scheduled-tick','lock-check'])
+    parser.add_argument('action',choices=['init','seed','slow','prices','change-fixture','status','recovery-check','fault-exit','observe-prices','deliver-prices','anomaly-evidence','continuity-replay','slow-prepare','slow-preview','slow-deliver','slow-new-generation','schedule-plan','scheduled-tick','lock-check'])
     parser.add_argument('--department',choices=['HCM','HN','BKK','IDK','HCM-HT','HN-HT','BKK-HT','IDK-HT'])
     parser.add_argument('--job',choices=['sales','purchase','slow-task','slow-report'])
     parser.add_argument('--reason')

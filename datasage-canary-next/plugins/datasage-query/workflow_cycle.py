@@ -105,10 +105,11 @@ def complete_plan(store,side,scope,key,data,state,*,send=None,fault=None,hasher=
         persist(store,key,scope,'delivered',data)
         if fault:fault('delivered',key)
     with store.transaction():
-        store.replace_snapshot(side,scope,data['after'])
+        if data['after_digest']!=data['before_digest']:store.replace_snapshot(side,scope,data['after'])
         if hasher(side,store.rows(side+'_snapshot',scope))!=data['after_digest']:raise ValueError('SNAPSHOT_READBACK_FAILED')
         store.cycle(key,scope,'committed',data)
         if fault:fault('before_commit',key)
     if fault:fault('after_commit',key)
-    result={'cycle':key,'events':data['document']['event_counts'],'delivery':data['receipt'],'test_snapshot_advanced':True,'snapshot_digest':data['after_digest'],'real_transport':data['real_transport']}
+    result={'cycle':key,'events':data['document']['event_counts'],'delivery':data['receipt'],'test_snapshot_advanced':data['after_digest']!=data['before_digest'],'snapshot_digest':data['after_digest'],'real_transport':data['real_transport']}
+    if data['document'].get('continuation'):result['continuation']=data['document']['continuation']
     saver(key+'-result.json',result);return result

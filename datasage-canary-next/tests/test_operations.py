@@ -136,7 +136,7 @@ class SourceSQLTests(unittest.TestCase):
     def query(self,kind):
         sql,params=ops.build_observation({'kind':kind,'regions':['IDK'],'limit':100})
         base.tools.db_executor._validate_read_only_sql(sql) if hasattr(base.tools.db_executor,'_validate_read_only_sql') else None
-        return [dict(r) for r in self.db.execute(sql.replace('%s','?').replace('CURRENT_DATE()',"'2026-09-15'"),params)]
+        return [dict(r) for r in self.db.execute(sql.replace('GROUP BY BINARY x.goods_no','GROUP BY CAST(x.goods_no AS BLOB)').replace('%s','?').replace('CURRENT_DATE()',"'2026-09-15'"),params)]
     def sale(self,detail,structure,price,modified='2026-09-01'):
         self.db.execute('INSERT INTO vk_dwd.sale_price_bill_detail_dwd VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(1,'SYN','Synthetic',structure,'n','A','black',price,'IDR','m','m','n','2026-01-01','2026-12-31',modified,detail))
     def test_region_precedence_latest_ties_and_duplicate_pool(self):

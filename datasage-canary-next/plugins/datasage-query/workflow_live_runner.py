@@ -4,7 +4,7 @@ import json
 from . import workflow_live_store as live,workflow_storage as base,workflow_cycle as cycle
 from . import workflow_live_prices as prices,workflow_live_slow as slow,workflow_schedule as schedule
 
-ACTIONS=('init','prices','observe-prices','deliver-prices','slow-prepare','slow-preview','slow-deliver','slow-new-generation','status','schedule-plan','scheduled-tick','lock-check')
+ACTIONS=('init','prices','observe-prices','deliver-prices','anomaly-evidence','continuity-replay','slow-prepare','slow-preview','slow-deliver','slow-new-generation','status','schedule-plan','scheduled-tick','lock-check')
 def status():
     from . import reminder_acceptance
     reference=reminder_acceptance._reference(base.profile())
@@ -13,13 +13,13 @@ def status():
         records=store.rows('cycles');summary=[];snapshots=[];departments=[]
         for row in records:
             data=cycle.payload(row);item={'cycle':row['cycle_id'],'scope':row['test_scope'],'status':row['status']}
-            if row['cycle_id'].startswith('lp-'):item.update(observation=data.get('observation'),blockers=data.get('blockers'),event_counts=data['document']['event_counts'])
+            if row['cycle_id'].startswith('lp-'):item.update(observation=data.get('observation'),blockers=data.get('blockers'),event_counts=data['document']['event_counts'],continuation=data['document'].get('continuation'),key_anomalies=data.get('key_anomalies',[]))
             if row['cycle_id'].startswith('ls-'):
                 current=cycle.clean(store.rows('slow_baseline',data['scope']))
                 if base.digest(base.normalized('slow_baseline',current))!=data['freeze_digest']:raise ValueError('LIVE_FREEZE_STATUS_MISMATCH')
                 role_count=len(base.wf.report_recipients(reference['regions'],data['department']))
                 if not role_count:raise ValueError('REPORT_ROLE_PLAN_EMPTY')
-                info={'department':data['department'],'cycle':row['cycle_id'],'status':row['status'],'frozen_rows':len(current),'observation':data['observation'],'phase_index':data['phase_index'],'original_report_role_count':role_count,'phases':{k:{'prepared':True,'receipt':v.get('receipt'),'evidence':v['evidence']} for k,v in data['phases'].items()}}
+                info={'department':data['department'],'cycle':row['cycle_id'],'status':row['status'],'frozen_rows':len(current),'frozen_at':data['frozen_at'],'observation':data['observation'],'report_observation':data.get('report_observation'),'phase_index':data['phase_index'],'total_customer_packages':data.get('total_packages'),'selected_customer_packages':len(data.get('selected_packages',[])),'original_report_role_count':role_count,'phases':{k:{'prepared':True,'receipt':v.get('receipt'),'dedup_review':v.get('dedup_review'),'evidence':v['evidence']} for k,v in data['phases'].items()}}
                 departments.append(info)
             summary.append(item)
         for side in ('sales','purchase'):
@@ -50,11 +50,12 @@ def status():
             if not path.resolve().is_relative_to(base.profile().resolve()):raise ValueError('LIVE_RECEIPT_PATH_INVALID')
             progress=json.loads(path.read_text(encoding='utf-8'))
             if sum(len(k)==64 and v['status']=='provider_accepted' for k,v in progress['components'].items())!=receipt['components']:raise ValueError('LIVE_RECEIPT_COUNT_MISMATCH')
-        result['delivery_evidence']={'logical_notifications':sum(r['logical_notifications'] for r in receipts),'components':sum(r['components'] for r in receipts),'actual_component_states_verified':True,'human_read':'unknown'}
+        fresh=[r for r in receipts if not r.get('reused_prior_delivery')]
+        result['delivery_evidence']={'logical_notifications':sum(r['logical_notifications'] for r in fresh),'components':sum(r['components'] for r in fresh),'reused_prior_receipts':len(receipts)-len(fresh),'actual_component_states_verified':True,'human_read':'unknown'}
         live.save('status.json',result)
         compact={**{k:result[k] for k in ('mode','production_enabled','clock','snapshots','runtime','schedule_enabled','delivery_evidence')},
                  'price_cycles':[r for r in summary if r['cycle'].startswith('lp-')],
-                 'departments':[{'department':d['department'],'frozen_rows':d['frozen_rows'],'stock_rows':d['observation']['stock_rows'],'monthly_rows':d['observation']['monthly_rows'],'status':d['status'],'phase_index':d['phase_index'],'weekly_groups':d['phases'].get('weekly',{}).get('evidence',{}).get('completeness',{}).get('pool_groups'),'monthly_groups':d['phases'].get('monthly',{}).get('evidence',{}).get('completeness',{}).get('pool_groups'),'labels_complete':all(v.get('evidence',{}).get('label_coverage',{}).get('complete',True) for v in d['phases'].values())} for d in departments]}
+                 'departments':[{'department':d['department'],'frozen_at':d['frozen_at'],'initial_source_observed_at':d['observation']['observed_at'],'report_source_observed_at':(d.get('report_observation') or d['observation'])['observed_at'],'report_source_stock_rows':(d.get('report_observation') or d['observation'])['stock_rows'],'report_source_monthly_rows':(d.get('report_observation') or d['observation'])['monthly_rows'],'frozen_rows':d['frozen_rows'],'stock_rows':d['observation']['stock_rows'],'monthly_rows':d['observation']['monthly_rows'],'status':d['status'],'phase_index':d['phase_index'],'weekly_groups':d['phases'].get('weekly',{}).get('evidence',{}).get('completeness',{}).get('pool_groups'),'monthly_groups':d['phases'].get('monthly',{}).get('evidence',{}).get('completeness',{}).get('pool_groups'),'labels_complete':all(v.get('evidence',{}).get('label_coverage',{}).get('complete',True) for v in d['phases'].values())} for d in departments]}
         live.save('summary.json',compact);return compact
     finally:store.close()
 def lock_check():
@@ -74,6 +75,9 @@ def run(action,*,department=None,job=None,reason=None):
     if action not in ACTIONS:raise ValueError('LIVE_ACTION_REJECTED')
     if action.startswith('slow-') and department not in live.DEPARTMENTS:raise ValueError('LIVE_DEPARTMENT_REQUIRED')
     if action=='init':return live.bootstrap()
+    if action in ('anomaly-evidence','continuity-replay'):
+        from . import workflow_price_diagnostics
+        return workflow_price_diagnostics.run() if action=='anomaly-evidence' else workflow_price_diagnostics.replay()
     if action in ('prices','observe-prices','deliver-prices'):
         results={}
         for side in ('sales','purchase'):

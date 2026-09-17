@@ -40,6 +40,7 @@ def prepare(department,*,new_generation=False,reason=None,reports=True):
         with live.lock(store,'slow-'+department.lower()):
             clock=store._read('SELECT NOW(6) AS at')[0]['at'];week=f'{clock.isocalendar().year}-W{clock.isocalendar().week:02d}'
             old=latest(store,department,week)
+            refreshed=False
             if old and not new_generation:
                 data=cycle.payload(old);key=old['cycle_id']
                 if old['status'] in ('unknown','sending'):return {'status':'blocked','reason':'EXISTING_DELIVERY_REQUIRES_RECOVERY','cycle':key}
@@ -52,6 +53,7 @@ def prepare(department,*,new_generation=False,reason=None,reports=True):
                 if stale:
                     stock,monthly,evidence=observe_department(department)
                     with store.transaction():install_input(store,data['scope'],stock,monthly)
+                    refreshed=True
                     for phase in stale:data.setdefault('superseded_reports',[]).append({'phase':phase,'manifest':data['phases'].pop(phase)})
                     data['report_observation']=evidence;persist(store,key,data)
                 if all(p in data['phases'] for p in ('weekly','monthly')) or not reports:return summary(old,data,unchanged=True)
@@ -75,14 +77,14 @@ def prepare(department,*,new_generation=False,reason=None,reports=True):
                     store.cycle(key,scope,'planned',data)
             # Full department reports can be prepared without flooding test targets.
             if reports:
-                if data['phase_index']>0 and 'weekly' not in data['phases']:
+                if data['phase_index']>0 and 'weekly' not in data['phases'] and not refreshed:
                     stock,monthly,evidence=observe_department(department)
                     with store.transaction():install_input(store,data['scope'],stock,monthly)
                     data['report_observation']=evidence
                 for phase in ('weekly','monthly'):
                     if phase not in data['phases']:
                         data['phases'][phase]=build(phase,key,data);persist(store,key,data)
-            result={'status':'prepared','cycle':key,'department':department,'generation':data['generation'],'frozen_rows':len(data['baseline']),'observation':data['observation'],'reports_prepared':reports,'sent':False}
+            result={'status':'prepared','cycle':key,'department':department,'generation':data['generation'],'frozen_rows':len(data['baseline']),'frozen_at':data['frozen_at'],'observation':data['observation'],'report_observation':data.get('report_observation'),'reports_prepared':reports,'sent':False}
             live.save(key+'-preparation.json',result);return result
     finally:store.close()
 def build(phase,key,data):
@@ -92,8 +94,11 @@ def build(phase,key,data):
         name=name.removesuffix('.json')+'-'+version+'.json';live.save(name,value);files.append(name)
     manifest=slow.build(phase,key,data,snapshots=lambda:live.Snapshot(data['scope']),saver=save_evidence)
     manifest['evidence']['query_files']=files
+    manifest['evidence']['baseline_frozen_at']=data['frozen_at']
+    manifest['evidence']['manual_single_department_sequence']=True
     for notice in manifest['notices']:
-        notice['role']='真实来源 '+data['department']+' 部门完整库存观察；客户包仅有界抽验；测试目标'
+        observed=manifest['evidence'].get('completeness',{}).get('observed_to','使用已有周冻结')
+        notice['role']='真实来源 '+data['department']+'；冻结于'+data['frozen_at']+'；报告观察：'+observed+'；手动单部门验收；客户包仅抽验；测试目标'
         notice['body']='【真实来源验收，非生产派发】\n'+notice['body']
     manifest['notice_digest']=base.digest(manifest['notices']);return manifest
 def summary(row,data,*,unchanged=False):return {'status':row['status'],'cycle':row['cycle_id'],'department':data['department'],'frozen_rows':len(data['baseline']),'generation':data['generation'],'phase_index':data['phase_index'],'prepared_phases':list(data['phases']),'existing_generation_preserved':unchanged,'sent':False}
@@ -109,6 +114,12 @@ def preview(department):
             key=row['cycle_id'];data=cycle.payload(row)
             for phase in ('task','customer'):
                 if phase not in data['phases']:data['phases'][phase]=build(phase,key,data);persist(store,key,data)
+            from . import workflow_delivery_review
+            for phase in ('task','customer','weekly','monthly'):
+                manifest=data['phases'].get(phase)
+                if manifest and 'receipt' not in manifest and manifest.get('dedup_review',{}).get('version')!=3:
+                    if 'dedup_review' in manifest:manifest.setdefault('dedup_review_history',[]).append(manifest['dedup_review'])
+                    manifest['dedup_review']=workflow_delivery_review.review(store,key,manifest);persist(store,key,data)
             lines=['# '+department+' 真实来源验收待发内容','', '目的地：仅 zhangzhengwei 测试私信。不是旧销售或客户。', '客户包为一个完整逻辑包抽验；其余包不发送。','']
             for phase in ('task','customer','weekly','monthly'):
                 if phase not in data['phases']:continue
@@ -117,7 +128,8 @@ def preview(department):
                     lines += [notice['body'],'']+[ '['+__import__('pathlib').Path(p).name+']('+p.replace('\\','/')+')' for p in notice['attachments']]+['']
             lines+=['## 派发核对','', '待客户包平台回执成功后，按同一个已选客户包生成核对表；不会声称实际销售或客户已收到。']
             path=live.root()/(key+'-preview.md');path.write_text('\n'.join(lines),encoding='utf-8')
-            return {'status':'prepared_not_sent','preview':str(path),'cycle':key,'frozen_rows':len(data['baseline']),'total_customer_packages':data.get('total_packages'),'selected_customer_packages':len(data.get('selected_packages',[]))}
+            result={'status':'prepared_not_sent','preview':str(path),'cycle':key,'frozen_rows':len(data['baseline']),'frozen_at':data['frozen_at'],'report_observation':data.get('report_observation'),'total_customer_packages':data.get('total_packages'),'selected_customer_packages':len(data.get('selected_packages',[])),'prior_equivalent_phases':[p for p,m in data['phases'].items() if m.get('dedup_review',{}).get('prior_matches')]}
+            live.save(key+'-preview-result.json',result);return result
     finally:store.close()
 def deliver(department,*,report_only=False):
     if department not in live.DEPARTMENTS:raise ValueError('LIVE_DEPARTMENT_REJECTED')
@@ -139,12 +151,20 @@ def deliver(department,*,report_only=False):
                 data['phases'][phase]=build(phase,key,data);persist(store,key,data);state='planned'
             manifest=data['phases'][phase];slow.verify_artifacts(manifest)
             if phase in ('weekly','monthly') and state=='planned' and clock-datetime.fromisoformat(manifest['evidence']['completeness']['observed_to'])>timedelta(hours=1):raise ValueError('REPORT_REOBSERVATION_REQUIRED')
-            if state!='sending':persist(store,key,data,'sending')
-            try:receipt=cycle.dispatch(key+'-'+phase,manifest['notices'],state)
-            except Exception as exc:
-                persist(store,key,data,'failed' if str(exc)=='DELIVERY_COMPONENT_FAILED' else 'unknown');raise
+            from . import workflow_delivery_review
+            if manifest.get('dedup_review',{}).get('version')!=3:
+                if 'dedup_review' in manifest:manifest.setdefault('dedup_review_history',[]).append(manifest['dedup_review'])
+                manifest['dedup_review']=workflow_delivery_review.review(store,key,manifest);persist(store,key,data,state)
+            matches=manifest['dedup_review'].get('prior_matches',[])
+            if matches and data['generation']==0 and state=='planned':
+                receipt={**matches[0]['receipt'],'reused_prior_delivery':True,'matched_prior_source':matches[0]['source'],'new_components':0}
+            else:
+                if state!='sending':persist(store,key,data,'sending')
+                try:receipt=cycle.dispatch(key+'-'+phase,manifest['notices'],state)
+                except Exception as exc:
+                    persist(store,key,data,'failed' if str(exc)=='DELIVERY_COMPONENT_FAILED' else 'unknown');raise
             manifest['receipt']=receipt;data['phase_index']+=1
             persist(store,key,data,'committed' if data['phase_index']==len(slow.PHASES) else 'planned')
-            result={'status':'stage_completed','cycle':key,'phase':phase,'receipt':receipt,'next_phase':slow.PHASES[data['phase_index']] if data['phase_index']<len(slow.PHASES) else None,'department':department,'scope':'full department inventory; one complete customer package sampled'}
+            result={'status':'stage_completed','cycle':key,'phase':phase,'receipt':receipt,'dedup_review':manifest['dedup_review'],'baseline_frozen_at':data['frozen_at'],'report_observed_at':manifest['evidence'].get('completeness',{}).get('observed_to'),'manual_department_sequence':True,'next_phase':slow.PHASES[data['phase_index']] if data['phase_index']<len(slow.PHASES) else None,'department':department,'scope':'full department inventory; one complete customer package sampled'}
             live.save(key+'-'+phase+'-result.json',result);return result
     finally:store.close()

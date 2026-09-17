@@ -123,11 +123,14 @@ def build_observation(binding):
         sql+='DENSE_RANK() OVER(PARTITION BY x.goods_id,x.dept,p.customer_grade,p.color_label ORDER BY CASE WHEN p.structure_name=x.dept THEN 0 ELSE 1 END,p.gmt_modified DESC) AS rank_in_key '
         sql+='FROM pool x JOIN regions z ON x.dept=z.dept LEFT JOIN '+_table(s['prices'])+" p ON p.goods_id=x.goods_id AND p.is_void='n' AND p.structure_name IN (z.dept,z.org)) SELECT goods_id,goods_no,dept,goods_name,customer_grade,color_label,ddp_price,currency_no,unit,unit_cuur,is_inclue_tax,effective_date,expiration_date,gmt_modified,detail_id,NOW(6) AS observed_at FROM candidates WHERE rank_in_key=1 ORDER BY goods_id,dept,customer_grade,color_label,detail_id LIMIT %s"
     else:
-        sql='WITH pool AS (SELECT DISTINCT goods_no FROM '+_table(s['ready'])+' WHERE dept IN ('+marks+') AND type<>%s UNION SELECT DISTINCT goods_no FROM '+_table(s['promotion'])+' WHERE promotion_area IN ('+marks+') AND CURRENT_DATE()>=promotion_start_time AND CURRENT_DATE()<=COALESCE(promotion_end_time,default_end_time)), candidates AS ('
+        # Membership is a semijoin, as in the legacy IN-list reader. Keep pool
+        # variants for diagnostics but take every priced identity from p itself.
+        sql='WITH pool AS (SELECT goods_no FROM '+_table(s['ready'])+' WHERE dept IN ('+marks+') AND type<>%s UNION ALL SELECT goods_no FROM '+_table(s['promotion'])+' WHERE promotion_area IN ('+marks+') AND CURRENT_DATE()>=promotion_start_time AND CURRENT_DATE()<=COALESCE(promotion_end_time,default_end_time)), candidates AS ('
         params=[*regions,c['cancelled_ready_type'],*regions]
-        sql+='SELECT x.goods_no,p.goods_name,p.color_label,p.supplier_no,p.supplier_name,p.tax_inclue_price,p.tax_exclue_price,p.currency_no,p.unit_cuur,p.effective_date,p.expiration_date,p.gmt_modified,p.detail_id,'
-        sql+='DENSE_RANK() OVER(PARTITION BY x.goods_no,p.color_label,p.supplier_no ORDER BY p.gmt_modified DESC) AS rank_in_key FROM pool x LEFT JOIN '+_table(s['prices'])+' p ON p.goods_no=x.goods_no AND p.parent_org_ids=%s) SELECT goods_no,goods_name,color_label,supplier_no,supplier_name,tax_inclue_price,tax_exclue_price,currency_no,unit_cuur,effective_date,expiration_date,gmt_modified,detail_id,NOW(6) AS observed_at FROM candidates WHERE rank_in_key=1 ORDER BY goods_no,color_label,supplier_no,detail_id LIMIT %s'
-        params.append(c['parent_org_ids'])
+        fields='goods_no,goods_name,color_label,supplier_no,supplier_name,tax_inclue_price,tax_exclue_price,currency_no,unit_cuur,effective_date,expiration_date,gmt_modified,detail_id'
+        sql+='SELECT '+','.join('p.'+field for field in fields.split(','))+',DENSE_RANK() OVER(PARTITION BY p.goods_no,p.color_label,p.supplier_no ORDER BY p.gmt_modified DESC) AS rank_in_key FROM '+_table(s['prices'])+' p WHERE p.parent_org_ids=%s AND EXISTS (SELECT 1 FROM pool x WHERE p.goods_no=x.goods_no)), observed AS ('
+        sql+='SELECT '+fields+' FROM candidates WHERE rank_in_key=1 UNION ALL SELECT MIN(x.goods_no) AS goods_no,'+','.join('NULL AS '+field for field in fields.split(',')[1:])+' FROM pool x WHERE NOT EXISTS (SELECT 1 FROM '+_table(s['prices'])+' p WHERE p.goods_no=x.goods_no AND p.parent_org_ids=%s) GROUP BY BINARY x.goods_no) SELECT '+fields+',NOW(6) AS observed_at FROM observed ORDER BY goods_no,color_label,supplier_no,detail_id LIMIT %s'
+        params.extend([c['parent_org_ids'],c['parent_org_ids']])
     return sql,params+[limit+1]
 
 def classify_prices(side,rows,observed_on):

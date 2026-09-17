@@ -6,29 +6,9 @@ import json,uuid,hashlib
 from . import workflow_live_store as live,workflow_storage as base,workflow_cycle as cycle
 from . import workflow_inputs as inputs,legacy_price_bridge as bridge,operations as op
 from . import reminder_acceptance as session,acceptance_delivery as delivery,workflow_io as io
+from . import workflow_price_continuity as continuity
 
 def snapshot_digest(side,rows):return base.digest(live.normalized(side+'_snapshot',cycle.clean(rows)))
-def issues(side,before,current,document):
-    result=Counter();spec=op.policy()[side];old={bridge.key_of(side,r):r for r in before}
-    for event in document['events']:
-        if event['event'].startswith('unresolved') or event['event'] in ('recorded_basis_changed','absent_from_current_selection'):result[event['event']]+=1
-    for row in current:
-        try:key=bridge.key_of(side,row)
-        except op.OperationError:continue
-        if any(row.get(k) in (None,'') for k in spec['basis']):result['current_basis_missing']+=1;continue
-        if side=='sales':
-            price=op._number(row.get('ddp_price'))
-            if price is not None and price!=price.quantize(Decimal('0.01')):result['snapshot_decimal_precision_insufficient']+=1
-        previous=old.get(key)
-        if previous is None:continue
-        original=previous.get('current_record')
-        if isinstance(original,str):original=json.loads(original)
-        if original is None:
-            # Historic unit/tax values cannot be reconstructed from today's quote.
-            if set(spec['basis'])-set(bridge.SPECS[side]['basis']):result['legacy_historical_basis_missing']+=1
-        elif any(original.get(k) in (None,'') for k in spec['basis']):result['previous_basis_missing']+=1
-        elif any(str(original[k])!=str(row[k]) for k in spec['basis']):result['observed_unit_tax_currency_changed']+=1
-    return dict(result)
 def observe(store,side):
     spec=bridge.SPECS[side]
     with base.tools._ConsistentSnapshotExecutor(deadline_at=base.tools._call_deadline(None)) as db:
@@ -109,19 +89,15 @@ def run(side,*,manual=False,allow_send=False):
                 if committed:
                     last=max(committed,key=lambda r:cycle.payload(r)['observation']['observed_at'])
                     if snapshot_digest(side,before)!=cycle.payload(last)['after_digest']:raise ValueError('LIVE_BASELINE_CHANGED_OUTSIDE_CYCLE')
-                doc=bridge.compare(side,before,current,at)
+                decision=continuity.plan(side,before,current,at);doc=decision['document']
                 doc['baseline_source']='live_acceptance_snapshot';doc['reference']['table']=live.TABLES[side+'_snapshot'];doc['observation_clock']='database_observation'
-                reasons=issues(side,before,current,doc)
-                data={'document':doc,'observation':evidence,'before_digest':snapshot_digest(side,before),'blockers':reasons,'current':current,'real_transport':True}
+                data={'document':doc,'observation':evidence,'before_digest':snapshot_digest(side,before),'before_records':before,'blockers':{},'key_anomalies':decision['anomalies'],'current':current,'real_transport':True}
+                live.save(key+'-anomalies.json',{'observation':evidence,'continuation':doc['continuation'],'anomalies':decision['anomalies']})
                 with store.transaction():
                     store.replace_scope('price_input',side,[{'side':side,'ordinal':i,'payload':base.canonical(r)} for i,r in enumerate(current)])
                     written=[cycle.payload(r) for r in sorted(store.rows('price_input',side),key=lambda r:r['ordinal'])]
                     if written!=current:raise ValueError('LIVE_PRICE_INPUT_READBACK_MISMATCH')
-                    if reasons:store.cycle(key,side,'blocked',data)
-                if reasons:
-                    result={'status':'blocked','cycle':key,'observation':evidence,'event_counts':doc['event_counts'],'blockers':reasons,'sent':False,'snapshot_advanced':False,'baseline_digest':data['before_digest']}
-                    live.save(key+'-result.json',result);return result
-                data['after']=[{**r,'current_record':base.canonical(current[i]),'reference_kind':'observed'} for i,r in enumerate(cycle.project(side,current,at))]
+                data['after']=decision['after']
                 data['after_digest']=snapshot_digest(side,data['after']);data['notices']=source_notices(side,key,doc) if doc['deliverable_event_count'] else []
                 data['notice_manifest']=seal_notices(data['notices'])
                 cycle.persist(store,key,side,'planned',data);state='planned'
