@@ -152,7 +152,8 @@ class RuntimeContractImmutabilityTests(unittest.TestCase):
             "plugins/datasage-query/contracts/query-policy.yaml"
         )
         self.assertEqual(first, second)
-        self.assertEqual("test-1", second["version"])
+        expected_version = original.decode("utf-8").splitlines()[0].split(":", 1)[1].strip()
+        self.assertEqual(expected_version, second["version"])
         self.assertEqual(str(self.query_policy_path.resolve()), path)
         self.assertEqual(hashlib.sha256(original).hexdigest(), digest)
         status = contract_store.contract_snapshot_status()

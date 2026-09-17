@@ -19,6 +19,18 @@ The preview freeze simulator still accepts only in-memory `sqlite3.Connection`;
 the separate gated production writer is documented in WORKFLOW_IO.md.
 The public query executor's SELECT-only policy is unchanged.
 
+## Current role source
+
+The legacy behavior is still the business baseline, but its private role input
+has one active location: Profile-local `local/workflow-roles.json` (Git ignored).
+`contracts/legacy-workflows.json` remains the sole source for non-secret region
+and department membership. `report_runs` role references and saved V2 recipient
+plans are historical or derived evidence; they are never an implicit runtime
+fallback. The old recipient reference can enter the active schema only through
+the explicit `roles-check --source <source>` preflight followed by
+`roles-import --source <source> --output <profile>/local/workflow-roles.json`.
+An existing destination is not overwritten.
+
 These are fixed report-ID adapters for the official script/no_agent path, not
 Windows startup services or a replacement scheduler. One shared helper performs
 the dispatch, because the official script runner does not pass arbitrary CLI args.
@@ -56,7 +68,7 @@ it rejects combining this with report-id or price-snapshot acceptance.
   is represented in the dry-run plan, not executed against a business database.
 - Calendar labels use UTC+8 ISO weeks, Monday 09:00 to Saturday 19:00. They do not
   replace the current query's recorded frozen_at/read_at flow bounds.
-- Task recipients merge configured executors, active sales/customer-service
+- Task recipients merge executors from the active role map, active sales/customer-service
   employees in each region's configured departments, and configured managers.
   Accounts are deduplicated while roles are retained. No active dynamic sales
   for a populated task region is an error. Ordinary same-week execution reuses
@@ -73,11 +85,15 @@ it rejects combining this with report-id or price-snapshot acceptance.
   have one sheet per sales owner and the legacy Customer No / Customer columns.
   Successful-region audits go to executors; all-failed audits additionally go
   to managers. A preview marks its simulated statuses, never claims delivery.
-- Legacy V2 text/file progress markers can be translated into scoped receipt
-  evidence. Corrupt or wrong-scope documents fail; log 'ok' is not a receipt.
-  Official SendResult with positive evidence maps to provider_accepted only;
-  bare success remains unverified, timeouts remain unknown, human read remains
-  unknown. No progress store or sending queue is reimplemented.
+- Legacy V2 text/file progress markers can be inspected as historical evidence,
+  but they do not silently become an active receipt. New delivery receipts use
+  `datasage-delivery-binding/v1` and bind period, generation, phase, business
+  scope, final target, content, component keys and progress scope. Only
+  `verified_for_reuse` is reusable; a provider-accepted record without the new
+  binding is `historical_provider_accepted` and cannot suppress a new delivery.
+  Corrupt or wrong-scope documents fail; log 'ok' is not a receipt. Bare success
+  remains unverified, timeouts remain unknown, and human read remains unknown.
+  The old 10/9 acceptance counts cannot be promoted to a passing new binding.
 - IDK repeats the current full unpriced candidate list each scheduled run by
   default. Source NULL/zero/negative are distinct in current query evidence;
   Promotion Offer displays Not Set for NULL/non-positive. A source-row count is

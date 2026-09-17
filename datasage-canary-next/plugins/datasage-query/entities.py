@@ -60,6 +60,33 @@ _PUBLIC_CANDIDATE_LIST_FIELDS = ("filter_values", "filter_role_candidates")
 # Process-private provenance through the existing binder. JSON does not carry
 # this type, and user-supplied trust flags cannot create it.
 _DISPLAY_NAME_ISSUER = object()
+_ENTITY_REF_PREFIX = "entity_ref_v1_"
+_ENTITY_REF_HEX_LENGTH = 64
+
+
+def opaque_entity_ref(entity_type: str, canonical_value: Any) -> str:
+    """Create a stable comparison reference, never a directly executable token."""
+
+    material = (
+        "datasage-entity-ref/v1\0"
+        + str(entity_type)
+        + "\0"
+        + str(canonical_value)
+    )
+    return _ENTITY_REF_PREFIX + hashlib.sha256(material.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def parse_opaque_entity_ref(token: str) -> str | None:
+    """Return the digest only for the exact Profile reference format."""
+
+    if not isinstance(token, str) or not token.startswith(_ENTITY_REF_PREFIX):
+        return None
+    digest = token[len(_ENTITY_REF_PREFIX):]
+    if len(digest) != _ENTITY_REF_HEX_LENGTH or any(
+        character not in "0123456789abcdef" for character in digest
+    ):
+        raise EntityFailure("ENTITY_REF_INVALID", "实体引用格式无效，请使用实体名称或业务编码。")
+    return digest
 
 
 class _GovernedDisplayName(str):
@@ -805,6 +832,83 @@ def _build_candidate_query(
     return sql, params
 
 
+def _build_opaque_reference_query(
+    digest: str,
+    entity_types: set[str],
+    *,
+    logical_roles: Mapping[str, Sequence[str]] | None = None,
+) -> tuple[str, list[Any]]:
+    """Build a bounded exact lookup for a Profile-issued reference.
+
+    The query is assembled only from the registered candidate sources and their
+    declared identity columns. The caller supplies only the opaque digest; it
+    never supplies a table, column, or raw identity value.
+    """
+
+    branches: list[str] = []
+    params: list[Any] = []
+    sources = _registry()["candidate_sources"]
+    for entity_type in sorted(entity_types):
+        raw = sources.get(entity_type)
+        if not isinstance(raw, Mapping):
+            continue
+        raw_quote_table = getattr(sql_identifiers, "quote_table")
+        raw_quote_identifier = getattr(sql_identifiers, "quote_identifier")
+        table = raw_quote_table(str(raw.get("table") or ""))
+        id_column = str(raw.get("id_column") or "")
+        display_column = str(raw.get("display_column") or "")
+        code_value = raw.get("code_column")
+        identity_columns = [id_column]
+        if isinstance(code_value, str) and code_value:
+            identity_columns.append(code_value)
+        required = raw.get("required_filters")
+        if not isinstance(required, Mapping):
+            raise EntityFailure("CONTRACT_UNAVAILABLE", "实体候选过滤定义无效。")
+        required_sql = "".join(
+            f" AND {raw_quote_identifier(str(column))} = %s"
+            for column in required
+        )
+        required_params = list(required.values())
+        code_sql = (
+            f"CAST({raw_quote_identifier(str(code_value))} AS CHAR)"
+            if isinstance(code_value, str) and code_value
+            else "NULL"
+        )
+        roles = (
+            logical_roles.get(entity_type)
+            if isinstance(logical_roles, Mapping)
+            else None
+        )
+        if not isinstance(roles, Sequence) or isinstance(roles, (str, bytes)) or not roles:
+            roles = (entity_type,)
+        for logical_role in dict.fromkeys(str(role) for role in roles):
+            for identity_column in identity_columns:
+                quoted_identity = raw_quote_identifier(identity_column)
+                branches.append(
+                    "SELECT %s AS entity_type, "
+                    f"CAST({raw_quote_identifier(id_column)} AS CHAR) AS canonical_id, "
+                    f"{code_sql} AS canonical_code, "
+                    f"CAST({raw_quote_identifier(display_column)} AS CHAR) AS display_name, "
+                    f"CAST({quoted_identity} AS CHAR) AS matched_value, "
+                    "0 AS match_rank "
+                    f"FROM {table} WHERE {quoted_identity} IS NOT NULL"
+                    f"{required_sql} AND SHA2(CONCAT(%s, %s, CHAR(0), "
+                    f"CAST({quoted_identity} AS CHAR)), 256) = %s"
+                )
+                params.append(entity_type)
+                params.extend(required_params)
+                params.extend(["datasage-entity-ref/v1\0", logical_role, digest])
+    if not branches:
+        raise EntityFailure("ENTITY_REF_SCOPE_REQUIRED", "实体引用没有受控候选类型范围。")
+    sql = (
+        "SELECT DISTINCT entity_type, canonical_id, canonical_code, display_name, matched_value, match_rank "
+        "FROM (" + " UNION ALL ".join(branches) + ") AS entity_ref_candidates "
+        "ORDER BY match_rank ASC, entity_type ASC, display_name ASC LIMIT %s"
+    )
+    params.append(51)
+    return sql, params
+
+
 def _effective_dimensions(semantics, metric=None):
     from .capability_contract import effective_dimension_definitions, CapabilityContractError
     try:
@@ -1086,7 +1190,15 @@ def datasage_entity_resolve(args: dict[str, Any], **_kwargs: Any) -> str:
                         "UNSUPPORTED_ENTITY_ROLE",
                         "该实体类型不能用于所选指标，请调整实体类型、业务域或指标。",
                     )
-        exact = _known_matches(token, entity_types=entity_types)
+        opaque_digest = parse_opaque_entity_ref(token)
+        if opaque_digest is not None and entity_types is None and domain is None:
+            raise EntityFailure(
+                "ENTITY_REF_SCOPE_REQUIRED",
+                "实体引用必须同时提供实体类型、业务域或指标范围。",
+            )
+        exact = [] if opaque_digest is not None else _known_matches(
+            token, entity_types=entity_types
+        )
         registered_types = {str(item["entity_type"]) for item in exact}
         considered_types = set(entity_types) if entity_types is not None else {
             str(kind) for kind in _registry()["entity_types"]
@@ -1095,6 +1207,22 @@ def datasage_entity_resolve(args: dict[str, Any], **_kwargs: Any) -> str:
                 attribution_mode=attribution_mode, semantics=semantics,
             )
         }
+        logical_roles: dict[str, tuple[str, ...]] = {}
+        for entity_type in considered_types:
+            roles = _roles_for(
+                entity_type,
+                domain,
+                metric=metric,
+                attribution_mode=attribution_mode,
+                semantics=semantics,
+            )
+            if roles:
+                logical_roles[entity_type] = tuple(dict.fromkeys(roles))
+            elif domain is None:
+                # Without a domain there is no governed role projection.  The
+                # explicit entity type is the only stable namespace available;
+                # callers still receive a non-binding resolver result.
+                logical_roles[entity_type] = (entity_type,)
         searched_types: set[str] = set()
 
         def with_resolution_scope(payload):
@@ -1116,9 +1244,104 @@ def datasage_entity_resolve(args: dict[str, Any], **_kwargs: Any) -> str:
                     payload["must_stop_business_query"] = True
             return payload
 
+        if opaque_digest is not None:
+            selected_types = entity_types or considered_types
+            source_types = selected_types.intersection(
+                _registry()["candidate_sources"]
+            )
+            if not source_types:
+                raise EntityFailure(
+                    "ENTITY_REF_SCOPE_REQUIRED",
+                    "实体引用在当前业务范围没有受控实体来源。",
+                )
+            sql, params = _build_opaque_reference_query(
+                opaque_digest,
+                source_types,
+                logical_roles=logical_roles,
+            )
+            deadline_at = _kwargs.get("deadline_at")
+            if deadline_at is not None and time.monotonic() >= deadline_at:
+                raise EntityFailure("BATCH_DEADLINE_EXCEEDED", "实体解析已超过调用总时限。")
+            execution_kwargs = {"deadline_at": deadline_at} if deadline_at is not None else {}
+            rows, truncated = db_runtime.execute(sql, params, 50, **execution_kwargs)
+            searched_types.update(source_types)
+            candidates = _candidate_rows(
+                rows,
+                domain,
+                metric=metric,
+                attribution_mode=attribution_mode,
+                semantics=semantics,
+                token=None,
+                public=False,
+            )
+            candidates = [
+                candidate
+                for candidate in candidates
+                if any(
+                    opaque_entity_ref(logical_role, value)
+                    == token
+                    for logical_role in logical_roles.get(
+                        str(candidate["entity_type"]),
+                        (str(candidate["entity_type"]),),
+                    )
+                    for value in (
+                        candidate.get("canonical_id"),
+                        candidate.get("canonical_code"),
+                    )
+                    if value not in (None, "")
+                )
+            ]
+            for candidate in candidates:
+                matching_roles = [
+                    logical_role
+                    for logical_role in logical_roles.get(
+                        str(candidate["entity_type"]),
+                        (str(candidate["entity_type"]),),
+                    )
+                    if any(
+                        opaque_entity_ref(logical_role, value) == token
+                        for value in (
+                            candidate.get("canonical_id"),
+                            candidate.get("canonical_code"),
+                        )
+                        if value not in (None, "")
+                    )
+                ]
+                if len(matching_roles) == 1:
+                    # The reference namespace already selected the logical
+                    # role.  Resolve that role without treating the entity
+                    # type's other valid roles as an ambiguity.
+                    candidate["filter_role"] = matching_roles[0]
+                    candidate.pop("filter_role_candidates", None)
+            if candidates:
+                status, must_clarify = _exact_resolution_status(
+                    candidates,
+                    metric=metric,
+                )
+            else:
+                status, must_clarify = "not_found", False
+            candidate_count = len(candidates)
+            public_candidates, public_bytes_truncated = _public_payload_candidates(
+                candidates,
+                limit,
+            )
+            payload = {
+                "status": status,
+                "resolution_path": "opaque_reference_exact",
+                "token": _public_text(token),
+                "candidates": public_candidates,
+                "must_clarify": must_clarify,
+                "must_stop_business_query": status != "resolved",
+                "candidate_count": candidate_count,
+                "candidate_count_is_lower_bound": bool(truncated),
+                "truncated": bool(
+                    truncated or candidate_count > limit or public_bytes_truncated
+                ),
+                "fuzzy_search_skipped": True,
+            }
         # An explicit list of several types is still a search across types,
         # not a choice of the first registered match.
-        if exact and entity_types is not None and len(entity_types) == 1:
+        elif exact and entity_types is not None and len(entity_types) == 1:
             candidates = [
                 _with_roles(
                     item,

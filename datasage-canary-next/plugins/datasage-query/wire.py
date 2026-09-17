@@ -296,6 +296,7 @@ def _compact_query_row(claim: Mapping[str, Any], *, has_ranking: bool = False) -
             "unit",
             "fact_units",
             "currency",
+            "currency_state",
         )
         if key in claim
     }
@@ -382,6 +383,7 @@ def compact_query_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "effective_limit",
                 "has_more",
                 "applied_time_range",
+                "currency_scope",
                 "error",
             )
             if key in result

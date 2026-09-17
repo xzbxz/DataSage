@@ -4,6 +4,11 @@ This supersedes the earlier preview-only execution boundary in LEGACY_WORKFLOWS.
 Preview inputs remain supported, but the fixed adapters now have an actual
 production-input path. **No activation file or credentials are shipped.**
 
+The implementation in this document is still a convergence candidate and has
+not been installed into the real Profile. Real role migration is not authorized
+and the gateway has not been reloaded. SQL SHA2 entity lookups have not been
+measured for scan cost or latency against the real database.
+
 ## Activation and fixed entrypoints
 
 Each existing `datasage_legacy_<job>.py` still defaults to
@@ -18,16 +23,24 @@ A selected binding uses `kind: legacy_execution`. All gates default false:
 customer/personnel mappings. Sending the task/sales-price workflow requires the
 mapping gate because those legacy outputs depend on buyer/recipient evidence.
 
-Other allowed fields: `recipients_file` (exactly `legacy-recipients.json`),
-`target_map`, `operation`, `failure_deliver`, and `schedule` for previously unresolved timing.
+Other allowed fields: `recipients_file`, `target_map`, `operation`,
+`failure_deliver`, and `schedule` for previously unresolved timing.
+`recipients_file` is a compatibility token: the preferred value is
+`local/workflow-roles.json`; the old value `legacy-recipients.json` is accepted
+only as a marker and never causes a file lookup. The active private role map is
+always loaded from Profile-local `local/workflow-roles.json`.
 No SQL, table name, arbitrary input filename, freeze week or source identifiers
 can be supplied through activation arguments. Normal execution is pinned to the
 physical Profile and existing local-operator admission; public query admission
 and SELECT-only enforcement remain unchanged.
 
-The private recipient file uses the previously extracted old mapping, not new
-hand-designed recipients. Dynamic rosters and buyers are read only when their
-gate is explicitly enabled. No credentials belong in this JSON or Git.
+The old `report_runs/reminder_acceptance/legacy-recipient-reference.json` is an
+explicit import source only. Run `roles-check --source <source>` for a read-only
+preflight, then `roles-import --source <source> --output <profile>/local/workflow-roles.json`
+to create the active file. The importer requires the destination inside `local`,
+publishes without overwriting an existing file, and exposes no overwrite option.
+Dynamic rosters and buyers are read only when their gate is explicitly enabled.
+No credentials or private role values belong in this JSON or Git.
 
 ## Implemented finite write action
 
@@ -99,6 +112,14 @@ Unknown/in-flight/unverified outcomes stop before any component is retried, even
 under force-resend. Per-job overlap uses a finite lock like the old task lock;
 a stale lock requires review, not blind deletion. Human receipt remains unknown.
 
+Receipts produced by the unified `acceptance_delivery` path carry
+`datasage-delivery-binding/v1`, binding the business period,
+generation, phase, scope, final target, content, component keys and progress
+scope. Only `verified_for_reuse` suppresses a new delivery. A historical
+`provider_accepted` record without that binding is classified as
+`historical_provider_accepted` and cannot be reused; the old 10/9 acceptance
+counts cannot be promoted to a passing new binding.
+
 The official `cronjob` adapter can create a **paused** fixed script/no_agent job
 after a separate registration gate. It lists existing names first and does not
 create duplicates or alter unrelated/active jobs. UTC+8 is verified. Missing
@@ -130,6 +151,12 @@ against real cron state in this implementation batch.
   do not invent price changes. Customer mapping is separately gated. Real price
   baseline acceptance is a final, separately enabled step after allowed delivery
   succeeds; it is never implied by read permission or preview generation.
+- The `fabric` path first applies `result_completeness.gate_for_document` to raw
+  query packets. When delivery was requested but the gate rejects incomplete
+  evidence, the result reports `delivery=blocked_incomplete_report` and exposes
+  `report_delivery_gate`; when delivery was not requested it reports
+  `delivery=not_requested`. This shared source-completeness gate is separate from
+  `report_evidence`'s business source/detail/summary reconciliation.
 - `fabric_report` consumes current governed packets and exports populated source
   tables with four source-backed static PNG charts embedded in XLSX. It preserves
   read/ETL times, distinct occurrence/contribution rates, known subsets and unknown

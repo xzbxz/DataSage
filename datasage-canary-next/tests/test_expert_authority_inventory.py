@@ -224,9 +224,14 @@ class ExpertAuthorityInventoryTests(unittest.TestCase):
         self.assertNotIn(".no-bundled-skills", repository_ignore)
 
     def test_removed_companion_has_no_usage_or_snapshot_inventory_entry(self):
-        usage = json.loads((PROFILE_ROOT / "skills" / ".usage.json").read_text(encoding="utf-8"))
-        self.assertNotIn("datasage-query-patterns", usage)
-        self.assertEqual("active", usage["datasage"]["state"])
+        # A Git-only restore has no generated usage registry until Hermes first
+        # runs. Inspect a real registry when present, without manufacturing one.
+        usage_path = PROFILE_ROOT / "skills" / ".usage.json"
+        if usage_path.exists():
+            usage = json.loads(usage_path.read_text(encoding="utf-8"))
+            self.assertNotIn("datasage-query-patterns", usage)
+            self.assertEqual("active", usage["datasage"]["state"])
+        self.assertFalse((PROFILE_ROOT / "skills" / "datasage-query-patterns").exists())
         snapshot_path = PROFILE_ROOT / ".skills_prompt_snapshot.json"
         if snapshot_path.exists():
             snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))

@@ -61,6 +61,17 @@ def _query_rules() -> str:
     )
 
 
+EXPECTED_MODEL_CATALOG_DOMAINS = (
+    "delivery",
+    "receipt",
+    "receivable",
+    "target",
+    "inventory",
+    "profit",
+    "pattern_matching",
+)
+
+
 class BusinessContractTests(unittest.TestCase):
     @staticmethod
     def _read_only_source_evidence() -> dict[str, object]:
@@ -5125,14 +5136,15 @@ class BusinessContractTests(unittest.TestCase):
     def test_all_model_catalog_details_avoid_legacy_driver_vocabulary(self) -> None:
         checked_metrics = 0
         structural_metrics = 0
-        for domain in (
-            "delivery",
-            "receipt",
-            "receivable",
-            "target",
-            "receivable",
-            "inventory",
-        ):
+        self.assertEqual(
+            len(EXPECTED_MODEL_CATALOG_DOMAINS),
+            len(set(EXPECTED_MODEL_CATALOG_DOMAINS)),
+        )
+        self.assertEqual(
+            set(EXPECTED_MODEL_CATALOG_DOMAINS),
+            set(capability_contract.SUPPORTED_DOMAINS),
+        )
+        for domain in EXPECTED_MODEL_CATALOG_DOMAINS:
             summary = json.loads(
                 contracts.datasage_catalog({"requests": [{"domain": domain}]})
             )

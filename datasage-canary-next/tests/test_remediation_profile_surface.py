@@ -31,16 +31,15 @@ ANSWER_BOUNDARY_PATH = (
     / "answer-boundary.md"
 )
 
-SUPPORTED_DOMAINS = {
+SUPPORTED_DOMAINS = (
     "delivery",
     "receipt",
     "receivable",
     "target",
-    "receivable",
     "inventory",
     "profit",
     "pattern_matching",
-}
+)
 
 
 def _load_config() -> dict[str, object]:
@@ -299,7 +298,8 @@ class RemediationProfileSurfaceTests(unittest.TestCase):
     def test_skill_frontmatter_and_answer_boundary_declare_scope(self):
         frontmatter = _frontmatter(SKILL_PATH)
         hermes = frontmatter["metadata"]["hermes"]
-        self.assertEqual(SUPPORTED_DOMAINS, set(hermes["supported_domains"]))
+        self.assertEqual(len(SUPPORTED_DOMAINS), len(set(SUPPORTED_DOMAINS)))
+        self.assertEqual(set(SUPPORTED_DOMAINS), set(hermes["supported_domains"]))
         self.assertTrue(hermes["non_activation_examples"])
 
         answer_boundary = ANSWER_BOUNDARY_PATH.read_text(encoding="utf-8").casefold()

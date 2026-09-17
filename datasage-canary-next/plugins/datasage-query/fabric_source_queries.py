@@ -1,4 +1,5 @@
 """Source-label summaries, independently aggregated per ADS; no lifecycle inference."""
+from datetime import date
 from .analytical_queries import (AnalysisQueryError, _dataset, _approved, _quote_table,
     _quote_column, _time_window, _value_filter, _bound_value, _entity_bindings, _filter_clause)
 from .capability_contract import effective_dimension_definitions
@@ -65,9 +66,15 @@ def build_fabric_query(request, metric, datasets, semantics, limit, *, observed_
     ctes.append('prepared AS (SELECT '+','.join(select)+' FROM raw a'+status_join+')')
     where=[];unknown=[];applied={'source':'fabric_source_observation','basis':'recorded_delivery_history' if delivery else 'source_inventory_snapshot'}
     if delivery:
-        unknown.append("p.is_inner_cus IS NULL OR p.is_inner_cus<>'n' OR p.is_ccbs_cus IS NULL OR p.is_ccbs_cus<>'n' OR p.delivery_time IS NULL OR p.delivery_time<'2025-01-01' OR (COALESCE(p.current_customer_dept,'') NOT LIKE %s AND (p.bill_type IS NULL OR p.bill_type<>'bulk'))")
+        source_history_start=metric.get('source_history_start')
+        try:
+            source_history_start=date.fromisoformat(str(source_history_start)).isoformat()
+        except (TypeError,ValueError) as exc:
+            raise AnalysisQueryError('CONTRACT_UNAVAILABLE','货源出库历史起点合同无效。') from exc
+        unknown.append("p.is_inner_cus IS NULL OR p.is_inner_cus<>'n' OR p.is_ccbs_cus IS NULL OR p.is_ccbs_cus<>'n' OR p.delivery_time IS NULL OR p.delivery_time<%s OR (COALESCE(p.current_customer_dept,'') NOT LIKE %s AND (p.bill_type IS NULL OR p.bill_type<>'bulk'))")
         # This expression occurs in SELECT before the WHERE parameters below.
-        params.append('%HT%')
+        params.extend([source_history_start,'%HT%'])
+        applied['source_history_start']=source_history_start
     else:
         unknown.append("p.whse_org IS NULL OR p.whse_org IN ('五点中国公司','缅鑫国际贸易有限公司') OR p.whse_type IS NULL OR p.whse_type='CCBS仓'")
     if delivery and request.get('time_range'):

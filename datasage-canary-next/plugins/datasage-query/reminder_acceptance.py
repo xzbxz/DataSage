@@ -2,7 +2,7 @@
 from pathlib import Path
 from datetime import datetime
 import json,hashlib,re,shutil,uuid
-from . import acceptance_delivery as delivery,report_evidence,workflow_inputs,legacy_workflow as wf,operations
+from . import acceptance_delivery as delivery,report_evidence,workflow_inputs,legacy_workflow as wf,operations,workflow_roles
 from .workflow_io import IOErrorBoundary,private_root,run_lock
 
 WEEK='2026-W38';MONTH='2026-09'
@@ -16,9 +16,11 @@ def _case(profile,case):
     path=_root(profile)/('case-'+case);path.mkdir(exist_ok=True);return path
 def _read(path):return json.loads(Path(path).read_text(encoding='utf-8'))
 def _reference(profile):
-    path=delivery.runtime_home(profile)/'legacy-recipient-reference.json'
-    if path.is_symlink() or not path.is_file():raise IOErrorBoundary('LEGACY_RECIPIENT_REFERENCE_REQUIRED')
-    return _read(path)
+    """Load the versioned private role map; legacy references require import."""
+    try:
+        return workflow_roles.load(profile)
+    except workflow_roles.RoleConfigurationError as exc:
+        raise IOErrorBoundary(exc.code) from exc
 def _notice(logical,role,body,files=(),*,channel='private',**extra):
     return {'logical_id':logical,'role':role,'body':body,'attachments':[str(f) for f in files],'channel':channel,**extra}
 

@@ -2328,9 +2328,68 @@ def _metric_missing_input_sql(metric, dataset, datasets_contract, alias, *, join
         expressions.append(_qualified_identifier(joined_alias, _approved_column(
             metric.get("subtract_measure"), set(joined_dataset.get("allowed_columns") or []),
             _blocked_columns(datasets_contract, joined_dataset))))
+    currency_missing = _currency_missing_input_sql(
+        metric,
+        dataset,
+        datasets_contract,
+        alias,
+    )
+    if currency_missing is not None:
+        expressions.append(currency_missing)
     # COUNT DISTINCT intentionally ignores NULL identifiers; that is not a
     # missing amount. Other non-additive aggregations retain their own policy.
     return " OR ".join(f"{expression} IS NULL" for expression in expressions) or "1 = 0"
+
+
+def _currency_missing_input_sql(metric, dataset, datasets_contract, alias):
+    """Return the governed currency expression for original amounts.
+
+    Currency is part of the value's unit.  A NULL or blank currency therefore
+    makes the row unassessable even when the numeric amount itself is present.
+    The column is taken exclusively from the metric's declared currency policy;
+    no inferred or user-supplied identifier is accepted here.
+    """
+
+    policy = metric.get("currency_policy")
+    if not (
+        isinstance(policy, Mapping)
+        and policy.get("mode") == "original_currency"
+        and policy.get("require_filter_or_group") is True
+    ):
+        return None
+    column = policy.get("column")
+    allowed = {str(item) for item in dataset.get("allowed_columns") or []}
+    blocked = _blocked_columns(datasets_contract, dataset)
+    approved = _approved_column(column, allowed, blocked)
+    qualified = _qualified_identifier(alias, approved)
+    return f"NULLIF(TRIM(CAST({qualified} AS CHAR)), '')"
+
+
+def _metric_unclassified_source_value_sql(
+    metric,
+    dataset,
+    datasets_contract,
+    alias,
+    *,
+    sign=1,
+):
+    """Build one direct measure expression for an unknown-currency group.
+
+    Original-currency base amount metrics use ``aggregation: sum``.  Keeping
+    this helper to that declared direct measure avoids copying the compiler's
+    sum-product and derived-metric formulas; those metrics still retain their
+    existing NULL completeness guard and expose the unknown-row count/state.
+    """
+
+    if metric.get("aggregation") != "sum":
+        return None
+    allowed = {str(item) for item in dataset.get("allowed_columns") or []}
+    blocked = _blocked_columns(datasets_contract, dataset)
+    expression = _qualified_identifier(
+        alias,
+        _approved_column(metric.get("measure"), allowed, blocked),
+    )
+    return expression if sign == 1 else f"-({expression})"
 
 
 def _integrity_columns(value_sql, missing, known):
@@ -2881,6 +2940,54 @@ def _build_metric_core(
         evidence_columns = _overdue_integrity_columns(
             metric, dataset, datasets_contract, metric_join_alias,
             metric_join_dataset, eligibility_evidence, missing_input, sign)
+    currency_missing_input = _currency_missing_input_sql(
+        metric,
+        dataset,
+        datasets_contract,
+        "f",
+    )
+    if currency_missing_input is not None:
+        unknown_count = (
+            f"COALESCE(SUM(CASE WHEN {currency_missing_input} IS NULL "
+            "THEN 1 ELSE 0 END), 0)"
+        )
+        evidence_columns.append(
+            f"COALESCE(SUM(CASE WHEN {currency_missing_input} IS NULL "
+            f"THEN 1 ELSE 0 END), 0) AS {_quote_identifier('currency_missing_rows')}"
+        )
+        evidence_columns.append(
+            f"{unknown_count} AS {_quote_identifier('unclassified_source_row_count')}"
+        )
+        evidence_columns.append(
+            f"CASE WHEN ({unknown_count}) = 0 THEN NULL "
+            f"WHEN ({unknown_count}) = 1 THEN 'currency_unknown_source_value_not_comparable' "
+            f"ELSE 'currency_unknown_source_range_not_comparable' END "
+            f"AS {_quote_identifier('unclassified_amount_state')}"
+        )
+        source_value = _metric_unclassified_source_value_sql(
+            metric,
+            dataset,
+            datasets_contract,
+            "f",
+            sign=sign,
+        )
+        if source_value is not None:
+            unknown_min = (
+                f"MIN(CASE WHEN {currency_missing_input} IS NULL "
+                f"THEN {source_value} ELSE NULL END)"
+            )
+            unknown_max = (
+                f"MAX(CASE WHEN {currency_missing_input} IS NULL "
+                f"THEN {source_value} ELSE NULL END)"
+            )
+            evidence_columns.extend(
+                [
+                    f"CASE WHEN ({unknown_count}) = 1 THEN {unknown_min} ELSE NULL END "
+                    f"AS {_quote_identifier('unclassified_source_amount')}",
+                    f"{unknown_min} AS {_quote_identifier('unclassified_source_amount_min')}",
+                    f"{unknown_max} AS {_quote_identifier('unclassified_source_amount_max')}",
+                ]
+            )
     if (
         isinstance(applied_time, Mapping)
         and applied_time.get("source") in _SNAPSHOT_TIME_SOURCES
@@ -3573,18 +3680,41 @@ def _build_composite_metric_core(
         f"{_qualified_identifier('u', output)} AS {_quote_identifier(output)}"
         for output in dimension_outputs
     ]
-    select_sql = ", ".join(
-        outer_dimensions
-        + [
-            *_integrity_columns(
-                f"COALESCE(SUM({_qualified_identifier('u', 'metric_value')}), 0)",
-                "COALESCE(SUM(u.missing_value_count), 0)",
-                "COALESCE(SUM(u.known_value_count), 0)",
-            ),
-            f"COALESCE(SUM({_qualified_identifier('u', _INTERNAL_MATCH_COUNT)}), 0) "
-            f"AS {_quote_identifier(_INTERNAL_MATCH_COUNT)}",
-        ]
-    )
+    select_columns = outer_dimensions + [
+        *_integrity_columns(
+            f"COALESCE(SUM({_qualified_identifier('u', 'metric_value')}), 0)",
+            "COALESCE(SUM(u.missing_value_count), 0)",
+            "COALESCE(SUM(u.known_value_count), 0)",
+        ),
+        f"COALESCE(SUM({_qualified_identifier('u', _INTERNAL_MATCH_COUNT)}), 0) "
+        f"AS {_quote_identifier(_INTERNAL_MATCH_COUNT)}",
+    ]
+    currency_policy = metric.get("currency_policy")
+    if (
+        isinstance(currency_policy, Mapping)
+        and currency_policy.get("mode") == "original_currency"
+        and currency_policy.get("require_filter_or_group") is True
+    ):
+        unknown_count = (
+            "COALESCE(SUM(u.unclassified_source_row_count), 0)"
+        )
+        unknown_min = "MIN(u.unclassified_source_amount_min)"
+        unknown_max = "MAX(u.unclassified_source_amount_max)"
+        select_columns.extend(
+            [
+                f"{unknown_count} AS {_quote_identifier('currency_missing_rows')}",
+                f"{unknown_count} AS {_quote_identifier('unclassified_source_row_count')}",
+                f"CASE WHEN ({unknown_count}) = 0 THEN NULL "
+                f"WHEN ({unknown_count}) = 1 THEN 'currency_unknown_source_value_not_comparable' "
+                f"ELSE 'currency_unknown_source_range_not_comparable' END "
+                f"AS {_quote_identifier('unclassified_amount_state')}",
+                f"CASE WHEN ({unknown_count}) = 1 THEN {unknown_min} ELSE NULL END "
+                f"AS {_quote_identifier('unclassified_source_amount')}",
+                f"{unknown_min} AS {_quote_identifier('unclassified_source_amount_min')}",
+                f"{unknown_max} AS {_quote_identifier('unclassified_source_amount_max')}",
+            ]
+        )
+    select_sql = ", ".join(select_columns)
     sql = f"SELECT {select_sql} FROM ({' UNION ALL '.join(core_sql)}) AS {_quote_identifier('u')}"
     if dimension_outputs:
         sql += " GROUP BY " + ", ".join(
@@ -4372,6 +4502,11 @@ _PUBLIC_FACT_FIELDS = {
     "currency_known_amount",
     "currency_amount_keys",
     "currency_unresolved_rows",
+    "currency_missing_rows",
+    "unclassified_source_amount",
+    "unclassified_source_amount_min",
+    "unclassified_source_amount_max",
+    "unclassified_source_row_count",
     "pattern_task_ref",
     "pattern_customer_ref",
     "pattern_salesperson_ref",
@@ -4567,6 +4702,7 @@ _PUBLIC_STATE_FIELDS = {
     "period_state",
     "cost_turnover_state",
     "ddp_turnover_state",
+    "unclassified_amount_state",
 }
 _SCOPE_PRESENTATION_KEYS = {
     "request_id",
@@ -4627,14 +4763,14 @@ def _public_scope_entities(
     resolved_entities: Sequence[Mapping[str, Any]],
     semantics: Mapping[str, Any],
     metric: str | None = None,
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     """Project governed filter identity without leaking execution identifiers."""
 
     dimensions = _effective_dimensions(semantics, metric)
     if not isinstance(dimensions, Mapping):
         raise QueryFailure("CONTRACT_UNAVAILABLE", "业务域缺少维度语义。")
-    public: list[dict[str, str]] = []
-    seen: set[tuple[str, str]] = set()
+    public: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
     for resolved in resolved_entities:
         if not isinstance(resolved, Mapping):
             raise QueryFailure(
@@ -4680,6 +4816,51 @@ def _public_scope_entities(
             if value is not None
         }
         accepted = 0
+        identity_filter = (
+            definition.get("identity_filter")
+            if isinstance(definition, Mapping)
+            else None
+        )
+        identity_capable = (
+            isinstance(identity_filter, Mapping)
+            and identity_filter.get("entity_type") == resolved.get("entity_type")
+            and isinstance(resolved.get("entity_type"), str)
+            and isinstance(identity_filter.get("column"), str)
+            and resolved.get("entity_type") in entities._registry()["candidate_sources"]
+        )
+        identity_metadata: dict[str, Any] = {}
+        entity_refs: list[str] = []
+        if identity_capable:
+            stable_values: list[str] = []
+            identity_keys = ["canonical_ids", "canonical_codes"]
+            if resolved.get("resolution_path") == "registered_exact":
+                # Registered aliases already carry canonical source values in
+                # filter_values; other paths must expose an explicit canonical
+                # ID or code before a re-callable reference can be issued.
+                identity_keys.append("filter_values")
+            for key in identity_keys:
+                raw_values = resolved.get(key)
+                if not isinstance(raw_values, list):
+                    continue
+                stable_values = [
+                    str(value)
+                    for value in raw_values
+                    if value is not None and not isinstance(value, bool) and str(value) != ""
+                ]
+                if stable_values:
+                    break
+            entity_refs = [
+                entities.opaque_entity_ref(role, value)
+                for value in dict.fromkeys(stable_values)
+            ]
+            identity_metadata = {
+                "identity_state": "identified" if entity_refs else "identity_missing",
+                "entity_ref_kind": "opaque_reference_non_filter_token",
+            }
+            if len(entity_refs) == 1:
+                identity_metadata["entity_ref"] = entity_refs[0]
+            elif entity_refs:
+                identity_metadata["entity_refs"] = entity_refs
         execution_values = {
             str(value)
             for key in ("canonical_ids", "filter_values")
@@ -4701,13 +4882,14 @@ def _public_scope_entities(
                 )
             ):
                 continue
-            key = (role, display_name)
+            key = (role, display_name, tuple(entity_refs))
             if key not in seen:
                 public.append(
                     {
                         "role": role,
                         "label": safe_label,
                         "display_name": display_name,
+                        **identity_metadata,
                     }
                 )
                 seen.add(key)
@@ -4719,6 +4901,60 @@ def _public_scope_entities(
                 stage="entity_preflight",
             )
     return public
+
+
+def _public_currency_scope(
+    request: Mapping[str, Any],
+    metric_definition: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    policy = metric_definition.get("currency_policy")
+    if not (
+        isinstance(policy, Mapping)
+        and policy.get("mode") == "original_currency"
+        and policy.get("require_filter_or_group") is True
+    ):
+        return None
+    dimensions = request.get("dimensions") or []
+    filters = request.get("metric_filters") or {}
+    if "currency" in dimensions:
+        return {"mode": "grouped"}
+    if "currency" not in filters:
+        return None
+    raw_value = filters.get("currency")
+    values = raw_value if isinstance(raw_value, list) else [raw_value]
+    public_values = [
+        _safe_display_value(value)
+        for value in values
+        if _safe_display_value(value) is not None
+    ]
+    if len(public_values) != len(values):
+        return {"mode": "filtered", "state": "unknown"}
+    return {
+        "mode": "filtered",
+        "value": public_values[0] if len(public_values) == 1 else public_values,
+    }
+
+
+def _claim_entity_identity(
+    binding: Mapping[str, Any],
+    row: Mapping[str, Any],
+) -> tuple[str | None, str | None]:
+    fields = binding.get("identity_fields")
+    if not isinstance(fields, list) or not fields:
+        return None, None
+    for field in fields:
+        if not isinstance(field, str):
+            continue
+        raw_value = row.get(field)
+        if raw_value is None or isinstance(raw_value, bool):
+            continue
+        if isinstance(raw_value, str) and not raw_value.strip():
+            continue
+        return entities.opaque_entity_ref(
+            str(binding.get("dimension") or "entity"),
+            raw_value,
+        ), "identified"
+    return None, "identity_missing"
 
 
 def _scope_fingerprints(
@@ -4836,6 +5072,7 @@ def _scope_fingerprints(
             {
                 "population": population_projection,
                 "dimension_outputs": scope.get("dimension_outputs") or [],
+                "identity_outputs": scope.get("identity_outputs") or {},
                 **({"ranking_plan": scope["ranking_plan"]} if scope.get("ranking_plan") else {}),
                 "join_plan": join_plan,
                 "selected_dataset_contracts": projection_datasets,
@@ -5101,6 +5338,7 @@ def _claim_ledger(
     rows: Sequence[Mapping[str, Any]],
     scope_entities: Sequence[Mapping[str, str]] = (),
     fact_units: Mapping[str, str] | None = None,
+    currency_scope: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Build canonical public evidence claims; renderers never infer raw rows."""
 
@@ -5117,7 +5355,9 @@ def _claim_ledger(
             if field in row and row[field] is not None
         }
         dimensions: list[dict[str, Any]] = []
+        currency_binding_missing = False
         for binding in dimension_bindings:
+            dimension_start = len(dimensions)
             label = binding.get("label")
             fields = binding.get("fields")
             if isinstance(binding.get("field"), str) and not isinstance(fields, list):
@@ -5151,6 +5391,104 @@ def _claim_ledger(
                     dimension_value["display_only"] = True
                 dimensions.append(dimension_value)
                 break
+            if (
+                binding.get("dimension") == "currency"
+                and len(dimensions) == dimension_start
+            ):
+                currency_binding_missing = True
+            entity_ref, identity_state = _claim_entity_identity(binding, row)
+            if identity_state is not None:
+                identity_metadata = {
+                    "identity_state": identity_state,
+                    "entity_ref_kind": "opaque_reference_non_filter_token",
+                }
+                if isinstance(binding.get("entity_ref_scope"), str):
+                    identity_metadata["entity_ref_scope"] = binding["entity_ref_scope"]
+                if isinstance(binding.get("source_group_identity"), str):
+                    identity_metadata["source_group_identity"] = binding[
+                        "source_group_identity"
+                    ]
+                if isinstance(binding.get("source_group_ref_field"), str):
+                    identity_metadata["source_group_ref_field"] = binding[
+                        "source_group_ref_field"
+                    ]
+                if entity_ref is not None:
+                    identity_metadata["entity_ref"] = entity_ref
+                if len(dimensions) > dimension_start:
+                    dimensions[dimension_start].update(identity_metadata)
+                elif isinstance(label, str):
+                    dimensions.append(
+                        {
+                            "label": label,
+                            "value": "未知",
+                            "display_only": True,
+                            "display_name_missing": True,
+                            **identity_metadata,
+                        }
+                    )
+        currency_value: str | None = None
+        currency_state: str | None = None
+        currency_placeholder_added = False
+        if currency_binding_missing:
+            currency_label = next(
+                (
+                    str(binding.get("label"))
+                    for binding in dimension_bindings
+                    if binding.get("dimension") == "currency"
+                    and isinstance(binding.get("label"), str)
+                ),
+                "币种",
+            )
+            dimensions.append(
+                {
+                    "label": currency_label,
+                    "value": "未知币种",
+                    "display_only": True,
+                    "display_name_missing": True,
+                    "identity_state": "unknown",
+                }
+            )
+            currency_placeholder_added = True
+        if isinstance(currency_scope, Mapping):
+            if currency_scope.get("mode") == "filtered":
+                raw_value = currency_scope.get("value")
+                currency_value = (
+                    _safe_display_value(raw_value)
+                    if not isinstance(raw_value, list)
+                    else None
+                )
+                currency_state = "identified" if currency_value is not None else "unknown"
+            elif currency_scope.get("mode") == "grouped":
+                currency_value = _safe_display_value(row.get("currency_no"))
+                currency_state = "identified" if currency_value is not None else "unknown"
+                if currency_value is None and not currency_placeholder_added:
+                    currency_label = next(
+                        (
+                            str(binding.get("label"))
+                            for binding in dimension_bindings
+                            if binding.get("dimension") == "currency"
+                            and isinstance(binding.get("label"), str)
+                        ),
+                        "币种",
+                    )
+                    dimensions.append(
+                        {
+                            "label": currency_label,
+                            "value": "未知币种",
+                            "display_only": True,
+                            "display_name_missing": True,
+                            "identity_state": "unknown",
+                        }
+                    )
+        elif not currency_binding_missing:
+            currency_value = (
+                "CNY"
+                if not fact_units and (
+                    any(field.endswith("_rmb") for field in facts)
+                    or metric_unit in {"人民币元", "元"}
+                )
+                else None
+            )
         period_value = _safe_display_value(row.get("period"))
         if period_value is not None and not any(
             dimension["value"] == period_value for dimension in dimensions
@@ -5185,14 +5523,8 @@ def _claim_ledger(
                 **({"fact_units": {
                     field: unit for field, unit in fact_units.items() if field in facts
                 }} if fact_units else {}),
-                "currency": (
-                    "CNY"
-                    if not fact_units and (
-                        any(field.endswith("_rmb") for field in facts)
-                        or metric_unit in {"人民币元", "元"}
-                    )
-                    else None
-                ),
+                "currency": currency_value,
+                **({"currency_state": currency_state} if currency_state is not None else {}),
                 "facts": facts,
                 "states": states,
                 "source_truncated": bool(truncated),
@@ -6882,6 +7214,9 @@ def _business_dimension_bindings(
     public_outputs = {
         output for output in outputs if isinstance(output, str) and output
     }
+    identity_outputs = scope.get("identity_outputs") or {}
+    if not isinstance(identity_outputs, Mapping):
+        identity_outputs = {}
     bindings: list[dict[str, Any]] = []
     for dimension in requested:
         definition = dimensions.get(dimension)
@@ -6893,6 +7228,16 @@ def _business_dimension_bindings(
             for _column, output in _dimension_columns(definition)
             if output in public_outputs
         ]
+        identity_fields: list[str] = []
+        identity_filter = definition.get("identity_filter")
+        if isinstance(identity_filter, Mapping):
+            identity_column = identity_filter.get("column")
+            if isinstance(identity_column, str) and identity_column in declared_outputs:
+                identity_fields.append(identity_column)
+            else:
+                identity_output = identity_outputs.get(dimension)
+                if isinstance(identity_output, str) and identity_output:
+                    identity_fields.append(identity_output)
         approved_display = definition.get("public_display_fields", [])
         declared_fields = {output for _column, output in _dimension_columns(definition)}
         if (
@@ -6921,11 +7266,25 @@ def _business_dimension_bindings(
 
         candidates = sorted(safe_outputs, key=display_priority)
         if candidates and label.strip():
+            binding_metadata: dict[str, Any] = {}
+            if (
+                dimension == "executor"
+                and identity_fields
+                and isinstance(identity_filter, Mapping)
+                and identity_filter.get("column") == "executor_erp_id"
+            ):
+                binding_metadata = {
+                    "entity_ref_scope": "filter_identity",
+                    "source_group_identity": "source_executor_id",
+                    "source_group_ref_field": "pattern_executor_ref",
+                }
             bindings.append(
                 {
                     "dimension": str(dimension),
                     "fields": candidates,
                     "label": label.strip(),
+                    **({"identity_fields": identity_fields} if identity_fields else {}),
+                    **binding_metadata,
                     **({"public_display_fields": approved_display} if approved_display else {}),
                 }
             )
@@ -7438,6 +7797,7 @@ _MODEL_WIRE_RESULT_FIELDS = (
     "effective_limit",
     "has_more",
     "applied_time_range",
+    "currency_scope",
     "error",
 )
 
@@ -9335,6 +9695,20 @@ def _run_one(
                 "CONTRACT_UNAVAILABLE",
                 "指标合同不可用。",
             )
+        currency_scope = _public_currency_scope(request, metric_definition)
+        result_fact_units = metric_definition.get("result_fact_units") or (
+            capability_contract.TARGET_COMPLETION_FACT_UNITS
+            if metric_definition.get("query_kind") == "target_completion"
+            else None
+        )
+        if isinstance(currency_scope, Mapping):
+            result_fact_units = {
+                **(result_fact_units if isinstance(result_fact_units, Mapping) else {}),
+                "unclassified_source_amount": "原币金额（币种未知，仅原始值证据，不可比较）",
+                "unclassified_source_amount_min": "原币金额下界（币种未知，不可合计）",
+                "unclassified_source_amount_max": "原币金额上界（币种未知，不可合计）",
+                "unclassified_source_row_count": "币种缺失源记录数",
+            }
         _validate_required_time_bucket_rows(metric_definition, public_rows)
         domain_dimensions = semantics.get("dimensions")
         if not isinstance(domain_dimensions, Mapping) or any(
@@ -9374,8 +9748,8 @@ def _run_one(
             truncated,
             public_rows,
             public_scope_entities,
-            fact_units=(metric_definition.get("result_fact_units") or (capability_contract.TARGET_COMPLETION_FACT_UNITS
-                        if metric_definition.get("query_kind") == "target_completion" else None)),
+            fact_units=result_fact_units,
+            currency_scope=currency_scope,
         )
         disclosure_ledger, disclosure_ledger_seal = _disclosure_ledger(
             request=request,
@@ -9446,6 +9820,8 @@ def _run_one(
             "business_sql_confirmed_count": business_sql_confirmed_count,
             "source_evidence_ref": source_evidence_ref,
         }
+        if currency_scope is not None:
+            result["currency_scope"] = copy.deepcopy(currency_scope)
         if isinstance(snapshot_group_marker, str) and snapshot_group_marker:
             result["_snapshot_group_marker"] = snapshot_group_marker
         _check_call_deadline(deadline_at)

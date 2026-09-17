@@ -188,7 +188,7 @@
       2
     ],
     "old_catch_scope": "all_RequestException_not_only_transient",
-    "new_transport": "Hermes_official_only_no_local_sender"
+    "new_transport": "Hermes_official_transport_or_explicitly_gated_app_http_adapter_no_standalone_sender"
   },
   "activation_location": "local-report-bindings.json; all action gates default false"
 }

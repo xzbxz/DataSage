@@ -18,7 +18,8 @@ class ReviewTests(unittest.TestCase):
             path=Path(d)/'progress.json';path.write_text(json.dumps({'components':{'a'*64:{'status':'provider_accepted'}}}))
             receipt={'status':'provider_accepted_not_human_read','components':1,'progress_file':str(path)}
             with patch.object(r.io,'private_root',return_value=Path(d)),patch.object(r.delivery,'runtime_home'):
-                self.assertTrue(r.accepted(receipt))
+                self.assertFalse(r.accepted(receipt))
+                self.assertEqual('historical_provider_accepted',r.delivery.classify_receipt(receipt)['classification'])
                 self.assertFalse(r.accepted({**receipt,'status':'unknown'}))
                 self.assertFalse(r.accepted({**receipt,'components':2}))
     def test_all_weeklies_precede_first_monthly_in_scheduled_group(self):

@@ -1792,6 +1792,7 @@ metrics:
     unit: 源出库事件条
     query_kind: fabric_source
     fabric_side: delivery
+    source_history_start: "2025-01-01"
     table: vk_ads.delivery_barcode_source_ads
     source_key: barcode_detail_id
     source_fields:

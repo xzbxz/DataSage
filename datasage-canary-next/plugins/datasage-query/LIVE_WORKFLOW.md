@@ -2,9 +2,28 @@
 
 入口：`scripts/datasage_workflow.py --mode live`。`live` 表示读取真实业务来源，**仍然是独立测试存储和测试投递目标**，不是生产启用。原 `--mode test` 继续作为合成 fixture 的独立证据，不混入真实实例。
 
+> 当前状态：实现已安装到本机 Profile，角色配置已按授权完成等价格式迁移。
+> 网关未重载；本文的历史验收数字不能证明当前进程已加载新代码。
+> SQL SHA2 实体回查在真实数据库的扫描成本和延迟尚未测量。
+
 本机显式配置为 Git 忽略的 `workflow-live-runtime.json`，示例在 `docs/workflow-live-runtime.example.json`。身份、库、owner、固定实例和前缀须完全匹配，不接受任意库表/SQL 覆盖。表固定为 `vk_ai.ds_test_live_v1_` 加 registry、stock_input、monthly_stock_input、slow_baseline、sales_snapshot、purchase_snapshot、price_input、cycles。创建前核对冲突；既有对象必须全部归属、引擎、字段和无触发器检查通过才可复用。原 fixture 表和更早验收表不清理。
 
 凭据继续由官方环境加载器及现有安全运行配置读取，通知沿用锁定的验收成员和测试 webhook。没有旧 Git 抽取凭据或 Codex 工作目录依赖。当前账号权限较宽、数据库连接无 TLS，仍是明确的生产切换前条件；应用白名单不等于数据库权限隔离。
+
+## 角色来源与显式迁移
+
+live 与 test 共用同一角色加载边界：活动私有角色只从 Git 忽略的
+`local/workflow-roles.json` 读取，区域和部门规则只从
+`contracts/legacy-workflows.json` 派生。缺少或不符合版本合同会返回
+`ROLE_CONFIGURATION_REQUIRED` 等阻断码；不会探测 `report_runs` 或旧文件来回退。
+
+旧 `report_runs/reminder_acceptance/legacy-recipient-reference.json` 只能作为显式
+导入源。先执行 `roles-check --source <source>` 只读预检，再执行
+`--mode live roles-import --source <source> --output <profile>/local/workflow-roles.json`；
+已存在目标不覆盖。无 source 的 `roles-check` 检查活动配置，`diagnose` 只验证当前磁盘 Profile 与当前
+CLI 进程的运行环境；正在运行的 gateway 版本是 `not_observed`。
+`local-report-bindings.json` 中旧的 `recipients_file=legacy-recipients.json` 只是兼容标记，
+不会改变活动文件路径。
 
 ## 价格：观察与投递分离
 
@@ -27,6 +46,17 @@ python <profile>/scripts/datasage_workflow.py --mode live deliver-prices
 无变化且完整性门槛通过，零通知后提交自己的验收快照。存在可解释变化时，先持久化事件及按旧角色/客户规则生成的待发清单；`deliver-prices` 只处理已准备内容，不能临时读取新来源。每次最多两个逻辑通知；尚有后续批次则保持 planned，快照不推进。发送成功后复用同一事务核心推进快照及提交标记。明确失败只补缺失组件；unknown 不盲重试；sending 仅在已确认全部组件成功时恢复。数据源阻断不会被当作发送失败。
 
 `anomaly-evidence` 对当前已隔离空白货号做有限定点只读检查；无现存变体时保留既有证据，不覆盖为空。`continuity-replay` 仅用封存的 before/current 重算并核对已提交摘要，不查生产、不写库、不发送。旧价参考、历史单位税缺口、观察时间与 ETL 新鲜度仍分别解释。
+
+## 回执绑定与完整性边界
+
+统一 `acceptance_delivery` 路径的新投递回执带 `datasage-delivery-binding/v1`，将业务周期、代次、阶段、业务范围、
+最终目标、正文与附件内容、组件集合和 progress scope 绑定；只有
+`verified_for_reuse` 才能抑制新发送。没有新 binding 的旧 `provider_accepted` 只保留为
+`historical_provider_accepted`，不能自动复用；旧验收记录中的 10/9 计数不能提升为新 binding 的通过。
+
+报表的 `report_evidence` 仍负责业务来源、明细与汇总对账；共享完整性投影负责原始查询包的
+请求集合、状态、覆盖、截断和观察时点。两者分别回答业务数值是否对账、投递所需数据是否完整，
+不能把一个通过解释成另一个通过。
 ## 滞销：真实部门、周次和明确代次
 
 ```text

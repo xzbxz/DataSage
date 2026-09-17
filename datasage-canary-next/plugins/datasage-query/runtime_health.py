@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
+import os
+import re
 import stat
+import subprocess
 from typing import Any
 
 from agent.secret_scope import get_secret
@@ -250,3 +254,58 @@ def query_readiness_status() -> dict[str, Any]:
         }
     status = database_configuration_status()
     return {**status, "identity": identity}
+
+
+def source_diagnostics() -> dict[str, Any]:
+    """Read only non-secret disk identity and this process's pinned contracts.
+
+    A CLI process cannot attest which source an already-running gateway loaded.
+    Do not initialize a home, load credentials, connect, or write a status file.
+    """
+    root = _profile_root()
+    source_root = root / "plugins" / "datasage-query"
+    relative_paths = ["SOUL.md", "profile.yaml", "plugins/datasage-query/plugin.yaml"]
+    relative_paths += [p.relative_to(root).as_posix() for p in source_root.glob("*.py")]
+    relative_paths += [p.relative_to(root).as_posix() for p in (source_root / "contracts").iterdir() if p.suffix in {".yaml", ".json"}]
+    entries = []
+    for relative in sorted(set(relative_paths)):
+        path = root / relative
+        if path.is_symlink() or not path.resolve().is_relative_to(root.resolve()):
+            raise ValueError("DIAGNOSTIC_SOURCE_PATH_INVALID")
+        entries.append((relative, hashlib.sha256(path.read_bytes()).hexdigest()))
+    disk_digest = hashlib.sha256(
+        "\n".join(f"{name}\0{digest}" for name, digest in entries).encode("utf-8")
+    ).hexdigest()
+    disk_contract_digest = hashlib.sha256(
+        "\n".join(f"{name}\0{digest}" for name, digest in entries if "/contracts/" in name).encode("utf-8")
+    ).hexdigest()
+    git_head = None
+    git_state = "unavailable"
+    try:
+        environment = dict(os.environ, GIT_OPTIONAL_LOCKS="0")
+        command = ["git", "-c", "safe.directory=" + root.parent.as_posix(), "-C", str(root)]
+        head = subprocess.run(command + ["rev-parse", "HEAD"], env=environment,
+                              capture_output=True, text=True, timeout=5, check=False)
+        if head.returncode == 0 and re.fullmatch(r"[0-9a-f]{40,64}", head.stdout.strip()):
+            git_head = head.stdout.strip()
+            dirty = subprocess.run(command + ["status", "--porcelain=v1", "--untracked-files=no", "--", "."],
+                                   env=environment, capture_output=True, text=True, timeout=5, check=False)
+            git_state = "modified" if dirty.stdout.strip() else "clean" if dirty.returncode == 0 else "unavailable"
+    except (OSError, subprocess.SubprocessError):
+        pass
+    loaded = contract_store.contract_snapshot_status()
+    loaded_digest = loaded.get("manifest_digest")
+    return {
+        "scope": "current_process_and_disk_only",
+        "profile_git_head_on_disk": git_head,
+        "tracked_worktree_state": git_state,
+        "source_file_count": len(entries),
+        "disk_source_sha256": disk_digest,
+        "disk_contract_files_sha256": disk_contract_digest,
+        "current_process_contract_snapshot_loaded": loaded.get("loaded") is True,
+        "current_process_contract_snapshot_sha256": loaded_digest,
+        "effective_runtime_configuration": "not_observed",
+        "running_gateway_loaded_revision": "not_observed",
+        "database_connection_attempted": False,
+        "credentials_read": False,
+    }

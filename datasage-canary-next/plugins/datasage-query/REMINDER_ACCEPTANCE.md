@@ -3,10 +3,21 @@
 验收目标固定为已批准成员及测试群机器人。完整webhook与应用凭据只保存在Git忽略的
 `acceptance-delivery.secrets.json`。代码只保存批准目标的指纹，禁止任意地址、群回退或第二条WS连接。
 
+业务角色的唯一活动私有来源是 Git 忽略的 `local/workflow-roles.json`。
+`reminder_acceptance` 通过 `workflow_roles.load()` 读取它；缺失或无效时直接阻断，
+不会从 `report_runs` 探测旧角色文件。旧 `report_runs/reminder_acceptance/legacy-recipient-reference.json`
+只能由显式 `roles-import --source <source> --output <profile>/local/workflow-roles.json`
+转换，先用 `roles-check --source <source>` 做只读预检，导入不覆盖已有目标。
+
 `acceptance_delivery.notification_parts` 接受已按旧规则生成的逻辑通知。原正文/附件不改写，
 另加验收说明；渠道及逻辑收件身份进入独立组件key，多个旧收件人重定向后不碰撞。
 验收进度、锁、上传证据和失败归属位于 `report_runs/reminder_acceptance` 下，
 复用既有组件回执/恢复实现，和生产进度、价格基线分开。
+
+新发送结果带 `datasage-delivery-binding/v1`，绑定周期、代次、阶段、业务范围、最终目标、
+正文/附件内容、组件 key 与 progress scope。只有 `verified_for_reuse` 才能抑制同一业务内容的
+新发送；旧的 `provider_accepted` 若没有可验证的新 binding，只记录为
+`historical_provider_accepted`，不可复用。历史验收中的 10/9 计数不能提升为新 binding 的通过。
 
 整批预检后上传所有待发附件，再按通知发送文字和文件。普通文本按UTF-8字符边界分段，
 群Markdown/文本@all按旧消息类型保留；单文件上限沿用已有20MiB边界，格式支持XLSX/ZIP/PNG。
@@ -33,6 +44,6 @@ QC与浮球仍取消。采购旧外部运行周期与实际原目标缺失时必
 
 `scripts/datasage_reminder_acceptance.py --list`列出本周期固定案例；`--prepare <case>`只做本地准备，`--send <case>`仅投到批准测试目标。输入仅允许已注册案例，当前验收周期为2026-W38，过期拒绝。无任意SQL、目标、附件路径或生产启用参数。
 
-原始逻辑角色和个性化内容在准备阶段保留，相同正文可合并并记录完整原角色范围；模板恢复旧周/月报的日期、库存变化摘要、销售排列，以及销售报价的旧标题/逐产品价差行。周/月报、IDK、采购私信按旧代码采用应用Markdown，群采购仍Markdown加可选单独text @all。保留已确认卷数小数精度，不恢复旧整数取整。
+活动角色映射产生的原始逻辑角色和个性化内容在准备阶段保留，相同正文可合并并记录完整原角色范围；模板恢复旧周/月报的日期、库存变化摘要、销售排列，以及销售报价的旧标题/逐产品价差行。周/月报、IDK、采购私信按旧代码采用应用Markdown，群采购仍Markdown加可选单独text @all。保留已确认卷数小数精度，不恢复旧整数取整。
 
 客户包仅在任务阶段接口接受后准备，月报仅在周报接口接受后发送；销售/采购已接入原数据库快照的只读比较；新键或不可比状态不冒充涨跌，不自动接受新基线。旧库中存在的参考不再被误报为没有基线。所有模拟涨跌、个性化附件、无买客、客户ZIP/派发审计及失败提醒都明确标记合成。

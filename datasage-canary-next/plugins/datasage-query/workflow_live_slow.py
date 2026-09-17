@@ -25,7 +25,13 @@ def observe_department(department):
 def latest(store,department,week):
     prefix=department.lower()+'-'+week.lower()+'-g'
     rows=[r for r in store.rows('cycles') if r['cycle_id'].startswith('ls-'+prefix)]
-    return max(rows,key=lambda r:cycle.payload(r)['generation']) if rows else None
+    by_generation={}
+    for row in rows:
+        generation=cycle.payload(row).get('generation')
+        if type(generation) is not int or not 0<=generation<=999:raise ValueError('LIVE_GENERATION_INVALID')
+        if generation in by_generation:raise ValueError('MULTIPLE_LIVE_GENERATION_RECORDS')
+        by_generation[generation]=row
+    return by_generation[max(by_generation)] if by_generation else None
 def persist(store,key,data,status='planned'):cycle.persist(store,key,data['scope'],status,data)
 def generation_number(previous,*,force=False,reason=None):
     if force and (not isinstance(reason,str) or not 5<=len(reason.strip())<=120):raise ValueError('EXPLICIT_GENERATION_REASON_REQUIRED')
@@ -100,6 +106,7 @@ def build(phase,key,data):
     def save_evidence(name,value):
         name=name.removesuffix('.json')+'-'+version+'.json';live.save(name,value);files.append(name)
     manifest=slow.build(phase,key,data,snapshots=lambda:live.Snapshot(data['scope']),saver=save_evidence)
+    manifest['business_scope']=data['department']
     manifest['evidence']['query_files']=files
     manifest['evidence']['baseline_frozen_at']=data['frozen_at']
     manifest['evidence']['manual_single_department_sequence']=True
@@ -170,6 +177,25 @@ def deliver(department,*,report_only=False):
                 try:receipt=cycle.dispatch(key+'-'+phase,manifest['notices'],state)
                 except Exception as exc:
                     persist(store,key,data,'failed' if str(exc)=='DELIVERY_COMPONENT_FAILED' else 'unknown');raise
+            from . import workflow_delivery_review,acceptance_delivery
+            expected_binding=manifest.get('delivery_binding')
+            if not acceptance_delivery.validate_delivery_binding(expected_binding):
+                notices=manifest.get('notices') or [];logical_id=notices[0].get('logical_id') if notices and isinstance(notices[0],dict) else None
+                cycle_id=logical_id if isinstance(logical_id,str) and logical_id.startswith(key) else key
+                try:expected_binding=workflow_delivery_review.binding_for_manifest(base.profile(),cycle_id,notices,manifest=manifest)
+                except Exception:expected_binding=None
+            try:provider_accepted=bool(workflow_delivery_review.accepted(receipt,expected_binding))
+            except Exception:provider_accepted=False
+            if provider_accepted and (not isinstance(receipt,dict) or not isinstance(expected_binding,dict) or receipt.get('delivery_binding',{}).get('phase')!=expected_binding.get('phase')):provider_accepted=False
+            lifecycle=manifest.setdefault('delivery_lifecycle',{'selected':phase=='customer','prepared':True,'provider_accepted':False,'receipt_bound':False,'human_confirmed':'unknown','delivery_state':'prepared'})
+            human_confirmed=receipt.get('human_confirmed') if isinstance(receipt,dict) and type(receipt.get('human_confirmed')) is bool else 'unknown'
+            lifecycle.update(provider_accepted=provider_accepted,receipt_bound=provider_accepted,
+                             human_confirmed=human_confirmed,
+                             receipt_status=receipt.get('status') if isinstance(receipt,dict) else None,
+                             delivery_state='provider_accepted' if provider_accepted else 'unknown')
+            if not provider_accepted:
+                persist(store,key,data,'unknown')
+                raise ValueError('DELIVERY_RECEIPT_UNBOUND')
             manifest['receipt']=receipt;data['phase_index']+=1
             persist(store,key,data,'committed' if data['phase_index']==len(slow.PHASES) else 'planned')
             result={'status':'stage_completed','cycle':key,'phase':phase,'receipt':receipt,'dedup_review':manifest['dedup_review'],'baseline_frozen_at':data['frozen_at'],'report_observed_at':manifest['evidence'].get('completeness',{}).get('observed_to'),'manual_department_sequence':True,'next_phase':slow.PHASES[data['phase_index']] if data['phase_index']<len(slow.PHASES) else None,'department':department,'scope':'full department inventory; one complete customer package sampled'}

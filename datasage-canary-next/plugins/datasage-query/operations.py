@@ -8,7 +8,7 @@ from collections import Counter, defaultdict
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 import hashlib, html, json, os, re
-from . import contract_store
+from . import contract_store, result_completeness
 
 class OperationError(ValueError):
     pass
@@ -249,10 +249,34 @@ def render(document):
         if not rows:return '<p>该部分没有返回行。</p>'
         fields=list(dict.fromkeys(k for row in rows for k in row))
         return '<table><tr>'+''.join('<th>'+escape(labels.get(k,k))+'</th>' for k in fields)+'</tr>'+''.join('<tr>'+''.join('<td>'+escape(row.get(k))+'</td>' for k in fields)+'</tr>' for row in rows)+'</table>'
+    def dimension_text(dimension):
+        if not isinstance(dimension,dict):return escape(dimension)
+        label=dimension.get('label',dimension.get('code','维度'))
+        value=dimension.get('value')
+        text=escape(str(label)+'='+str(value))
+        for key in ('entity_ref','identity_ref','stable_entity_ref','identity_state'):
+            if key in dimension and dimension.get(key) not in (None,''):
+                text+='；'+escape(key+'='+str(dimension[key]))
+        return text
+    def coverage_block(summary):
+        observed=summary.get('observed_at') or '未知'
+        population=summary.get('population_group_count')
+        population='未知' if population is None else population
+        unknown=summary.get('unknown_items') or {}
+        return ('<p>状态：'+escape(summary.get('status'))+'；数据状态：'+escape(summary.get('data_state'))+
+                '；完整性：'+escape(summary.get('completeness'))+'；返回分组：'+escape(summary.get('returned_group_count'))+
+                '；总体分组：'+escape(population)+'；截断：'+escape(summary.get('truncated'))+
+                '；观察时点：'+escape(observed)+'</p>'+('<p>未知项：'+escape(json.dumps(unknown,ensure_ascii=False,sort_keys=True,default=str))+'</p>' if unknown else '<p>未知项：无显式未知值。</p>'))
     body='<h1>业务观察与覆盖</h1><p>本地生成成功不等于投递成功。本产物未发送。未知值不是零，范围变化不是价格变化或因果证明。</p>'
     if document.get('synthetic'):body='<p><strong>合成示例，不是真实业务数据</strong></p>'+body
     body+='<p>'+escape(document.get('meaning',document.get('coverage','')))+' </p>'
     if document.get('observed_at'):body+='<p>库端观察时点：'+escape(document['observed_at'])+'</p>'
+    if isinstance(document.get('query_packets'),list):
+        gate=result_completeness.gate_for_document(document)
+        body+='<p>完整报告门槛：'+('通过' if gate['allowed'] else '未通过')
+        if gate['reason_codes']:body+='；原因：'+escape('、'.join(gate['reason_codes']))
+        body+='。完整报告才允许进入投递适配器。</p>'
+    if 'records' in document:body+=coverage_block(result_completeness.summarize_result(document))
     records=[]
     for r in document.get('records',[]):
         if 'price_state' in r:records.append({k:v for k,v in r.items() if k not in ('source_ref','sku_ref')})
@@ -265,11 +289,20 @@ def render(document):
             body+='<h3>'+escape(events[event['event']])+'</h3>'+table([{'观察':'之前',**(event['before'] or {}).get('labels',{}),**(event['before'] or {}).get('prices',{}),**(event['before'] or {}).get('basis',{})},{'观察':'本次',**(event['after'] or {}).get('labels',{}),**(event['after'] or {}).get('prices',{}),**(event['after'] or {}).get('basis',{})}])
     for packet in document.get('query_packets',[]):
         body+='<h2>'+escape(packet.get('answer_scope_line','受控查询结果'))+'</h2>'
-        for result in packet.get('results',[]):
-            body+='<p>仅返回部分行：'+escape(result.get('truncated'))+'</p>'
-            for row in result.get('rows',[]):
-                title='；'.join(str(d.get('label'))+'：'+str(d.get('value')) for d in row.get('dimensions',[]))
-                body+='<h3>'+escape(title)+'</h3>'+table([row.get('facts',{})])
+        results=packet.get('results',[])
+        if not isinstance(results,list):results=[]
+        for result in results:
+            summary=result_completeness.summarize_result(result if isinstance(result,dict) else None)
+            body+=coverage_block(summary)
+            rows=result.get('rows',[]) if isinstance(result,dict) else []
+            if not isinstance(rows,list) and isinstance(result,dict):rows=result.get('claim_ledger',[])
+            for row in rows:
+                if not isinstance(row,dict):continue
+                title='；'.join(dimension_text(d) for d in row.get('dimensions',[]) if isinstance(d,dict)) or '总体'
+                row_values=dict(row.get('facts',{}) if isinstance(row.get('facts'),dict) else row)
+                for key in ('entity_ref','identity_ref','stable_entity_ref','identity_state','currency','currency_no'):
+                    if row.get(key) not in (None,''):row_values[key]=row[key]
+                body+='<h3>'+title+'</h3>'+table([row_values])
         for disclosure in packet.get('disclosures',[]):body+='<p>'+escape(disclosure.get('text'))+'</p>'
     return '<!doctype html><meta charset="utf-8"><title>DataSage 业务观察</title><style>body{font:15px system-ui;margin:32px;color:#182331}table{border-collapse:collapse;display:block;overflow:auto;margin:18px 0}td,th{border:1px solid #ccd5df;padding:8px;white-space:nowrap}th{background:#edf3f8}h3{margin-top:28px}</style>'+body
 
@@ -326,13 +359,44 @@ def execute_governed(profile,report_id,binding,scope_hash):
                 else:request['inventory_scope']=binding['inventory_scope']
                 requests.append(request)
     handler=wire.bounded_json_handler('datasage_query',tools.runtime_guarded_datasage_query)
-    packets=[]
+    packets=[];results_by_id={};packet_status_by_id={}
     # Respect existing public per-call budgets; no identity spoofing, new engine,
     # result manufacture, or merge of observations into a fake atomic snapshot.
+    # Bind every returned result by its request_id.  A provider that returns the
+    # wrong id is retained as a failed packet and can never satisfy another
+    # request's coverage entry.
     for request in requests:
-        packet=json.loads(handler({'requests':[request]}));packets.append(packet)
-        results=packet.get('results')
-        valid=(packet.get('status')=='success' and isinstance(results,list) and len(results)==1 and results[0].get('request_id')==request['request_id'] and results[0].get('status')=='success')
-        if not valid:break
-    ok=len(packets)==len(requests) and all(p.get('status')=='success' and isinstance(p.get('results'),list) and len(p['results'])==1 and p['results'][0].get('status')=='success' and p['results'][0].get('request_id')==r['request_id'] for p,r in zip(packets,requests))
-    return {'status':'success' if ok else 'partial','kind':kind,'scope_hash':scope_hash,'query_packets':packets,'delivery_state':'not_requested','assignment_state':'review_only_no_recipient_or_responsibility_inference' if kind=='slow_assignment' else None,'coverage':'Each packet retains its own time and truncation. Visible rows are not the complete population.','unmigrated':'Formal responsibility attribution, unverified upstream quality/return labels, image delivery and automatic recipient mapping are not asserted.'}
+        packet=json.loads(handler({'requests':[request]}))
+        if not isinstance(packet,dict):packet={'status':'failed','results':[]}
+        packets.append(packet)
+        returned=packet.get('results')
+        if isinstance(returned,list) and len(returned)==1 and isinstance(returned[0],dict):
+            result=returned[0]
+            request_id=result.get('request_id')
+            if request_id==request['request_id'] and request_id not in results_by_id:
+                results_by_id[request_id]=result
+                packet_status_by_id[request_id]=packet.get('status')
+    ordered=[];coverage=[]
+    for request in requests:
+        result=results_by_id.get(request['request_id'])
+        if result is None:
+            result={'request_id':request['request_id'],'status':'missing_result','data_state':'incomplete','truncated':False}
+        else:
+            packet_status=packet_status_by_id.get(request['request_id'])
+            if packet_status!='success':
+                result={**result,'status':packet_status if isinstance(packet_status,str) else 'missing_packet_status'}
+        ordered.append(result);coverage.append(result_completeness.summarize_result(result))
+    packet_ok=(len(results_by_id)==len(requests) and len(packets)==len(requests)
+               and all(packet.get('status')=='success' for packet in packets)
+               and all(result.get('status')=='success' for result in ordered))
+    # A successful bounded query remains inspectable, but a truncated or
+    # incomplete table cannot make the governed report a complete success.
+    hard_incomplete=any(item['truncated'] is True or item['data_state'] in {'truncated','incomplete'} for item in coverage)
+    status='success' if packet_ok and not hard_incomplete else 'partial'
+    gate=result_completeness.report_delivery_gate(ordered)
+    return {'status':status,'kind':kind,'scope_hash':scope_hash,'query_packets':packets,
+        'delivery_state':'not_requested','assignment_state':'review_only_no_recipient_or_responsibility_inference' if kind=='slow_assignment' else None,
+        'expected_request_ids':[r['request_id'] for r in requests],
+        'coverage':coverage,'report_complete':gate['allowed'],'delivery_allowed':gate['allowed'],
+        'delivery_gate':gate,'coverage_note':'Each table retains its status, data state, truncation flag, returned/known population counts, observation time and unknown items. Visible rows are not the complete population unless the table gate is complete.',
+        'unmigrated':'Formal responsibility attribution, unverified upstream quality/return labels, image delivery and automatic recipient mapping are not asserted.'}

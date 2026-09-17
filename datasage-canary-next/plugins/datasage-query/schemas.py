@@ -620,7 +620,7 @@ DATASAGE_ENTITY_RESOLVE = {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 128,
-                "description": "Business-entity name, code, alias or short token to look up.",
+                "description": "Business-entity name, code, alias or an entity_ref_v1_ reference returned by query dimensions. Resolve such references here within the selected entity type/domain/metric before using the returned canonical value in an existing metric filter; the opaque reference itself is not a raw filter value.",
             },
             "entity_types": {
                 "type": "array",

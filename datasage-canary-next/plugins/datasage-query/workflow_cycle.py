@@ -40,13 +40,13 @@ def recover_receipt(key,items):
     parts=transport.normalize(parts,progress)
     if not parts or any(progress.status(p['key'])!='provider_accepted' for p in parts):raise ValueError('WORKFLOW_SEND_UNKNOWN_REVIEW_REQUIRED')
     # Full normal entry still checks unchanged fingerprints and destination.
-    return delivery.deliver_batch(profile,case,items)
+    return delivery.deliver_batch(profile,case,items,cycle_id=key)
 def dispatch(key,items,previous_status,send=None):
     if previous_status=='sending':
         if send is not None:raise ValueError('WORKFLOW_SEND_UNKNOWN_REVIEW_REQUIRED')
         return recover_receipt(key,items)
     if send is not None:return send(key,items)
-    return delivery.deliver_batch(storage.profile(),case_id(key),items)
+    return delivery.deliver_batch(storage.profile(),case_id(key),items,cycle_id=key)
 def select_cycle(rows,side,scope):
     pending=[r for r in rows if r['status']!='committed']
     if len(pending)>1:raise ValueError('MULTIPLE_PENDING_CYCLES')

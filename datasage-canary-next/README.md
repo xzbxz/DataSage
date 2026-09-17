@@ -1,7 +1,8 @@
 # DataSage Canary Next
 
-这是 DataSage Profile 的源码目录，也是当前 `datasage-canary-next` 运行目录。
-当前维护方式是在现有 Git 工作区和活动分支上原地修改、测试、审查与提交；
+这是本机 `datasage-canary-next` Profile 的源码目录。本轮结构收敛代码已安装，
+角色配置已按授权完成等价格式迁移；网关未重载，历史验收记录不代表当前进程已加载新代码。
+维护方式是在现有 Git 工作区和活动分支上原地修改、测试、审查与提交；
 不创建第二个安装实例，也不使用 `hermes profile install/update` 覆盖这个目录。
 
 `.env`、认证信息、状态库、会话、日志、Memory 及其他运行数据属于用户态，
@@ -53,6 +54,35 @@ rc14 落实本轮出库事实口径：8 项数量指标恢复查询，必须按�
 
 当前宿主为官方稳定版 `0.21.1`。维护只在当前 Git Profile 内进行：修改、离线测试、审查、提交，再通过官方 Hermes 重新加载。Git commit/tag 是版本与回退依据；不再维护 distribution manifest、自建发布 receipt、晋级脚本或第二个安装实例。运行时继续保留 `plugin.yaml` 等官方加载元数据。
 
+### 角色配置与激活边界
+
+工作流唯一活动的私有角色配置是 Profile 下 Git 忽略的
+`local/workflow-roles.json`。非秘密的区域与部门规则只来自
+`plugins/datasage-query/contracts/legacy-workflows.json`；执行人、管理人员、固定价格管理人员和其他私有目标不在公共合同中重复保存。
+`workflow_roles.load()` 只读取活动路径，缺失、版本错误或口径不一致会直接返回
+`ROLE_CONFIGURATION_REQUIRED` 或其他稳定阻断码，不探测 `report_runs`，也不从旧文件隐式回退。
+
+旧 `report_runs/reminder_acceptance/legacy-recipient-reference.json` 只能作为一次明确的迁移来源。
+迁移前用 `roles-check --source <source>` 做只读预检，再用同时指定
+`--source` 和 `--output` 的 `roles-import` 导入；目标必须位于 Profile 的 `local` 目录内，
+已有目标不覆盖，CLI 不提供覆盖选项。`local-report-bindings.json` 中遗留的
+`recipients_file=legacy-recipients.json` 只是兼容标记，读取仍固定走
+`local/workflow-roles.json`，不会读取同名文件。
+
+角色命令均通过固定入口调用（`--mode` 是入口所需参数，角色动作自身不连库）：
+
+```text
+python <profile>/scripts/datasage_workflow.py --mode test roles-check
+python <profile>/scripts/datasage_workflow.py --mode test roles-check --source <source>
+python <profile>/scripts/datasage_workflow.py --mode test roles-import --source <source> --output <profile>/local/workflow-roles.json
+python <profile>/scripts/datasage_workflow.py --mode test diagnose
+```
+
+无 `--source` 的 `roles-check` 检查活动角色配置；带 `--source` 时只做显式来源的
+`prepare` 预检。`diagnose` 只验证当前磁盘 Profile 与当前 CLI 进程的运行环境，不替代角色检查；
+正在运行的 gateway 版本是 `not_observed`。命令输出只含状态、哈希、计数和错误码，
+不打印人员值。本轮代码已安装，角色配置已按授权完成等价格式迁移，网关未重载；SQL SHA2 实体回查在真实数据库的扫描成本和延迟尚未测量。
+
 内建 Skill 由 Hermes 官方同步。当前启用 `docx`、`xlsx`、`pdf`、`powerpoint`，并接受宿主必需的 `hermes-agent`；其他当前与遗留内建入口通过 `skills.disabled` 关闭。`ocr-and-documents` 已不在当前 core 集合，不再声明为可用原生能力。升级时检查 `tests/fixtures/reviewed_host_skills.json` 的快照差异和 `related_skills`，再有选择地更新。调试期间显式关闭 `curator.enabled`，避免自动改变能力集合；background review 也保持关闭。
 
 普通 CLI 可以编辑和测试源码，但普通 CLI 身份不能直接调用业务查询；业务入口仍要求已绑定的 WeCom 身份或合法 trusted replay。工具可见性不等于业务授权，本次没有扩展任何权限。
@@ -60,6 +90,12 @@ rc14 落实本轮出库事实口径：8 项数量指标恢复查询，必须按�
 所有 Hermes 维护命令显式使用 `-p datasage-canary-next`。离线检查使用现有官方宿主 Python，在本目录运行 `python -B -m unittest discover -s tests -p "test_*.py" -v`。测试保留 SQL、数值完整性、证据、授权、并发、时限、宿主装配和会话配对验证，不再验证已删除的发布系统。
 
 `tests/business_replay.py` 只解析已有会话导出并验证工具配对和结束边界，不读取会话数据库、不调用模型、不发送消息，也不授予上线资格。真实业务验收独立于源码回归；量化目标仍见 `ARCHITECTURE.md`，不得把计划门槛写成已达到的成绩。
+
+统一 `acceptance_delivery` 路径产生的新投递回执使用 `datasage-delivery-binding/v1`，把业务周期/代次/阶段、范围、最终目标、正文与附件内容、组件集合和 progress scope 绑定在一起；只有 `verified_for_reuse` 才能抑制一次新的发送。没有新 binding 的历史 `provider_accepted` 只标为 `historical_provider_accepted`，不能自动复用。旧验收记录中的 10/9 计数不能提升为新 binding 的通过。
+
+`report_evidence` 继续负责报表业务证据的来源、明细与汇总对账；共享
+`result_completeness` 只负责原始查询包的状态、覆盖、截断、观察时点和完整报告门槛。
+两者分别回答业务数值是否对账、投递所需来源是否完整；一个通过不能替代另一个。
 
 LSP 使用 Profile 中官方 npm 的 Windows `.cmd` 入口。Git 操作和维护不得覆盖 `.env`、认证、state、sessions、logs、Memory 或更改企微与数据库权限。
 

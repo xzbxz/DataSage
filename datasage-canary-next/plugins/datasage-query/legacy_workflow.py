@@ -7,7 +7,7 @@ from pathlib import Path
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from datetime import date,datetime,time,timedelta,timezone
 from collections import defaultdict
-import hashlib,json,re,sqlite3,zipfile
+import hashlib,json,os,re,shutil,sqlite3,tempfile,zipfile
 from . import contract_store
 from .legacy_xlsx import gen_workbook_xlsx
 
@@ -24,6 +24,10 @@ def number(value):
     except InvalidOperation:return None
 def show(value):return 'Unknown' if value is None else str(value)
 def safe_name(value):return re.sub(r'[<>:"/\\|?*\x00-\x1f]','_',str(value)).strip(' .')[:110] or 'Unknown'
+
+def customer_product_key(row):
+    """Use the legacy customer source key without changing business text."""
+    return (row['whse_dept'],row['goods_no'],str(row.get('attr_val') or ''))
 
 def legacy_periods(now):
     if now.tzinfo is None:raise WorkflowError('CLOCK_TIMEZONE_REQUIRED')
@@ -212,11 +216,20 @@ def official_receipt(send_result,component_key):
     else:status='unknown'
     return {'component_key':component_key,'status':status,'evidence':'official_adapter_result','provider_message_id':message_id,'api_errcode':raw.get('errcode') if isinstance(raw,dict) else None,'human_received':'unknown'}
 
+def customer_assignment(info,mapping):
+    """Return the shared customer-to-sales eligibility decision for reports and audits."""
+    info=dict(info) if isinstance(info,dict) else {}
+    sales=str(info.get('sales') or '').strip();customer_no=str(info.get('customer_no') or '').strip();name=str(info.get('name') or '').strip()
+    account=str((mapping.get('wecomBySales') or {}).get(sales) or '').strip();employee=(mapping.get('employeeBySales') or {}).get(sales) or {}
+    employee=dict(employee) if isinstance(employee,dict) else {}
+    reason='Missing Customer No' if not customer_no else 'Missing Customer Name' if not name else 'Missing Sales Owner' if not sales else 'Missing WeCom Account' if not account else 'Sales Owner Not Active' if not employee else 'Personnel Account Mismatch' if str(employee.get('wecom_account') or '').strip()!=account else 'Personnel Region Mismatch' if str(employee.get('region') or '').strip() not in policy()['regions'] else None
+    return {'customer_no':customer_no,'name':name,'sales':sales,'account':account,'employee':employee,'region':str(employee.get('region') or '').strip(),'reason':reason}
+
 def contact_plan(baseline,mapping):
     """Per-customer PNG and per-sales ZIP membership, using supplied reviewed identities."""
     products={};audit=[];matched_keys=set();packages={}
     for r in baseline:
-        key=(r['whse_dept'],r['goods_no'],str(r.get('attr_val') or ''))
+        key=customer_product_key(r)
         rolls=number(r.get('total_piece'))
         if rolls is None:raise WorkflowError('CUSTOMER_CARD_ROLLS_UNKNOWN')
         products[key]=products.get(key,Decimal(0))+rolls
@@ -224,11 +237,8 @@ def contact_plan(baseline,mapping):
         selected={k:v for k,v in products.items() if any(p.get('goods_no')==k[1] and p.get('whse_dept')==k[0] for p in purchased)}
         if not selected:continue
         matched_keys.update(selected);info=dict(mapping.get('customerInfo',{}).get(cid,{}))
-        for field in ('customer_no','name','sales'):info[field]=str(info.get(field) or '').strip()
-        sales=info['sales'];account=str(mapping.get('wecomBySales',{}).get(sales) or '').strip();employee=dict(mapping.get('employeeBySales',{}).get(sales,{}))
-        if employee:
-            for field in ('wecom_account','region'):employee[field]=str(employee.get(field) or '').strip()
-        reason='Missing Customer No' if not info.get('customer_no') else 'Missing Customer Name' if not info.get('name') else 'Missing Sales Owner' if not sales else 'Missing WeCom Account' if not account else 'Sales Owner Not Active' if not employee else 'Personnel Account Mismatch' if employee.get('wecom_account')!=account else 'Personnel Region Mismatch' if employee.get('region') not in policy()['regions'] else None
+        assignment=customer_assignment(info,mapping);info.update(customer_no=assignment['customer_no'],name=assignment['name'],sales=assignment['sales'])
+        sales=assignment['sales'];account=assignment['account'];employee=assignment['employee'];reason=assignment['reason']
         for key in selected:audit.append({'product_dept':key[0],'goods_no':key[1],'color':key[2],'customer_no':info.get('customer_no'),'customer_name':info.get('name'),'sales_owner':sales,'account':account,'exception':reason,'dispatch_status':'not_sent','customer_follow_up':'Not Assigned' if reason else 'Pending'})
         if reason:continue
         package=packages.setdefault(account,{'account':account,'sales_name':sales,'sales_names':[],'region':employee['region'],'customers':[]})
@@ -321,18 +331,73 @@ def card_png(customer,path):
         y+=height
     image.save(path,'PNG')
 
+def _cache_expected(folder):
+    expected={}
+    for path in folder.iterdir():
+        if path.is_symlink() or not path.is_file():raise WorkflowError('CUSTOMER_IMAGE_OUTPUT_COLLISION')
+        expected[path.name]=path
+    return expected
+
+def _validate_image_cache(folder,expected):
+    if folder.is_symlink() or (folder.exists() and not folder.is_dir()):raise WorkflowError('CUSTOMER_IMAGE_OUTPUT_COLLISION')
+    if not folder.exists():return
+    for path in folder.iterdir():
+        if path.is_symlink() or not path.is_file() or path.name not in expected:raise WorkflowError('CUSTOMER_IMAGE_OUTPUT_COLLISION')
+    for name,source in expected.items():
+        target=folder/name
+        if target.is_symlink() or (target.exists() and not target.is_file()):raise WorkflowError('CUSTOMER_IMAGE_OUTPUT_COLLISION')
+        if target.exists() and hashlib.sha256(target.read_bytes()).hexdigest()!=hashlib.sha256(source.read_bytes()).hexdigest():raise WorkflowError('CUSTOMER_IMAGE_OUTPUT_COLLISION')
+
+def _publish_image_cache(folder,expected):
+    if folder.is_symlink() or (folder.exists() and not folder.is_dir()):raise WorkflowError('CUSTOMER_IMAGE_OUTPUT_COLLISION')
+    if not folder.exists():
+        try:folder.mkdir()
+        except FileExistsError:pass
+    _validate_image_cache(folder,expected)
+    for name,source in expected.items():
+        target=folder/name
+        try:os.link(source,target)
+        except FileExistsError:
+            if target.is_symlink() or not target.is_file() or hashlib.sha256(target.read_bytes()).hexdigest()!=hashlib.sha256(source.read_bytes()).hexdigest():raise WorkflowError('CUSTOMER_IMAGE_OUTPUT_COLLISION')
 
 def customer_zip(package,outdir,week):
-    token=account_token(package['account'])[:12];folder=outdir/('images_'+token);folder.mkdir()
+    """Build a deterministic customer archive and publish it atomically.
+
+    The archive and its renderer inputs are created in a private staging
+    directory.  A retry can reuse an already published byte-identical archive
+    and can finish publishing its image cache after an interruption; a changed
+    destination is retained and reported as a collision.
+    """
+    outdir=Path(outdir)
+    if outdir.is_symlink():raise WorkflowError('CUSTOMER_ARCHIVE_OUTPUT_INVALID')
+    outdir.mkdir(parents=True,exist_ok=True)
+    token=account_token(package['account'])[:12]
+    published_folder=outdir/('images_'+token)
     path=outdir/f'sales_{token}_{week}.zip';names=set()
-    with zipfile.ZipFile(path,'x',zipfile.ZIP_DEFLATED) as z:
-        for i,customer in enumerate(package['customers']):
-            filename=safe_name(customer['customer_no'])+'_'+safe_name(customer['customer_name'])+'.png'
-            if filename.casefold() in names:raise WorkflowError('CUSTOMER_IMAGE_FILENAME_COLLISION')
-            names.add(filename.casefold());image=folder/f'{i:05d}.png';card_png(customer,image)
-            info=zipfile.ZipInfo(filename,date_time=(1980,1,1,0,0,0));info.compress_type=zipfile.ZIP_DEFLATED;info.external_attr=0o600<<16;z.writestr(info,image.read_bytes())
-    if path.stat().st_size>policy()['customer_artifacts']['max_zip_bytes']:raise WorkflowError('ZIP_SIZE_LIMIT_EXCEEDED')
-    return path
+    staging=Path(tempfile.mkdtemp(prefix='.customer-archive-',dir=str(outdir)))
+    staged_folder=staging/('images_'+token);staged_folder.mkdir()
+    staged_archive=staging/(path.name)
+    try:
+        with zipfile.ZipFile(staged_archive,'x',zipfile.ZIP_DEFLATED) as z:
+            for i,customer in enumerate(package['customers']):
+                filename=safe_name(customer['customer_no'])+'_'+safe_name(customer['customer_name'])+'.png'
+                if filename.casefold() in names:raise WorkflowError('CUSTOMER_IMAGE_FILENAME_COLLISION')
+                names.add(filename.casefold());image=staged_folder/f'{i:05d}.png';card_png(customer,image)
+                info=zipfile.ZipInfo(filename,date_time=(1980,1,1,0,0,0));info.compress_type=zipfile.ZIP_DEFLATED;info.external_attr=0o600<<16;z.writestr(info,image.read_bytes())
+        if staged_archive.stat().st_size>policy()['customer_artifacts']['max_zip_bytes']:raise WorkflowError('ZIP_SIZE_LIMIT_EXCEEDED')
+        expected_images=_cache_expected(staged_folder);_validate_image_cache(published_folder,expected_images)
+        staged_digest=hashlib.sha256(staged_archive.read_bytes()).hexdigest()
+        if path.is_symlink():raise WorkflowError('CUSTOMER_ARCHIVE_DESTINATION_COLLISION')
+        try:os.link(staged_archive,path)
+        except FileExistsError:
+            if path.is_symlink() or not path.is_file():raise WorkflowError('CUSTOMER_ARCHIVE_DESTINATION_COLLISION')
+            try:existing_digest=hashlib.sha256(path.read_bytes()).hexdigest()
+            except OSError:raise WorkflowError('CUSTOMER_ARCHIVE_DESTINATION_COLLISION') from None
+            if existing_digest!=staged_digest:raise WorkflowError('CUSTOMER_ARCHIVE_DESTINATION_COLLISION')
+        _publish_image_cache(published_folder,expected_images)
+        return path
+    finally:
+        shutil.rmtree(staging,ignore_errors=True)
 
 def customer_package_message(package,week):
     return f"Sales owner: {', '.join(package['sales_names'])}\nSlow sales-stock Products - Customer Package\n\nBaseline week: {week}\nCustomers: {len(package['customers'])}. One image per customer in one ZIP."

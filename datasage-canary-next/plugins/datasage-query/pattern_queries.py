@@ -94,6 +94,12 @@ def build_pattern_query(request, metric, datasets_contract, semantics, limit, *,
     projection=','.join([*grouping,*labelsql])
     projection=projection+',' if projection else ''
     groupby=' GROUP BY '+groupcols if grouping else ''
+    identity_outputs = {}
+    if 'executor' in chosen:
+        # The pattern contract uses executor_erp_id only as the governed
+        # salesperson filter identity.  It must not become the source group
+        # key, which remains executor_id above.
+        identity_outputs['executor'] = 'executor_filter_identity'
     if view=='summary':
         known="task_key_ok=1 AND scope_unknown=0"
         count=lambda condition: f'COUNT(DISTINCT CASE WHEN {known} AND ({condition}) THEN task_id ELSE NULL END)'
@@ -132,7 +138,13 @@ def build_pattern_query(request, metric, datasets_contract, semantics, limit, *,
           'candidate_product_nonatomic_rows':"SUM(CASE WHEN final_goods_no LIKE '%%,%%' THEN 1 ELSE 0 END)",
           'recorded_unverified_link_rows':'SUM(CASE WHEN link_recorded=1 AND link_ok=0 THEN 1 ELSE 0 END)',
         }
-        ctes.append('grouped AS (SELECT '+projection+'COUNT(*) AS result_source_rows,'+','.join(f'{expr} AS {name}' for name,expr in stats.items())+' FROM scoped'+groupby+')')
+        identity_projection = (
+            "CASE WHEN executor_id IS NOT NULL "
+            "AND COUNT(DISTINCT executor_erp_id)=1 "
+            "THEN MAX(executor_erp_id) ELSE NULL END AS executor_filter_identity,"
+            if 'executor' in chosen else ''
+        )
+        ctes.append('grouped AS (SELECT '+projection+identity_projection+'COUNT(*) AS result_source_rows,'+','.join(f'{expr} AS {name}' for name,expr in stats.items())+' FROM scoped'+groupby+')')
         value='CASE WHEN COALESCE(g.task_identity_unknown_rows,0)=0 AND pattern_scope_unknown_rows=0 THEN g.known_task_count ELSE NULL END'
         known_value='g.known_task_count'
         missing='COALESCE(g.task_identity_unknown_rows,0)+pattern_scope_unknown_rows'
@@ -143,10 +155,21 @@ def build_pattern_query(request, metric, datasets_contract, semantics, limit, *,
         dedup=list(dict.fromkeys([*grouping,*identity,'sale_goods_detail_id']))
         bad='link_ok=0 OR scope_unknown=1'+(' OR task_key_ok=0 OR executor_id IS NULL OR product_key_ok=0' if person else '')
         # One amount per stable detail or owner-confirmed person attribution key, never SUM(DISTINCT amount).
-        ctes.append('amount_keys AS (SELECT '+','.join(dedup)+f",COUNT(*) AS attribution_source_rows,SUM(CASE WHEN {bad} THEN 1 ELSE 0 END) AS bad_rows,MAX(linked_amount) AS linked_amount FROM scoped WHERE link_recorded=1 GROUP BY "+','.join(dedup)+')')
+        amount_identity_projection = (
+            ",COUNT(DISTINCT executor_erp_id) AS executor_filter_identity_count,"
+            "MAX(executor_erp_id) AS executor_filter_identity"
+            if 'executor' in chosen else ''
+        )
+        ctes.append('amount_keys AS (SELECT '+','.join(dedup)+f",COUNT(*) AS attribution_source_rows,SUM(CASE WHEN {bad} THEN 1 ELSE 0 END) AS bad_rows,MAX(linked_amount) AS linked_amount"+amount_identity_projection+" FROM scoped WHERE link_recorded=1 GROUP BY "+','.join(dedup)+')')
         # Labels derive from the scoped identity, not from arbitrarily selected duplicate amounts.
         amount_projection=groupcols+',' if groupcols else ''
-        ctes.append('grouped AS (SELECT '+amount_projection+'COUNT(*) AS amount_key_count,SUM(attribution_source_rows) AS result_source_rows,SUM(CASE WHEN bad_rows=0 THEN linked_amount ELSE 0 END) AS known_amount,SUM(CASE WHEN bad_rows=0 THEN 1 ELSE 0 END) AS known_amount_keys,SUM(bad_rows) AS unresolved_amount_rows FROM amount_keys'+groupby+')')
+        identity_projection = (
+            "CASE WHEN MAX(executor_id) IS NOT NULL "
+            "AND COUNT(DISTINCT executor_filter_identity)=1 "
+            "THEN MAX(executor_filter_identity) ELSE NULL END AS executor_filter_identity,"
+            if 'executor' in chosen else ''
+        )
+        ctes.append('grouped AS (SELECT '+amount_projection+identity_projection+'COUNT(*) AS amount_key_count,SUM(attribution_source_rows) AS result_source_rows,SUM(CASE WHEN bad_rows=0 THEN linked_amount ELSE 0 END) AS known_amount,SUM(CASE WHEN bad_rows=0 THEN 1 ELSE 0 END) AS known_amount_keys,SUM(bad_rows) AS unresolved_amount_rows FROM amount_keys'+groupby+')')
         ctes.append('currency_keys AS (SELECT '+','.join(['currency_no',*identity,'sale_goods_detail_id'])+f",SUM(CASE WHEN {bad} THEN 1 ELSE 0 END) AS bad_rows,MAX(linked_amount) AS linked_amount FROM scoped WHERE link_recorded=1 GROUP BY "+','.join(['currency_no',*identity,'sale_goods_detail_id'])+')')
         ctes.append('currency_totals AS (SELECT currency_no,SUM(CASE WHEN bad_rows=0 THEN linked_amount ELSE 0 END) AS currency_known_amount,COUNT(*) AS currency_amount_keys,SUM(bad_rows) AS currency_unresolved_rows FROM currency_keys GROUP BY currency_no)')
         value='CASE WHEN g.unresolved_amount_rows=0 AND pattern_scope_unknown_rows=0 THEN g.known_amount ELSE NULL END'
@@ -164,7 +187,7 @@ def build_pattern_query(request, metric, datasets_contract, semantics, limit, *,
     sql='WITH '+',\n'.join(ctes)+f' SELECT g.*,clock.*,observation.*,coverage.*,population.*{extra},{value} AS metric_value,{known_value} AS known_subset_value,{missing} AS missing_value_count,COALESCE(g.result_source_rows,0) AS known_value_count,COALESCE(g.result_source_rows,0) AS __matched_row_count FROM clock CROSS JOIN observation CROSS JOIN coverage CROSS JOIN population LEFT JOIN grouped g ON TRUE'+amount_join+label_join+order+' LIMIT %s'
     params.append(limit+1)
     outputs=[*grouping,*[labels[k][0] for k in chosen if k in labels]]
-    return sql,params,{'metric':request.get('metric'),'dataset':None,'source_datasets':[table,linked_table],'dimension_outputs':outputs,'filters':filters,'time_range':{'source':'pattern_current_observation','basis':basis,'window_start':window.get('start'),'window_end':window.get('end')},'_validate_pattern_observation':True,'effective_dimensions':chosen,'warnings':[metric.get('answer_note','')]}
+    return sql,params,{'metric':request.get('metric'),'dataset':None,'source_datasets':[table,linked_table],'dimension_outputs':outputs,'identity_outputs':identity_outputs,'filters':filters,'time_range':{'source':'pattern_current_observation','basis':basis,'window_start':window.get('start'),'window_end':window.get('end')},'_validate_pattern_observation':True,'effective_dimensions':chosen,'warnings':[metric.get('answer_note','')]}
 
 
 def pattern_observation(rows, scope):

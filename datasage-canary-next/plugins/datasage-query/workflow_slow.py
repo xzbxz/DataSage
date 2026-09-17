@@ -50,9 +50,10 @@ def build(phase,key,data,*,snapshots=None,saver=s.save):
         with s.tools._ConsistentSnapshotExecutor(deadline_at=s.tools._call_deadline(None)) as db:mapping=inputs.customer_mapping(db,[(r['goods_no'],r['whse_dept']) for r in rows])
         plan=wf.contact_plan(rows,mapping);packages=plan['sales_packages'][:1]
         if not packages:raise ValueError('TEST_CUSTOMER_PACKAGE_EMPTY')
-        data['selected_packages']=packages;data['total_packages']=len(plan['sales_packages'])
+        package_digests=[s.digest(p) for p in packages]
+        data['selected_packages']=packages;data['selected_package_digests']=package_digests;data['total_packages']=len(plan['sales_packages'])
         notices=[notice(key+'-customer',wf.customer_package_message(p,week),[wf.customer_zip(p,folder,week)]) for p in packages]
-        evidence={'selected_packages':len(packages),'total_packages':len(plan['sales_packages']),'unselected_not_sent':len(plan['sales_packages'])-len(packages)}
+        evidence={'selected_packages':len(packages),'total_packages':len(plan['sales_packages']),'unselected_not_sent':len(plan['sales_packages'])-len(packages),'customer_package_digests':package_digests}
     elif phase=='audit':
         if data['phases']['customer']['receipt']['status']!='provider_accepted_not_human_read':raise ValueError('CUSTOMER_RECEIPT_REQUIRED')
         packages=data['selected_packages']
@@ -72,7 +73,12 @@ def build(phase,key,data,*,snapshots=None,saver=s.save):
         body=wf.report_draft(region,period,adapted['summary'],adapted['sales_rows'],monthly=phase=='monthly')
         path=folder/('Test_'+phase+'.xlsx');gen_workbook_xlsx([('Detail',wf.REPORT_HEADERS,adapted['detail_rows'])],path,borders=True,landscape=True)
         notices=[notice(key+'-'+phase,body,[path],'markdown')];evidence={'summary':adapted['summary'],'completeness':adapted['completeness'],'label_coverage':adapted['label_coverage'],'original_report_role_count':len(original_report_roles),'delivery_route':'approved test member only; same report merged for role acceptance'}
-    return {'notices':notices,'notice_digest':s.digest(notices),'files':{p:hashlib.sha256(Path(p).read_bytes()).hexdigest() for n in notices for p in n['attachments']},'evidence':evidence}
+    manifest={'notices':notices,'notice_digest':s.digest(notices),'files':{p:hashlib.sha256(Path(p).read_bytes()).hexdigest() for n in notices for p in n['attachments']},'evidence':evidence,'business_scope':region}
+    # Preparation is independent of provider acceptance and human receipt.
+    manifest['delivery_lifecycle']={'selected':phase=='customer','prepared':True,
+        'provider_accepted':False,'receipt_bound':False,'human_confirmed':'unknown',
+        'delivery_state':'prepared'}
+    return manifest
 def verify_artifacts(manifest):
     if s.digest(manifest['notices'])!=manifest['notice_digest']:raise ValueError('STAGED_NOTICE_CHANGED')
     for name,digest in manifest['files'].items():

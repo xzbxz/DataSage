@@ -8,10 +8,17 @@ Additional migrated IDK, price observation, slow assignment review and fabric
 report modes share this entrypoint and binding file; see [OPERATIONS.md](OPERATIONS.md).
 They remain unconfigured by default and do not enable scheduling or delivery.
 
+When a legacy workflow needs business roles, it reads only the Git-ignored
+`local/workflow-roles.json`. The historical role reference under `report_runs`
+is an explicit import source, never an implicit fallback; use the role commands
+documented in [WORKFLOW_RUNTIME.md](WORKFLOW_RUNTIME.md).
+
 This is an operator entrypoint, not a registered model tool. Public DataSage
 admission still requires the existing bound identity. The report entrypoint
-does not set WeCom or replay identities and does not register jobs or send
-messages. Same-account processes can read or change local bindings; a report
+does not set WeCom or replay identities. Default reports and `--legacy-preview`
+do not send or register jobs; `--legacy-run` delegates to the separately gated
+operator workflow and can freeze, send or accept a price reference when explicitly enabled.
+Same-account processes can read or change local bindings; a report
 ID, script name or environment variable is not an unforgeable cron principal.
 
 The installed entrypoint is `scripts/datasage_slow_report.py`, under the active

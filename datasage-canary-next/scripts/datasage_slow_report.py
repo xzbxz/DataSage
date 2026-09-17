@@ -1,4 +1,4 @@
-"""Official cron-compatible entrypoint. Unconfigured by default; no sending."""
+"""Operator reports; default/preview do not send, legacy-run has explicit I/O gates."""
 from pathlib import Path
 import importlib.util
 import sys

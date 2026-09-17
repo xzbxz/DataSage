@@ -8,8 +8,23 @@ from datetime import datetime,timezone,timedelta
 from types import SimpleNamespace
 import test_business_contracts as base
 from test_legacy_workflow import source
+from role_config_fixture import legacy_document,public_document
 
 io=importlib.import_module(base.TEST_PACKAGE+'.workflow_io');wf=importlib.import_module(base.TEST_PACKAGE+'.legacy_workflow');inputs=importlib.import_module(base.TEST_PACKAGE+'.workflow_inputs');fabric=importlib.import_module(base.TEST_PACKAGE+'.fabric_report')
+
+def install_synthetic_roles(profile):
+    """Install a complete isolated role map; workflow_io must read its active path."""
+    roles=importlib.import_module(base.TEST_PACKAGE+'.workflow_roles')
+    contract=profile/roles.LEGACY_RELATIVE_PATH
+    contract.parent.mkdir(parents=True,exist_ok=True)
+    contract.write_text(json.dumps(public_document(),ensure_ascii=False),encoding='utf-8')
+    legacy=legacy_document()
+    legacy['regions']['HCM']['executors']=[{'account':'exec','name':'Synthetic Executor HCM'}]
+    legacy['regions']['HCM']['managers']=['m']
+    legacy['price_manager_fixed']=['m']
+    source_path=profile/'synthetic-legacy-role-source.json'
+    source_path.write_text(json.dumps(legacy,ensure_ascii=False),encoding='utf-8')
+    roles.import_legacy(source_path,profile/roles.ACTIVE_RELATIVE_PATH,profile)
 
 class Cursor:
     def __init__(self,db):self.db=db;self.result=[]
@@ -231,8 +246,8 @@ class WorkflowIOTests(unittest.TestCase):
                 return {'success':False,'raw_response':{'errcode':1}} if item['stage']=='customer_zip' else {'success':True,'message_id':'synthetic'}
         with TemporaryDirectory() as tmp:
             root=Path(tmp);out=root/'run';out.mkdir()
-            (root/'legacy-recipients.json').write_text(json.dumps({'regions':{'HCM':{'executors':[{'account':'e','name':'Executor'}],'managers':['m'],'dynamic_sales_departments':['HCM Sales']}}}),encoding='utf-8')
-            binding={'recipients_file':'legacy-recipients.json','customer_mapping_enabled':True,'send_enabled':True}
+            install_synthetic_roles(root)
+            binding={'recipients_file':'local/workflow-roles.json','customer_mapping_enabled':True,'send_enabled':True}
             t=Transport();p=io.Progress(root,'slow_task','2026-W38')
             with self.assertRaisesRegex(io.IOErrorBoundary,'CUSTOMER_DELIVERY_PARTIAL'):io._produce_and_execute(root,'slow_task',binding,out,'2026-W38','2026-09',p,snapshots,t,None)
             self.assertTrue(any(r['account']=='m' and r['stage']=='audit_file' for r in t.calls))

@@ -2,6 +2,8 @@ import unittest,importlib,copy,json
 from contextlib import nullcontext
 from unittest.mock import patch
 from datetime import datetime,timedelta,timezone
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import test_business_contracts as base
 from test_legacy_price_bridge import old_sales,sales,old_purchase,purchase,NOW
 
@@ -128,6 +130,26 @@ class LiveWorkflowTests(unittest.TestCase):
             with self.assertRaises(prices.cycle.DeliveryDeferred):fn('unused',notices,'planned',None)
             result=fn('unused',notices,'planned',None)
         self.assertEqual(calls,[[0,1],[2,3],[4]]);self.assertEqual(result['logical_notifications'],5)
+
+    def test_status_preserves_provider_counts_but_separates_historical_receipts(self):
+        old_receipt={'status':'provider_accepted_not_human_read','logical_notifications':10,'components':9}
+        row={'cycle_id':'lp-sales-2026091615','test_scope':'sales','status':'committed','payload':{'observation':{'observed_at':'2026-09-16T15:00:00'},'blockers':{},'document':{'event_counts':{},'continuation':{}},'notices':[],'receipt':{'batch_receipts':{'0':old_receipt}},'after_digest':'digest','before_digest':'digest'}}
+        class Store:
+            def rows(self,role,*args):
+                if role=='cycles':return [row]
+                return []
+            def close(self):pass
+        reminder=importlib.import_module(base.TEST_PACKAGE+'.reminder_acceptance')
+        with TemporaryDirectory() as directory:
+            binding=Path(directory)/'workflow-live-runtime.json';binding.write_text(json.dumps({'schedule_enabled':False}))
+            with patch.object(runner.live,'Store',return_value=Store()),patch.object(runner.live,'binding',return_value=binding),patch.object(runner.live,'save'),patch.object(runner.prices,'snapshot_digest',return_value='digest'),patch.object(reminder,'_reference',return_value={'regions':{}}):
+                result=runner.status()
+        evidence=result['delivery_evidence']
+        self.assertEqual(10,evidence['logical_notifications'])
+        self.assertEqual(9,evidence['components'])
+        self.assertEqual(0,evidence['verified_components'])
+        self.assertEqual(9,evidence['historical_components'])
+        self.assertFalse(evidence['actual_component_states_verified'])
     def test_notice_seal_changes_when_body_or_file_changes(self):
         notice={'body':'first','attachments':['test.xlsx']}
         with patch.object(prices.delivery,'runtime_home'),patch.object(prices.delivery,'file_snapshot',return_value=('test.xlsx',b'first','type','digest')):

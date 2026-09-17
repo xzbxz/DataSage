@@ -45,23 +45,6 @@ def customer_mapping(db,pairs):
             employees[name]=r
     return {'productsByCustomer':dict(products),'customerInfo':info,'employeeBySales':employees,'wecomBySales':{n:r['wecom_account'] for n,r in employees.items()},'window':{'start':start.isoformat(),'end':end.isoformat()},'meaning':'Legacy notification buyer relationship, not a replacement for the governed historical-customer metric.'}
 
-def report_inputs(handler,region,week,month,*,phase=None):
-    """Get current governed result packets, not old unchecked report calculations."""
-    import json
-    result={}
-    if phase not in (None,'weekly','monthly'):raise IOErrorBoundary('REPORT_PHASE_INVALID')
-    for name,metric,dimensions,period in (
-        ('weekly_pool','registered_slow_pool_baseline_groups',['product','pool_sku','warehouse_department','unit'],{'baseline_week':week}),
-        ('weekly_flow','registered_slow_pool_baseline_net_outbound',['product','pool_sku','warehouse_department','unit','salesperson'],{'baseline_week':week}),
-        ('monthly_pool','registered_slow_monthly_groups',['product','pool_sku','warehouse_department','unit'],{'calendar_month':month}),
-        ('monthly_flow','registered_slow_monthly_net_outbound',['product','pool_sku','warehouse_department','unit','salesperson'],{'calendar_month':month})):
-        if phase and not name.startswith(phase):continue
-        request={'request_id':name,'domain':'inventory','mode':'metric','metric':metric,'dimensions':dimensions,'metric_filters':{'warehouse_department':region},'limit':100,**period}
-        packet=json.loads(handler({'requests':[request]}))
-        if packet.get('status')!='success' or len(packet.get('results',[]))!=1 or packet['results'][0].get('status')!='success' or packet['results'][0].get('truncated'):raise IOErrorBoundary('GOVERNED_REPORT_INCOMPLETE')
-        result[name]=packet
-    return result
-
 def legacy_report_packet(pool_packet,flow_packet,label_rows,region,period,*,evidence=None):
     """Map complete governed facts into old Detail columns; never invent missing labels."""
     from . import contracts,capability_contract,legacy_workflow as wf

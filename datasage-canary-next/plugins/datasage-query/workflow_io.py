@@ -65,13 +65,12 @@ def run_lock(profile,job):
     finally:path.unlink()
 
 def read_recipients(profile,binding):
-    # One fixed private map; no arbitrary caller-supplied path or fallback group.
-    if binding.get('recipients_file')!='legacy-recipients.json':raise IOErrorBoundary('RECIPIENT_CONFIGURATION_REQUIRED')
-    path=profile/'legacy-recipients.json'
-    if path.is_symlink() or not path.is_file():raise IOErrorBoundary('RECIPIENT_CONFIGURATION_REQUIRED')
-    doc=json.loads(path.read_text(encoding='utf-8'))
-    if not isinstance(doc.get('regions'),dict):raise IOErrorBoundary('RECIPIENT_CONFIGURATION_INVALID')
-    return doc
+    # The old filename is a parameter compatibility alias, never a second source.
+    if binding.get('recipients_file') not in ('local/workflow-roles.json','legacy-recipients.json'):
+        raise IOErrorBoundary('RECIPIENT_CONFIGURATION_REQUIRED')
+    from . import workflow_roles
+    try:return workflow_roles.load(profile)
+    except workflow_roles.RoleConfigurationError as exc:raise IOErrorBoundary(exc.code) from exc
 
 def cached_plan(profile,kind,week):
     if kind not in ('recipients','customers'):raise IOErrorBoundary('PLAN_KIND_INVALID')
@@ -497,13 +496,17 @@ def _produce_and_execute(profile,job,binding,out,week,month,progress,snapshots,t
         if not isinstance(op,dict) or op.get('kind')!='fabric_review':raise IOErrorBoundary('FABRIC_SCOPE_CONFIGURATION_REQUIRED')
         doc=operations.execute(profile,wf.policy()['jobs'][job]['report_id'],op)
         from .fabric_report import export_report
+        from .result_completeness import gate_for_document
+        report_gate=gate_for_document(doc)
         files=export_report(doc,out)
-        if doc['status']=='success' and binding.get('send_enabled'):
+        if report_gate['allowed'] and binding.get('send_enabled'):
             scope=wf.digest([op,doc])
             text='货源分析报告已生成，详见随附工作簿。报告保留各来源观察时间；未知项不视为零，接口接受不代表人工已读。'
             components=[part for a in binding['target_map'] for part in (component(a,'text',text,scope,'fabric_text'),component(a,'file',files[0],scope,'fabric_workbook'))]
             deliver_components(components,transport,progress,enabled=True)
-        return {'status':doc['status'],'job':job,'artifacts':files,'delivery':'provider_accepted_not_human_read' if doc['status']=='success' and binding.get('send_enabled') else 'not_requested'}
+        delivery_state=('provider_accepted_not_human_read' if report_gate['allowed'] else 'blocked_incomplete_report') if binding.get('send_enabled') else 'not_requested'
+        result_status='partial' if doc['status']=='success' and not report_gate['allowed'] else doc['status']
+        return {'status':result_status,'job':job,'artifacts':files,'report_delivery_gate':report_gate,'delivery':delivery_state}
     raise IOErrorBoundary('WORKFLOW_KIND_UNSUPPORTED')
 
 def at_utc8(week):

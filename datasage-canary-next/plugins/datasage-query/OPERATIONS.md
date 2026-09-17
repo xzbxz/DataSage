@@ -4,6 +4,14 @@ This extends the existing local report entrypoint, not the public admission or
 the official scheduler. Production bindings, recipients, schedules and jobs remain disabled; the separately authorized test-only delivery configuration is documented in REMINDER_ACCEPTANCE.md. Prices and customer evidence never belong in Git. Reports and
 accepted local snapshots use Git-ignored `report_runs/operations/<report-id>/`.
 
+Role-backed workflows use the single Git-ignored private map
+`local/workflow-roles.json`. The public region/department rules remain in
+`contracts/legacy-workflows.json`; an old `report_runs` role reference is only
+an explicit import source and is never a runtime fallback. Use
+`roles-check --source <source>` before
+`roles-import --source <source> --output <profile>/local/workflow-roles.json`;
+an existing active file is not overwritten.
+
 Business rules and source roles live in `contracts/operations.yaml`; the existing
 contract snapshot pins this file. Implementations are in `operations.py`. The
 existing local report binding configures production local observations; test-only delivery uses its separate ignored runtime configuration and progress.
@@ -32,6 +40,15 @@ The second command applies only to the separate local-observation mode. It is an
 Acceptance uses an exclusive lock, verifies document digest and expected prior
 baseline, and refuses stale concurrent candidates. Re-accepting the same digest
 is harmless. Never infer receipt from generated stdout or an accepted snapshot.
+For actual delivery, the receipt must carry
+`datasage-delivery-binding/v1`; only `verified_for_reuse` suppresses a new send.
+An old provider-accepted record without that binding remains historical and
+cannot be reused, and old 10/9 acceptance counts do not pass the new binding.
+
+For report delivery, `report_evidence` remains responsible for business source,
+detail and summary reconciliation. The shared completeness gate checks the raw
+query packets and delivery coverage; passing one evidence layer does not prove
+the other.
 
 In the existing `local-report-bindings.json`, a report may use `kind` instead of
 the prior slow report's `views`. Root shape remains version/default_report/reports.

@@ -2,7 +2,9 @@
 
 Trust belongs to the local OS operator and reviewed bindings. A process with the
 same filesystem privileges can impersonate a report ID; no claim to prevent it.
-No SQL, recipients, sending, scheduler or production fixture is exposed here.
+The default report and preview paths expose no SQL, recipients, sending or
+scheduler. ``--legacy-run`` is a separate explicitly gated workflow delegation
+and may use its own delivery path.
 """
 from __future__ import annotations
 from datetime import date, datetime
@@ -11,7 +13,7 @@ import json
 import re
 import sys
 
-from . import contract_store, settings, tools, wire
+from . import contract_store, result_completeness, settings, tools, wire
 
 VIEWS = {
     'monthly_pool_summary': ('registered_slow_monthly_summary', ['unit']),
@@ -177,12 +179,25 @@ def render_text(report):
         'opening_quantity':'期初池数量','closing_quantity':'期末池数量','opening_rolls':'期初池卷数',
         'closing_rolls':'期末池卷数','missing_value_count':'缺失及未知计数',
         'outbound_unknown_rows':'出库范围未知记录','returns_unknown_rows':'退货范围未知记录'}
-    for result in payload.get('results',[]):
-        lines.append(_display(result.get('business_metric_label','查询分项'))+'；状态：'+_display(result.get('data_state',result.get('status'))))
+    results=payload.get('results',[])
+    if not isinstance(results,list):results=[]
+    gate=result_completeness.report_delivery_gate([r for r in results if isinstance(r,dict)])
+    gate_reasons=set(gate['reason_codes'])
+    if payload.get('status') not in (None,'success'):gate_reasons.add('DOCUMENT_STATUS_'+str(payload.get('status')).upper())
+    if payload.get('error') not in (None,{}):gate_reasons.add('DOCUMENT_ERROR_PRESENT')
+    gate['reason_codes']=sorted(gate_reasons);gate['allowed']=not gate_reasons
+    lines.append('完整报告门槛：'+('通过' if gate['allowed'] else '未通过')+('；原因：'+'、'.join(gate['reason_codes']) if gate['reason_codes'] else ''))
+    for result in results:
+        if not isinstance(result,dict):continue
+        coverage=result_completeness.summarize_result(result)
+        lines.append(_display(result.get('business_metric_label','查询分项'))+'；状态：'+_display(result.get('data_state',result.get('status')))+'；完整性：'+_display(coverage['completeness'])+'；返回分组：'+_display(coverage['returned_group_count'])+'；总体分组：'+_display(coverage['population_group_count'] if coverage['population_group_count'] is not None else '未知')+'；截断：'+_display(coverage['truncated'])+'；观察时点：'+_display(coverage['observed_at'] or '未知'))
         if result.get('error'):
             lines.append('失败：'+_display(result['error'].get('code')))
-        if result.get('truncated'):lines.append('仅展示部分分组，不能视为全体。')
-        total_row=next((r.get('facts',{}) for r in result.get('rows',[]) if 'scope_net_rolls' in r.get('facts',{})),None)
+        if coverage['truncated'] is True:lines.append('仅展示部分分组，不能视为全体。')
+        elif coverage['truncated'] is not False:lines.append('截断证据缺失，不能视为完整结果。')
+        if coverage['unknown_items']:
+            lines.append('未知项：'+_display(json.dumps(coverage['unknown_items'],ensure_ascii=False,sort_keys=True,default=str)))
+        total_row=next((r.get('facts',{}) for r in result.get('rows',[]) if isinstance(r,dict) and 'scope_net_rolls' in r.get('facts',{})),None)
         if total_row is not None:
             lines.append('当前筛选范围普通净出库总卷数：'+_display(total_row['scope_net_rolls'])+' 卷')
             lines.append('当前筛选范围高折净出库总卷数：'+_display(total_row['scope_high_net_rolls'])+' 卷')
@@ -191,9 +206,12 @@ def render_text(report):
         shown_sales=set()
         shown_units=set()
         for row in result.get('rows',[]):
-            dims=row.get('dimensions',[])
-            unit=next((d['value'] for d in dims if '单位' in d['label']),row.get('unit','来源单位'))
-            fact=row.get('facts',{})
+            if not isinstance(row,dict):continue
+            dims=row.get('dimensions',[]) if isinstance(row.get('dimensions',[]),list) else []
+            unit=next((d.get('value') for d in dims if isinstance(d,dict) and '单位' in str(d.get('label'))),row.get('unit','来源单位'))
+            fact=row.get('facts',{}) if isinstance(row.get('facts',{}),dict) else {}
+            metadata='；'.join(_display(key+'='+str(row[key])) for key in ('entity_ref','identity_ref','stable_entity_ref','identity_state','currency','currency_no') if row.get(key) not in (None,''))
+            if metadata:lines.append('结果身份/币种：'+metadata)
             if str(result.get('request_id')).endswith('flow_sales') and unit not in shown_units and 'unit_net_quantity' in fact:
                 lines.append('截断前该单位范围净数量：'+_display(fact['unit_net_quantity'])+' '+_display(unit))
                 lines.append('截断前该单位普通净卷数：'+_display(fact.get('unit_net_rolls'))+' 卷')
@@ -203,13 +221,23 @@ def render_text(report):
                 identity=fact.get('sales_identity_ref')
                 if identity not in shown_sales:
                     shown_sales.add(identity)
-                    lines.append('；'.join(_display(d['label'])+'='+_display(d['value']) for d in dims if '单位' not in d['label']))
+                    def dimension_text(d):
+                        text=_display(d.get('label',d.get('code','维度')))+'='+_display(d.get('value'))
+                        for key in ('entity_ref','identity_ref','stable_entity_ref','identity_state','currency','currency_no'):
+                            if d.get(key) not in (None,''):text+='；'+_display(key+'='+str(d[key]))
+                        return text
+                    lines.append('；'.join(dimension_text(d) for d in dims if isinstance(d,dict) and '单位' not in str(d.get('label'))))
                     lines.append('销售身份引用：'+_display(identity))
                     lines.append('该销售在当前筛选范围的普通净卷：'+_display(fact['sales_net_rolls'])+' 卷')
                     lines.append('该销售在当前筛选范围的高折净卷：'+_display(fact['sales_high_net_rolls'])+' 卷')
                     if fact['sales_high_net_rolls'] is None:lines.append('该销售高折净卷已知部分：'+_display(fact.get('sales_high_known_net_rolls'))+' 卷')
                 continue
-            lines.append('；'.join(_display(d['label'])+'='+_display(d['value']) for d in dims))
+            def dimension_text(d):
+                text=_display(d.get('label',d.get('code','维度')))+'='+_display(d.get('value'))
+                for key in ('entity_ref','identity_ref','stable_entity_ref','identity_state','currency','currency_no'):
+                    if d.get(key) not in (None,''):text+='；'+_display(key+'='+str(d[key]))
+                return text
+            lines.append('；'.join(dimension_text(d) for d in dims if isinstance(d,dict)))
             for field,label in labels.items():
                 if field not in fact:continue
                 complete_field={'known_subset_value':'metric_value','known_net_rolls':'net_rolls','high_known_net_rolls':'high_net_rolls'}.get(field)
@@ -258,7 +286,7 @@ def save_artifacts(profile, report, text):
 def main(profile, argv=None):
     import argparse
     from hermes_constants import get_hermes_home
-    parser=argparse.ArgumentParser(description='Local trusted slow report; no scheduling or sending.')
+    parser=argparse.ArgumentParser(description='Local trusted slow report; default path has no scheduling or sending; --legacy-run uses separate explicit gates.')
     parser.add_argument('--report-id')
     parser.add_argument('--legacy-preview', choices=['slow_task','slow_report','idk','sales_price','purchase_price','fabric'])
     parser.add_argument('--legacy-run', choices=['slow_task','slow_report','idk','sales_price','purchase_price','fabric'])

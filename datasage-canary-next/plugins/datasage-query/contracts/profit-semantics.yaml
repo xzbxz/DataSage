@@ -422,7 +422,7 @@ metrics:
     include_known_subset: true
   customer_month_sales_commission:
     label: 客户月度利润报表·销售提成（人民币）
-    business_definition: 客户利润的销售提成优先取提成表，缺少对应记录时按提成比例计算补入；报表计入值不代表已实际支付。
+    business_definition: 客户利润的销售提成优先取提成表；缺少对应记录时，以该客户利润报表行销售收入的正数部分按1%补入（销售收入小于等于0时补入0）；查询只汇总ADS已记录的销售提成，不在查询层重算；报表计入值不代表已实际支付。
     unit: 人民币元
     table: vk_ads.customer_profit_ads
     aggregation: sum
@@ -437,7 +437,7 @@ metrics:
       text: *id001
     - id: profit.customer_month.commission
       mode: required_always
-      text: 客户利润的销售提成优先取提成表，缺少对应记录时按提成比例计算补入；报表计入值不代表已实际支付。
+      text: 客户利润的销售提成优先取提成表；缺少对应记录时，以该客户利润报表行销售收入的正数部分按1%补入（销售收入小于等于0时补入0）；查询只汇总ADS已记录的销售提成，不在查询层重算；报表计入值不代表已实际支付。
     answer_note: *id001
     time_granularity: month
     time_value_format: month

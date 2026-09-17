@@ -52,7 +52,9 @@ class BusinessAcceptanceFixtureTests(unittest.TestCase):
     def test_coverage_and_unmeasured_status_are_explicit(self):
         self.assertEqual(18, len(self.cases))
         self.assertEqual(18, len(self.suite['cases']))
-        self.assertEqual({'delivery', 'receipt', 'receivable', 'inventory', 'target', 'receivable'},
+        expected_case_domains = ('delivery', 'receipt', 'receivable', 'inventory', 'target')
+        self.assertEqual(len(expected_case_domains), len(set(expected_case_domains)))
+        self.assertEqual(set(expected_case_domains),
                          {domain for case in self.cases.values() for domain in case['domains']})
         self.assertEqual('hand_authored_independent_of_plugin_contracts', self.suite['expected_result_origin'])
         self.assertTrue(self.suite['not_a_model_accuracy_result'])

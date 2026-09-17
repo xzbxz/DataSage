@@ -4,16 +4,29 @@ from contextlib import contextmanager
 from datetime import date
 from test_acceptance_delivery import AcceptanceDeliveryTests
 from test_legacy_workflow import source
+from role_config_fixture import legacy_document,public_document
 import test_business_contracts as base
 
 r=importlib.import_module(base.TEST_PACKAGE+'.regional_acceptance')
+
+def install_synthetic_roles(profile):
+    """Install the complete eight-region role fixture through its importer."""
+    roles=importlib.import_module(base.TEST_PACKAGE+'.workflow_roles')
+    contract=profile/roles.LEGACY_RELATIVE_PATH
+    contract.parent.mkdir(parents=True,exist_ok=True)
+    contract.write_text(json.dumps(public_document(),ensure_ascii=False),encoding='utf-8')
+    legacy=legacy_document()
+    legacy['regions']['HN']['executors']=[{'account':'original-exec','name':'Synthetic Executor HN'}]
+    legacy['regions']['HN']['managers']=['original-manager']
+    source_path=profile/'synthetic-legacy-role-source.json'
+    source_path.write_text(json.dumps(legacy,ensure_ascii=False),encoding='utf-8')
+    roles.import_legacy(source_path,profile/roles.ACTIVE_RELATIVE_PATH,profile)
 
 class RegionalAcceptanceTests(unittest.TestCase):
     def setUp(self):
         self.f=AcceptanceDeliveryTests();self.f.setUp();self.addCleanup(self.f.doCleanups)
         self.profile=self.f.profile
-        ref={'regions':{'HN':{'executors':[{'account':'original-exec'}],'managers':['original-manager'],'dynamic_sales_departments':['HN Sales']}}}
-        (self.f.home/'legacy-recipient-reference.json').write_text(json.dumps(ref),encoding='utf-8')
+        install_synthetic_roles(self.profile)
         local=importlib.import_module(base.TEST_PACKAGE+'.local_report')
         for p in (patch.object(local,'configure_runtime'),patch.object(r.report_evidence.tools,'_business_today',return_value=date(2026,9,16))):p.start();self.addCleanup(p.stop)
     def test_fixed_scope_excludes_already_sent_hcm_and_unknown_arguments(self):

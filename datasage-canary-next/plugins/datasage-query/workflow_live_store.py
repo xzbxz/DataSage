@@ -6,7 +6,7 @@ from . import workflow_storage as base,operations,tools
 
 PREFIX='ds_test_live_v1_';OWNER='257c7e85-c3c8-4a1b-99ad-4b042dd45cf0'
 TABLES={r:'`vk_ai`.`'+PREFIX+r+'`' for r in base.ROLES}
-DEPARTMENTS=('HCM','HN','BKK','IDK','HCM-HT','HN-HT','BKK-HT','IDK-HT')
+DEPARTMENTS=tuple(base.wf.policy()['regions'])
 def root():
     path=base.profile()/'report_runs'/'workflow_live'
     if path.is_symlink() or path.parent.is_symlink():raise ValueError('LIVE_STATE_PATH_INVALID')

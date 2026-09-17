@@ -3,15 +3,36 @@ from unittest.mock import patch
 from datetime import date
 from pathlib import Path
 from test_acceptance_delivery import AcceptanceDeliveryTests,a,io
+from role_config_fixture import legacy_document,public_document
 import test_business_contracts as base
 
 r=importlib.import_module(base.TEST_PACKAGE+'.reminder_acceptance')
+
+def install_synthetic_roles(profile):
+    """Install one complete, isolated role map through the production API."""
+    roles=importlib.import_module(base.TEST_PACKAGE+'.workflow_roles')
+    contract=profile/roles.LEGACY_RELATIVE_PATH
+    contract.parent.mkdir(parents=True,exist_ok=True)
+    contract.write_text(json.dumps(public_document(),ensure_ascii=False),encoding='utf-8')
+    legacy=legacy_document()
+    # Preserve the legacy cases' multi-target assertions while keeping every
+    # public region present and deriving departments from the contract.
+    legacy['regions']['HCM']['executors']=[{'account':'exec','name':'Synthetic Executor HCM'}]
+    legacy['regions']['HCM']['managers']=['m']
+    legacy['regions']['IDK']['executors']=[
+        {'account':'original-a','name':'Synthetic Executor IDK A'},
+        {'account':'original-b','name':'Synthetic Executor IDK B'},
+    ]
+    legacy['price_manager_fixed']=['m']
+    source=profile/'synthetic-legacy-role-source.json'
+    source.write_text(json.dumps(legacy,ensure_ascii=False),encoding='utf-8')
+    roles.import_legacy(source,profile/roles.ACTIVE_RELATIVE_PATH,profile)
 class ReminderAcceptanceTests(unittest.TestCase):
     def setUp(self):
         self.fixture=AcceptanceDeliveryTests();self.fixture.setUp();self.addCleanup(self.fixture.doCleanups)
         self.profile=self.fixture.profile
         self.home=a.runtime_home(self.profile)
-        (self.home/'legacy-recipient-reference.json').write_text(json.dumps({'regions':{'IDK':{'executors':[{'account':'original-a'},{'account':'original-b'}]}}}),encoding='utf-8')
+        install_synthetic_roles(self.profile)
         local=importlib.import_module(base.TEST_PACKAGE+'.local_report')
         for p in (patch.object(local,'configure_runtime'),patch.object(r.report_evidence.tools,'_business_today',return_value=date(2026,9,16))):p.start();self.addCleanup(p.stop)
     def test_synthetic_sales_keep_distinct_content_and_attachments(self):
@@ -54,8 +75,6 @@ class ReminderAcceptanceTests(unittest.TestCase):
         from test_legacy_price_bridge import b,old_sales,sales,NOW
         from contextlib import contextmanager
         current=sales();current['ddp_price']='11';document=b.compare('sales',[old_sales()],[current],NOW)
-        reference={'regions':{'HCM':{'executors':[{'account':'exec'}],'managers':['manager'],'dynamic_sales_departments':['HCM Sales']}},'price_manager_fixed':['manager']}
-        (self.home/'legacy-recipient-reference.json').write_text(json.dumps(reference),encoding='utf-8')
         employee={'region':'HCM','main_dept':'HCM Sales','person_name':'Sales A','wecom_account':'sales','position':'Sales','is_delete':'n','wecom_status':'payroll'}
         class DB:
             def execute(self,sql,args,limit,**kwargs):return [employee],False,{}
@@ -88,7 +107,6 @@ class ReminderAcceptanceTests(unittest.TestCase):
             with self.assertRaisesRegex(io.IOErrorBoundary,'WEEKLY_STAGE'):r.send(self.profile,'hcm-monthly')
 
     def test_real_audit_only_covers_selected_accepted_packages(self):
-        (self.home/'legacy-recipient-reference.json').write_text(json.dumps({'regions':{'HCM':{'executors':[{'account':'exec'}],'managers':['manager']}}}),encoding='utf-8')
         folder=r._case(self.profile,'hcm-customer-packages')
         packages=[{'account':str(i),'region':'HCM','sales_name':'Synthetic '+str(i),'sales_names':['Synthetic '+str(i)],
             'customers':[{'customer_no':'SYN-'+str(i),'customer_name':'Synthetic'}]} for i in range(3)]
@@ -109,9 +127,6 @@ class ReminderAcceptanceTests(unittest.TestCase):
     def test_task_uses_aware_legacy_week_period_with_naive_database_timestamp(self):
         from contextlib import contextmanager
         from test_legacy_workflow import source
-        reference={'regions':{'HCM':{'executors':[{'account':'original-exec','name':'Exec'}],
-            'managers':['original-manager'],'dynamic_sales_departments':['HCM Sales']}}}
-        (self.home/'legacy-recipient-reference.json').write_text(json.dumps(reference),encoding='utf-8')
         rows=r.wf.freeze_plan([source()],[],r.WEEK,r.WEEK)['insert_rows']
         rows[0]['frozen_at']='2026-09-15 09:00:00'
         class DB:

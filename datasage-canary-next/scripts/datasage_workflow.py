@@ -4,7 +4,7 @@ import os,sys,types,importlib
 
 def main():
     profile=Path(__file__).resolve().parents[1]
-    official=profile.parents[1]/'hermes-agent'
+    official=Path(os.environ.get('HERMES_AGENT_ROOT',str(profile.parents[1]/'hermes-agent'))).resolve()
     if not (official/'hermes_constants.py').is_file():raise RuntimeError('ADJACENT_OFFICIAL_HERMES_REQUIRED')
     os.environ['HERMES_HOME']=str(profile)
     sys.path.insert(0,str(official))

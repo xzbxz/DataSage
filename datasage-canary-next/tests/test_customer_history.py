@@ -186,7 +186,15 @@ class CustomerHistoryTests(unittest.TestCase):
         result=self.result()
         self.assertEqual(1,facts(result)[0]['history_customer_details_missing'])
         self.assertEqual(1,facts(result)[0]['history_return_quantity'])
-        self.assertFalse(any(d['label']=='客户' and d.get('value') for d in result['rows'][0]['dimensions']))
+        customer_dimension=next(d for d in result['rows'][0]['dimensions'] if d['label']=='客户')
+        # A missing display name is represented explicitly.  The stable
+        # source identity may still be known, so ``未知`` is never treated as
+        # the customer's real name or as a resolver filter token.
+        self.assertEqual('未知',customer_dimension.get('value'))
+        self.assertTrue(customer_dimension.get('display_only'))
+        self.assertTrue(customer_dimension.get('display_name_missing'))
+        self.assertIn(customer_dimension.get('identity_state'),{'identified','identity_missing'})
+        self.assertNotEqual('客户甲',customer_dimension.get('value'))
         self.h.conn.execute("UPDATE vk_dwd.customer_dwd SET customer_name=' 客户甲😀 ' WHERE customer_id=1")
         result=self.result()
         self.assertTrue(any(d['label']=='客户' and d['value']=='客户甲😀' for d in result['rows'][0]['dimensions']))

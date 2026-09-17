@@ -24,13 +24,8 @@ def content_digest(path,raw):
             for name in sorted(archive.namelist()):digest.update(name.encode()+b'\0'+hashlib.sha256(archive.read(name)).digest())
     else:digest.update(raw)
     return digest.hexdigest()
-def accepted(receipt):
-    if receipt.get('status')!='provider_accepted_not_human_read':return False
-    path=Path(receipt.get('progress_file',''))
-    allowed=io.private_root(delivery.runtime_home(base.profile())).resolve()
-    if path.is_symlink() or not path.resolve().is_relative_to(allowed) or not path.is_file():return False
-    state=json.loads(path.read_text(encoding='utf-8'))
-    return sum(len(k)==64 and v.get('status')=='provider_accepted' for k,v in state.get('components',{}).items())==receipt.get('components')
+def accepted(receipt,expected_binding=None):
+    return delivery.classify_receipt(receipt,expected_binding).get('reusable') is True
 def same_delivery_week(key,document,receipt,source):
     target=re.search(r'(\d{4})-w(\d{2})',key,re.I)
     if not target:return False
@@ -61,10 +56,99 @@ def sealed(document,items):
             _,raw,_,_=delivery.file_snapshot(path,delivery.runtime_home(base.profile()))
             if hashlib.sha256(raw).hexdigest()!=expected_file:return False
     return True
+
+
+def _stage_key(key,notice):
+    logical=str(notice.get('logical_id',''))
+    return logical if logical.startswith(str(key)+'-') else str(key)
+
+
+def _binding_for_manifest(key,manifest):
+    notices=manifest.get('notices') or []
+    if not notices:raise ValueError('DELIVERY_NOTICE_MANIFEST_EMPTY')
+    stage_key=_stage_key(key,notices[0])
+    return delivery.binding_for_manifest(base.profile(),stage_key,notices,manifest=manifest)
+
+
+def _prior_binding(document,receipt,items):
+    binding=receipt.get('delivery_binding') if isinstance(receipt,dict) else None
+    if not delivery.validate_delivery_binding(binding):return None,'delivery_binding_missing_or_invalid'
+    try:
+        expected=delivery.binding_for_manifest(base.profile(),binding['cycle_id'],items,manifest=document,case_id=binding['case_id'],period=binding['period'],generation=binding['generation'],phase=binding['phase'])
+    except (ValueError,OSError,io.IOErrorBoundary):
+        return None,'prior_manifest_binding_unavailable'
+    if expected!=binding:return None,'prior_manifest_binding_mismatch'
+    return binding,None
+
+
+def summarize_receipts(entries):
+    """Project provider, historical, and binding-verified receipt counts separately."""
+    provider=[];fresh=[];verified=[];historical=[];unverified=[];recorded=[];entry_count=0
+    for entry in entries:
+        entry_count+=1
+        if isinstance(entry,dict):receipt=entry.get('receipt');manifest=entry.get('manifest')
+        else:
+            try:receipt,manifest=entry[0],entry[1]
+            except (IndexError,TypeError):receipt,manifest=None,None
+        if isinstance(receipt,dict) and receipt.get('status')=='provider_accepted_not_human_read':
+            recorded.append(receipt)
+            provider.append(receipt)
+            if not receipt.get('reused_prior_delivery'):fresh.append(receipt)
+        elif isinstance(receipt,dict):
+            recorded.append(receipt)
+        if not isinstance(receipt,dict) or receipt.get('status')!='provider_accepted_not_human_read':
+            unverified.append({'classification':'not_provider_accepted','receipt':receipt});continue
+        binding=receipt.get('delivery_binding')
+        if not delivery.validate_delivery_binding(binding):
+            classified=delivery.classify_receipt(receipt)
+            historical.append({'classification':'historical_provider_accepted','receipt':receipt,'reason':classified.get('reason'),'evidence_level':classified.get('evidence_level','historical_record_declared_provider_acceptance')});continue
+        notices=manifest.get('notices') if isinstance(manifest,dict) else None
+        if not isinstance(notices,list) or not notices:
+            unverified.append({'classification':'unverified_no_current_context','receipt':receipt});continue
+        try:
+            prior_binding,reason=_prior_binding(manifest,receipt,notices)
+            if prior_binding is None or not sealed(manifest,notices):
+                unverified.append({'classification':'unverified_receipt','receipt':receipt,'reason':reason or 'current_manifest_not_sealed'});continue
+            classified=delivery.classify_receipt(receipt,prior_binding)
+        except (ValueError,OSError,io.IOErrorBoundary) as exc:
+            unverified.append({'classification':'unverified_receipt','receipt':receipt,'reason':str(exc)});continue
+        if classified.get('classification')=='verified_for_reuse':verified.append(receipt)
+        else:unverified.append({'classification':classified.get('classification'),'receipt':receipt,'reason':classified.get('reason')})
+
+    def total(items,field):
+        return sum(value.get(field,0) for value in items if isinstance(value,dict) and type(value.get(field)) is int and value.get(field)>=0)
+    return {
+        'recorded_logical_notifications':total(recorded,'logical_notifications'),
+        'recorded_components':total(recorded,'components'),
+        'provider_logical_notifications':total(provider,'logical_notifications'),
+        'provider_components':total(provider,'components'),
+        'fresh_provider_logical_notifications':total(fresh,'logical_notifications'),
+        'fresh_provider_components':total(fresh,'components'),
+        'verified_logical_notifications':total(verified,'logical_notifications'),
+        'verified_components':total(verified,'components'),
+        'historical_logical_notifications':total([item['receipt'] for item in historical],'logical_notifications'),
+        'historical_components':total([item['receipt'] for item in historical],'components'),
+        'unverified_logical_notifications':total([item['receipt'] for item in unverified],'logical_notifications'),
+        'unverified_components':total([item['receipt'] for item in unverified],'components'),
+        'receipt_count':entry_count,
+        'provider_accepted_receipt_count':sum(item.get('status')=='provider_accepted_not_human_read' for item in provider),
+        'verified_receipt_count':len(verified),
+        'historical_provider_accepted_count':len(historical),
+        'unverified_receipt_count':len(unverified),
+        'reused_prior_receipts':len(provider)-len(fresh),
+        'all_component_receipts_verified':bool(entry_count) and len(verified)==entry_count,
+    }
+
+
 def review(store,key,manifest):
-    notices=manifest['notices'];matches=[];checked=0;unverified=0
+    notices=manifest['notices'];matches=[];checked=0;unverified=0;legacy_unverified=[];binding_mismatches=[]
     if len(notices)!=1:return {'version':3,'prior_matches':[],'checked':0,'reason':'multi_notice_no_automatic_equivalence'}
     current=notices[0];wanted=signature(current);candidates=[]
+    try:
+        current_binding=_binding_for_manifest(key,manifest)
+        manifest['delivery_binding']=current_binding
+    except (ValueError,OSError,io.IOErrorBoundary) as exc:
+        return {'version':3,'prior_matches':[],'checked':0,'unverified_candidates':0,'reason':'current_delivery_binding_unavailable','binding_error':str(exc)}
     root=io.private_root(delivery.runtime_home(base.profile()))
     paths=list(root.rglob('*manifest.json'))
     if len(paths)>1000:raise ValueError('PRIOR_DELIVERY_REVIEW_BUDGET_EXCEEDED')
@@ -83,9 +167,25 @@ def review(store,key,manifest):
             if 'receipt' in value:candidates.append((value['notices'],value['receipt'],row['cycle_id']+':'+phase,value))
     for items,receipt,source,document in candidates:
         checked+=1
-        for prior in items:
-            if prior.get('channel')!=current['channel'] or body(prior)!=body(current):continue
-            try:
-                if same_delivery_week(key,document,receipt,source) and sealed(document,items) and accepted(receipt) and signature(prior)==wanted:matches.append({'source':source,'receipt':receipt,'business_digest':wanted})
-            except (ValueError,OSError,io.IOErrorBoundary):unverified+=1
-    return {'version':3,'business_digest':wanted,'prior_matches':matches,'checked_receipt_candidates':checked,'unverified_candidates':unverified,'comparison':'same ISO delivery week, channel, sealed business body/archive content and verified receipt; outer filename and instance labels excluded'}
+        prior_binding,reason=_prior_binding(document,receipt,items)
+        if prior_binding is None:
+            if isinstance(receipt,dict) and receipt.get('status')=='provider_accepted_not_human_read':
+                legacy_unverified.append({'source':source,'classification':'historical_provider_accepted','evidence_level':'historical_record_declared_provider_acceptance','reason':reason or 'delivery_binding_missing_or_invalid','components':receipt.get('components'),'case_id':receipt.get('case_id'),'progress_observation':delivery.inspect_progress(receipt)})
+            else:unverified+=1
+            if reason:binding_mismatches.append({'source':source,'reason':reason})
+            continue
+        try:
+            if len(items)!=1:
+                unverified+=1;binding_mismatches.append({'source':source,'reason':'multi_notice_no_automatic_equivalence'});continue
+            receipt_state=delivery.classify_receipt(receipt,prior_binding)
+            if receipt_state.get('classification')!='verified_for_reuse':
+                unverified+=1;binding_mismatches.append({'source':source,'reason':receipt_state.get('reason')});continue
+            if not delivery.cross_entry_compatible(prior_binding,current_binding) or signature(items[0])!=wanted:
+                unverified+=1;binding_mismatches.append({'source':source,'reason':'delivery_context_mismatch'});continue
+            if sealed(document,items):
+                matches.append({'source':source,'receipt':receipt,'business_digest':wanted,'content_manifest_digest':current_binding['content_manifest_digest'],'delivery_binding':prior_binding})
+            else:
+                unverified+=1;binding_mismatches.append({'source':source,'reason':'prior_content_not_sealed'})
+        except (ValueError,OSError,io.IOErrorBoundary):
+            unverified+=1
+    return {'version':3,'business_digest':wanted,'content_manifest_digest':current_binding['content_manifest_digest'],'delivery_binding':current_binding,'prior_matches':matches,'checked_receipt_candidates':checked,'unverified_candidates':unverified,'legacy_unverified':legacy_unverified,'binding_mismatches':binding_mismatches,'comparison':'same period, generation, phase, final target binding and existing business signature; prior content manifest, component keys and progress scope are verified against that prior receipt'}

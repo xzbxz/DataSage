@@ -57,6 +57,14 @@ class InstalledWorkflowTests(unittest.TestCase):
         self.assertEqual(result['latest_snapshot_proof'][0]['status'],'unknown')
         self.assertTrue(result['latest_snapshot_proof'][0]['snapshot_verified'])
         self.assertEqual(result['delivery_evidence']['real_components'],0)
+
+    def test_status_keeps_old_provider_acceptance_historical_and_unverified(self):
+        self.db.data['cycles'].append({'cycle_id':'slow-2026-w38','test_scope':'main','status':'committed','payload':{'phases':{'weekly':{'notices':[{'channel':'private','logical_id':'old-logical','role':'role','body':'historical body','attachments':[]}],'receipt':{'status':'provider_accepted_not_human_read','components':1}}}}})
+        result=runner.status();evidence=result['delivery_evidence']
+        self.assertEqual(1,evidence['real_components'])
+        self.assertEqual(1,evidence['historical_components'])
+        self.assertEqual(1,evidence['historical_provider_accepted_count'])
+        self.assertFalse(evidence['all_component_receipts_verified'])
     def test_known_failure_can_resume_frozen_event(self):
         def failed(*a):raise c.io.IOErrorBoundary('DELIVERY_COMPONENT_FAILED')
         with self.assertRaises(c.io.IOErrorBoundary):c.run('sales',send=failed)

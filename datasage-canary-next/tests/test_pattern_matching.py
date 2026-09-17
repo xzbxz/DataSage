@@ -48,9 +48,14 @@ class PatternTests(unittest.TestCase):
     def test_transaction_currency_not_requirement_currency_and_no_fx(self):
         self.sale(1,10,'VND');self.sale(2,20,'THB');self.sale(3,30,None)
         self.row(detail=1,amount=10,currency=None);self.row(detail=2,amount=20,currency='VND');self.row(detail=3,amount=30,currency='VND')
-        r=self.result(self.run_pattern('linked_delivery_amount'));self.assertEqual(3,len(r['rows']));self.assertEqual({'VND','THB'},{d['value'] for row in r['rows'] for d in row['dimensions'] if d['label']=='已核验出库币种'})
+        r=self.result(self.run_pattern('linked_delivery_amount'));self.assertEqual(3,len(r['rows']));self.assertEqual({'VND','THB','未知币种'},{d['value'] for row in r['rows'] for d in row['dimensions'] if d['label']=='已核验出库币种'})
         self.assertEqual([10,20],sorted(x['facts']['metric_value'] for x in r['rows'] if x['facts']['metric_value'] is not None))
-        self.assertTrue(any(x['facts']['metric_value'] is None for x in r['rows']))
+        missing_rows=[x for x in r['rows'] if x['facts']['metric_value'] is None]
+        self.assertEqual(1,len(missing_rows))
+        missing_currency=next(d for d in missing_rows[0]['dimensions'] if d['label']=='已核验出库币种')
+        self.assertEqual('未知币种',missing_currency['value'])
+        self.assertTrue(missing_currency['display_only'])
+        self.assertTrue(missing_currency['display_name_missing'])
         self.assertEqual('failed',self.run_pattern('linked_delivery_amount',dimensions=['task'])['status'])
     def test_duplicate_source_currency_or_missing_amount_is_unresolved(self):
         self.sale(1,100,'VND');self.sale(1,100,'THB');self.row(detail=1,amount=100)
@@ -108,6 +113,22 @@ class PatternTests(unittest.TestCase):
         r=self.result(self.run_pattern(dimensions=['executor']));self.assertEqual(2,len(r['rows']))
         self.assertEqual(1,self.value(metric_filters={'executor':'E201'})['metric_value'])
         self.assertFalse(any('JOIN `vk_dwd`.`employee_dwd`' in x['sql'] for x in self.sql_trace if x['sql'].startswith('WITH')))
+
+    def test_executor_filter_ref_does_not_replace_source_executor_group(self):
+        self.row(task=1,execute=11,person=1)
+        self.row(task=2,execute=22,person=2)
+        # Two source executor IDs can share one ERP salesperson identity.
+        self.conn.execute('UPDATE vk_dwd.pattern_matching_dwd SET executor_erp_id=999')
+        result=self.result(self.run_pattern(dimensions=['executor']))
+        self.assertEqual(2,len(result['rows']))
+        dimensions=[next(d for d in row['dimensions'] if d['label']=='执行人') for row in result['rows']]
+        self.assertEqual(1,len({d['entity_ref'] for d in dimensions}))
+        self.assertTrue(all(d['entity_ref_scope']=='filter_identity' for d in dimensions))
+        self.assertTrue(all(d['source_group_identity']=='source_executor_id' for d in dimensions))
+        self.assertTrue(all(d['source_group_ref_field']=='pattern_executor_ref' for d in dimensions))
+        self.assertEqual(2,len({row['facts']['pattern_executor_ref'] for row in result['rows']}))
+        self.assertEqual({1}, {row['facts']['metric_value'] for row in result['rows']})
+        self.assertNotIn('executor_filter_identity',json.dumps(result,ensure_ascii=False))
     def test_missing_time_and_nonatomic_product_preserve_unknown(self):
         self.row(created=None,product='P1,P2')
         f=self.value();self.assertEqual(0,f['known_candidate_product_count']);self.assertEqual(1,f['candidate_product_nonatomic_rows'])

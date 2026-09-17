@@ -41,17 +41,21 @@ def status():
                 origin_verified=True
             snapshots.append({'side':side,'rows':len(rows),'digest':prices.snapshot_digest(side,rows),'origin_kinds':sorted({r['reference_kind'] for r in rows}),'latest_input_readback_verified':input_verified,'legacy_starting_copy_verified':origin_verified})
         result={'mode':'real_source_acceptance','production_enabled':False,'clock':'database_observation','cycles':summary,'snapshots':snapshots,'departments':departments,'runtime':{'entry':str(base.profile()/'scripts/datasage_workflow.py'),'working_directory':str(Path.cwd())},'schedule_enabled':json.loads(live.binding().read_text())['schedule_enabled'],'scope_note':'Each prepared department includes all source stock/month rows within fixed budgets; customer delivery is one complete package sample.'}
-        receipts=[p['receipt'] for d in departments for p in d['phases'].values() if p.get('receipt')]
+        receipt_entries=[]
         for row in records:
             data=cycle.payload(row)
-            if row['cycle_id'].startswith('lp-') and data.get('receipt',{}).get('batch_receipts'):receipts.extend(data['receipt']['batch_receipts'].values())
-        for receipt in receipts:
-            path=Path(receipt['progress_file'])
-            if not path.resolve().is_relative_to(base.profile().resolve()):raise ValueError('LIVE_RECEIPT_PATH_INVALID')
-            progress=json.loads(path.read_text(encoding='utf-8'))
-            if sum(len(k)==64 and v['status']=='provider_accepted' for k,v in progress['components'].items())!=receipt['components']:raise ValueError('LIVE_RECEIPT_COUNT_MISMATCH')
-        fresh=[r for r in receipts if not r.get('reused_prior_delivery')]
-        result['delivery_evidence']={'logical_notifications':sum(r['logical_notifications'] for r in fresh),'components':sum(r['components'] for r in fresh),'reused_prior_receipts':len(receipts)-len(fresh),'actual_component_states_verified':True,'human_read':'unknown'}
+            if row['cycle_id'].startswith('ls-'):
+                receipt_entries.extend((phase.get('receipt'),phase) for phase in data.get('phases',{}).values() if phase.get('receipt'))
+            if row['cycle_id'].startswith('lp-') and data.get('receipt',{}).get('batch_receipts'):
+                notices=data.get('notices') or []
+                for raw_index,receipt in data['receipt']['batch_receipts'].items():
+                    try:index=int(raw_index)
+                    except (TypeError,ValueError):index=-1
+                    manifest={'notices':notices[index*2:index*2+2],'files':{}}
+                    receipt_entries.append((receipt,manifest))
+        from . import workflow_delivery_review as review
+        receipt_summary=review.summarize_receipts(receipt_entries)
+        result['delivery_evidence']={'schema':'delivery-evidence/v2','logical_notifications':receipt_summary['fresh_provider_logical_notifications'],'components':receipt_summary['fresh_provider_components'],'recorded_logical_notifications':receipt_summary['recorded_logical_notifications'],'recorded_components':receipt_summary['recorded_components'],'verified_logical_notifications':receipt_summary['verified_logical_notifications'],'verified_components':receipt_summary['verified_components'],'verified_manifest_scope':'recorded_cycle_manifests','historical_logical_notifications':receipt_summary['historical_logical_notifications'],'historical_components':receipt_summary['historical_components'],'unverified_logical_notifications':receipt_summary['unverified_logical_notifications'],'unverified_components':receipt_summary['unverified_components'],'reused_prior_receipts':receipt_summary['reused_prior_receipts'],'receipt_count':receipt_summary['receipt_count'],'verified_receipt_count':receipt_summary['verified_receipt_count'],'historical_provider_accepted_count':receipt_summary['historical_provider_accepted_count'],'unverified_receipt_count':receipt_summary['unverified_receipt_count'],'actual_component_states_verified':receipt_summary['all_component_receipts_verified'],'actual_component_states_verified_basis':'recorded_manifest_binding','human_read':'unknown'}
         live.save('status.json',result)
         compact={**{k:result[k] for k in ('mode','production_enabled','clock','snapshots','runtime','schedule_enabled','delivery_evidence')},
                  'price_cycles':[r for r in summary if r['cycle'].startswith('lp-')],
