@@ -9,6 +9,25 @@ import test_business_contracts as base
 
 
 class ProfileDiagnosticsTests(unittest.TestCase):
+    def test_registration_log_identifies_emitting_process_and_pinned_contract(self):
+        health=base.runtime_health
+        snapshot={'current_process_contract_snapshot_loaded':True,'current_process_contract_snapshot_sha256':'pinned',
+                  'profile_git_head_on_disk':'disk','running_gateway_loaded_revision':'not_observed','credentials_read':False}
+        with patch.object(health,'source_diagnostics',return_value=snapshot),patch.object(health.os,'getpid',return_value=1234),self.assertLogs(health.__name__,level='INFO') as logs:
+            health.record_plugin_initialization(self.test_registration_log_identifies_emitting_process_and_pinned_contract.__code__)
+        value=json.loads(logs.output[0].split('DATASAGE_PLUGIN_INITIALIZED ',1)[1])
+        self.assertEqual(value['pid'],1234)
+        self.assertEqual(value['current_process_contract_snapshot_sha256'],'pinned')
+        self.assertEqual(value['running_gateway_loaded_revision'],'not_observed')
+        self.assertEqual(len(value['registration_code_sha256']),64)
+
+    def test_registration_diagnostic_failure_is_bounded_and_nonfatal(self):
+        health=base.runtime_health
+        with patch.object(health,'source_diagnostics',side_effect=RuntimeError('SENSITIVE_DO_NOT_LOG')),self.assertLogs(health.__name__,level='WARNING') as logs:
+            health.record_plugin_initialization(self.test_registration_diagnostic_failure_is_bounded_and_nonfatal.__code__)
+        self.assertNotIn('SENSITIVE_DO_NOT_LOG',''.join(logs.output))
+        self.assertIn('error_type=RuntimeError',''.join(logs.output))
+
     def test_disk_diagnostic_distinguishes_disk_from_gateway_without_secret_reads(self):
         health=base.runtime_health
         with TemporaryDirectory() as directory:

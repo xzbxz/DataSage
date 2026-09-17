@@ -51,3 +51,5 @@ def register(ctx) -> None:
         ],
         description=schemas.DATASAGE_QUERY["description"],
     )
+    from .runtime_health import record_plugin_initialization
+    record_plugin_initialization(register.__code__)

@@ -4,11 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 import hashlib
+import json
+import logging
+import marshal
 import os
 import re
 import stat
 import subprocess
 from typing import Any
+from datetime import datetime, timezone
 
 from agent.secret_scope import get_secret
 from .db_security import (
@@ -309,3 +313,25 @@ def source_diagnostics() -> dict[str, Any]:
         "database_connection_attempted": False,
         "credentials_read": False,
     }
+
+
+def record_plugin_initialization(registration_code) -> None:
+    """Log this registering process's pinned identity, without runtime actions.
+
+    A gateway claim requires correlating this PID with the host's start event;
+    another CLI process emitting this record is not gateway-load evidence.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        record = source_diagnostics()
+        record.update(
+            event="datasage_plugin_initialized/v1",
+            pid=os.getpid(),
+            observed_at_utc=datetime.now(timezone.utc).isoformat(),
+            registration_code_sha256=hashlib.sha256(marshal.dumps(registration_code)).hexdigest(),
+        )
+        logger.info("DATASAGE_PLUGIN_INITIALIZED %s", json.dumps(record, sort_keys=True))
+    except Exception as exc:
+        # Diagnostic failures must not disable an otherwise registered plugin.
+        # Do not serialize an exception message: it may contain private paths.
+        logger.warning("DATASAGE_PLUGIN_IDENTITY_UNAVAILABLE pid=%s error_type=%s", os.getpid(), type(exc).__name__)
