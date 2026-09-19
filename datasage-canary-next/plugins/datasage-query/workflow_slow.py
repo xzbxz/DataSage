@@ -44,7 +44,7 @@ def build(phase,key,data,*,snapshots=None,saver=s.save):
             employees=inputs.complete(db,"SELECT region,main_dept,person_name,wecom_account,position,is_delete,wecom_status FROM vk_dwd.employee_dwd WHERE is_delete='n' AND wecom_status='payroll' AND COALESCE(wecom_account,'')<>'' AND region=%s AND main_dept IN ("+','.join('%s' for _ in depts)+') ORDER BY wecom_account LIMIT 10001',[region,*depts])
         targets=wf.task_recipients(ref['regions'],employees,[region])[region]
         periods=wf.legacy_periods(io.at_utc8(week));body,sheet=wf.task_draft(region,week,periods['planned_start'][:10],periods['planned_end'][:10],rows)
-        path=folder/'Test_Products.xlsx';gen_workbook_xlsx([sheet],path)
+        path=folder/'Test_Products.xlsx';gen_workbook_xlsx([sheet],path,legacy_layout=True)
         notices=[notice(key+'-task',body,[path])];evidence={'frozen_rows':len(rows),'original_role_count':len(targets),'actual_delivery':'approved_test_member_only'}
     elif phase=='customer':
         with s.tools._ConsistentSnapshotExecutor(deadline_at=s.tools._call_deadline(None)) as db:mapping=inputs.customer_mapping(db,[(r['goods_no'],r['whse_dept']) for r in rows])
@@ -70,8 +70,8 @@ def build(phase,key,data,*,snapshots=None,saver=s.save):
         adapted=inputs.legacy_report_packet(ev['packets']['pool'],ev['packets']['flow'],labels,region,period,evidence=ev)
         if not adapted['label_coverage']['complete']:raise ValueError('REPORT_LABEL_COVERAGE_INCOMPLETE')
         saver(key+'-'+phase+'-validation.json',adapted)
-        body=wf.report_draft(region,period,adapted['summary'],adapted['sales_rows'],monthly=phase=='monthly')
-        path=folder/('Test_'+phase+'.xlsx');gen_workbook_xlsx([('Detail',wf.REPORT_HEADERS,adapted['detail_rows'])],path,borders=True,landscape=True)
+        body=wf.report_draft(region,period,adapted['summary'],adapted['sales_rows'],monthly=phase=='monthly',weekly_start=adapted.get('completeness',{}).get('frozen_at'),detail_semantics=adapted.get('detail_semantics'))
+        path=folder/('Test_'+phase+'.xlsx');gen_workbook_xlsx([('Detail',wf.REPORT_HEADERS,wf.legacy_detail_rows_for_xlsx(adapted['detail_rows'])),wf.REPORT_NOTES_SHEET],path,borders=True,landscape=True,legacy_layout=True)
         notices=[notice(key+'-'+phase,body,[path],'markdown')];evidence={'summary':adapted['summary'],'completeness':adapted['completeness'],'label_coverage':adapted['label_coverage'],'original_report_role_count':len(original_report_roles),'delivery_route':'approved test member only; same report merged for role acceptance'}
     manifest={'notices':notices,'notice_digest':s.digest(notices),'files':{p:hashlib.sha256(Path(p).read_bytes()).hexdigest() for n in notices for p in n['attachments']},'evidence':evidence,'business_scope':region}
     # Preparation is independent of provider acceptance and human receipt.

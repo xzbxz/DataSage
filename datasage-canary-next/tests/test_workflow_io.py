@@ -119,7 +119,7 @@ class WorkflowIOTests(unittest.TestCase):
             async def send_document(self,**kwargs):self.calls.append(('file',kwargs));return SendResult(success=True,message_id='synthetic-file')
         adapter=Adapter();runner=SimpleNamespace(adapters={'wecom':adapter});binding={'send_enabled':True,'target_map':{'a':{'platform':'wecom','chat_id':'approved-chat'}}}
         with patch.object(io,'require_action',return_value=binding),patch.object(gateway,'_gateway_runner_ref',return_value=runner):
-            transport=io.OfficialTransport('slow_task');parts=[io.component('a','text','hello','s','text'),io.component('a','file','synthetic.xlsx','s','file')];transport.preflight(parts)
+            transport=io.OfficialTransport('slow_task');parts=[io.component('a','text','hello','s','text'),io.component('a','file','synthetic.xlsx','s','file')];parts[0]['message_format']='markdown';transport.preflight(parts)
             self.assertTrue(transport.send(parts[0]).success);self.assertTrue(transport.send(parts[1]).success)
             self.assertEqual(['text','file'],[c[0] for c in adapter.calls])
         with patch.object(io,'require_action',return_value=binding),patch.object(gateway,'_gateway_runner_ref',return_value=None):
@@ -244,12 +244,12 @@ class WorkflowIOTests(unittest.TestCase):
             def send(self,item):
                 self.calls.append(item)
                 return {'success':False,'raw_response':{'errcode':1}} if item['stage']=='customer_zip' else {'success':True,'message_id':'synthetic'}
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory() as tmp,patch.object(io.time,'sleep'):
             root=Path(tmp);out=root/'run';out.mkdir()
             install_synthetic_roles(root)
             binding={'recipients_file':'local/workflow-roles.json','customer_mapping_enabled':True,'send_enabled':True}
             t=Transport();p=io.Progress(root,'slow_task','2026-W38')
-            with self.assertRaisesRegex(io.IOErrorBoundary,'CUSTOMER_DELIVERY_PARTIAL'):io._produce_and_execute(root,'slow_task',binding,out,'2026-W38','2026-09',p,snapshots,t,None)
+            with self.assertRaisesRegex(io.IOErrorBoundary,'DELIVERY_COMPONENT_FAILED'):io._produce_and_execute(root,'slow_task',binding,out,'2026-W38','2026-09',p,snapshots,t,None)
             self.assertTrue(any(r['account']=='m' and r['stage']=='audit_file' for r in t.calls))
             self.assertEqual('not_attempted',p.status('freeze'))
             self.assertTrue(io.cached_plan(root,'recipients','2026-W38'))

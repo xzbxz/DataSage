@@ -26,8 +26,8 @@ def show(value):return 'Unknown' if value is None else str(value)
 def safe_name(value):return re.sub(r'[<>:"/\\|?*\x00-\x1f]','_',str(value)).strip(' .')[:110] or 'Unknown'
 
 def customer_product_key(row):
-    """Use the legacy customer source key without changing business text."""
-    return (row['whse_dept'],row['goods_no'],str(row.get('attr_val') or ''))
+    """Legacy customer identity trims source labels before matching and grouping."""
+    return tuple(str(row.get(k) or '').strip() for k in ('whse_dept','goods_no','attr_val'))
 
 def legacy_periods(now):
     if now.tzinfo is None:raise WorkflowError('CLOCK_TIMEZONE_REQUIRED')
@@ -60,7 +60,7 @@ def collect_readonly_inputs(snapshot_executor,week):
         result[{'freeze_source':'source_rows','existing_week':'existing_rows','dynamic_recipients':'employees'}[spec['role']]]=rows
     return result
 
-def freeze_plan(source_rows,existing_rows,week,current_week,*,refreeze=True):
+def freeze_plan(source_rows,existing_rows,week,current_week,*,refreeze=False):
     for value in (week,current_week):
         try:
             if not re.fullmatch(r'\d{4}-W\d{2}',value):raise ValueError()
@@ -230,18 +230,21 @@ def contact_plan(baseline,mapping):
     products={};audit=[];matched_keys=set();packages={}
     for r in baseline:
         key=customer_product_key(r)
+        if not key[0] or not key[1]:continue
         rolls=number(r.get('total_piece'))
         if rolls is None:raise WorkflowError('CUSTOMER_CARD_ROLLS_UNKNOWN')
         products[key]=products.get(key,Decimal(0))+rolls
-    for cid,purchased in sorted(mapping.get('productsByCustomer',{}).items()):
-        selected={k:v for k,v in products.items() if any(p.get('goods_no')==k[1] and p.get('whse_dept')==k[0] for p in purchased)}
+    for raw_cid,purchased in sorted((mapping.get('productsByCustomer') or {}).items(),key=lambda item:str(item[0])):
+        cid=str(raw_cid)
+        pairs={(str(p.get('whse_dept') or '').strip(),str(p.get('goods_no') or '').strip()) for p in (purchased or [])}
+        selected={k:v for k,v in products.items() if k[:2] in pairs}
         if not selected:continue
-        matched_keys.update(selected);info=dict(mapping.get('customerInfo',{}).get(cid,{}))
+        matched_keys.update(selected);info=dict((mapping.get('customerInfo') or {}).get(cid) or {})
         assignment=customer_assignment(info,mapping);info.update(customer_no=assignment['customer_no'],name=assignment['name'],sales=assignment['sales'])
         sales=assignment['sales'];account=assignment['account'];employee=assignment['employee'];reason=assignment['reason']
         for key in selected:audit.append({'product_dept':key[0],'goods_no':key[1],'color':key[2],'customer_no':info.get('customer_no'),'customer_name':info.get('name'),'sales_owner':sales,'account':account,'exception':reason,'dispatch_status':'not_sent','customer_follow_up':'Not Assigned' if reason else 'Pending'})
         if reason:continue
-        package=packages.setdefault(account,{'account':account,'sales_name':sales,'sales_names':[],'region':employee['region'],'customers':[]})
+        package=packages.setdefault(account,{'account':account,'sales_name':sales,'sales_names':[],'region':assignment['region'],'customers':[]})
         if sales not in package['sales_names']:package['sales_names'].append(sales)
         image_products={}
         for (_,goods,color),rolls in selected.items():image_products[(goods,color)]=image_products.get((goods,color),Decimal(0))+rolls
@@ -254,24 +257,49 @@ def contact_plan(baseline,mapping):
 
 TASK_HEADERS=['Item No','Color','Color Label','Warehouse Dept','Opening Qty','Inventory Unit','Opening Rolls','Slow Type','Promotion Offer','Remarks']
 REPORT_HEADERS=['Item No','Color','Warehouse Dept','Movement','Opening Slow Qty','Unit','Closing Slow Qty','Opening Slow Rolls','Closing Slow Rolls','Rolls Change','Net Outbound Rolls','Sold By']
+REPORT_NOTES_SHEET=('Notes',['Slow-pool quantities: interpretation notes'],[
+    ['池成员数量/变化；不代表实际库存或销量。'],
+    ['New/Exited缺端=0仅限完整池证据。'],
+    ['New无期初基线，净出库=N/A。'],
+])
+
+def legacy_sort_detail_rows(rows):
+    """Preserve the old stable status/goods display order for attachments."""
+    return sorted(list(rows),key=lambda row:(str(row[3] if len(row)>3 else ''),str(row[0] if row else '')))
+
+def legacy_detail_rows_for_xlsx(rows):
+    """Use numeric XML cells for the old Detail columns without changing packet facts."""
+    numeric={4,6,7,8,9,10};result=[]
+    for row in legacy_sort_detail_rows(rows):
+        value=list(row)
+        for index in numeric:
+            if index<len(value) and value[index] is not None:value[index]=number(value[index])
+        result.append(value)
+    return result
 
 def promotion_offer(row):
-    price=number(row.get('promotion_price'))
-    if row.get('promotion_price') is None or price==0 or price is not None and price<0:return 'Not Set'
+    raw=row.get('promotion_price')
+    if raw is None or str(raw).strip()=='':return 'Not Set'
+    price=number(raw)
     if price is None:raise WorkflowError('INVALID_PROMOTION_PRICE')
-    return f"{price} {row.get('promotion_currency_no') or '[Currency Missing]'} / {row.get('promotion_unit') or '[Unit Missing]'}"
+    if price<=0:return 'Not Set'
+    from .legacy_message_templates import display
+    currency=str(row.get('promotion_currency_no') or '').strip() or '[Currency Missing]'
+    unit=str(row.get('promotion_unit') or '').strip() or '[Unit Missing]'
+    return f"{display(price)} {currency} / {unit}"
 
 def task_draft(region,week,start,end,rows):
+    from .legacy_message_templates import display
     count=len({(r['goods_no'],str(r.get('attr_val')),r['whse_dept']) for r in rows})
     numbers=[number(r.get('total_piece')) for r in rows]
     rolls=sum(numbers,Decimal(0)) if all(n is not None for n in numbers) else None
-    text=f'Slow sales-stock Products\nDept: {region}\nPeriod: {start} ~ {end}\nTotal SKUs: {count}\nTotal Rolls: {show(rolls)}'
+    text=f'Slow sales-stock Products\nDept: {region}\nPeriod: {start} ~ {end}\nTotal SKUs: {count}\nTotal Rolls: {display(rolls)}'
     values=[[r.get('goods_no'),r.get('attr_val'),r.get('color_label'),r.get('whse_dept'),number(r.get('total_qty')),r.get('source_unit'),number(r.get('total_piece')),r.get('slow_label'),promotion_offer(r),r.get('remarks')] for r in rows]
-    return text,('Products',TASK_HEADERS,values)
+    return text,('Sheet1',TASK_HEADERS,values)
 
-def report_draft(region,period,summary,sales_rows,*,monthly=False):
+def report_draft(region,period,summary,sales_rows,*,monthly=False,weekly_start=None,detail_semantics=None):
     from .legacy_message_templates import report
-    return report(region,period,summary,sales_rows,monthly=monthly)
+    return report(region,period,summary,sales_rows,monthly=monthly,weekly_start=weekly_start,detail_semantics=detail_semantics)
 
 
 def validate_complete_detail(packet):
@@ -305,31 +333,12 @@ def card_lines(value,font,max_width):
     return lines or ['']
 
 def card_png(customer,path):
-    from PIL import Image,ImageDraw,ImageFont
-    cfg=policy()['customer_artifacts'];widths=cfg['column_widths'];width=sum(widths)+16;rows=customer['products']
-    if len(rows)>5000:raise WorkflowError('CUSTOMER_IMAGE_TOO_LARGE')
-    font_path=Path('C:/Windows/Fonts/msyh.ttc')
-    font=ImageFont.truetype(str(font_path),13) if font_path.exists() else ImageFont.load_default()
-    title_font=ImageFont.truetype(str(font_path),15) if font_path.exists() else font
-    title=str(customer['customer_name']);title_lines=[title[i:i+24] for i in range(0,len(title),24)] or ['Unknown']
-    top=12+len(title_lines)*23;layout=[]
-    for index,row in enumerate([cfg['headers'],*rows]):
-        cells=[card_lines(value,font,cw-12) for value,cw in zip(row,widths)]
-        height=max(30 if index==0 else 26,max(len(lines) for lines in cells)*18+8)
-        layout.append((cells,height))
-    height=top+sum(h for _,h in layout)+8
-    if width*height>60000000:raise WorkflowError('CUSTOMER_IMAGE_PIXEL_BUDGET_EXCEEDED')
-    image=Image.new('RGB',(width,height),'white');draw=ImageDraw.Draw(image)
-    for i,line in enumerate(title_lines):draw.text((8,8+i*23),line,font=title_font,fill='#172533')
-    y=top
-    for index,(cells,height) in enumerate(layout):
-        x=8
-        for lines,cw in zip(cells,widths):
-            draw.rectangle((x,y,x+cw,y+height),fill='#e9eff5' if index==0 else 'white',outline='#8998a8')
-            for line_index,text in enumerate(lines):draw.text((x+6,y+5+line_index*18),text,font=font,fill='#172533')
-            x+=cw
-        y+=height
-    image.save(path,'PNG')
+    from .legacy_customer_compat import render_customer_card
+    return render_customer_card(customer,path)
+
+def customer_zip_member_name(customer,index):
+    from .legacy_customer_compat import customer_zip_member_name as member_name
+    return member_name(customer,index)
 
 def _cache_expected(folder):
     expected={}
@@ -380,7 +389,7 @@ def customer_zip(package,outdir,week):
     try:
         with zipfile.ZipFile(staged_archive,'x',zipfile.ZIP_DEFLATED) as z:
             for i,customer in enumerate(package['customers']):
-                filename=safe_name(customer['customer_no'])+'_'+safe_name(customer['customer_name'])+'.png'
+                filename=customer_zip_member_name(customer,i)
                 if filename.casefold() in names:raise WorkflowError('CUSTOMER_IMAGE_FILENAME_COLLISION')
                 names.add(filename.casefold());image=staged_folder/f'{i:05d}.png';card_png(customer,image)
                 info=zipfile.ZipInfo(filename,date_time=(1980,1,1,0,0,0));info.compress_type=zipfile.ZIP_DEFLATED;info.external_attr=0o600<<16;z.writestr(info,image.read_bytes())
@@ -403,28 +412,9 @@ def customer_package_message(package,week):
     return f"Sales owner: {', '.join(package['sales_names'])}\nSlow sales-stock Products - Customer Package\n\nBaseline week: {week}\nCustomers: {len(package['customers'])}. One image per customer in one ZIP."
 
 def price_draft(side,changes):
-    """Presentation of explicit changes only; initial observations are not fabricated changes."""
+    from .legacy_price_compat import purchase_message,sales_message
     if not changes:return 'No price-change notification: no confirmed comparable change in this preview.'
-    if side=='purchase':
-        groups={'🔻 采购价下调':[],'🔺 采购价上调':[],'缺失状态变化（需核对）':[]}
-        for row in changes:
-            deltas={};parts=[f"**供应商：{show(row.get('supplier_name') or row.get('supplier_no'))}**",f"货号：{show(row.get('goods_no'))}（{show(row.get('goods_name'))}）",f"色标：{row.get('color_label') or '-'}"]
-            if row.get('validity_state')=='unknown_validity':parts.append('有效期未确认，仅记录报价变化。')
-            for key,label in [('inc','含税价'),('exc','不含税价')]:
-                old=number(row.get('old_'+key));new=number(row.get('new_'+key))
-                if old==new:continue
-                parts.append(f'{label}：{show(old)} → {show(new)}（{show(row.get("unit_cuur"))}；{show(row.get("currency_no"))}）')
-                deltas[key]=new-old if old is not None and new is not None else None
-            if not deltas:continue
-            # Legacy direction is tax-excluded first, even when the two sides
-            # move in opposite directions. Missing values are not converted to 0.
-            direction=deltas.get('exc') or deltas.get('inc')
-            group='缺失状态变化（需核对）' if any(v is None for v in deltas.values()) else '🔻 采购价下调' if direction<0 else '🔺 采购价上调'
-            groups[group].append('\n'.join(parts))
-        header='**采购报价变更提醒**\n调整日期：'+'、'.join(sorted({str(r.get('adjust_date') or 'Unknown')[:10] for r in changes}))
-        return header+'\n\n'+'\n\n**————————————**\n\n'.join('**'+k+'（'+str(len(v))+'条）**\n\n'+'\n\n────────────\n\n'.join(v) for k,v in groups.items() if v)
-    from .legacy_message_templates import sales
-    return sales(changes)
+    return (purchase_message(changes) or 'No price-change notification: no confirmed comparable change in this preview.') if side=='purchase' else sales_message(changes)
 
 def operation_preview_input(job,document):
     """Translate existing local observations; never manufacture a first-run change."""
@@ -436,7 +426,7 @@ def operation_preview_input(job,document):
                 'baseline_state':'existing_legacy_database_reference_readonly','reference':document['reference'],
                 'comparison_disclosure':document['scope_notice'],'customer_mapping_complete':False}
     result={'evidence_origin':'existing_local_observation','observed_at':document.get('observed_at')}
-    if job=='idk':return {**result,'region':'IDK','records':document['records']}
+    if job=='idk':return {**result,'region':'IDK','records':document['records'],'window_days':document.get('window_days',0),'window_start':document.get('window_start')}
     changes=[]
     if document.get('baseline_id') is not None:
         for event in document.get('events',[]):
@@ -482,26 +472,26 @@ def build_preview(job,data,out):
             date.fromisocalendar(int(week[:4]),int(week[6:]),1)
         except (TypeError,ValueError):raise WorkflowError('INVALID_WEEK')
     if job=='slow_task':
-        plan=freeze_plan(data['source_rows'],data.get('existing_rows',[]),week,data['current_week'],refreeze=data.get('refreeze',True));extra['freeze_plan']=plan
+        plan=freeze_plan(data['source_rows'],data.get('existing_rows',[]),week,data['current_week'],refreeze=data.get('refreeze',False));extra['freeze_plan']=plan
         extra['read_only_source_specs']=source_query_specs(week)
         if plan['status']=='ready':
             baseline=plan['insert_rows'] if plan['action']!='reuse_existing' else [r for r in data['existing_rows'] if r['week_label']==week]
             by_region={r:[v for v in baseline if v['whse_dept']==r] for r in dict.fromkeys(v['whse_dept'] for v in baseline)}
             extra['task_targets']=data.get('resolved_task_targets') or task_recipients(data['recipient_map'],data['employees'],list(by_region))
             extra['recipient_plan_behavior']={'preview':recipient_plan_decision(week,extra['task_targets'],data.get('existing_recipient_plan'),preview=True),'non_preview':recipient_plan_decision(week,extra['task_targets'],data.get('existing_recipient_plan'),preview=False) if 'existing_recipient_plan' in data else {'action':'existing_week_plan_state_not_supplied; do not assume absent'}}
-            extra['customer_plan_behavior']=customer_plan_decision(week,digest(baseline),data.get('existing_customer_plan'),rebuild=data.get('refreeze',True),preview=True)
+            extra['customer_plan_behavior']=customer_plan_decision(week,digest(baseline),data.get('existing_customer_plan'),rebuild=data.get('refreeze',False),preview=True)
             extra['component_actions']=[]
             for task_region,rows in by_region.items():
                 message,sheet=task_draft(task_region,week,data['start'],data['end'],rows);messages.append(message)
-                path=out/f'{week}_{safe_name(task_region)}_Products.xlsx';gen_workbook_xlsx([sheet],path);files.append(path.name)
+                path=out/f'{week}_{safe_name(task_region)}_Products.xlsx';gen_workbook_xlsx([sheet],path,legacy_layout=True);files.append(path.name)
                 for target in extra['task_targets'][task_region]:
-                    extra['component_actions'].append({'mode':'task','region':task_region,'account':target['account'],'components':delivery_preview('task',week,task_region,target['account'],['text','file'],data.get('receipts',[]),force=data.get('force_resend',True))})
+                    extra['component_actions'].append({'mode':'task','region':task_region,'account':target['account'],'components':delivery_preview('task',week,task_region,target['account'],['text','file'],data.get('receipts',[]),force=data.get('force_resend',False))})
             contacts=data.get('resolved_contact_plan') or contact_plan(baseline,data.get('customer_mapping',{}));extra['contact_plan']=contacts
             for package in contacts['sales_packages']:
                 path=customer_zip(package,out,week);files.append(path.name)
                 messages.append(customer_package_message(package,week))
                 content=digest({'week':week,'account':package['account'],'customers':package['customers']})
-                extra['component_actions'].append({'mode':'customer-zip','account':package['account'],'components':delivery_preview('customer-zip',week,'all',package['account'],['summary:'+content,'zip:'+content],data.get('receipts',[]),force=data.get('force_resend',True))})
+                extra['component_actions'].append({'mode':'customer-zip','account':package['account'],'components':delivery_preview('customer-zip',week,'all',package['account'],['summary:'+content,'zip:'+content],data.get('receipts',[]),force=data.get('force_resend',False))})
             statuses={p['account']:data.get('simulated_zip_status',{}).get(p['account'],'Planned') for p in contacts['sales_packages']}
             for group in audit_groups(contacts['sales_packages'],statuses,data['recipient_map'],{'Planned','Sent to Sales','Already Sent to Sales'}):
                 sales_region=group['region'];good=group['confirmed'];failed=group['unconfirmed'];selected=group['selected'];all_failed=not good
@@ -528,12 +518,13 @@ def build_preview(job,data,out):
                         if not re.fullmatch(r'\d{4}-\d{2}',packet['period']):raise ValueError()
                         date.fromisoformat(packet['period']+'-01')
                     except (KeyError,TypeError,ValueError):raise WorkflowError('INVALID_MONTH')
-                messages.append(report_draft(report_region,packet['period'],packet['summary'],packet.get('sales_rows',[]),monthly=monthly))
+                messages.append(report_draft(report_region,packet['period'],packet['summary'],packet.get('sales_rows',[]),monthly=monthly,weekly_start=packet.get('completeness',{}).get('frozen_at'),detail_semantics=packet.get('detail_semantics')))
                 path=out/(f'Monthly_{packet["period"]}_{safe_name(report_region)}.xlsx' if monthly else f'{week}_{safe_name(report_region)}_Report.xlsx')
-                gen_workbook_xlsx([('Detail',REPORT_HEADERS,packet['detail_rows'])],path,borders=True,landscape=True);files.append(path.name)
-                for account in extra['targets'][report_region]:extra['component_actions'].append({'mode':key,'region':report_region,'account':account,'components':delivery_preview('monthly' if monthly else 'report',packet['period'],report_region,account,['text','file'],data.get('receipts',[]),force=True if monthly else data.get('force_resend',False))})
+                gen_workbook_xlsx([('Detail',REPORT_HEADERS,legacy_detail_rows_for_xlsx(packet['detail_rows'])),REPORT_NOTES_SHEET],path,borders=True,landscape=True,legacy_layout=True);files.append(path.name)
+                for account in extra['targets'][report_region]:extra['component_actions'].append({'mode':key,'region':report_region,'account':account,'components':delivery_preview('monthly' if monthly else 'report',packet['period'],report_region,account,['text','file'],data.get('receipts',[]),force=data.get('force_resend',False))})
     elif job=='idk':
-        records=data.get('records',[]);messages=['**IDK Slow-Moving Products Without Promotion Price**\nScope: all slow-moving pool (as of '+str(data.get('observed_at','recorded review observation'))+')\n'+str(len(records))+' product source row(s) without promotion price:\n'+'\n'.join(f"{i+1}. {r.get('product','Unknown')} | Color {r.get('color') or '-'}" for i,r in enumerate(records))+'\nPlease set promotion prices for the above products.']
+        from .legacy_price_compat import idk_message
+        records=data.get('records',[]);messages=[idk_message(records,data.get('observed_at'),window_days=data.get('window_days',0))]
         extra['targets']=data.get('idk_executors',[])
     elif job in ('sales_price','purchase_price'):
         changes=data.get('changes',[]);messages=[price_draft('sales' if job=='sales_price' else 'purchase',changes)]
@@ -541,13 +532,16 @@ def build_preview(job,data,out):
             if data.get('recipient_map') is not None:
                 affected=list(dict.fromkeys(r['dept'] for r in changes))
                 extra['target_plan']=price_recipients(data['recipient_map'],data.get('employees',[]),affected,data.get('fixed_managers',[]))
-            sheets=[(goods,['Customer No','Customer'],rows) for goods,rows in data.get('customers_by_goods',{}).items() if rows]
+            from .legacy_price_compat import customer_sheets,manager_customer_sheets
+            own={g:r for g,r in data.get('customers_by_goods',{}).items() if r}
+            sheets=customer_sheets(own) if own else []
             if sheets:
                 path=out/f'customer_list_{safe_name(region)}_{safe_name(data.get("sales_name","sales"))}.xlsx';gen_workbook_xlsx(sheets,path);files.append(path.name)
             if data.get('customer_mapping_complete') is True:
                 messages[0]+='\n\n'+('See attachment for your customers who purchased these products (one Sheet per product).' if sheets else 'You have no customers who purchased these products, so no attachment is included.')
             else:messages[0]+='\n\nCustomer matching is not confirmed complete; do not interpret a missing attachment as no buyers.'
-            manager_sheets=[(goods,['Sales','Customer No','Customer'],rows) for goods,rows in data.get('manager_rows_by_goods',{}).items() if rows]
+            manager_rows={g:r for g,r in data.get('manager_rows_by_goods',{}).items() if r}
+            manager_sheets=manager_customer_sheets(manager_rows) if manager_rows else []
             if manager_sheets:
                 path=out/f'customer_list_{safe_name(region)}.xlsx';gen_workbook_xlsx(manager_sheets,path);files.append(path.name)
                 from .legacy_message_templates import sales as manager_message

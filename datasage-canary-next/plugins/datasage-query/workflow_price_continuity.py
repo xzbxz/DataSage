@@ -17,18 +17,23 @@ def normalized_current(side,rows):
 def plan(side,before,current,at):
     normalized=normalized_current(side,current)
     document=bridge.compare(side,before,normalized,at)
-    old={bridge.key_of(side,r):dict(r) for r in before};raw_by_key={}
+    old={bridge.key_of(side,r):dict(r) for r in before};raw_by_key={};identity_complete=True
     for row in normalized:
         try:key=bridge.key_of(side,row)
-        except op.OperationError:continue
+        except op.OperationError:identity_complete=False;continue
         raw_by_key.setdefault(key,[]).append(row)
     retained=dict(old);next_id=max((int(r['id']) for r in before),default=0)+1
-    anomalies=[];advanced=[];initialized=[];notes=Counter()
+    anomalies=[];advanced=[];initialized=[];removed=[];notes=Counter()
     healthy={'recorded_price_unchanged','legacy_nominal_price_changed','legacy_recorded_purchase_price_changed','new_key_without_legacy_reference','recovered_reference_without_known_price'}
     for event in document['events']:
         key=tuple(event['key']) if 'key' in event else None
         reason=None
-        if event['event']=='absent_from_current_selection':reason='absent_selection_keep_reference'
+        if event['event']=='absent_from_current_selection':
+            if identity_complete:
+                retained.pop(key,None);removed.append(list(key));event['deliverable']=False
+                event['continuation']='remove_absent_reference_after_required_receipts'
+                continue
+            reason='absence_not_proven_with_unkeyed_current_rows'
         elif event['event'] not in healthy:reason=event['event']
         candidate=raw_by_key.get(key,[]) if key else []
         row=candidate[0] if len(candidate)==1 else None
@@ -80,6 +85,6 @@ def plan(side,before,current,at):
         if prior is None:initialized.append(list(key));next_id+=1
     document['event_counts']=dict(Counter(e['event'] for e in document['events']))
     document['deliverable_event_count']=sum(e['deliverable'] for e in document['events'])
-    document['continuation']={'policy':'recorded_prices_per_key_v1','advanced_keys':len(advanced),'new_reference_keys':len(initialized),'retained_reference_keys':len(old)-sum(tuple(k) in old for k in advanced),'anomaly_count':len(anomalies),'anomaly_counts':dict(Counter(a['reason'] for a in anomalies)),'notes':dict(notes)}
-    document['scope_notice']+=' 异常按键保留旧参考；当前范围未见不等于删除或撤销。新键首次建立参考，不把缺旧价当零。比较各键最近一次可比参考，恢复后发现的变化不一定发生在本小时。仅在来源报价ID、供应商、颜色均相同且货号只差首尾空白时，沿用较新的已观测参考防止别名重复提醒；原始键及证据均保留。'
-    return {'document':document,'after':[retained[k] for k in sorted(retained)],'anomalies':anomalies,'advanced_keys':advanced,'initialized_keys':initialized}
+    document['continuation']={'policy':'recorded_prices_per_key_v2_legacy_reentry','advanced_keys':len(advanced),'new_reference_keys':len(initialized),'removed_absent_reference_keys':len(removed),'retained_reference_keys':sum(k in retained and list(k) not in advanced for k in old),'anomaly_count':len(anomalies),'anomaly_counts':dict(Counter(a['reason'] for a in anomalies)),'notes':dict(notes)}
+    document['scope_notice']+=' 异常按键保留旧参考；完整观察中离开监控池的键移出比较基线，这不代表业务删除或撤销。重新进入时只建立参考，不提醒，不把缺旧价当零。身份不完整时不据此删除旧参考。仅在同次观察中来源报价ID、供应商、颜色均相同且货号只差首尾空白时，沿用较新的已观测参考防止别名重复提醒。'
+    return {'document':document,'after':[retained[k] for k in sorted(retained)],'anomalies':anomalies,'advanced_keys':advanced,'initialized_keys':initialized,'removed_keys':removed}

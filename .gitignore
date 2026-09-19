@@ -210,7 +210,6 @@ datasage-canary-next/scripts/*
 !datasage-canary-next/scripts/datasage_workflow.py
 !datasage-canary-next/tests/test_installed_workflow.py
 !datasage-canary-next/docs/workflow-runtime.example.json
-!datasage-canary-next/docs/workflow-runtime-acceptance.md
 
 # Real-source acceptance workflow
 !datasage-canary-next/plugins/datasage-query/workflow_live_store.py
@@ -225,7 +224,6 @@ datasage-canary-next/scripts/*
 !datasage-canary-next/docs/workflow-live-runtime.example.json
 !datasage-canary-next/tests/test_live_workflow.py
 !datasage-canary-next/plugins/datasage-query/LIVE_WORKFLOW.md
-!datasage-canary-next/docs/workflow-live-acceptance.md
 
 # Per-key continuity and bounded acceptance proof
 !datasage-canary-next/plugins/datasage-query/workflow_price_continuity.py
@@ -233,7 +231,6 @@ datasage-canary-next/scripts/*
 !datasage-canary-next/plugins/datasage-query/workflow_price_diagnostics.py
 !datasage-canary-next/tests/test_price_continuity.py
 !datasage-canary-next/tests/test_delivery_review.py
-!datasage-canary-next/docs/price-continuity-acceptance-20260917.md
 !datasage-canary-next/docs/hourly-acceptance-proposal-20260917.json
 
 # Manual customer package coverage and period proof
@@ -241,7 +238,6 @@ datasage-canary-next/scripts/*
 !datasage-canary-next/plugins/datasage-query/workflow_manual_boundaries.py
 !datasage-canary-next/tests/test_customer_audit.py
 !datasage-canary-next/tests/test_manual_boundaries.py
-!datasage-canary-next/docs/manual-acceptance-checklist-20260917.md
 
 # Shared evidence, customer lifecycle and private configuration recovery
 !datasage-canary-next/docs/structure-convergence.md
@@ -278,3 +274,39 @@ datasage-canary-next/scripts/*
 !datasage-canary-next/tests/test_target_golden_cases.py
 !datasage-canary-next/tests/test_target_runtime_customer_breakdown.py
 !datasage-canary-next/tests/test_workflow_report_gate.py
+!datasage-canary-next/plugins/datasage-query/legacy_customer_compat.py
+!datasage-canary-next/plugins/datasage-query/legacy_price_compat.py
+!datasage-canary-next/tests/test_legacy_customer_compatibility.py
+!datasage-canary-next/tests/test_legacy_price_compatibility.py
+!datasage-canary-next/tests/test_legacy_report_compatibility.py
+!datasage-canary-next/tests/test_push_compatibility_boundaries.py
+!datasage-canary-next/tests/fixtures/legacy_customer_compatibility.json
+!datasage-canary-next/tests/fixtures/legacy_report_golden.json
+!datasage-canary-next/plugins/datasage-query/slow_task_coverage.py
+!datasage-canary-next/plugins/datasage-query/slow_task_retry.py
+!datasage-canary-next/tests/test_slow_task_coverage.py
+!datasage-canary-next/tests/test_slow_task_preparation.py
+!datasage-canary-next/tests/test_slow_task_retry_policy.py
+!datasage-canary-next/tests/test_slow_task_window_empty.py
+!datasage-canary-next/plugins/datasage-query/slow_report_batch.py
+!datasage-canary-next/plugins/datasage-query/slow_report_runner.py
+!datasage-canary-next/tests/test_slow_report_batch.py
+!datasage-canary-next/tests/test_slow_report_delivery.py
+!datasage-canary-next/tests/test_slow_report_entry.py
+!datasage-canary-next/plugins/datasage-query/idk_batch.py
+!datasage-canary-next/plugins/datasage-query/idk_content.py
+!datasage-canary-next/plugins/datasage-query/idk_runner.py
+!datasage-canary-next/tests/test_idk_batch.py
+!datasage-canary-next/tests/test_idk_content.py
+!datasage-canary-next/tests/test_idk_delivery.py
+!datasage-canary-next/tests/test_idk_observation.py
+!datasage-canary-next/tests/test_idk_entry.py
+!datasage-canary-next/tests/test_pool_contribution_presentation.py
+!datasage-canary-next/tests/test_repair_xlsx_precision.py
+!datasage-canary-next/tests/test_report_sales_unknowns.py
+
+# Private acceptance reports remain local, including in full local backups.
+datasage-canary-next/docs/manual-acceptance-checklist-20260917.md
+datasage-canary-next/docs/price-continuity-acceptance-20260917.md
+datasage-canary-next/docs/workflow-live-acceptance.md
+datasage-canary-next/docs/workflow-runtime-acceptance.md

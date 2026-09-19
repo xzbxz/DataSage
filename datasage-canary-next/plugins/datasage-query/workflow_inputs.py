@@ -47,7 +47,7 @@ def customer_mapping(db,pairs):
 
 def legacy_report_packet(pool_packet,flow_packet,label_rows,region,period,*,evidence=None):
     """Map complete governed facts into old Detail columns; never invent missing labels."""
-    from . import contracts,capability_contract,legacy_workflow as wf
+    from . import contracts,capability_contract,legacy_workflow as wf,legacy_message_templates as templates
     from . import report_evidence
     proof=None
     if evidence is not None:
@@ -62,6 +62,8 @@ def legacy_report_packet(pool_packet,flow_packet,label_rows,region,period,*,evid
         label=dimension_labels[metric][code]
         values=[d.get('value') for d in row.get('dimensions',[]) if d.get('label')==label]
         return values[0] if len(values)==1 else None
+    def display_unit(value):
+        text=str(value or '').strip();return {'m':'M','y':'Y','unknown':'Unknown'}.get(text.lower(),text.lower())
     pool=pool_packet['results'][0]['rows'];flow=flow_packet['results'][0]['rows'];labels=defaultdict(set)
     for r in label_rows:
         if r.get('goods_no'):labels[(str(r['goods_sku_id']),r['whse_dept'])].add((r['goods_no'],r.get('attr_val')))
@@ -76,7 +78,7 @@ def legacy_report_packet(pool_packet,flow_packet,label_rows,region,period,*,evid
         f=r['facts'];identity=f.get('sales_identity_ref')
         if identity not in sales:sales[identity]={'sales_name':dim(r,'salesperson',flow_metric) or 'Unknown','net_rolls':f.get('sales_net_rolls')}
         elif wf.number(sales[identity]['net_rolls'])!=wf.number(f.get('sales_net_rolls')):raise IOErrorBoundary('REPORT_SALES_TOTAL_CONFLICT')
-        unit=dim(r,'unit',flow_metric)
+        unit=str(dim(r,'unit',flow_metric) or '')
         if unit is not None:
             if str(unit) in units and wf.number(units[str(unit)])!=wf.number(f.get('unit_net_quantity')):raise IOErrorBoundary('REPORT_UNIT_TOTAL_CONFLICT')
             units[str(unit)]=f.get('unit_net_quantity')
@@ -92,9 +94,33 @@ def legacy_report_packet(pool_packet,flow_packet,label_rows,region,period,*,evid
         if state!='Exited':close_keys.add(key)
         matched=grouped.get((sku,unit),[]);numbers=[wf.number(v['facts'].get('net_rolls')) for v in matched]
         net=None if state=='New' or any(v is None for v in numbers) else sum(numbers,wf.number(0)) if numbers else wf.number(0) if proof is not None or unique('scope_net_rolls',flow) is not None else None
-        old=wf.number(f.get('opening_rolls'));new=wf.number(f.get('closing_rolls'));delta=new-old if old is not None and new is not None else None
-        names=sorted({str(dim(v,'salesperson',flow_metric) or 'Unknown') for v in matched})
-        details.append([item or 'Unknown',color or 'Unknown',region,state,f.get('opening_quantity'),unit,f.get('closing_quantity'),old,new,delta,net,', '.join(names) if state!='New' else None])
+        old=wf.number(f.get('opening_rolls'));new=wf.number(f.get('closing_rolls'))
+        display_old=old;display_new=new
+        proof_complete=bool(proof is not None and proof.get('population_complete') is True and proof.get('quantities_complete') is True)
+        if proof_complete and state=='New' and display_old is None:display_old=wf.number(0)
+        if proof_complete and state=='Exited' and display_new is None:display_new=wf.number(0)
+        delta=display_new-display_old if display_old is not None and display_new is not None else None
+        sold_by=''
+        if state!='New' and matched:
+            sales_group={}
+            for value in matched:
+                facts=value['facts'];identity=facts.get('sales_identity_ref');name=str(dim(value,'salesperson',flow_metric) or 'Unknown');rolls=facts.get('net_rolls')
+                entry=sales_group.setdefault(identity,{'name':name,'rolls':wf.number(0),'quantities':{}})
+                parsed_rolls=wf.number(rolls)
+                if parsed_rolls is None:entry['rolls']=None
+                elif entry['rolls'] is not None:entry['rolls']+=parsed_rolls
+                quantity=wf.number(facts.get('metric_value'));source_unit=display_unit(dim(value,'unit',flow_metric))
+                prior=entry['quantities'].get(source_unit,wf.number(0))
+                entry['quantities'][source_unit]=None if quantity is None or prior is None else prior+quantity
+            lines=[]
+            active_entries=[entry for entry in sales_group.values() if entry['rolls'] is None or entry['rolls']!=0 or any(value is None or value!=0 for value in entry['quantities'].values())]
+            for entry in sorted(active_entries,key=lambda item:(wf.number(item['rolls']) is None,-abs(wf.number(item['rolls']) or 0),item['name'])):
+                lines.append(f"{entry['name']}: {templates.display(entry['rolls'])} rolls | Qty: {templates.quantity(entry['quantities'])}")
+            sold_by=' | '.join(lines)
+        opening_quantity=f.get('opening_quantity');closing_quantity=f.get('closing_quantity')
+        if proof_complete and state=='New' and opening_quantity is None:opening_quantity=0
+        if proof_complete and state=='Exited' and closing_quantity is None:closing_quantity=0
+        details.append([item or 'Unknown',color or 'Unknown',region,state,opening_quantity,display_unit(unit),closing_quantity,display_old,display_new,delta,net,sold_by])
     def sum_side(index,excluded):
         values=[wf.number(r[index]) for r in details if r[3]!=excluded]
         return None if any(v is None for v in values) else sum(values,wf.number(0))
@@ -105,10 +131,12 @@ def legacy_report_packet(pool_packet,flow_packet,label_rows,region,period,*,evid
             by_unit=defaultdict(list)
             for row in flow:
                 if row['facts'].get('sales_identity_ref')==identity:by_unit[dim(row,'unit',flow_metric)].append(row['facts'])
-            sale['net_quantity_by_unit']={u:sum((wf.number(v['metric_value']) for v in values),wf.number(0)) if all(wf.number(v.get('metric_value')) is not None for v in values) else None for u,values in by_unit.items()}
+                sale['net_quantity_by_unit']={u:sum((wf.number(v['metric_value']) for v in values),wf.number(0)) if all(wf.number(v.get('metric_value')) is not None for v in values) else None for u,values in by_unit.items()}
+    details=wf.legacy_sort_detail_rows(details)
     result={'period':period,'summary':summary,'sales_rows':list(sales.values()),'detail_rows':details,'detail_complete':proof is not None,
         'label_coverage':{'total_groups':len(details),'missing_groups':missing_count,'ambiguous_groups':ambiguous_count,'complete':not(missing_count or ambiguous_count)},
         'completeness':proof or {'population_complete':False,'quantities_complete':False,'reason':'no_independent_evidence'},
-        'mapping_note':'Counts use stable SKU/department/unit groups, never display names. Missing/ambiguous labels stay Unknown.'}
+        'mapping_note':'Counts use stable SKU/department/unit groups, never display names. Missing/ambiguous labels stay Unknown.',
+        'detail_semantics':{'pool_membership_zero_fill':'confirmed_complete_proof_only','pool_membership_note':'池成员数量/变化；不代表实际库存或销量。缺端补0仅限完整池证据；New净出库=N/A。','new_net_outbound':'not_applicable_without_opening_baseline'} }
     if proof:result['detail_reconciliation']=wf.validate_complete_detail(result)
     return result

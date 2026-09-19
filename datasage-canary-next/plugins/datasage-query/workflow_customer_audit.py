@@ -53,16 +53,17 @@ def _expected_customer_population(baseline,mapping):
     """
     pool=defaultdict(Decimal)
     for row in baseline:
+        key=tuple(_text(row.get(k)) for k in ('whse_dept','goods_no','attr_val'))
+        if not key[0] or not key[1]:continue
         try:rolls=Decimal(str(row.get('total_piece')))
         except Exception:raise ValueError('CUSTOMER_EXPECTED_ROLLS_INVALID')
         if not rolls.is_finite():raise ValueError('CUSTOMER_EXPECTED_ROLLS_INVALID')
-        key=wf.customer_product_key(row)
         pool[key]+=rolls
     products_by_customer=mapping.get('productsByCustomer') or {}
     customer_info=mapping.get('customerInfo') or {}
     packages={};matched_pool=set();relations=set();audit_rows=Counter()
     for raw_cid,purchased in sorted(products_by_customer.items(),key=lambda item:_text(item[0])):
-        cid=str(raw_cid);pairs={(p.get('whse_dept'),p.get('goods_no')) for p in (purchased or []) if isinstance(p,dict)}
+        cid=str(raw_cid);pairs={(_text(p.get('whse_dept')),_text(p.get('goods_no'))) for p in (purchased or []) if isinstance(p,dict)}
         selected=[(dept,goods,color,rolls) for (dept,goods,color),rolls in pool.items() if (dept,goods) in pairs]
         matched_pool.update((dept,goods,color) for dept,goods,color,_ in selected)
         relations.update((cid,dept,goods,color) for dept,goods,color,_ in selected)
@@ -250,7 +251,7 @@ def verify_plan(baseline,mapping,plan):
             if assignment['reason']:raise ValueError('INELIGIBLE_CUSTOMER_IN_PACKAGE')
             if package['account']!=assignment['account'] or str(employee.get('wecom_account') or '').strip()!=package['account'] or str(employee.get('region') or '').strip()!=package['region']:raise ValueError('PACKAGE_OWNER_RECONCILIATION_FAILED')
             if customer['customer_no']!=assignment['customer_no'] or customer['customer_name']!=assignment['name']:raise ValueError('CUSTOMER_LABEL_RECONCILIATION_FAILED')
-            purchased={(p.get('whse_dept'),p.get('goods_no')) for p in (mapping.get('productsByCustomer') or {}).get(cid, (mapping.get('productsByCustomer') or {}).get(str(cid), []))}
+            purchased={(_text(p.get('whse_dept')),_text(p.get('goods_no'))) for p in (mapping.get('productsByCustomer') or {}).get(cid, (mapping.get('productsByCustomer') or {}).get(str(cid), []))}
             product_rolls=defaultdict(Decimal)
             for (dept,goods,color),rolls in pool.items():
                 if (dept,goods) in purchased:product_rolls[(goods,color)]+=rolls
@@ -276,7 +277,7 @@ def verify_plan(baseline,mapping,plan):
             'population_reconciled':True,'roll_rounding':'sum exact source rolls, then HALF_UP integer as legacy contract'}
 def inspect_zip(path,package):
     from PIL import Image
-    names=[wf.safe_name(c['customer_no'])+'_'+wf.safe_name(c['customer_name'])+'.png' for c in package['customers']]
+    names=[wf.customer_zip_member_name(c,i) for i,c in enumerate(package['customers'])]
     if len({n.casefold() for n in names})!=len(names):raise ValueError('CUSTOMER_ARCHIVE_NAME_COLLISION')
     size=path.stat().st_size
     if not 5<=size<=wf.policy()['customer_artifacts']['max_zip_bytes']:raise ValueError('CUSTOMER_ARCHIVE_SIZE_INVALID')

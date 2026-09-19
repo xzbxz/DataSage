@@ -7,8 +7,9 @@ Profile application HTTP path, including text/file recovery and target ordering.
 
 Behavior baseline: local Git object `3fd38fcb803307e1688688ca1dfbde271131157a`
 (`release/datasage-0.2.0`). No historical script with import-time side effects is
-imported. `contracts/legacy-workflows.json` holds the extracted schedules, regions
-and workflow facts; actual receiver identifiers remain outside Git.
+imported. `contracts/legacy-workflows.json` holds the current candidate schedules,
+regions and workflow facts, including explicit user-approved timing overrides;
+actual receiver identifiers remain outside Git.
 
 ## Execution boundary
 
@@ -35,14 +36,19 @@ These are fixed report-ID adapters for the official script/no_agent path, not
 Windows startup services or a replacement scheduler. One shared helper performs
 the dispatch, because the official script runner does not pass arbitrary CLI args.
 
-| Script | Fixed report ID | Legacy candidate timing (Asia/Shanghai) |
+| Script | Fixed report ID | Current candidate timing (Asia/Shanghai) |
 |---|---|---|
 | datasage_legacy_slow_task.py | legacy-slow-task | Tuesday 09:00 |
 | datasage_legacy_slow_report.py | legacy-slow-report | Saturday 19:00; monthly follows weekly |
-| datasage_legacy_idk.py | legacy-idk | Monday 19:00 |
+| datasage_legacy_idk.py | legacy-idk | Monday 12:00 |
 | datasage_legacy_sales_price.py | legacy-sales-price | Hourly; exact minute not present in this Git object |
 | datasage_legacy_purchase_price.py | legacy-purchase-price | Not recoverable from this Git object |
 | datasage_legacy_fabric.py | legacy-fabric | On demand; no proved legacy scheduled job |
+
+The IDK timing above is the user's 2026-09-19 override: Monday 12:00
+(`0 12 * * 1`, Asia/Shanghai), replacing the historical Monday 19:00 candidate.
+This is a local definition change only; it does not create, update or enable an
+existing official job. Other task schedules and historical evidence are unchanged.
 
 For explicit local previews only, add `--preview`. The adapter consumes exactly
 `report_inputs/legacy/<job>.json`, where job is slow_task, slow_report, idk,
@@ -54,6 +60,10 @@ closed. The existing generic report entry also accepts `--legacy-preview <job>`;
 it rejects combining this with report-id or price-snapshot acceptance.
 
 ## Recovered legacy behavior
+
+The following describes the fixed historical reference. The user-approved
+2026-09-18 current exception is ordinary rerun continuation with no implicit
+refreeze or forced resend, including monthly reports; see WORKFLOW_IO.md.
 
 - Task wrapper defaults to same-week re-freeze and full re-send. Manual no-refreeze
   and no-force-resend were legacy overrides. A plain baseline read reuses an
@@ -94,8 +104,9 @@ it rejects combining this with report-id or price-snapshot acceptance.
   Corrupt or wrong-scope documents fail; log 'ok' is not a receipt. Bare success
   remains unverified, timeouts remain unknown, and human read remains unknown.
   The old 10/9 acceptance counts cannot be promoted to a passing new binding.
-- IDK repeats the current full unpriced candidate list each scheduled run by
-  default. Source NULL/zero/negative are distinct in current query evidence;
+- IDK selects the full current unpriced candidate list for each new business
+  week; same-week continuation reuses the first validated sealed plan. Complete
+  zero selections are audited without sending. Source NULL/zero/negative are distinct in current query evidence;
   Promotion Offer displays Not Set for NULL/non-positive. A source-row count is
   not relabeled as a unique-product count.
 - Sales-price messages cover all active sales/customer-service staff in affected

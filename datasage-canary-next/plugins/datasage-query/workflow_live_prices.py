@@ -14,8 +14,13 @@ def observe(store,side):
     with base.tools._ConsistentSnapshotExecutor(deadline_at=base.tools._call_deadline(None)) as db:
         start=inputs.complete(db,'SELECT NOW(6) AS observed_at,UTC_TIMESTAMP(6) AS observed_utc',limit=1)[0]
         existing=store.rows(side+'_snapshot',side)
+        history=store.rows('cycles');initialized=any(r['cycle_id']=='origin-'+side for r in history)
+        if not existing and initialized:
+            committed=[r for r in history if r['cycle_id'].startswith('lp-'+side+'-') and r['status']=='committed']
+            last=max(committed,key=lambda r:cycle.payload(r)['observation']['observed_at']) if committed else None
+            if last is None or cycle.payload(last).get('after_digest')!=snapshot_digest(side,[]):raise ValueError('MISSING_SNAPSHOT_WITH_EXISTING_ORIGIN')
         old=None
-        if not existing:old=inputs.complete(db,'SELECT '+','.join(spec['fields'])+' FROM '+spec['table']+' ORDER BY id LIMIT 10001')
+        if not existing and not initialized:old=inputs.complete(db,'SELECT '+','.join(spec['fields'])+' FROM '+spec['table']+' ORDER BY id LIMIT 10001')
         sql,args=op.build_observation({'kind':side+'_prices','regions':['HCM','HN','BKK','IDK'],'limit':10000})
         current=inputs.complete(db,sql,args)
         end=inputs.complete(db,'SELECT NOW(6) AS observed_at,UTC_TIMESTAMP(6) AS observed_utc',limit=1)[0]

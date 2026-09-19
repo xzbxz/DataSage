@@ -4,10 +4,29 @@ This supersedes the earlier preview-only execution boundary in LEGACY_WORKFLOWS.
 Preview inputs remain supported, but the fixed adapters now have an actual
 production-input path. **No activation file or credentials are shipped.**
 
-The implementation in this document is still a convergence candidate and has
-not been installed into the real Profile. Real role migration is not authorized
-and the gateway has not been reloaded. SQL SHA2 entity lookups have not been
-measured for scan cost or latency against the real database.
+This document describes source capabilities, not active deployment or delivery
+evidence. Existing private role configuration and runtime activation are separate
+from code installation. Installing code does not register a job or prove that a
+production recipient received anything.
+
+## Approved compatibility exceptions
+
+On 2026-09-18 the user chose accurate current values over known legacy display
+defects, and ordinary reruns that continue incomplete work rather than refreezing
+or resending completed notifications. Missing values must not become zero and
+missing customer names must not become internal IDs. Long image fields remain
+readable instead of restoring clipping.
+
+The production-input adapter and preview now default to `refreeze=False` and
+`force_resend=False`, including monthly reports. Explicit local-operator options
+are `--refreeze`, `--force-resend`, and `--replay-reason` (5–120 characters).
+Refreezing a sending task requires both action flags, and cannot bypass an
+incomplete or unknown previous generation. These options do not enable any
+existing read, freeze or delivery gate. No schedule invokes them by default.
+
+Pending deliveries created by older code must retain their original sealed
+content and receipt bindings. A changed renderer does not authorize invalidating
+old fingerprints, relabeling old accepted states, or resending them automatically.
 
 ## Activation and fixed entrypoints
 
@@ -178,9 +197,147 @@ These are distinct from missing runtime settings; they are not hidden behind an
 "enable" toggle. Existing previews, original observations and unknown outcomes
 are retained for individual acceptance.
 
-Production task delivery precedes customer lookup/package execution; all weekly
-delivery precedes monthly input execution. Same-week recipient and customer plans
-are persisted privately. Customer plans rebuild after an enabled re-freeze or fail
+For `slow_task`, all task workbooks, independently verified customer plans, customer
+ZIPs and audit preparation materials are prepared before the first send. Dynamic
+targets, format/file capabilities and existing component bindings are preflighted
+first. Delivery still follows task text/workbook, then customer summary/ZIP, then
+the audit generated from actual component receipts. Audit preparation is explicitly
+unsent preview material and never overwrites an accepted notification manifest.
+Post-send audit or external I/O failure cannot be called a cross-system rollback.
+
+Known component failures may continue through the existing delivery function, with
+at most two retries shared by the entire invocation's delivery phase, 5/15 second
+backoff, and a 120-second retry-start window. Accepted components are skipped.
+Unknown/in-flight results, timeouts, content/target changes, configuration and
+preparation errors do not auto-retry. Exhaustion raises the original error to the
+official failure path; without configured failure delivery, no responsible-person
+notification is claimed. This adds no scheduler, persistent retry queue or job.
+
+The customer transaction window remains the 12-calendar-month window observed at
+the first successfully verified plan; that plan is then reused in the same week.
+Customer/personnel master data are from the read snapshot, not historical as-of
+the inventory freeze. The observation window and snapshot marker are recorded
+with the plan; legacy caches without metadata are explicitly identified as such.
+Empty source remains blocked as pending source verification, not successful zero
+work. Existing valid weekly freezes are reused. The official recurring task never
+implicitly refreezes; refreeze/resend still require explicit flags and a reason.
+
+An additional audit-only Customer Coverage workbook is prepared for each product
+department, including Summary, Coverage, Exceptions, Unmatched Products and Notes.
+It uses existing department executor/manager roles and is not included in the
+general sales task attachment. Counts distinguish unique customer IDs, actual
+generated-package membership, customer/product/color relations and unmatched
+product grains; regional customer counts must not be summed into a global total.
+Product department and personnel region remain separate. A completed send is
+limited to the prepared components, not a claim of complete business coverage.
+Unassigned/no-match cases stay visible in the result and CLI completion message.
+The old Products workbook, customer ZIP and dispatch workbook retain their
+existing layouts; the coverage notice/file are additional audit components.
+
+## Sealed weekly and monthly report batches
+
+`slow_report` remains a Saturday 19:00 Asia/Shanghai job: weekly reports first,
+then progress for the batch's reporting month. Monthly data is not a sum of
+weekly reports and is not certified as a month-end financial close. Existing
+monthly opening snapshots, whitelist semantics, complete-pool zero projection,
+New net-outbound N/A, precise HT values and Detail/Notes formatting are unchanged.
+Department observations are independent; the batch does not claim a global
+simultaneous database snapshot.
+
+Each phase prepares all department bodies/workbooks and a nonempty recipient
+plan before its first send. Explicit target mappings are required even when
+preparing an unsent batch, so an unbound preview cannot silently acquire a new
+recipient route later. Material is atomically sealed beneath the existing
+`report_runs/legacy_execution/slow_report_batches/<week>` private directory.
+Bodies, attachment bytes, original observations, accounts and target mappings
+are bound together. Publication means prepared material, not provider acceptance.
+Failed temporary preparation directories are retained; they are not a send queue.
+
+Normal same-week reruns load the sealed material, not current roles or fresh
+report data. Missing/corrupt published content and missing receipt bindings stop
+recovery; accepted labels without content bindings are not automatically adopted.
+The monthly target plan is inherited from the batch's sealed weekly plan, so a
+role edit during weekly recovery cannot silently change monthly recipients.
+Current routes for those accounts must still match the frozen routes before send.
+
+Confirmed text/file failures are accumulated locally while other independent
+notifications in that phase continue. A failed text does not send its file;
+accepted text is skipped when only its file needs continuation. Unknown/in-flight
+results stop the phase, with no blind retry or new failure notification. Monthly
+sending is blocked until every notification in the current weekly delivery
+generation is provider-accepted. No new automatic retry schedule or RetryBudget
+is added for `slow_report`; the slow-task-only policy remains separate.
+
+The existing trusted local operator script supports three distinct actions:
+
+- Ordinary `--legacy-run slow_report`: resume the current week's batch. An
+  already completed batch sends nothing and does not recollect report data.
+- `--force-resend --replay-reason <reason>`: only after both phases are complete,
+  advance the delivery generation and resend the same sealed materials. It
+  does not refresh the observation, content generation or recipient plan.
+- `--regenerate-report --replay-reason <reason>`: only after both phases are
+  complete, create a new content generation from fresh observations for the
+  same reporting week/month. It is incompatible with force-resend/refreeze.
+
+Reasons are 5–120 characters. `--resume-report-week YYYY-Www` selects an existing
+batch only, including cross-week recovery; it cannot create a historical batch
+and cannot combine with regeneration. Default execution in a new business week
+creates that week's distinct batch; it does not mark older unfinished batches as
+complete or automatically replay them. The batch month remains fixed across
+month-boundary continuation. A not-yet-prepared monthly phase records its own
+actual first observation, not an invented historical as-of time.
+
+These flags are supplied to `scripts/datasage_slow_report.py --legacy-run
+slow_report ...`; the fixed official cron adapter remains a no-argument entry.
+Read-only prepared output is marked `WORKFLOW_PREPARED_NOT_SENT`, never as a
+confirmed delivery. Existing private batches need explicit review for adoption;
+code installation does not migrate active state or enable a job.
+
+All weekly report delivery still precedes monthly input execution when delivery
+is enabled; unsent preparation may inspect both phases without receipt claims. Same-week
+recipient and customer plans are persisted privately. Customer plans rebuild
+after an enabled re-freeze or fail
 when the accepted source baseline no longer matches. This local envelope does not
 claim old runtime cache files were imported. The new app HTTP path is no longer blocked by live-gateway media support, but
 production activation and scoped real acceptance remain outstanding.
+# IDK weekly continuation (2026-09-19)
+
+The local IDK schedule definition is Monday 12:00 Asia/Shanghai. Editing this
+definition does not register, change, enable, or reload a running job.
+
+Only IDK is selected (not IDK-HT): `goods_num > 10`, whitelist `n`, promotion
+price NULL or <= 0. This is quantity, not rolls; negative prices remain included.
+Counts retain source-row grain, even when product/color repeats. Default scope
+is all current unresolved rows, including older entries. An explicit `window_days`
+uses SQL `gmt_create >= DATE_SUB(NOW(6), INTERVAL N DAY)` and displays that exact
+rolling timestamp cutoff, not a calendar-day cutoff. For a complete empty query,
+the audit clock is a subsequent database clock read, explicitly labelled as such.
+
+The first fully validated formal weekly plan seals its observation, complete
+record parts, scope/time, executor accounts and exact target bindings. Ordinary
+same-week continuation reads this plan, not fresh source data or roles. Changed
+target mappings block sending. A new business week selects all still-unpriced
+rows again. A read-only preview is not a formal weekly plan and cannot claim
+delivery. Old progress without sealed content blocks; there is no automatic
+migration or repair of accepted receipts.
+
+Complete zero selection is a sealed, auditable `empty_no_task`, with zero sends.
+This intentionally replaces the old zero-product notice. Missing/invalid
+executors or routes, incomplete source, invalid identities or bad data are errors,
+not zero-task success. This policy is IDK-only: slow_task empty input still stops
+as “空源待核验”.
+
+Complete source records are escaped and grouped into UTF-8 byte-bounded parts.
+Every part repeats scope/as-of and Part i/N; numbering is global. App Markdown
+uses a conservative 4000-byte budget within its 4096-byte limit; callback text
+uses 2000 within 2048. An oversized single record blocks before any delivery.
+Per-account parts share a notification but have distinct component keys and
+receipts. Known failure stops later parts for that account; unknown stops the
+run and requires review. Accepted parts are skipped on ordinary continuation.
+
+`--force-resend --replay-reason ...` requires the entire nonempty batch to be
+accepted, and resends only its sealed content. It does not requery or regenerate.
+There is no same-week reobserve/regeneration command in this implementation;
+operators must not delete the plan or change keys to bypass partial/unknown state.
+IDK reminders do not advance price acceptance baselines. Production takeover
+remains deferred; source installation does not prove a running process loaded it.

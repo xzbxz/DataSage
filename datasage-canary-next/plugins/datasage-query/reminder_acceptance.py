@@ -88,8 +88,8 @@ def prepare(profile,case):
             operations._atomic(folder/'query-evidence.json',evidence)
             adapted=workflow_inputs.legacy_report_packet(evidence['packets']['pool'],evidence['packets']['flow'],labels,'HCM',period,evidence=evidence)
             operations._atomic(folder/'validation.json',adapted)
-            text=wf.report_draft('HCM',period,adapted['summary'],adapted['sales_rows'],monthly=phase=='monthly')
-            file=folder/('HCM_'+period+'_Report.xlsx');gen_workbook_xlsx([('Detail',wf.REPORT_HEADERS,adapted['detail_rows'])],file,borders=True,landscape=True)
+            text=wf.report_draft('HCM',period,adapted['summary'],adapted['sales_rows'],monthly=phase=='monthly',weekly_start=adapted.get('completeness',{}).get('frozen_at'),detail_semantics=adapted.get('detail_semantics'))
+            file=folder/('HCM_'+period+'_Report.xlsx');gen_workbook_xlsx([('Detail',wf.REPORT_HEADERS,wf.legacy_detail_rows_for_xlsx(adapted['detail_rows'])),wf.REPORT_NOTES_SHEET],file,borders=True,landscape=True,legacy_layout=True)
             recipients=wf.report_recipients(reference['regions'],'HCM')
             role='HCM原执行人及管理层（同文合并'+str(len(recipients))+'人）；截至'+adapted['completeness']['observed_to']+'，非期末最终结果'
             if not adapted['label_coverage']['complete']:role+='；标签Unknown待核验，不称完整可上线报表'
@@ -112,7 +112,7 @@ def prepare(profile,case):
             targets=wf.task_recipients(reference['regions'],employees,['HCM'])['HCM']
             periods=wf.legacy_periods(delivery.workflow.at_utc8(WEEK))
             text,sheet=wf.task_draft('HCM',WEEK,periods['planned_start'][:10],periods['planned_end'][:10],baseline)
-            file=folder/('HCM_'+WEEK+'_Products.xlsx');gen_workbook_xlsx([sheet],file)
+            file=folder/('HCM_'+WEEK+'_Products.xlsx');gen_workbook_xlsx([sheet],file,legacy_layout=True)
             return stage(profile,case,[_notice('hcm-task-all-roles','HCM原执行人/在职销售客服/管理层（同文合并'+str(len(targets))+'人），使用已有冻结，未重冻',text,[file])],
                 {'origin':'current_readonly','baseline_week':WEEK,'baseline_rows':len(baseline),'frozen_at':str(baseline[0]['frozen_at']),'observed_at':str(clock),'original_recipients':targets,'frozen':False})
         if case=='hcm-customer-packages':

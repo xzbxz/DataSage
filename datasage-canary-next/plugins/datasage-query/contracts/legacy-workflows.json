@@ -76,8 +76,8 @@
     "slow_task": {
       "report_id": "legacy-slow-task",
       "schedule": "0 9 * * 2",
-      "refreeze": true,
-      "force_resend": true,
+      "refreeze": false,
+      "force_resend": false,
       "sequence": [
         "task_text",
         "task_xlsx",
@@ -91,22 +91,29 @@
       "schedule": "0 19 * * 6",
       "force_resend": false,
       "monthly_follows": true,
-      "monthly_force_resend": true,
+      "monthly_force_resend": false,
       "sequence": [
         "weekly_text",
         "weekly_xlsx",
         "monthly_text",
         "monthly_xlsx"
-      ]
+      ],
+      "monthly_meaning": "progress_for_the_batch_month_at_each_department_observation_not_month_end_close",
+      "ordinary_rerun": "reuse_sealed_bodies_files_targets_and_observation; continue_unfinished_components_only",
+      "force_resend_meaning": "explicit_new_delivery_generation_for_completed_batch; reuse_original_content",
+      "regenerate_meaning": "explicit_new_content_generation_with_reason; completed_batch_only; reporting_period_unchanged"
     },
     "idk": {
       "report_id": "legacy-idk",
-      "schedule": "0 19 * * 1",
+      "schedule": "0 12 * * 1",
       "sequence": [
         "idk_text"
       ],
       "recipients": "configured_IDK_executors",
-      "repeat": "all_current_unpriced_each_scheduled_run"
+      "repeat": "new_business_week_queries_all_current_unpriced; same_week_reuses_first_validated_sealed_plan",
+      "zero_result": "complete_empty_selection_is_auditable_no_task_no_send",
+      "retry": "resume_unaccepted_parts; unknown_requires_review; force_resend_only_completed_sealed_content",
+      "schedule_note": "2026-09-19 user override: Monday 12:00 Asia/Shanghai; definition only"
     },
     "sales_price": {
       "report_id": "legacy-sales-price",
@@ -144,7 +151,7 @@
     "grain": "source_row_id",
     "version": 2,
     "empty": "fail_keep_existing",
-    "repeated_week": "reuse_unless_refreeze; scheduled_task_requests_refreeze",
+    "repeated_week": "reuse_existing_for_ordinary_and_scheduled_runs; refreeze_only_with_explicit_refreeze_and_reason; sending_refreeze_requires_explicit_force_resend",
     "write": "transaction_replace_requested_week_only",
     "missing_source_unit": "blocked_current_policy_no_promotion_fallback",
     "missing_rolls": "blocked_current_policy_no_zero_fallback"

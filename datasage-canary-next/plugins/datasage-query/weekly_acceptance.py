@@ -22,13 +22,13 @@ def render_local(evidence,labels,out):
     if evidence.get('evidence_origin')=='synthetic':prefix='【合成数据，仅验证代码】\n'+prefix
     prefix+='规格数按登记SKU/部门/单位组计数，数量按来源单位分别核验。\n'
     if not adapted['label_coverage']['complete']:prefix+='标签存在缺失或歧义，保持Unknown；数值已对账，但不作为可发送完整报表。\n'
-    text=prefix+wf.report_draft(REGION,WEEK,adapted['summary'],adapted['sales_rows'])
+    text=prefix+wf.report_draft(REGION,WEEK,adapted['summary'],adapted['sales_rows'],weekly_start=adapted.get('completeness',{}).get('frozen_at'),detail_semantics=adapted.get('detail_semantics'))
     out=Path(out);out.mkdir(parents=True,exist_ok=False)
     operations._atomic(out/'evidence.json',evidence)
     operations._atomic(out/'validation.json',adapted)
     (out/'message.txt').write_text(text,encoding='utf-8')
     workbook=out/('HCM_2026-W38_'+('REVIEW_ONLY' if status!='local_review_ready' else 'local')+'.xlsx')
-    gen_workbook_xlsx([('Detail',wf.REPORT_HEADERS,adapted['detail_rows'])],workbook,borders=True,landscape=True)
+    gen_workbook_xlsx([('Detail',wf.REPORT_HEADERS,wf.legacy_detail_rows_for_xlsx(adapted['detail_rows'])),wf.REPORT_NOTES_SHEET],workbook,borders=True,landscape=True,legacy_layout=True)
     result={'status':status,'region':REGION,'baseline_week':WEEK,'observed_at':observed,
         'full_week_final':False,'sent':False,'frozen':False,'price_accepted':False,
         'monthly_executed':False,'files':[str(workbook),str(out/'message.txt'),str(out/'validation.json')],

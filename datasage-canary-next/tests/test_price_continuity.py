@@ -1,10 +1,33 @@
 import unittest,importlib,copy
+from contextlib import nullcontext
+from unittest.mock import patch
 from datetime import timedelta
 import test_business_contracts as base
 from test_legacy_price_bridge import old_sales,sales,old_purchase,purchase,NOW
 p=importlib.import_module(base.TEST_PACKAGE+'.workflow_price_continuity')
 
 class ContinuityTests(unittest.TestCase):
+    def test_committed_empty_reference_does_not_reimport_retired_legacy_keys(self):
+        runtime=importlib.import_module(base.TEST_PACKAGE+'.workflow_live_prices')
+        class Store:
+            history=[{'cycle_id':'origin-purchase','status':'committed'},
+                     {'cycle_id':'lp-purchase-1','status':'committed','payload':{'observation':{'observed_at':NOW.isoformat()},'after_digest':runtime.snapshot_digest('purchase',[])}}]
+            def rows(self,role,*args):return self.history if role=='cycles' else []
+        class DB:
+            marker='synthetic-snapshot'
+            def __init__(self):self.queries=[]
+            def execute(self,sql,params,limit):
+                self.queries.append(sql)
+                rows=[{'observed_at':NOW,'observed_utc':NOW}] if sql.startswith('SELECT NOW') else [{**purchase(),'observed_at':NOW}]
+                return rows,False,{}
+        db=DB()
+        with patch.object(runtime.base.tools,'_ConsistentSnapshotExecutor',return_value=nullcontext(db)):
+            before,current,at,meta=runtime.observe(Store(),'purchase')
+        self.assertEqual(before,[])
+        self.assertFalse(any('FROM '+runtime.bridge.SPECS['purchase']['table'] in sql for sql in db.queries))
+        store=Store();store.history=store.history[:1]
+        with patch.object(runtime.base.tools,'_ConsistentSnapshotExecutor',return_value=nullcontext(DB())):
+            with self.assertRaisesRegex(ValueError,'MISSING_SNAPSHOT'):runtime.observe(store,'purchase')
     def test_purchase_membership_does_not_replace_quote_identity_or_multiply_rows(self):
         sql,args=p.op.build_observation({'kind':'purchase_prices','regions':['HCM','HN','BKK','IDK'],'limit':10000})
         self.assertIn('SELECT p.goods_no,p.goods_name',sql)
@@ -40,12 +63,14 @@ class ContinuityTests(unittest.TestCase):
         self.assertEqual(result['document']['continuation']['new_reference_keys'],1)
         repeat=p.plan('purchase',result['after'],[purchase()],NOW+timedelta(hours=1))
         self.assertEqual(repeat['document']['event_counts'],{'recorded_price_unchanged':1})
-    def test_disappearance_then_return_compares_retained_reference_once(self):
+    def test_disappearance_then_return_initializes_silently_as_user_approved(self):
         original=old_purchase();missing=p.plan('purchase',[original],[],NOW)
-        self.assertEqual(missing['after'],[original])
+        self.assertEqual(missing['after'],[])
+        self.assertEqual(missing['document']['continuation']['removed_absent_reference_keys'],1)
         returned={**purchase(),'tax_exclue_price':'9'}
         resumed=p.plan('purchase',missing['after'],[returned],NOW+timedelta(hours=1))
-        self.assertEqual(resumed['document']['deliverable_event_count'],1)
+        self.assertEqual(resumed['document']['deliverable_event_count'],0)
+        self.assertEqual(resumed['document']['continuation']['new_reference_keys'],1)
         repeat=p.plan('purchase',resumed['after'],[returned],NOW+timedelta(hours=2))
         self.assertEqual(repeat['document']['deliverable_event_count'],0)
     def test_duplicate_key_is_retained_then_repaired_without_lost_change(self):
@@ -73,7 +98,7 @@ class ContinuityTests(unittest.TestCase):
         a=old_purchase();b={**a,'id':9,'goods_no':'RETAINED'};new={**purchase(),'goods_no':'NEW'}
         result=p.plan('purchase',[a,b],[purchase(),new],NOW)
         ids={r['goods_no']:r['id'] for r in result['after']}
-        self.assertEqual(ids,{'SYN-1':1,'RETAINED':9,'NEW':10})
+        self.assertEqual(ids,{'SYN-1':1,'NEW':10})
     def test_same_quote_whitespace_alias_does_not_repeat_already_seen_change(self):
         import json
         canonical={**old_purchase(),'tax_inclue_price':'13','snapshot_at':NOW.isoformat(),'current_record':json.dumps({**purchase(),'tax_inclue_price':'13'})}

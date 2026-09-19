@@ -61,13 +61,14 @@ class CustomerLifecycleTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "EXCEPTION_POPULATION"):
             a.verify_plan(baseline, mapping, extra_exception)
 
-    def test_expected_population_preserves_source_business_key_text(self):
+    def test_expected_population_matches_legacy_trim_without_mutating_source(self):
         baseline, mapping, _ = sample()
         baseline[0]["goods_no"] = "G1 "
         baseline[1]["goods_no"] = "G1 "
         plan = a.wf.contact_plan(baseline, mapping)
         self.assertEqual(a.verify_plan(baseline, mapping, plan)["population_reconciled"], True)
-        self.assertEqual(plan["sales_packages"][0]["customers"][0]["products"], [["G2", "B", 4]])
+        self.assertEqual(plan["sales_packages"][0]["customers"][0]["products"], [["G1", "R", 3], ["G2", "B", 4]])
+        self.assertEqual(baseline[0]["goods_no"],"G1 ")
 
     def test_current_generation_isolated_from_history(self):
         class Store:

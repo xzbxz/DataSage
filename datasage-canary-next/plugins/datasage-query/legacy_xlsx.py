@@ -38,6 +38,7 @@ def gen_workbook_xlsx(
     *,
     borders: bool = False,
     landscape: bool = False,
+    legacy_layout: bool = False,
 ) -> None:
     if not sheets:
         raise ValueError("Workbook requires at least one sheet")
@@ -48,7 +49,11 @@ def gen_workbook_xlsx(
         formats = spec[3] if len(spec) == 4 else {}
         title = _safe_workbook_sheet_title(raw_title, used)
         rows = [headers, *items]
-        width_values=[max(12,min(42,max(_display_width(row[c]) if c<len(row) else 0 for row in rows)+2)) for c in range(len(headers))]
+        width_values=[]
+        for c in range(len(headers)):
+            values=[row[c] if c<len(row) and row[c] is not None else '' for row in rows]
+            maximum=max((len(str(value)) if legacy_layout else _display_width(value) for value in values),default=0)
+            width_values.append(max(12,min(42,maximum+2)))
         row_xml = []
         for row_index, row in enumerate(rows, 1):
             cells = []
@@ -58,18 +63,24 @@ def gen_workbook_xlsx(
                     style = ' s="3"' if row_index == 1 else ' s="2"'
                 else:
                     style = ' s="1"' if row_index == 1 else ""
+                if row_index > 1 and formats.get((row_index-1,column_index),formats.get(column_index)) == 'percent' and legacy_layout:
+                    raise ValueError('LEGACY_LAYOUT_PERCENT_FORMAT_UNSUPPORTED')
                 if row_index > 1 and formats.get((row_index-1,column_index),formats.get(column_index)) == 'percent' and isinstance(value,(int,float,Decimal)):
                     style = ' s="5"' if borders else ' s="4"'
-                if isinstance(value, (int, float, Decimal)) and not isinstance(value, bool):
-                    if not (value.is_finite() if isinstance(value,Decimal) else math.isfinite(value)):
+                cell_value=value; decimal_xml=None
+                if legacy_layout and isinstance(value,Decimal):
+                    if not value.is_finite(): raise ValueError('Non-finite worksheet value')
+                    decimal_xml=str(int(value)) if value==value.to_integral_value() else format(value,'f')
+                if decimal_xml is not None or (isinstance(cell_value, (int, float, Decimal)) and not isinstance(cell_value, bool)):
+                    if decimal_xml is None and not (cell_value.is_finite() if isinstance(cell_value,Decimal) else math.isfinite(cell_value)):
                         raise ValueError('Non-finite worksheet value')
-                    cells.append(f'<c r="{ref}"{style}><v>{value}</v></c>')
+                    cells.append(f'<c r="{ref}"{style}><v>{decimal_xml if decimal_xml is not None else cell_value}</v></c>')
                 else:
                     cells.append(
                         f'<c r="{ref}" t="inlineStr"{style}><is><t>{_xml_text(value)}</t></is></c>'
                     )
             line_count=max((max(1,math.ceil(_display_width(value)/max(1,width_values[c]-2))) for c,value in enumerate(row) if c<len(width_values)),default=1)
-            row_xml.append(f'<row r="{row_index}" ht="{15*line_count}" customHeight="1">{"".join(cells)}</row>')
+            row_xml.append((f'<row r="{row_index}">{"".join(cells)}</row>' if legacy_layout else f'<row r="{row_index}" ht="{15*line_count}" customHeight="1">{"".join(cells)}</row>'))
         column_count = max(1, len(headers))
         last_column = _column_name(column_count - 1)
         last_row = max(1, len(rows))
@@ -133,7 +144,7 @@ def gen_workbook_xlsx(
         + f'<Relationship Id="rId{len(sheet_parts) + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
         '</Relationships>'
     )
-    styles = (
+    current_styles = (
         '<?xml version="1.0" encoding="UTF-8"?>'
         '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
         '<numFmts count="1"><numFmt numFmtId="164" formatCode="0.0%"/></numFmts>'
@@ -153,12 +164,36 @@ def gen_workbook_xlsx(
         '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
         '</styleSheet>'
     )
+    legacy_styles = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        '<fonts count="2"><font/><font><b/></font></fonts>'
+        '<fills count="1"><fill><patternFill patternType="none"/></fill></fills>'
+        '<borders count="2"><border/><border>'
+        '<left style="thin"><color rgb="FF808080"/></left><right style="thin"><color rgb="FF808080"/></right>'
+        '<top style="thin"><color rgb="FF808080"/></top><bottom style="thin"><color rgb="FF808080"/></bottom>'
+        '<diagonal/></border></borders>'
+        '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+        '<cellXfs count="4"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+        '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>'
+        '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"/>'
+        '<xf numFmtId="0" fontId="1" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1"/></cellXfs>'
+        '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
+        '</styleSheet>'
+    )
+    styles = legacy_styles if legacy_layout else current_styles
     outpath.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(outpath, "w", zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("[Content_Types].xml", content_types)
-        archive.writestr("_rels/.rels", root_rels)
-        archive.writestr("xl/workbook.xml", workbook)
-        archive.writestr("xl/_rels/workbook.xml.rels", workbook_rels)
-        archive.writestr("xl/styles.xml", styles)
+        def write_part(name,value):
+            # Packaging time is not business content. Stable bytes let a retry
+            # bind the same attachment without changing its accepted fingerprint.
+            info=zipfile.ZipInfo(name,date_time=(1980,1,1,0,0,0))
+            info.compress_type=zipfile.ZIP_DEFLATED;info.external_attr=0o600<<16
+            archive.writestr(info,value)
+        write_part("[Content_Types].xml", content_types)
+        write_part("_rels/.rels", root_rels)
+        write_part("xl/workbook.xml", workbook)
+        write_part("xl/_rels/workbook.xml.rels", workbook_rels)
+        write_part("xl/styles.xml", styles)
         for index, (_, sheet_xml) in enumerate(sheet_parts, 1):
-            archive.writestr(f"xl/worksheets/sheet{index}.xml", sheet_xml)
+            write_part(f"xl/worksheets/sheet{index}.xml", sheet_xml)

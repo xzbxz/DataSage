@@ -12,11 +12,15 @@ class LegacyTemplateTests(unittest.TestCase):
         self.assertIn('Slow-moving stock improved',text);self.assertIn('High-Discount: **-0.25 rolls**',text)
         self.assertLess(text.index('**A**'),text.index('**B**'))
         self.assertIn('<font color="comment">Detailed SKU list',text)
+    def test_weekly_freeze_start_uses_actual_freeze_but_iso_week_end(self):
+        summary={'opening_skus':1,'closing_skus':1,'opening_rolls':2,'closing_rolls':1,'new':0,'exited':0,'net_outbound_rolls':0,'high_net_rolls':0}
+        text=wf.report_draft('HCM','2026-W38',summary,[],weekly_start='2026-09-15 09:00:46')
+        self.assertIn('> 2026/09/15 - 2026/09/19',text)
     def test_unknown_and_ht_units_are_not_replaced_with_zero(self):
         summary={'opening_skus':None,'closing_skus':2,'opening_rolls':None,'closing_rolls':4,'net_outbound_qty_by_unit':{'m':10,'kg':2}}
         text=wf.report_draft('HCM-HT','2026-09',summary,[],monthly=True)
         self.assertIn('unassessable',text);self.assertIn('High-Discount: **Unknown**',text)
-        self.assertIn('kg: 2 | m: 10',text);self.assertIn('Month-to-date',text)
+        self.assertIn('2 kg; 10 M',text);self.assertIn('Month-to-date',text)
     def test_sales_restores_grouped_product_lines_and_signed_delta(self):
         text=wf.price_draft('sales',[{'goods_no':'SYN','customer_grade':'A','color_label':'Red','old_ddp_price':12,'new_ddp_price':10,'currency_no':'CNY'},
                                       {'goods_no':'SYN','customer_grade':'B','color_label':'Blue','old_ddp_price':8,'new_ddp_price':9,'currency_no':'CNY'}])

@@ -42,9 +42,11 @@ class LiveWorkflowTests(unittest.TestCase):
     def test_missing_current_basis_blocks_even_if_price_same(self):
         current=purchase();current['unit_cuur']=None
         self.assertIn('unresolved_recorded_basis',key_issues('purchase',[old_purchase()],[current],bridge.compare('purchase',[old_purchase()],[current],NOW)))
-    def test_absent_identity_and_duplicate_source_are_not_silent_advancement(self):
+    def test_absent_identity_retires_reference_but_duplicate_source_stays_unresolved(self):
         old=old_purchase();doc=bridge.compare('purchase',[old],[],NOW)
-        self.assertEqual(key_issues('purchase',[old],[],doc)['absent_selection_keep_reference'],1)
+        result=prices.continuity.plan('purchase',[old],[],NOW)
+        self.assertEqual(result['after'],[])
+        self.assertEqual(result['document']['deliverable_event_count'],0)
         current=purchase();doc=bridge.compare('purchase',[old],[current,current],NOW)
         self.assertTrue(any(k.startswith('unresolved') for k in key_issues('purchase',[old],[current,current],doc)))
     def test_scope_mapping_handles_optional_aliases_without_touching_literals(self):

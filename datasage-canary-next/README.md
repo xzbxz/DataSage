@@ -158,9 +158,9 @@ pattern_time_basis默认current_observation。指定期间须选task_created、e
 
 ## 真实来源验收
 
-`--mode live` 使用真实源与数据库时间，仍仅写独立测试表。普通小时观察、手动新观察和发送分离；各部门按周/代次去重。配置、阻断和未开启的有界调度方案见 [LIVE_WORKFLOW.md](plugins/datasage-query/LIVE_WORKFLOW.md)，实际覆盖见 [workflow-live-acceptance.md](docs/workflow-live-acceptance.md)。
+`--mode live` 使用真实源与数据库时间，仍仅写独立测试表。普通小时观察、手动新观察和发送分离；各部门按周/代次去重。配置、阻断和未开启的有界调度方案见 [LIVE_WORKFLOW.md](plugins/datasage-query/LIVE_WORKFLOW.md)，实际覆盖记录只保存在本机私有验收报告中，不随源码上传。
 
-价格真实来源已改为逐键接续，并恢复采购报价表自身身份；当前验收、抽样未覆盖范围和未开启的小时窗口见 [2026-09-17验收结果](docs/price-continuity-acceptance-20260917.md)。旧 blocked 是保留的历史证据，不是当前全部价格停摆。
+价格真实来源已改为逐键接续，并恢复采购报价表自身身份；当前验收、抽样未覆盖范围和未开启的小时窗口记录仅保留本机。旧 blocked 是保留的历史证据，不是当前全部价格停摆。
 
 
-最新状态（2026-09-17）：用户已暂缓自动调度，原小时窗口仅留作历史提案，不视为授权或自动顺延。客户包全量本地检查及追加两包私信结果见 [手动验收清单](docs/manual-acceptance-checklist-20260917.md)。
+最新状态（2026-09-17）：用户已暂缓自动调度，原小时窗口仅留作历史提案，不视为授权或自动顺延。客户包本地检查及获准测试投递的实际结果只保留在本机私有验收清单中。

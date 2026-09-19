@@ -50,7 +50,7 @@ def prepare(profile,region):
                     targets=wf.task_recipients(reference['regions'],employees,[region])[region]
                     period=wf.legacy_periods(delivery.workflow.at_utc8(session.WEEK))
                     text,sheet=wf.task_draft(region,session.WEEK,period['planned_start'][:10],period['planned_end'][:10],rows)
-                    path=out/(region+'_'+session.WEEK+'_Products.xlsx');gen_workbook_xlsx([sheet],path)
+                    path=out/(region+'_'+session.WEEK+'_Products.xlsx');gen_workbook_xlsx([sheet],path,legacy_layout=True)
                     notice=session._notice('task-'+region,'原'+region+'任务角色同文合并'+str(len(targets))+'人，仅验收重定向，使用既有冻结，未重冻',text,[path])
                     result=seal(root,phase,notice,{'baseline_rows':len(rows),'original_targets':targets,'frozen_at':str(rows[0]['frozen_at']),'observed_at':str(observed),'frozen':False})
                 else:
@@ -60,8 +60,8 @@ def prepare(profile,region):
                     adapted=workflow_inputs.legacy_report_packet(evidence['packets']['pool'],evidence['packets']['flow'],labels,region,period,evidence=evidence)
                     operations._atomic(out/'validation.json',adapted)
                     if not adapted['label_coverage']['complete']:raise IOErrorBoundary('REGIONAL_REPORT_LABEL_REVIEW_REQUIRED')
-                    text=wf.report_draft(region,period,adapted['summary'],adapted['sales_rows'],monthly=phase=='monthly')
-                    path=out/(region+'_'+period+'_Report.xlsx');gen_workbook_xlsx([('Detail',wf.REPORT_HEADERS,adapted['detail_rows'])],path,borders=True,landscape=True)
+                    text=wf.report_draft(region,period,adapted['summary'],adapted['sales_rows'],monthly=phase=='monthly',weekly_start=adapted.get('completeness',{}).get('frozen_at'),detail_semantics=adapted.get('detail_semantics'))
+                    path=out/(region+'_'+period+'_Report.xlsx');gen_workbook_xlsx([('Detail',wf.REPORT_HEADERS,wf.legacy_detail_rows_for_xlsx(adapted['detail_rows'])),wf.REPORT_NOTES_SHEET],path,borders=True,landscape=True,legacy_layout=True)
                     targets=wf.report_recipients(reference['regions'],region)
                     role=region+'原执行人/管理层同文合并'+str(len(targets))+'人，截至'+adapted['completeness']['observed_to']+'，非期末最终结果'
                     notice=session._notice(phase+'-'+region,role,text,[path],message_format='markdown')

@@ -106,7 +106,7 @@ def build_observation(binding):
         params=[c['department'],c['minimum_quantity_exclusive'],c['whitelist_value']]
         if binding.get('window_days'):
             sql+=' AND gmt_create>=DATE_SUB(NOW(6),INTERVAL %s DAY)';params.append(binding['window_days'])
-        return sql+' ORDER BY id LIMIT %s',params+[limit+1]
+        return sql+' ORDER BY gmt_create DESC,goods_no,id LIMIT %s',params+[limit+1]
     side='sales' if kind=='sales_prices' else 'purchase' if kind=='purchase_prices' else None
     if side is None:raise OperationError('OPERATION_NOT_SOURCE_OBSERVATION')
     c=cfg[side];s=c['sources'];regions=binding['regions'];marks=','.join(['%s']*len(regions));params=[]
@@ -322,7 +322,8 @@ def execute(profile,report_id,binding):
     if truncated or len(rows)>binding['limit']:raise OperationError('OBSERVATION_TRUNCATED_NO_BASELINE_ADVANCE')
     observed=str(rows[0]['observed_at']) if rows else None
     if observed is None:
-        clock,_,_=tools._execute_with_source('SELECT NOW(6) AS observed_at',[],1)
+        clock,clock_cut,_=tools._execute_with_source('SELECT NOW(6) AS observed_at',[],1)
+        if clock_cut or len(clock)!=1 or not clock[0].get('observed_at'):raise OperationError('OBSERVATION_CLOCK_INVALID')
         observed=str(clock[0]['observed_at'])
     kind=binding['kind']
     if kind=='idk_unpriced':
@@ -335,6 +336,13 @@ def execute(profile,report_id,binding):
     else:
         records=classify_prices('sales' if kind=='sales_prices' else 'purchase',rows,datetime.fromisoformat(observed));events=compare((previous or {}).get('records'),records)
     doc={'status':'success','kind':kind,'scope_hash':scope_hash,'baseline_id':(previous or {}).get('observation_id'),'observed_at':observed,'observation_clock':'database local clock; not claimed UTC','source_rows':len(rows),'records':records,'events':events,'event_counts':dict(Counter(e['event'] for e in events)),'delivery_state':'not_requested','baseline_state':'requires_explicit_accept','meaning':policy()['idk' if kind=='idk_unpriced' else 'sales' if kind=='sales_prices' else 'purchase']['meaning']}
+    if kind=='idk_unpriced':
+        from datetime import timedelta
+        at=datetime.fromisoformat(observed)
+        doc.update(window_days=binding.get('window_days',0),
+                   window_start=(at-timedelta(days=binding['window_days'])).isoformat(sep=' ') if binding.get('window_days') else None,
+                   selection_complete=True,
+                   selection_clock='statement_now' if rows else 'post_empty_query_clock')
     return doc
 
 def execute_governed(profile,report_id,binding,scope_hash):

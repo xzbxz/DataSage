@@ -6,7 +6,7 @@ scoped and crash-conservative; the finite app HTTP path also works in cron child
 from pathlib import Path
 from contextlib import contextmanager,nullcontext
 from datetime import datetime
-import json,os,uuid,time
+import json,os,uuid,time,re
 from . import legacy_workflow as wf,operations
 
 class IOErrorBoundary(wf.WorkflowError):pass
@@ -82,15 +82,15 @@ def cached_plan(profile,kind,week):
     return value
 
 def baseline_digest(rows):
-    # This fingerprint follows the legacy grouped-stock representation. It is
-    # a cache identity, not a replacement for precise business calculations.
+    # Identity follows the grouped customer population, without float rounding
+    # or source-label whitespace creating a different equivalent population.
     grouped={}
     for row in rows:
-        key=(row['whse_dept'],str(row['goods_no']).strip(),str(row.get('attr_val') or '').strip())
+        key=wf.customer_product_key(row)
         value=wf.number(row.get('total_piece'))
         if value is None:raise IOErrorBoundary('CUSTOMER_BASELINE_ROLLS_UNKNOWN')
-        grouped[key]=grouped.get(key,0.0)+float(value)
-    return wf.digest([list(k)+[v] for k,v in sorted(grouped.items())])
+        grouped[key]=grouped.get(key,0)+value
+    return wf.digest([list(k)+[format(v.normalize(),'f')] for k,v in sorted(grouped.items())])
 
 def persist_plan(profile,kind,week,value):
     operations._atomic(private_root(profile)/(kind+'-'+week+'.json'),value)
@@ -103,6 +103,13 @@ class OfficialTransport:
     """
     def __init__(self,job):
         self.job=job;self.target_map=require_action(job,'send_enabled').get('target_map') or {};self.targets={}
+    def fingerprint(self,item):
+        if item['kind']=='file':
+            from .wecom_app_transport import file_snapshot
+            from .contract_store import profile_root
+            content=file_snapshot(item['path'],profile_root())[3]
+        else:content=item['text']
+        return wf.digest({'target':self.target_map.get(item['account']),'account':item['account'],'kind':item['kind'],'stage':item['stage'],'content':content,'format':item.get('message_format','text')})
     def preflight(self,components):
         from gateway.run import _gateway_runner_ref
         from gateway.platforms.base import BasePlatformAdapter
@@ -114,6 +121,8 @@ class OfficialTransport:
                 raise IOErrorBoundary('EXPLICIT_OFFICIAL_TARGET_MAPPING_REQUIRED')
             adapter=next((a for p,a in runner.adapters.items() if getattr(p,'value',p)==target['platform']),None)
             if adapter is None:raise IOErrorBoundary('OFFICIAL_TARGET_PLATFORM_NOT_CONNECTED')
+            expected_format='markdown' if target['platform']=='wecom' else 'text'
+            if item.get('stage') and item['kind']=='text' and item.get('message_format','text')!=expected_format:raise IOErrorBoundary('OFFICIAL_MESSAGE_FORMAT_UNSUPPORTED')
             if target['platform']=='wecom_callback':
                 app=adapter._resolve_app_for_chat(target['chat_id'])
                 if not target.get('app_name') or app.get('name')!=target['app_name'] or not target['chat_id'].startswith(str(app.get('corp_id'))+':'):raise IOErrorBoundary('CALLBACK_APP_TARGET_NOT_EXPLICITLY_RESOLVED')
@@ -133,27 +142,36 @@ class OfficialTransport:
             return await adapter.send(chat_id=chat_id,content=item['text'],metadata={'force_proactive_send':True})
         return _run_async(_dispatch_on_gateway_loop(runner,send,'DataSage official workflow delivery'))
 
-def deliver_components(components,transport,progress,*,enabled=False,force=False):
-    if enabled is not True:raise IOErrorBoundary('WORKFLOW_SEND_NOT_ENABLED')
+def preflight_components(components,transport,progress,*,force=False,check_receipts=True):
+    """Validate prepared material and existing receipts without sending or writing progress."""
+    if not check_receipts:
+        # Hypothetical audit material is only a capability/format check, never a
+        # candidate replacement for a previously accepted real notification.
+        components=[{**i,'key':wf.digest(['preparation-only',i['key']]),'notification_key':wf.digest(['preparation-only',i.get('notification_key') or i['account']])} for i in components]
     if hasattr(transport,'normalize'):components=transport.normalize(components,progress)
     if len({i['key'] for i in components})!=len(components):raise IOErrorBoundary('DUPLICATE_DELIVERY_COMPONENT')
     if any(progress.status(i['key']) in ('in_flight','unknown','unverified_success','not_delivered') for i in components):raise IOErrorBoundary('DELIVERY_UNKNOWN_REVIEW_REQUIRED')
-    transport.preflight(components) # All capabilities/targets checked before the first send.
+    transport.preflight(components)
+    if check_receipts:_check_delivery_evidence(components,transport,progress,force=force)
+    return components
+
+
+def deliver_components(components,transport,progress,*,enabled=False,force=False):
+    if enabled is not True:raise IOErrorBoundary('WORKFLOW_SEND_NOT_ENABLED')
+    components=preflight_components(components,transport,progress,force=force)
     lock=transport.delivery_lock(progress) if hasattr(transport,'delivery_lock') else nullcontext()
     with lock:
         return _deliver_notifications(components,transport,progress,force=force)
 
 
-def _deliver_notifications(components,transport,progress,*,force=False):
-    intent=[{k:item[k] for k in ('account','kind','stage','key')} for item in components]
-    operations._atomic(progress.root/('intent-'+wf.digest(intent)+'.json'),{'scope':progress.scope,'components':intent,'purpose':'audit_manifest_not_a_send_queue'})
+def _check_delivery_evidence(components,transport,progress,*,force=False):
     groups={}
     # An incomplete generation is a recovery run, not a new business force run.
     # Do not resend its already completed notifications while repairing another.
     force=force and not any(len(k)==64 and v.get('status')=='failed' for k,v in progress.data['components'].items())
     for item in components:
         groups.setdefault(item.get('notification_key') or wf.digest([item['account']]),[]).append(item)
-    pending=[];fingerprints={}
+    fingerprints={}
     for notification,items in groups.items():
         items.sort(key=lambda i:i['kind']!='text')
         complete=all(progress.status(i['key'])=='provider_accepted' for i in items)
@@ -163,15 +181,32 @@ def _deliver_notifications(components,transport,progress,*,force=False):
             old=progress.data['components'].get(item['key'],{})
             fingerprint=transport.fingerprint(item) if hasattr(transport,'fingerprint') else None
             fingerprints[item['key']]=fingerprint
+            if fingerprint is not None and old.get('status')=='provider_accepted' and not old.get('fingerprint'):
+                raise IOErrorBoundary('LEGACY_RECEIPT_BINDING_REVIEW_REQUIRED')
             # A regenerated report/changed destination must not be combined with
             # an already accepted component of an incomplete notification.
-            if (not complete and old.get('fingerprint') and old['fingerprint']!=fingerprint):
+            if (old.get('fingerprint') and old['fingerprint']!=fingerprint and not resend):
                 raise IOErrorBoundary('NOTIFICATION_CONTENT_CHANGED_REVIEW_REQUIRED')
         if hasattr(transport,'fingerprint'):
             manifest=wf.digest([[i['key'],fingerprints[i['key']]] for i in items])
-            manifests=progress.data.setdefault('notification_manifests',{})
+            manifests=progress.data.get('notification_manifests',{})
             if notification in manifests and manifests[notification]!=manifest and not resend:
                 raise IOErrorBoundary('NOTIFICATION_CONTENT_CHANGED_REVIEW_REQUIRED')
+    return groups,fingerprints,force
+
+
+def _deliver_notifications(components,transport,progress,*,force=False):
+    intent=[{k:item[k] for k in ('account','kind','stage','key')} for item in components]
+    operations._atomic(progress.root/('intent-'+wf.digest(intent)+'.json'),{'scope':progress.scope,'components':intent,'purpose':'audit_manifest_not_a_send_queue'})
+    groups,fingerprints,force=_check_delivery_evidence(components,transport,progress,force=force)
+    pending=[]
+    for notification,items in groups.items():
+        complete=all(progress.status(i['key'])=='provider_accepted' for i in items)
+        same_run=getattr(progress,'run_id',None) is not None and all(progress.data['components'].get(i['key'],{}).get('run_id')==progress.run_id for i in items)
+        resend=bool(force and complete and not same_run)
+        if hasattr(transport,'fingerprint'):
+            manifest=wf.digest([[i['key'],fingerprints[i['key']]] for i in items])
+            manifests=progress.data.setdefault('notification_manifests',{})
             manifests[notification]=manifest
         if resend:
             history=progress.data.setdefault('notification_history',[])
@@ -235,7 +270,7 @@ def open_freeze_writer(*,enabled=False):
         return conn
     except Exception:conn.close();raise
 
-def freeze_current_week(snapshot_factory,writer_factory,progress,*,enabled=False,refreeze=True):
+def freeze_current_week(snapshot_factory,writer_factory,progress,*,enabled=False,refreeze=False):
     """Only this fixed action. Caller cannot supply rows, SQL, table, week or IDs."""
     if enabled is not True:raise IOErrorBoundary('FREEZE_NOT_ENABLED')
     require_action('slow_task','freeze_enabled')
@@ -250,11 +285,17 @@ def freeze_current_week(snapshot_factory,writer_factory,progress,*,enabled=False
             cur.execute('SELECT GET_LOCK(%s,10) AS acquired',(lock,));locked=cur.fetchone()['acquired']==1
             if not locked:raise IOErrorBoundary('FREEZE_LOCK_BUSY')
         with snapshot_factory() as db:
-            specs=wf.source_query_specs(week);source,cut,_=db.execute(specs[0]['sql'],specs[0]['params'],10000);existing,cut2,_=db.execute(specs[1]['sql'],specs[1]['params'],10000)
+            specs=wf.source_query_specs(week);existing,cut2,_=db.execute(specs[1]['sql'],specs[1]['params'],10000)
+            source,cut=[],False
+            if not existing or refreeze:source,cut,_=db.execute(specs[0]['sql'],specs[0]['params'],10000)
         if cut or cut2:raise IOErrorBoundary('FREEZE_SOURCE_INCOMPLETE')
         plan=wf.freeze_plan(source,existing,week,week,refreeze=refreeze)
-        if plan['status']!='ready':raise IOErrorBoundary('FREEZE_PLAN_BLOCKED')
-        if plan['action']=='reuse_existing':return existing
+        if plan['status']!='ready':raise IOErrorBoundary('FREEZE_PLAN_BLOCKED:'+','.join(plan.get('issues') or ['SOURCE_REVIEW_REQUIRED']))
+        if plan['action']=='reuse_existing':
+            if len({str(r.get('frozen_at')) for r in existing})!=1 or any(r.get('source_table')!='vk_ods.slow_moving_goods_ods' or r.get('frozen_at') is None for r in existing):raise IOErrorBoundary('EXISTING_BASELINE_PROVENANCE_INVALID')
+            frozen=datetime.fromisoformat(str(existing[0]['frozen_at']))
+            if frozen>datetime.fromisoformat(str(clock)) or frozen.isocalendar()[:2]!=(y,w):raise IOErrorBoundary('EXISTING_BASELINE_CLOCK_INVALID')
+            return existing
         progress.set('freeze','in_flight',week=week)
         conn.begin()
         with conn.cursor() as cur:
@@ -321,31 +362,79 @@ def price_reference_disclosures(components,note):
         result.append(item)
     return result
 
-def run_bound(profile,job,*,transport=None,writer_factory=None,snapshot_factory=None):
+def validate_replay_request(job,*,refreeze=False,force_resend=False,regenerate_report=False,resume_report_week=None,reason=None):
+    if any(type(v) is not bool for v in (refreeze,force_resend,regenerate_report)):raise IOErrorBoundary('WORKFLOW_REPLAY_OPTION_INVALID')
+    if refreeze and job!='slow_task':raise IOErrorBoundary('REFREEZE_ACTION_NOT_ALLOWED')
+    if force_resend and job not in ('slow_task','slow_report','idk'):raise IOErrorBoundary('FORCE_RESEND_ACTION_NOT_ALLOWED')
+    if regenerate_report and job!='slow_report':raise IOErrorBoundary('REPORT_REGENERATION_NOT_ALLOWED')
+    if regenerate_report and (force_resend or refreeze or resume_report_week is not None):raise IOErrorBoundary('REPORT_REPLAY_OPTION_CONFLICT')
+    if resume_report_week is not None:
+        from datetime import date
+        try:
+            if job!='slow_report' or not isinstance(resume_report_week,str) or not re.fullmatch(r'[0-9]{4}-W[0-9]{2}',resume_report_week):raise ValueError()
+            date.fromisocalendar(int(resume_report_week[:4]),int(resume_report_week[6:]),1)
+        except ValueError:raise IOErrorBoundary('REPORT_RESUME_WEEK_INVALID') from None
+    if (refreeze or force_resend or regenerate_report) and (not isinstance(reason,str) or not 5<=len(reason.strip())<=120):raise IOErrorBoundary('EXPLICIT_GENERATION_REASON_REQUIRED')
+    if reason is not None and not (refreeze or force_resend or regenerate_report):raise IOErrorBoundary('REPLAY_REASON_WITHOUT_ACTION')
+
+
+def run_bound(profile,job,*,transport=None,writer_factory=None,snapshot_factory=None,refreeze=False,force_resend=False,reason=None,regenerate_report=False,resume_report_week=None):
     """Production input -> existing rules/artifacts -> separately permitted I/O."""
     from .contract_store import profile_root
     if profile.resolve()!=profile_root().resolve():raise IOErrorBoundary('WORKFLOW_PROFILE_MISMATCH')
     binding=load_activation(profile,job) # Before credentials, sockets, state or artifacts.
+    validate_replay_request(job,refreeze=refreeze,force_resend=force_resend,regenerate_report=regenerate_report,resume_report_week=resume_report_week,reason=reason)
+    if refreeze and (job!='slow_task' or not binding.get('freeze_enabled')):raise IOErrorBoundary('REFREEZE_ACTION_NOT_ALLOWED')
+    if force_resend and job not in ('slow_task','slow_report','idk'):raise IOErrorBoundary('FORCE_RESEND_ACTION_NOT_ALLOWED')
+    if refreeze and binding.get('send_enabled') and not force_resend:raise IOErrorBoundary('REFREEZE_DELIVERY_REQUIRES_EXPLICIT_RESEND')
+    binding={**binding,'_refreeze':refreeze,'_force_resend':force_resend,'_replay_reason':reason,'_regenerate_report':regenerate_report,'_resume_report_week':resume_report_week}
+    report_head=None;idk_head=None
+    if job=='slow_report':
+        from . import slow_report_batch as batches
+        from datetime import timezone,timedelta
+        local_now=datetime.now(timezone(timedelta(hours=8)));y,w,_=local_now.isocalendar()
+        report_lookup_week=resume_report_week or f'{y}-W{w:02d}'
+        try:report_head=batches.BatchStore(profile/'report_runs'/'legacy_execution'/'slow_report_batches',report_lookup_week).head()
+        except batches.BatchError as exc:raise IOErrorBoundary(str(exc)) from exc
+        if resume_report_week is not None and report_head is None:raise IOErrorBoundary('REPORT_RESUME_BATCH_MISSING')
     from .local_report import configure_runtime
     from . import tools,wire,workflow_inputs as inputs
     configure_runtime(profile)
     snapshot_factory=snapshot_factory or (lambda:tools._ConsistentSnapshotExecutor(deadline_at=time.monotonic()+120))
     transport=transport or (make_transport(profile,job,binding) if binding.get('send_enabled') else None)
-    if binding.get('send_enabled'):
+    if binding.get('send_enabled') and job not in ('slow_report','idk'):
         # Avoid committing a freeze before discovering the official transport cannot
         # deliver the necessary file type or target namespace.
         targets=binding.get('target_map') or {}
         if not targets:raise IOErrorBoundary('EXPLICIT_OFFICIAL_TARGET_MAPPING_REQUIRED')
         transport.preflight([{'account':a,'kind':'file' if job in ('slow_task','slow_report','sales_price','fabric') else 'text','text':''} for a in targets])
     with run_lock(profile,job):
-        with snapshot_factory() as db:
-            clock=inputs.complete(db,'SELECT NOW(6) AS at',limit=1)[0]['at']
-        at=datetime.fromisoformat(str(clock));y,w,_=at.isocalendar();week=f'{y}-W{w:02d}';month=at.strftime('%Y-%m')
+        if job=='idk':
+            from datetime import timezone,timedelta
+            from .idk_batch import IdkBatchStore,IdkBatchError,batch_root
+            local_now=datetime.now(timezone(timedelta(hours=8)));y,w,_=local_now.isocalendar()
+            idk_week=f'{y}-W{w:02d}'
+            try:
+                idk_store=IdkBatchStore(batch_root(profile),idk_week)
+                if idk_store.exists():idk_head=idk_store.load()
+            except IdkBatchError as exc:raise IOErrorBoundary(str(exc)) from exc
+        if idk_head is not None:
+            week=idk_week;month=local_now.strftime('%Y-%m')
+        elif report_head is not None:
+            week=report_head['week'];month=report_head['month']
+        else:
+            with snapshot_factory() as db:
+                clock=inputs.complete(db,'SELECT NOW(6) AS at',limit=1)[0]['at']
+            at=datetime.fromisoformat(str(clock));y,w,_=at.isocalendar();week=f'{y}-W{w:02d}';month=at.strftime('%Y-%m')
         progress=Progress(profile,job,'price-events' if job in ('sales_price','purchase_price') else week)
+        if refreeze and any(v.get('status') in ('failed','in_flight','unknown','not_attempted','unverified_success','not_delivered') for v in progress.data['components'].values()):raise IOErrorBoundary('INCOMPLETE_GENERATION_CANNOT_BE_BYPASSED')
         run_dir=private_root(profile)/(job+'-'+uuid.uuid4().hex);run_dir.mkdir()
         progress.run_id=run_dir.name
+        replay={'refreeze':refreeze,'force_resend':force_resend,'regenerate_report':regenerate_report,'resume_report_week':resume_report_week,'reason':reason,'previous_progress_digest':wf.digest(progress.data),'request_context':'trusted_local_operator','run_id':run_dir.name}
+        operations._atomic(run_dir/'replay-request.json',replay)
         try:
             result=_produce_and_execute(profile,job,binding,run_dir,week,month,progress,snapshot_factory,transport,writer_factory)
+            result['replay_request']=replay
             operations._atomic(run_dir/'run.json',result);return result
         except Exception as exc:
             operations._atomic(run_dir/'run.json',{'status':'failed_or_unknown','run_id':run_dir.name,'code':str(exc) if isinstance(exc,wf.WorkflowError) else type(exc).__name__,'freeze_progress':progress.data['components'].get('freeze'),'no_cross_system_rollback_claim':True})
@@ -355,10 +444,15 @@ def _produce_and_execute(profile,job,binding,out,week,month,progress,snapshots,t
     from . import tools,wire,workflow_inputs as inputs
     from .legacy_xlsx import gen_workbook_xlsx
     components=[];outputs=[];raw_document=None;raw_path=None
-    recipients=read_recipients(profile,binding) if job in ('slow_report',) or job in ('slow_task','sales_price') and binding.get('customer_mapping_enabled') or job=='idk' and binding.get('send_enabled') else {'regions':{} }
+    if job=='idk':
+        from .idk_runner import run
+        return run(profile,binding,out,week,progress,transport)
+    recipients=read_recipients(profile,binding) if job in ('slow_task','sales_price') and binding.get('customer_mapping_enabled') else {'regions':{} }
     if job=='slow_task':
+        if binding.get('send_enabled') and any(v.get('status') in ('unknown','in_flight','unverified_success','not_delivered') for v in progress.data['components'].values()):
+            raise IOErrorBoundary('DELIVERY_UNKNOWN_REVIEW_REQUIRED')
         if binding.get('freeze_enabled'):
-            baseline=freeze_current_week(snapshots,writer_factory or (lambda:open_freeze_writer(enabled=True)),progress,enabled=True,refreeze=True)
+            baseline=freeze_current_week(snapshots,writer_factory or (lambda:open_freeze_writer(enabled=True)),progress,enabled=True,refreeze=binding.get('_refreeze',False))
         else:
             with snapshots() as db:
                 spec=wf.source_query_specs(week)[1];baseline=inputs.complete(db,spec['sql'],spec['params'])
@@ -374,7 +468,7 @@ def _produce_and_execute(profile,job,binding,out,week,month,progress,snapshots,t
             periods=wf.legacy_periods(at_utc8(week))
             for region in regions:
                 message,sheet=wf.task_draft(region,week,periods['planned_start'][:10],periods['planned_end'][:10],[r for r in baseline if r['whse_dept']==region])
-                path=out/f'{week}_{wf.safe_name(region)}_Products.xlsx';gen_workbook_xlsx([sheet],path);outputs.append(str(path))
+                path=out/f'{week}_{wf.safe_name(region)}_Products.xlsx';gen_workbook_xlsx([sheet],path,legacy_layout=True);outputs.append(str(path))
             return {'status':'success','job':job,'artifacts':outputs,'freeze_status':progress.status('freeze'),'customer_mapping':'not_enabled','delivery':'not_requested'}
         recipient_cache=cached_plan(profile,'recipients',week)
         with snapshots() as db:
@@ -386,70 +480,125 @@ def _produce_and_execute(profile,job,binding,out,week,month,progress,snapshots,t
         periods=wf.legacy_periods(at_utc8(week))
         for region in regions:
             text,sheet=wf.task_draft(region,week,periods['planned_start'][:10],periods['planned_end'][:10],[r for r in baseline if r['whse_dept']==region])
-            path=out/f'{week}_{wf.safe_name(region)}_Products.xlsx';gen_workbook_xlsx([sheet],path);outputs.append(str(path))
+            path=out/f'{week}_{wf.safe_name(region)}_Products.xlsx';gen_workbook_xlsx([sheet],path,legacy_layout=True);outputs.append(str(path))
             targets=recipient_cache['regions'][region]
             for target in targets:
                 components += [component(target['account'],'text',text,week+region,'task_text'),component(target['account'],'file',path,week+region,'task_file')]
-        # Delivery stage failure aborts before customer packages, matching the wrapper.
-        if binding.get('send_enabled'):deliver_components(components,transport,progress,enabled=True,force=True)
+        task_components=components
         customer_cache=cached_plan(profile,'customers',week);fingerprint=baseline_digest(baseline)
-        if customer_cache and not binding.get('freeze_enabled') and customer_cache.get('baseline_digest')!=fingerprint:raise IOErrorBoundary('CACHED_CUSTOMER_BASELINE_MISMATCH')
-        if customer_cache is None or binding.get('freeze_enabled'):
-            with snapshots() as db:mapping=inputs.customer_mapping(db,[(r['goods_no'],r['whse_dept']) for r in baseline])
-            customer_cache={'version':4,'week':week,'baseline_digest':fingerprint,'plan':wf.contact_plan(baseline,mapping)}
-            persist_plan(profile,'customers',week,customer_cache)
-        components=[];zip_status={};package_errors=[]
+        if customer_cache and not binding.get('_refreeze') and customer_cache.get('baseline_digest')!=fingerprint:raise IOErrorBoundary('CACHED_CUSTOMER_BASELINE_MISMATCH')
+        new_customer_cache=customer_cache is None or binding.get('_refreeze')
+        if new_customer_cache:
+            with snapshots() as db:
+                mapping=inputs.customer_mapping(db,[(r['goods_no'],r['whse_dept']) for r in baseline])
+                observation={'relationship_window':mapping.get('window'),'snapshot_marker':getattr(db,'marker',None),
+                    'customer_master_basis':'read_snapshot_not_historical','personnel_basis':'read_snapshot_not_historical'}
+            plan=wf.contact_plan(baseline,mapping)
+            customer_cache={'version':4,'week':week,'baseline_digest':fingerprint,'plan':plan,'plan_digest':wf.digest(plan),'source_mapping':mapping,'mapping_digest':wf.digest(mapping),
+                'observation_evidence':observation,'observation_evidence_digest':wf.digest(observation)}
+        if customer_cache.get('plan_digest')!=wf.digest(customer_cache['plan']) or customer_cache.get('source_mapping') is None or customer_cache.get('mapping_digest')!=wf.digest(customer_cache['source_mapping']):raise IOErrorBoundary('CACHED_CUSTOMER_PLAN_BINDING_REVIEW_REQUIRED')
+        if 'observation_evidence' in customer_cache and customer_cache.get('observation_evidence_digest')!=wf.digest(customer_cache['observation_evidence']):raise IOErrorBoundary('CACHED_CUSTOMER_OBSERVATION_BINDING_INVALID')
+        if 'observation_evidence' in customer_cache and customer_cache['observation_evidence'].get('relationship_window')!=customer_cache['source_mapping'].get('window'):raise IOErrorBoundary('CACHED_CUSTOMER_OBSERVATION_WINDOW_MISMATCH')
+        from .workflow_customer_audit import verify_plan
+        verify_plan(baseline,customer_cache['source_mapping'],customer_cache['plan'])
+        if new_customer_cache:persist_plan(profile,'customers',week,customer_cache)
+        operations._atomic(out/'customer-observation.json',{'week':week,'baseline_digest':fingerprint,
+            'baseline_frozen_at':str(baseline[0].get('frozen_at')) if baseline else None,'reused_plan':not new_customer_cache,
+            'observation':customer_cache.get('observation_evidence') or {'relationship_window':customer_cache['source_mapping'].get('window'),'personnel_basis':'legacy_cache_observation_not_recorded'}})
+        prepared_packages=[];zip_status={};package_errors=[];delivery_errors=[]
+        # Every deliverable package is materialized and verified before the first send.
+        # A rendering failure must not be converted into a partial delivery run.
         for package in customer_cache['plan']['sales_packages']:
+            scope=wf.digest([week,package['account'],package['customers']]);archive=wf.customer_zip(package,out,week);outputs.append(str(archive))
+            parts=[component(package['account'],'text',wf.customer_package_message(package,week),scope,'customer_summary'),component(package['account'],'file',archive,scope,'customer_zip')]
+            prepared_packages.append((package,parts))
+        from . import slow_task_coverage as coverage_tools
+        coverage=coverage_tools.build_coverage(baseline,customer_cache['source_mapping'],customer_cache['plan'],
+            generated_customer_ids=[c['customer_id'] for p,_ in prepared_packages for c in p['customers']])
+        if coverage['population']['invalid_baseline_rows'] or coverage['plan_checks'].get('passed') is not True:raise IOErrorBoundary('CUSTOMER_COVERAGE_RECONCILIATION_FAILED')
+        operations._atomic(out/'customer-coverage.json',coverage)
+        coverage_groups=[]
+        for region in regions:
+            summary=coverage_tools.coverage_summary(coverage,region)
+            path=out/f'{week}_{wf.safe_name(region)}_Customer_Coverage.xlsx'
+            gen_workbook_xlsx(coverage_tools.coverage_sheets(coverage,region),path);outputs.append(str(path))
+            text=(f'Customer Coverage Review\nProduct Dept: {region}\nWeek: {week}'
+                f"\nMatched distinct customers: {summary['customer_id_count']}"
+                f"\nCustomers included in generated packages: {summary['assigned_customer_id_count']}"
+                f"\nUnassigned distinct customers: {summary['unassigned_customer_id_count']}"
+                f"\nProducts without matched customers: {summary['unmatched_product_grain_count']}"
+                '\nCounts are distinct customer IDs within this product department; regional counts are not additive.'
+                '\nGenerated packages and platform acceptance do not establish complete customer coverage, human receipt or onward sharing.'
+                '\nSee Coverage, Exceptions and Unmatched Products sheets; product department and personnel region are separate fields.')
+            scope=wf.digest(['customer-coverage-v1',week,region,summary,coverage['by_product_dept'].get(region,[])])
+            parts=[]
+            for target in wf.report_recipients(recipients['regions'],region):
+                parts.extend([component(target,'text',text,scope,'coverage_text'),component(target,'file',path,scope,'coverage_file')])
+            coverage_groups.append(parts)
+        audit_preview_dir=out/'dispatch-preparation';audit_preview_dir.mkdir(exist_ok=True)
+        preview_status={p['account']:'not_requested' for p,_ in prepared_packages}
+        audit_previews=dispatch_audits(customer_cache['plan']['sales_packages'],preview_status,recipients['regions'],week,audit_preview_dir,preview=True)
+        if binding.get('send_enabled'):
+            # Check both normal and failure-path audit targets before tasks are sent.
+            audit_parts=[]
+            audit_groups=wf.audit_groups(customer_cache['plan']['sales_packages'],preview_status,recipients['regions'],{'not_requested'})
+            for audit,group in zip(audit_previews,audit_groups):
+                for target in sorted(set(audit['targets'])|set(wf.report_recipients(recipients['regions'],group['region']))):
+                    audit_parts.extend([component(target,'text',audit['text'],audit['scope'],'audit_text'),component(target,'file',audit['path'],audit['scope'],'audit_file')])
+            preflight_components(audit_parts,transport,progress,check_receipts=False)
+            preflight_components(task_components+[part for _,parts in prepared_packages for part in parts]+[part for parts in coverage_groups for part in parts],transport,progress,force=binding.get('_force_resend',False))
+            from .slow_task_retry import RetryBudget
+            retry_budget=RetryBudget(sleep=time.sleep)
+            def send_prepared(parts):
+                return retry_budget.run(lambda:deliver_components(parts,transport,progress,enabled=True,force=binding.get('_force_resend',False)),progress)
+            send_prepared(task_components)
+        for package,parts in prepared_packages:
             try:
-                scope=wf.digest([week,package['account'],package['customers']]);archive=wf.customer_zip(package,out,week);outputs.append(str(archive))
-                components=[component(package['account'],'text',wf.customer_package_message(package,week),scope,'customer_summary'),component(package['account'],'file',archive,scope,'customer_zip')]
                 if binding.get('send_enabled'):
-                    deliver_components(components,transport,progress,enabled=True,force=True);zip_status[package['account']]='provider_accepted'
+                    send_prepared(parts);zip_status[package['account']]='provider_accepted'
                 else:zip_status[package['account']]='not_requested'
             except Exception as exc:
                 code=str(exc) if isinstance(exc,wf.WorkflowError) else type(exc).__name__
                 zip_status[package['account']]='unknown' if 'UNKNOWN' in code else 'failed';package_errors.append(code)
+                delivery_errors.append(exc)
+                if any(v.get('status') in ('unknown','in_flight','unverified_success','not_delivered') for v in progress.data['components'].values()):raise IOErrorBoundary('DELIVERY_UNKNOWN_REVIEW_REQUIRED') from exc
         # The audit must describe confirmed component evidence, not preview labels.
         for audit in dispatch_audits(customer_cache['plan']['sales_packages'],zip_status,recipients['regions'],week,out,preview=not binding.get('send_enabled')):
             outputs.append(str(audit['path']))
             if binding.get('send_enabled'):
                 for target in audit['targets']:
                     components=[component(target,'text',audit['text'],audit['scope'],'audit_text'),component(target,'file',audit['path'],audit['scope'],'audit_file')]
-                    try:deliver_components(components,transport,progress,enabled=True)
-                    except IOErrorBoundary as exc:package_errors.append(str(exc))
-        if package_errors:raise IOErrorBoundary('CUSTOMER_DELIVERY_PARTIAL_OR_UNKNOWN')
-        return {'status':'success','job':job,'artifacts':outputs,'freeze_status':progress.status('freeze'),'delivery':'provider_accepted_not_human_read' if binding.get('send_enabled') else 'not_requested'}
+                    try:send_prepared(components)
+                    except IOErrorBoundary as exc:
+                        if any(v.get('status') in ('unknown','in_flight','unverified_success','not_delivered') for v in progress.data['components'].values()):raise
+                        package_errors.append(str(exc))
+                        delivery_errors.append(exc)
+        if binding.get('send_enabled'):
+            for parts in coverage_groups:
+                try:send_prepared(parts)
+                except IOErrorBoundary as exc:
+                    if any(v.get('status') in ('unknown','in_flight','unverified_success','not_delivered') for v in progress.data['components'].values()):raise
+                    package_errors.append(str(exc))
+                    delivery_errors.append(exc)
+        if delivery_errors:raise delivery_errors[0]
+        coverage_exceptions=bool(coverage['population']['unassigned_customer_ids'] or coverage['population']['unmatched_product_grains'])
+        return {'status':'success','job':job,'artifacts':outputs,'freeze_status':progress.status('freeze'),
+            'coverage':coverage['population'],'coverage_complete':not coverage_exceptions,'coverage_review_required':coverage_exceptions,
+            'delivery_scope':'prepared_packages_and_task_audit_components_not_total_business_coverage',
+            'delivery':'provider_accepted_not_human_read' if binding.get('send_enabled') else 'not_requested'}
     if job=='slow_report':
-        from . import report_evidence
-        for period_name in ('weekly','monthly'):
-            period=month if period_name=='monthly' else week
-            collected={region:report_evidence.collect(region,period,period_name,week,snapshots=snapshots) for region in wf.policy()['regions']}
-            # Validate every region of this phase before its first artifact/send.
-            reports={}
-            for region,(evidence,label_rows) in collected.items():
-                packets=evidence['packets']
-                reports[region]=inputs.legacy_report_packet(packets['pool'],packets['flow'],label_rows,region,period,evidence=evidence)
-                if not reports[region]['label_coverage']['complete']:raise IOErrorBoundary('REPORT_LABEL_REVIEW_REQUIRED')
-            for region,adapted in reports.items():
-                text=wf.report_draft(region,adapted['period'],adapted['summary'],adapted['sales_rows'],monthly=period_name=='monthly')
-                text+='\n'+adapted['completeness']['as_of_label']+'：'+adapted['completeness']['observed_to']+'\nSKU counts use registered SKU/department/unit groups.'
-                operations._atomic(out/(region+'_'+period_name+'_evidence.json'),adapted)
-                path=out/f'{region}_{period_name}.xlsx';gen_workbook_xlsx([('Detail',wf.REPORT_HEADERS,adapted['detail_rows'])],path,borders=True,landscape=True);outputs.append(str(path))
-                for target in wf.report_recipients(recipients['regions'],region):
-                    components=[component(target,'text',text,(month if period_name=='monthly' else week)+region,period_name+'_text'),component(target,'file',path,(month if period_name=='monthly' else week)+region,period_name+'_file')]
-                    if binding.get('send_enabled'):deliver_components(components,transport,progress,enabled=True,force=period_name=='monthly')
-        return {'status':'success','job':job,'artifacts':outputs,'delivery':'provider_accepted_not_human_read' if binding.get('send_enabled') else 'not_requested','format':'governed evidence columns; old exact display adapter remains separately reviewable'}
-    if job in ('idk','sales_price','purchase_price'):
-        kind={'idk':'idk_unpriced','sales_price':'sales_prices','purchase_price':'purchase_prices'}[job]
-        op=binding.get('operation') or {'kind':kind,'limit':10000,**({} if job=='idk' else {'regions':['HCM','HN','BKK','IDK']})}
+        from .slow_report_runner import run
+        from .slow_report_batch import BatchError
+        try:return run(profile,binding,out,week,month,progress,snapshots,transport)
+        except BatchError as exc:raise IOErrorBoundary(str(exc)) from exc
+    if job in ('sales_price','purchase_price'):
+        kind={'sales_price':'sales_prices','purchase_price':'purchase_prices'}[job]
+        op=binding.get('operation') or {'kind':kind,'limit':10000,'regions':['HCM','HN','BKK','IDK']}
         if job in ('sales_price','purchase_price'):op={**op,'reference_source':op.get('reference_source','legacy_database')}
         if op.get('kind')!=kind:raise IOErrorBoundary('OPERATION_KIND_MISMATCH')
         raw_document=operations.execute(profile,wf.policy()['jobs'][job]['report_id'],op);raw_path=operations.save_observation(profile,wf.policy()['jobs'][job]['report_id'],raw_document)
-        data=wf.operation_preview_input(job,raw_document);data['region']='IDK' if job=='idk' else 'HCM'
-        if job=='idk':
-            data['idk_executors']=recipients['regions'].get('IDK',{}).get('executors',[]);bundle=wf.build_preview(job,data,out)
-            components=[component(t['account'],'text',bundle['message_bodies'][0],week,'idk') for t in data['idk_executors']]
-        elif job=='purchase_price':
+        data=wf.operation_preview_input(job,raw_document);data['region']='HCM'
+        if job=='purchase_price':
             bundle=wf.build_preview(job,data,out)
             components=[component(a,'text',bundle['message_bodies'][0],wf.digest(data['changes']),'purchase') for a in (binding.get('target_map') or {})] if data['changes'] else []
         else:
@@ -487,7 +636,7 @@ def _produce_and_execute(profile,job,binding,out,week,month,progress,snapshots,t
             elif changes:
                 wf.build_preview(job,{**data,'customers_by_goods':{},'customer_mapping_complete':False},out)
         components=price_reference_disclosures(components,data.get('comparison_disclosure'))
-        if components and binding.get('send_enabled'):deliver_components(components,transport,progress,enabled=True,force=job=='idk')
+        if components and binding.get('send_enabled'):deliver_components(components,transport,progress,enabled=True,force=binding.get('_force_resend',False))
         if binding.get('price_accept_enabled'):
             operations.accept_snapshot(profile,wf.policy()['jobs'][job]['report_id'],raw_path.stem,expected_scope=operations.scope_fingerprint(op))
         return {'status':'success','job':job,'observation':str(raw_path),'components':len(components),'delivery':'provider_accepted_not_human_read' if components and binding.get('send_enabled') else 'not_requested','baseline_accepted':binding.get('price_accept_enabled',False)}
@@ -516,13 +665,16 @@ def at_utc8(week):
 
 def dispatch_audits(packages,statuses,recipient_map,week,out,*,preview=False):
     """Old regional audit membership, with unknown receipt distinguished from failure."""
-    from .legacy_xlsx import gen_workbook_xlsx
+    from .legacy_customer_compat import generate_customer_dispatch_xlsx
     result=[]
     for group in wf.audit_groups(packages,statuses,recipient_map,{'not_requested'} if preview else {'provider_accepted'}):
         region=group['region'];regional=group['regional'];confirmed=group['confirmed'];unconfirmed=group['unconfirmed'];selected=group['selected'];sheets=[]
         for p in selected:sheets.append((p['sales_name'],['Customer No','Customer'],[list(r) for r in sorted({(c['customer_no'],c['customer_name']) for c in p['customers']})]))
-        suffix='Dispatch' if confirmed else 'Failure';path=out/f'{week}_{wf.safe_name(region)}_Customer_Image_{suffix}.xlsx';gen_workbook_xlsx(sheets,path)
+        suffix='Dispatch' if confirmed else 'Dispatch_Failure';path=out/f'{week}_{wf.safe_name(region)}_Customer_Image_{suffix}.xlsx';generate_customer_dispatch_xlsx(selected,path)
         text=f'Slow sales-stock Customer Image Dispatch\nRegion: {region}\nWeek: {week}\nConfirmed platform acceptance: {len(confirmed)} sales owners\nUnconfirmed/failed: {len(unconfirmed)} sales owners\nHuman receipt and onward customer sharing are not established.'
+        customer_count=sum(len({(str(c.get('customer_no') or '').strip(),str(c.get('customer_name') or '').strip()) for c in p['customers']}) for p in selected)
+        text+=f'\nCustomers: {customer_count}\nThe attached workbook has one sheet per sales owner. Please spot-check the corresponding customer groups to confirm the images were shared.'
+        if unconfirmed:text+='\n\nNot confirmed dispatched to sales: '+'; '.join(', '.join(p.get('sales_names') or [p['sales_name']]) for p in unconfirmed)
         if preview:text=f'Customer Image Dispatch PREVIEW\nRegion: {region}\nWeek: {week}\nPrepared owners: {len(confirmed)}\nNothing has been sent.'
         result.append({'targets':group['targets'],'text':text,'path':path,'scope':wf.digest([week,region,selected,{p['account']:statuses.get(p['account']) for p in regional}])})
     return result

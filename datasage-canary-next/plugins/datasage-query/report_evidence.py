@@ -270,6 +270,7 @@ def validate(evidence):
         for rows in sales.values():equal(shared(rows,'sales_net_rolls'),sum((num(r['facts']['net_rolls']) for r in rows),num(0)))
     return {'population_complete':True,'quantities_complete':True,'amounts_applicable':False,
         'snapshot_marker':evidence['snapshot_marker'],'observed_from':min(times).isoformat(),'observed_to':max(times).isoformat(),
+        'frozen_at':freeze[0] if phase=='weekly' and freeze else None,
         'as_of_label':'截至本次只读快照观察时点，非全周最终结果' if phase=='weekly' else '截至本次只读快照观察时点，非整月最终结果',
         'pool_groups':len(pool),'flow_groups':len(flow),'unit_totals':nets,
         'checked':['population_counts','stable_grain_uniqueness','unit_coverage','pool_states','opening_closing_quantity_and_rolls','flow_quantity_rolls_high_rolls','sales_totals','flow_event_counts'],

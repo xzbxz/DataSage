@@ -290,20 +290,39 @@ def main(profile, argv=None):
     parser.add_argument('--report-id')
     parser.add_argument('--legacy-preview', choices=['slow_task','slow_report','idk','sales_price','purchase_price','fabric'])
     parser.add_argument('--legacy-run', choices=['slow_task','slow_report','idk','sales_price','purchase_price','fabric'])
+    parser.add_argument('--refreeze',action='store_true',help='Explicitly replace this week\'s freeze; ordinary reruns reuse it.')
+    parser.add_argument('--force-resend',action='store_true',help='Explicit new delivery after the prior generation is complete.')
+    parser.add_argument('--regenerate-report',action='store_true',help='Explicitly rebuild a completed slow-report batch from a new observation; not an ordinary retry.')
+    parser.add_argument('--resume-report-week',help='Resume an existing sealed slow-report week (YYYY-Www); never creates a historical batch.')
+    parser.add_argument('--replay-reason',help='Required reason for explicit refreeze or force resend.')
     parser.add_argument('--accept-snapshot', help='Explicitly accept a reviewed local observation digest; never writes the business database.')
     args=parser.parse_args(argv)
     try:
         if Path(get_hermes_home()).resolve()!=profile.resolve():raise ReportError('REPORT_PROFILE_MISMATCH')
         _assert_local_context()
+        if (args.refreeze or args.force_resend or args.replay_reason or args.regenerate_report or args.resume_report_week) and not args.legacy_run:raise ReportError('WORKFLOW_REPLAY_REQUIRES_LEGACY_RUN')
         if args.legacy_run:
             if args.legacy_preview or args.report_id or args.accept_snapshot:raise ReportError('WORKFLOW_ARGUMENT_CONFLICT')
-            from .workflow_io import run_bound,IOErrorBoundary
+            from .workflow_io import run_bound,IOErrorBoundary,validate_replay_request
             try:
-                result=run_bound(profile,args.legacy_run)
+                replay_options={'refreeze':args.refreeze,'force_resend':args.force_resend,'reason':args.replay_reason,'regenerate_report':args.regenerate_report,'resume_report_week':args.resume_report_week}
+                validate_replay_request(args.legacy_run,**replay_options)
+                result=run_bound(profile,args.legacy_run,**replay_options)
                 if result.get('status')!='success':
                     print('WORKFLOW_QUERY_INCOMPLETE',file=sys.stderr);return 3
-                print('WORKFLOW_COMPLETED '+str(result.get('status')));return 0
+                if args.legacy_run=='slow_task' and result.get('coverage_review_required'):
+                    print('WORKFLOW_COMPLETED_WITH_COVERAGE_EXCEPTIONS: review customer coverage artifacts; generated packages are not complete business coverage')
+                elif args.legacy_run=='idk' and result.get('delivery_state')=='empty_no_task':
+                    print('WORKFLOW_EMPTY_NO_TASK: IDK complete selection is empty; no notification sent')
+                elif args.legacy_run in ('slow_report','idk') and result.get('prepared_only'):
+                    print('WORKFLOW_PREPARED_NOT_SENT: sealed report material is not provider acceptance')
+                elif args.legacy_run in ('slow_report','idk') and result.get('delivery')=='previous_provider_acceptance_reused':
+                    print('WORKFLOW_ALREADY_COMPLETED_NO_SEND: existing sealed batch acceptance reused')
+                else:print('WORKFLOW_COMPLETED '+str(result.get('status')))
+                return 0
             except IOErrorBoundary as exc:
+                if args.legacy_run=='slow_task' and 'EMPTY_SOURCE_KEEP_EXISTING' in str(exc):
+                    print('空源待核验：保留现有冻结，未确认为零任务。',file=sys.stderr)
                 print(str(exc),file=sys.stderr);return 2
         if args.legacy_preview:
             if args.report_id or args.accept_snapshot:raise ReportError('WORKFLOW_PREVIEW_ARGUMENT_CONFLICT')

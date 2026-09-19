@@ -60,7 +60,7 @@ class WeeklyAcceptanceTests(unittest.TestCase):
         self.assertEqual(7,value['summary']['high_net_qty_by_unit']['m'])
         self.assertEqual([-3,10],sorted(v['net_quantity_by_unit']['m'] for v in value['sales_rows']))
         text=io.wf.report_draft('HCM-HT','2026-W38',value['summary'],value['sales_rows'])
-        self.assertIn('High-Discount: **m: 7**',text);self.assertNotIn('High-Discount: **Unknown**',text)
+        self.assertIn('High-Discount: **7 M**',text);self.assertNotIn('High-Discount: **Unknown**',text)
 
     def test_missing_packet_truncated_or_missing_truncation_flag_rejected(self):
         for mode in ['packet','truncated','missing_flag']:
@@ -253,19 +253,25 @@ class WeeklyAcceptanceTests(unittest.TestCase):
             value=copy.deepcopy(adapted);value['period']=period;return value
         class Transport:
             def preflight(self,components):pass
+            def fingerprint(self,item):
+                import hashlib
+                content=Path(item['path']).read_bytes() if item['kind']=='file' else item['text'].encode()
+                return io.wf.digest([item['account'],item['kind'],hashlib.sha256(content).hexdigest()])
             def send(self,item):events.append(('send',item['stage'],item['account']));return {'success':True,'message_id':'synthetic'}
-        with TemporaryDirectory() as tmp,patch.object(proof,'collect',side_effect=collect),patch.object(inputs,'legacy_report_packet',side_effect=adapt),patch.object(io,'read_recipients',return_value={'regions':{}}),patch.object(io.wf,'report_recipients',return_value=['synthetic']):
+        roles={'regions':{region:{'executors':[{'account':'synthetic'}],'managers':[]} for region in regions}}
+        binding={'send_enabled':True,'target_map':{'synthetic':{'platform':'synthetic','target_id':'synthetic'}}}
+        with TemporaryDirectory() as tmp,patch.object(proof,'collect',side_effect=collect),patch.object(inputs,'legacy_report_packet',side_effect=adapt),patch.object(io,'read_recipients',return_value=roles),patch.object(io.wf,'report_recipients',return_value=['synthetic']):
             out=Path(tmp)/'out';out.mkdir();progress=io.Progress(Path(tmp),'slow_report','2026-W38')
-            result=io._produce_and_execute(Path(tmp),'slow_report',{'send_enabled':True},out,'2026-W38','2026-09',progress,None,Transport(),None)
+            result=io._produce_and_execute(Path(tmp),'slow_report',binding,out,'2026-W38','2026-09',progress,None,Transport(),None)
             self.assertEqual('success',result['status'])
             weekly=[e[2] for e in events if e[:2]==('collect','weekly')];monthly=[e[2] for e in events if e[:2]==('collect','monthly')]
             self.assertEqual(regions,weekly);self.assertEqual(regions,monthly)
             self.assertGreater(next(i for i,e in enumerate(events) if e[:2]==('collect','monthly')),max(i for i,e in enumerate(events) if e[:2]==('send','weekly_file')))
         events.clear();adapted['label_coverage']['complete']=False
-        with TemporaryDirectory() as tmp,patch.object(proof,'collect',side_effect=collect),patch.object(inputs,'legacy_report_packet',side_effect=adapt),patch.object(io,'read_recipients',return_value={'regions':{}}):
+        with TemporaryDirectory() as tmp,patch.object(proof,'collect',side_effect=collect),patch.object(inputs,'legacy_report_packet',side_effect=adapt),patch.object(io,'read_recipients',return_value=roles):
             out=Path(tmp)/'out';out.mkdir()
             with self.assertRaisesRegex(io.IOErrorBoundary,'LABEL_REVIEW'):
-                io._produce_and_execute(Path(tmp),'slow_report',{'send_enabled':True},out,'2026-W38','2026-09',io.Progress(Path(tmp),'slow_report','2026-W38'),None,Transport(),None)
+                io._produce_and_execute(Path(tmp),'slow_report',binding,out,'2026-W38','2026-09',io.Progress(Path(tmp),'slow_report','2026-W38'),None,Transport(),None)
             self.assertFalse(any(e[0]=='send' or e[1]=='monthly' for e in events))
 
     def test_monthly_adapter_still_accepts_independently_complete_monthly_evidence(self):

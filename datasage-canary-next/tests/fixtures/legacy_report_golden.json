@@ -1,0 +1,340 @@
+{
+  "canonical": {
+    "sales_rows": [
+      {
+        "net_quantity_by_unit": {
+          "m": 20
+        },
+        "net_rolls": 2,
+        "sales_name": "Alice"
+      },
+      {
+        "net_quantity_by_unit": {
+          "m": 10
+        },
+        "net_rolls": 1,
+        "sales_name": "Bob"
+      }
+    ],
+    "summary": {
+      "closing_rolls": 1.5,
+      "closing_skus": 1,
+      "exited": 1,
+      "gross_outbound_rolls": 4.0,
+      "high_net_rolls": 1,
+      "increased": 0,
+      "net_outbound_qty_text": "35 m",
+      "net_outbound_rolls": 3.5,
+      "new": 0,
+      "no_change": 0,
+      "opening_rolls": 3.0,
+      "opening_skus": 2,
+      "reduced": 1,
+      "return_rolls": 0.5,
+      "rolls_change": -1.5
+    }
+  },
+  "inputs": {
+    "canonical_sales_rows": [
+      {
+        "net_quantity_by_unit": {
+          "m": 20
+        },
+        "net_rolls": 2,
+        "sales_name": "Alice"
+      },
+      {
+        "net_quantity_by_unit": {
+          "m": 10
+        },
+        "net_rolls": 1,
+        "sales_name": "Bob"
+      }
+    ],
+    "end": "2026/09/19",
+    "items": [
+      {
+        "attr_val": "Red",
+        "baseline_piece": 2,
+        "baseline_qty": 20,
+        "color_label": "A",
+        "current_ods_row_found": true,
+        "current_slow_piece": 1.5,
+        "current_slow_qty": 15,
+        "customer_return_piece": 0.5,
+        "goods_id": 1,
+        "goods_no": "SYN-1001",
+        "goods_sku_id": 11,
+        "is_baseline_item": true,
+        "net_outbound_piece": 2.5,
+        "net_outbound_qty": 25,
+        "piece_change": -0.5,
+        "promotion_currency_no": "CNY",
+        "promotion_price": "12.5",
+        "promotion_unit": "m",
+        "remarks": "ok",
+        "sales_out_piece": 3,
+        "slow_label": "slow",
+        "sold_by": [
+          {
+            "hi_disc_piece": 1,
+            "net_piece": 2,
+            "return_piece": 0,
+            "sales_id": "s1",
+            "sales_name": "Alice",
+            "units": [
+              {
+                "hi_disc_qty": 10,
+                "net_qty": 20,
+                "return_qty": 1,
+                "unit": "m"
+              }
+            ]
+          },
+          {
+            "hi_disc_piece": 0,
+            "net_piece": 1,
+            "return_piece": 0,
+            "sales_id": "s2",
+            "sales_name": "Bob",
+            "units": [
+              {
+                "hi_disc_qty": 0,
+                "net_qty": 10,
+                "return_qty": 0,
+                "unit": "m"
+              }
+            ]
+          }
+        ],
+        "source_unit": "m",
+        "status": "Reduced",
+        "total_piece": 2,
+        "total_qty": 20,
+        "unit": "m",
+        "whse_dept": "HCM"
+      },
+      {
+        "attr_val": "Blue",
+        "baseline_piece": 1,
+        "baseline_qty": 10,
+        "color_label": "B",
+        "current_ods_row_found": false,
+        "current_slow_piece": null,
+        "current_slow_qty": null,
+        "customer_return_piece": 0,
+        "goods_id": 2,
+        "goods_no": "SYN-1002",
+        "goods_sku_id": 22,
+        "is_baseline_item": true,
+        "net_outbound_piece": 1,
+        "net_outbound_qty": 10,
+        "piece_change": null,
+        "promotion_currency_no": null,
+        "promotion_price": null,
+        "promotion_unit": null,
+        "remarks": "",
+        "sales_out_piece": 1,
+        "slow_label": "slow",
+        "sold_by": [
+          {
+            "hi_disc_piece": 1,
+            "net_piece": 2,
+            "return_piece": 0,
+            "sales_id": "s1",
+            "sales_name": "Alice",
+            "units": [
+              {
+                "hi_disc_qty": 10,
+                "net_qty": 20,
+                "return_qty": 1,
+                "unit": "m"
+              }
+            ]
+          },
+          {
+            "hi_disc_piece": 0,
+            "net_piece": 1,
+            "return_piece": 0,
+            "sales_id": "s2",
+            "sales_name": "Bob",
+            "units": [
+              {
+                "hi_disc_qty": 0,
+                "net_qty": 10,
+                "return_qty": 0,
+                "unit": "m"
+              }
+            ]
+          }
+        ],
+        "source_unit": "m",
+        "status": "Exited",
+        "total_piece": 1.5,
+        "total_qty": 10.5,
+        "unit": "m",
+        "whse_dept": "HCM"
+      }
+    ],
+    "month": "2026-09",
+    "region": "HCM",
+    "sales_rows": [
+      {
+        "hi_disc_piece": 1,
+        "net_piece": 2,
+        "return_piece": 0,
+        "sales_id": "s1",
+        "sales_name": "Alice",
+        "units": [
+          {
+            "hi_disc_qty": 10,
+            "net_qty": 20,
+            "return_qty": 1,
+            "unit": "m"
+          }
+        ]
+      },
+      {
+        "hi_disc_piece": 0,
+        "net_piece": 1,
+        "return_piece": 0,
+        "sales_id": "s2",
+        "sales_name": "Bob",
+        "units": [
+          {
+            "hi_disc_qty": 0,
+            "net_qty": 10,
+            "return_qty": 0,
+            "unit": "m"
+          }
+        ]
+      }
+    ],
+    "start": "2026/09/14",
+    "week": "2026-W38"
+  },
+  "old": {
+    "detail_rows": [
+      [
+        "SYN-1001",
+        "Red",
+        "HCM",
+        "Reduced",
+        20,
+        "m",
+        15,
+        2,
+        1.5,
+        -0.5,
+        2.5,
+        "Alice: 2 rolls | Qty: 20 m | Bob: 1 rolls | Qty: 10 m"
+      ],
+      [
+        "SYN-1002",
+        "Blue",
+        "HCM",
+        "Exited",
+        10,
+        "m",
+        null,
+        1,
+        null,
+        null,
+        1,
+        "Alice: 2 rolls | Qty: 20 m | Bob: 1 rolls | Qty: 10 m"
+      ]
+    ],
+    "monthly": "**HCM Slow-moving Inventory Monthly Report | 2026-09**\n> period since month-begin (opening pool = previous month-end snapshot, ODS whitelist excluded)\n\n<font color=\"info\">**Slow-moving stock improved: SKU ↓1 | Rolls ↓1.5**</font>\n\n**1. Key Metrics (Month-to-date)**\n　SKUs: **2** -> **1**  ↓1\n　Rolls: **3** -> **1.5**  ↓1.5\n　New SKUs: **0**\n　Exited SKUs: **1**\n\n**2. Sold This Month**\n　Total: **3.5 rolls**\n　High-Discount: **1 rolls**\n\n**3. Sold by Sales**\nSales    Total\n　**Alice**       **2**\n　**Bob**         **1**\n\n<font color=\"comment\">Detailed SKU list is in the attachment.</font>",
+    "products_rows": [
+      [
+        "SYN-1001",
+        "Red",
+        "A",
+        "HCM",
+        20,
+        "m",
+        2,
+        "slow",
+        "12.5 CNY / m",
+        "ok"
+      ],
+      [
+        "SYN-1002",
+        "Blue",
+        "B",
+        "HCM",
+        10.5,
+        "m",
+        1.5,
+        "slow",
+        "Not Set",
+        ""
+      ]
+    ],
+    "report_headers": [
+      "Item No",
+      "Color",
+      "Warehouse Dept",
+      "Movement",
+      "Opening Slow Qty",
+      "Unit",
+      "Closing Slow Qty",
+      "Opening Slow Rolls",
+      "Closing Slow Rolls",
+      "Rolls Change",
+      "Net Outbound Rolls",
+      "Sold By"
+    ],
+    "sales": [
+      {
+        "hi_disc": 1.0,
+        "hi_qty_text": "9 m",
+        "qty_text": "20 m",
+        "rolls": 2.0,
+        "sales_name": "Alice"
+      },
+      {
+        "hi_disc": 0.0,
+        "hi_qty_text": "(none)",
+        "qty_text": "10 m",
+        "rolls": 1.0,
+        "sales_name": "Bob"
+      }
+    ],
+    "summary": {
+      "closing_rolls": 1.5,
+      "closing_skus": 1,
+      "exited": 1,
+      "gross_outbound_rolls": 4.0,
+      "increased": 0,
+      "net_outbound_qty_text": "35 m",
+      "net_outbound_rolls": 3.5,
+      "new": 0,
+      "no_change": 0,
+      "opening_rolls": 3.0,
+      "opening_skus": 2,
+      "reduced": 1,
+      "return_rolls": 0.5,
+      "rolls_change": -1.5
+    },
+    "task_headers": [
+      "Item No",
+      "Color",
+      "Color Label",
+      "Warehouse Dept",
+      "Opening Qty",
+      "Inventory Unit",
+      "Opening Rolls",
+      "Slow Type",
+      "Promotion Offer",
+      "Remarks"
+    ],
+    "weekly": "**HCM Slow-moving Inventory Weekly Report | W38**\n> 2026/09/14 - 2026/09/19\n\n<font color=\"info\">**Slow-moving stock improved: SKU ↓1 | Rolls ↓1.5**</font>\n\n**1. Key Metrics**\n　SKUs: **2** -> **1**  ↓1\n　Rolls: **3** -> **1.5**  ↓1.5\n　New SKUs: **0**\n　Exited SKUs: **1**\n\n**2. Sold This Week**\n　Total: **3.5 rolls**\n　High-Discount: **1 rolls**\n\n**3. Sold by Sales**\nSales    Total\n　**Alice**       **2**\n　**Bob**         **1**\n\n<font color=\"comment\">Detailed SKU list is in the attachment.</font>"
+  },
+  "source": {
+    "commit": "3fd38fcb803307e1688688ca1dfbde271131157a",
+    "path": "datasage-core/send_slow_report.py",
+    "repository": "C:\\Users\\10192\\Documents\\Codex\\datasage-old-reference",
+    "sha256": "72fad5c99a57cc984b4ddf9638f6d0072fb5eb895f21bc0496bbba07204d3235"
+  }
+}

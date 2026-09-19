@@ -1,0 +1,60 @@
+{
+  "legacy_source": "datasage-core/send_slow_customer.py",
+  "legacy_ref": "3fd38fcb803307e1688688ca1dfbde271131157a",
+  "legacy_source_sha256": "9019cffe1627b735d5d172d86b9703af7b39fdf34098e96c39a9160add7eec81",
+  "normal_case": {
+    "account": "synthetic-s",
+    "week": "2026-W38",
+    "customer": {
+      "customer_no": "SYN-C1",
+      "customer_name": "Synthetic Customer",
+      "products": [
+        ["SYN-001", "Red", 3],
+        ["SYN-002", "Blue", 1]
+      ]
+    },
+    "image_size": [424, 152],
+    "image_sha256": "db418b5947580d2d2e0adfb07d834c083384edb2670eeeed2dc62cc4cb223485",
+    "zip_name": "sales_61ea65c400dc_2026-W38.zip",
+    "zip_sha256": "1a5390017d93eaa098b2884ebef9874ddef5bbfbc85d132b7e16d9164cc3808d",
+    "zip_member": "SYN-C1_Synthetic Customer.png",
+    "content_digest": "2be0aa870f5c67779e6847de8d1edc0e29c3098715eee6e3f6e11d0bbcdc3e74"
+  },
+  "long_case": {
+    "customer_no": "SYN-C2",
+    "customer_name": "Synthetic Customer With A Very Long Business Name Repeated Twice",
+    "products": [
+      ["SYN-PRODUCT-NUMBER-EXTREMELY-LONG-0001", "Deep red long colour label", 3],
+      ["SYN-002", "Blue", 1]
+    ],
+    "legacy_image_size": [424, 152],
+    "compatibility_image_width": 424,
+    "compatibility_image_min_height": 153
+  },
+  "dispatch_case": {
+    "packages": [
+      {
+        "account": "synthetic-s",
+        "sales_names": ["Synthetic Sales"],
+        "customers": [
+          {"customer_no": "SYN-C1", "customer_name": "Synthetic Customer"},
+          {"customer_no": "SYN-C2", "customer_name": "Another Customer"}
+        ]
+      }
+    ],
+    "sheet_name": "Synthetic Sales",
+    "headers": ["Customer No", "Customer"],
+    "rows_sorted": [
+      ["SYN-C1", "Synthetic Customer"],
+      ["SYN-C2", "Another Customer"]
+    ],
+    "workbook_entries": [
+      "[Content_Types].xml",
+      "_rels/.rels",
+      "xl/workbook.xml",
+      "xl/_rels/workbook.xml.rels",
+      "xl/styles.xml",
+      "xl/worksheets/sheet1.xml"
+    ]
+  }
+}
