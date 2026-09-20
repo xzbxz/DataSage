@@ -3,9 +3,13 @@
 Rule ID: `datasage.entity-guidance/v1`
 
 - Owner: DataSage Skill's model-safe entity guidance.
-- Consumers: Hermes on demand; architecture inventory tests.
+- Consumers: Hermes on demand whenever native Skill reading is available in any
+  supported session; architecture inventory tests.
 - Lifecycle: version with the Skill. The plugin registry and domain semantics
   own executable identities; this reference cannot create a mapping.
+- Channel: optional when native Skill reading is available; never a query
+  precondition, and this reference does not claim real WeCom loading or
+  business approval.
 
 - `datasage_entity_resolve` provides bounded identity candidates and search
   scope. Query validation (`datasage_query`) is the execution authority and

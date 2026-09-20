@@ -5,10 +5,18 @@
 维护方式是在现有 Git 工作区和活动分支上原地修改、测试、审查与提交；
 不创建第二个安装实例，也不使用 `hermes profile install/update` 覆盖这个目录。
 
+本机已安装 `skills-readonly` 及配套 Hermes 宿主补丁；原版
+Hermes 0.21.1 不包含该组。它复用原生 Skill 读取，不包含 `skill_manage`，并显式
+关闭 `skills.inline_shell`。七域与跨域方法是可选 reference，SOUL 现有规则保留。
+“已安装”指本机磁盘源码；当前网关是否加载及真实渠道验收仍单独记录，不能由磁盘版本推定。
+
 `.env`、认证信息、状态库、会话、日志、Memory 及其他运行数据属于用户态，
 不得提交，也不得由发行更新覆盖。企微和数据库权限不属于发行流程的修改范围。
 
 当前候选版本：`0.15.0-rc14`。
+
+维护时按 [维护与能力接入](docs/maintenance.md) 记录每批任务、写入范围、保留能力、验证和局部回退。
+本版本为 L3 候选；离线测试、真实渠道验收和生产批准分别记录。
 
 ## 定位与使用边界
 
@@ -18,7 +26,7 @@ DataSage 面向公司经营负责人及出库、销售、应收、财务、库�
 公共研究、普通写作、用户文件分析器，也不批准或执行业务决策。
 当前候选目标成熟度为 L3 数据专家；本候选版本不声明 L4 主动管理或主动巡检能力。
 
-WeCom 入口声明 `clarify`、`datasage-query` 和官方 `code_execution` 三个 toolset，所有已认证企微成员
+候选 WeCom 入口声明 `clarify`、`datasage-query`、官方 `code_execution` 和 `skills-readonly`，所有已认证企微成员
 均可私聊和群聊，并共享七个经营域同一完整的 DataSage 查询面。Profile 不施加
 用户、群组、部门、实体、行或领域过滤；这不替代外部数据库授权。数据库执行仍为
 SELECT-only，并由治理查询合同、只读执行限制和 evidence 边界约束。

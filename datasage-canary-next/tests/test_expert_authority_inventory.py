@@ -33,25 +33,33 @@ DATASAGE_REFERENCE_OWNERS = {
 DATASAGE_ARCHITECTURE_ROWS = {
     "datasage.query-rules/v1": (
         "Profile Skill",
-        "CLI/维护面（可选）",
+        "Skill 读取会话（可选）",
         "请求构造提示；可用字段以 live schema/catalog 为准",
     ),
     "datasage.entity-guidance/v1": (
         "Profile Skill",
-        "CLI/维护面（可选）",
+        "Skill 读取会话（可选）",
         "实体消歧提示；不能创建或覆盖实体映射",
     ),
     "datasage.answer-boundary/v1": (
         "Profile Skill",
-        "CLI/维护面（可选）",
+        "Skill 读取会话（可选）",
         "解释提示；插件不注册 prompt 副本",
     ),
     "datasage.delivery-analysis/v1": (
         "Profile Skill",
-        "CLI/维护面（可选）",
+        "Skill 读取会话（可选）",
         "出库 L3 分析提示；不能替代工具证据",
     ),
 }
+
+
+# Reviewed optional methods share the existing Skill authority; they are not metric contracts.
+OPTIONAL_METHOD_REFERENCES = ('receipt', 'target', 'inventory', 'pattern-matching', 'profit', 'receivable', 'cross-domain')
+for domain in OPTIONAL_METHOD_REFERENCES:
+    rule_id = f"datasage.{domain}-analysis/v1"
+    DATASAGE_REFERENCE_OWNERS[rule_id] = f"references/{domain}-analysis.md"
+    DATASAGE_ARCHITECTURE_ROWS[rule_id] = ("Profile Skill", "Skill 读取会话（可选）", "可选方法；不替代合同或工具证据")
 
 
 def _bundled_skill_inventory() -> dict[str, dict[str, object]]:

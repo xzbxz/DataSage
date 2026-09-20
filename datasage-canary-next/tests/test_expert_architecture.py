@@ -149,6 +149,13 @@ class ExpertArchitectureTests(unittest.TestCase):
                 "delivery-analysis.md",
                 "entity-guidance.md",
                 "query-rules.md",
+                "receipt-analysis.md",
+                "target-analysis.md",
+                "inventory-analysis.md",
+                "pattern-matching-analysis.md",
+                "profit-analysis.md",
+                "receivable-analysis.md",
+                "cross-domain-analysis.md",
             },
             linked,
         )

@@ -3,9 +3,13 @@
 Rule ID: `datasage.query-rules/v1`
 
 - Owner: DataSage Skill request-construction policy.
-- Consumers: Hermes on demand; architecture inventory tests.
+- Consumers: Hermes on demand whenever native Skill reading is available in any
+  supported session; architecture inventory tests.
 - Lifecycle: version with the Skill. Live plugin schema and catalog remain
   authoritative for available fields, values, metrics, and capabilities.
+- Channel: optional when native Skill reading is available; never a query
+  precondition, and this reference does not claim real WeCom loading or
+  business approval.
 
 ## Intent and catalog discovery
 
@@ -54,6 +58,11 @@ Dependent delivery facts retain compatible gross versus net basis, order versus
 line grain, warehouse and attribution scope, business time, external-customer
 population, and return-settlement period. These meanings are defined by the
 metric contract, not by row counts or similar labels.
+
+Customer department attribution and the external-customer population are
+separate axes. A `customer_dept` value does not turn the named department into
+an external customer or replace a transaction business-occurrence department;
+keep the returned attribution and population scope distinct.
 
 [`datasage.delivery-analysis/v1`](delivery-analysis.md) describes these meanings
 and evidence relationships on skill-enabled surfaces. Pending/current-master,
@@ -130,7 +139,7 @@ does not duplicate its formulas, thresholds, pool filters or return policies.
 - A follow-up may reuse context understood by Hermes, but every new
   `datasage_query` call must carry a complete request. No plugin-private
   conversation state may be required.
-- In a Skill-enabled CLI/maintenance session, consult as needed
+- When native Skill reading is available in any session, consult as needed
   [`datasage.entity-guidance/v1`](entity-guidance.md), which owns when to resolve
   and when another resolution attempt is justified, plus confirmation and
   turn-boundary behavior. Empty-result interpretation follows
@@ -147,7 +156,7 @@ does not duplicate its formulas, thresholds, pool filters or return policies.
   (default), or `absolute` ordering of the same full partition. Choose the
   relevant ordering for the question; it is not a sign filter. Distribution
   statements require explicit full counts/sums, not a net unreturned remainder.
-- In a Skill-enabled CLI/maintenance session, consult as needed
+- When native Skill reading is available in any session, consult as needed
   [`datasage.answer-boundary/v1`](answer-boundary.md). It solely owns whether a
   returned comparison, contribution, decomposition, or truncation authorizes a
   structural, evaluative, or causal statement.

@@ -47,9 +47,13 @@ adaptively; this is not a mandatory call sequence.
 
 ## How to Run
 
-On restricted WeCom, use only SOUL, public tool schemas, and returned evidence;
-references are never a query prerequisite. On a skill-enabled CLI or maintenance
-surface, optionally load a reference with `skill_view(name="datasage", file_path="references/<file>.md")`.
+On restricted WeCom, references are never a query prerequisite. When the
+session exposes native `skill_view`, optionally load a relevant reference with
+`skill_view(name="datasage", file_path="references/<file>.md")`. On a
+skill-enabled CLI or maintenance surface, use the same optional path. If the
+tool or reference is unavailable, say so when relevant and continue with SOUL,
+public tool schemas, and returned evidence; do not use arbitrary file or code
+execution to bypass the available Skill tools.
 
 ## Quick Reference
 
@@ -61,6 +65,13 @@ surface, optionally load a reference with `skill_view(name="datasage", file_path
   interpretation of comparisons, targets, calculations, and typed result states.
 - [`datasage.delivery-analysis/v1`](references/delivery-analysis.md) is optional
   supplemental guidance for L3 delivery, not a fixed planner recipe or WeCom query prerequisite.
+- The following candidate method references are also optional and are loaded
+  only when the question materially uses their domain: [`datasage.receipt-analysis/v1`](references/receipt-analysis.md), [`datasage.target-analysis/v1`](references/target-analysis.md), [`datasage.inventory-analysis/v1`](references/inventory-analysis.md), [`datasage.pattern-matching-analysis/v1`](references/pattern-matching-analysis.md), [`datasage.profit-analysis/v1`](references/profit-analysis.md), [`datasage.receivable-analysis/v1`](references/receivable-analysis.md), and [`datasage.cross-domain-analysis/v1`](references/cross-domain-analysis.md) for intentional multi-domain questions.
+- These candidate references organize contract-backed evidence selection and
+  answer boundaries. They do not add a planner, require a fixed metric set, or
+  replace the live catalog/schema/results. No channel must load one before
+  every query; if a reference is unavailable, proceed with public tool
+  schemas, returned evidence, and the existing SOUL rules.
 
 ## Tool facts
 
@@ -84,7 +95,10 @@ surface, optionally load a reference with `skill_view(name="datasage", file_path
 ## Verification
 
 - Confirm each claim with successfully returned governed evidence and the public
-  tool schema. An optional reference can guide a skill-enabled CLI/maintenance
-  turn, but its absence never blocks a WeCom query or conclusion.
+  tool schema. An optional reference can guide any turn where native Skill
+  reading is available, but its absence never blocks a WeCom query or conclusion.
+- The candidate references are not evidence of real WeCom Skill loading or
+  business approval. B01 live-channel consumption, independent numeric oracle,
+  and owner sign-off remain separate verification items.
 - Stop rather than loop when remaining uncertainty cannot be resolved by
   governed operations.

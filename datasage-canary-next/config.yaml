@@ -24,6 +24,7 @@ platform_toolsets:
   cli:
     - hermes-cli
     - datasage-query
+  # The paired host candidate adds native Skill reads without skill_manage.
   # WeCom exposes clarification, governed evidence and official code processing. Every
   # host-authenticated member with a non-empty identity is intentionally
   # admitted in both DM and group chats; this Profile adds no per-user,
@@ -32,6 +33,7 @@ platform_toolsets:
     - clarify
     - datasage-query
     - code_execution
+    - skills-readonly
 privacy:
   redact_pii: true
 security:
@@ -70,6 +72,8 @@ memory:
 skills:
   # Git is authoritative; tracked expert guidance requires operator approval.
   write_approval: true
+  # Keep native Skill viewing free of inline shell execution.
+  inline_shell: false
   # Hermes 0.21.1 has a denylist rather than a persistent bundled-skill
   # allowlist. Keep only the reviewed local document, spreadsheet, and
   # presentation capabilities active. The architecture test

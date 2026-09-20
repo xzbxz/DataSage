@@ -3,9 +3,13 @@
 Rule ID: `datasage.answer-boundary/v1`
 
 - Owner: DataSage Skill final-answer policy.
-- Consumers: Hermes after loading this reference; architecture inventory tests.
+- Consumers: Hermes after loading this reference whenever native Skill reading
+  is available in any supported session; architecture inventory tests.
 - Lifecycle: version with the Skill. Plugin prompt text may cite this ID and
   path, but must not become an independently versioned policy source.
+- Channel: optional when native Skill reading is available; never a query
+  precondition, and this reference does not claim real WeCom loading or
+  business approval.
 
 ## Five evidence types
 
@@ -38,6 +42,13 @@ stated, and name the next evidence that would discriminate among them.
 
 Target and actual facts retain compatible scope, period and attribution
 ledger. A related actual metric or a different ledger is not a target substitute.
+Missing or zero target states leave the corresponding completion ratio
+undefined, but do not by themselves decide whether an absolute difference can
+be displayed. Keep a governed gap claim separate from transparent arithmetic:
+the former still requires the contract's compatible period, scope, attribution
+ledger and returned evidence, while the latter must be labeled and use only
+compatible returned operands. Do not infer the cause of a missing or zero
+target without evidence or owner confirmation.
 
 The following three operations are distinct:
 

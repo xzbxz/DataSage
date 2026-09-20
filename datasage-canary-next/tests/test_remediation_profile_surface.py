@@ -78,7 +78,7 @@ class RemediationProfileSurfaceTests(unittest.TestCase):
             platform_toolsets["cli"],
         )
         self.assertEqual(
-            ["clarify", "datasage-query", "code_execution"],
+            ["clarify", "datasage-query", "code_execution", "skills-readonly"],
             platform_toolsets["wecom"],
         )
         self.assertNotIn("skills", platform_toolsets["wecom"])
@@ -106,6 +106,9 @@ class RemediationProfileSurfaceTests(unittest.TestCase):
             resolved_tools.update(expanded or [toolset])
 
         self.assertIn("execute_code", resolved_tools)
+        self.assertTrue({"skills_list", "skill_view"}.issubset(resolved_tools))
+        self.assertNotIn("skill_manage", resolved_tools)
+        self.assertIs(config["skills"]["inline_shell"], False)
 
         forbidden_exact = {
             "terminal",
@@ -141,7 +144,7 @@ class RemediationProfileSurfaceTests(unittest.TestCase):
 
         skills_tools = set(resolve_toolset("skills"))
         self.assertTrue(skills_tools)
-        self.assertTrue(skills_tools.isdisjoint(resolved_tools))
+        self.assertEqual({"skills_list", "skill_view"}, skills_tools & resolved_tools)
 
     def test_wecom_private_group_and_data_access_match_business_policy(self):
         config = _load_config()

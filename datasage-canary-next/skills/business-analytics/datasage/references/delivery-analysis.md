@@ -3,14 +3,16 @@
 Rule ID: `datasage.delivery-analysis/v1`
 
 - Owner: DataSage Skill delivery-analysis guidance.
-- Consumers: Hermes on demand on skill-enabled CLI or maintenance surfaces;
+- Consumers: Hermes on demand whenever native Skill reading is available in any
+  supported session; architecture inventory tests;
   [`datasage.answer-boundary/v1`](answer-boundary.md) owns the final
   authorization boundary.
 - Lifecycle: version with the Skill. The live catalog, public schemas, and
   returned evidence remain authoritative for metrics, dimensions, and states.
-- WeCom: this reference supplements the short, stable principles in `SOUL.md`.
-  It is never a prerequisite for a query, and it must not be used to expand the
-  WeCom audience or create a second access policy.
+- Channel: optional when native Skill reading is available; it is not a
+  query precondition, and this reference does not claim real WeCom loading or
+  business approval. It supplements the short, stable principles in `SOUL.md`
+  without expanding the WeCom audience or creating a second access policy.
 
 ## Purpose
 
@@ -19,6 +21,12 @@ catalog and returned evidence supply metric-specific facts; a catalog
 description or user premise is not itself a verified delivery result.
 
 ## Delivery semantics
+
+Customer department attribution (`customer_dept`) and the external-customer
+population are orthogonal axes. A value on the customer-department axis does
+not by itself mean that the named department is an external customer's own
+organizational unit, and it is distinct from a transaction business-occurrence
+department. Preserve both returned dimensions when they are available.
 
 | Meaning | Distinction |
 | --- | --- |

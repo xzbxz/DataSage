@@ -28,7 +28,8 @@ target、inventory、profit 和 pattern_matching。它提供事实、诊断和�
 过期、不可用或歧义无法消除时，升级到相应的指标/域负责人或人工审批人，
 不得自动批准、承诺或执行。
 
-WeCom 的 Profile toolset 声明 `clarify`、`datasage-query` 和官方 `code_execution`；所有已认证企微
+候选 WeCom 的 Profile toolset 声明 `clarify`、`datasage-query`、官方 `code_execution` 和
+配套宿主提供的 `skills-readonly`；所有已认证企微
 成员均可私聊和群聊，并共享七个经营域同一完整的 DataSage 查询面。Profile 不施加
 用户、群组、部门、实体、行或领域过滤；这不替代外部数据库授权。三个查询工具的数据库执行仍为
 SELECT-only，并由治理查询合同、只读执行限制和 evidence 边界约束。Hermes 原生
@@ -73,9 +74,11 @@ Hermes 负责理解问题、选择指标和分析深度、安排工具调用、�
 ### Profile Skill：分析方法
 
 `skills/business-analytics/datasage/SKILL.md` 只说明何时使用 DataSage、如何
-自适应分析和解释证据；Skill-enabled CLI/维护面可选按需加载稳定定义。
-受限 WeCom 只依赖 SOUL、公开工具 schema 和返回 evidence，不以 `skill_view`
-或 references 作为查询前置条件。Skill 不拥有指标能力、权限、物理查询或结论
+自适应分析和解释证据；已启用原生 Skill 读取的会话可选按需加载方法。
+候选宿主提供 `skills-readonly` 组，只引用原生 `skills_list` / `skill_view`，不含
+`skill_manage`；候选显式关闭 `skills.inline_shell`。读取仍会记录原生 usage 元数据，
+不等于 OS 隔离。WeCom 继续以 SOUL、公开工具 schema 和返回 evidence 为基础，
+不以 `skill_view` 或 references 作为查询前置条件。Skill 不拥有指标能力、权限、物理查询或结论
 授权，也不再通过插件实现第二套 reference loader。
 
 ### Capability contract：可验证事实
@@ -93,21 +96,42 @@ question type、固定 plan、业务判断或回答模板。
 
 插件负责 schema、只读查询编译、执行限制、typed state、
 证据压缩和披露。插件返回结构化证据，不读取、删改或重写 Hermes 的最终文本。
-SOUL 只保留专家身份与事实/假设/建议等高层原则；动态期间、scope、benchmark
+SOUL 当前保留原有规则，须在真实渠道消费验证和逐条迁移验收后再精简；动态期间、scope、benchmark
 和兼容性只在工具证据中计算一次，wire 只做结构投影。
+
+请求字段和类型校验由 `query_validation.py` 拥有，读取既有 capability、request 和
+target-gap 合同；`query_errors.py` 共享错误类型。`tools.py` 保留原校验调用入口，
+执行器、观察时点、分支预算和证据处理继续使用现有实现。校验模块不反向导入工具执行或运营模块。
+
+`query_sql.py` 拥有标识符引用、合同允许的聚合表达式与行完整性 SQL 片段，只依赖纯合同和共享错误类型。
+`query_builders.py` 拥有普通指标、比较、复合和比例构造及时间/关联规划，不执行实体查询或数据库请求。
+`tools.py` 保留调用兼容入口、执行上限和批次协调；构造层不反向导入它或数据库执行器。
+
+`query_execution.py` 组合既有 `db_executor` / `db_runtime` 的连接、只读事务、截止和关闭能力，
+拥有 DataSage 错误映射及一致快照适配；不复制底层驱动或权限校验。
+`result_projection.py` 负责已形成结果及 calculation 的模型投影与完整性验证，继续调用 `evidence.py` 的封存真源。
+`wire.py` 保留最终 JSON 和大小预算。并发槽、冻结观察日期、`_run_one`、批次流程和公开鉴权顺序仍由 `tools.py` 协调。
 
 ## 权威与维护职责
 
-Hermes 拥有问题理解、工具选择、推理和最终结论；受限 WeCom 只使用 SOUL、公开
-工具 schema 与返回 evidence。references 只在 skill-enabled CLI/维护面可选加载，
-不改变 WeCom 查询路径。插件不注册 prompt 副本，也不拥有结论授权。
+Hermes 拥有问题理解、工具选择、推理和最终结论；SOUL、公开工具 schema 与返回 evidence
+继续保留当前规则。references 在工具实际可用时按需读取，不增加固定查询步骤。
+本地候选接线和真实企微消费分别验收；后者未通过前不据此删减 SOUL。
+插件不注册 prompt 副本，也不拥有结论授权。
 
 | 资源 | Owner | 使用方 | 边界 |
 | --- | --- | --- | --- |
-| `datasage.query-rules/v1` | Profile Skill | CLI/维护面（可选） | 请求构造提示；可用字段以 live schema/catalog 为准 |
-| `datasage.entity-guidance/v1` | Profile Skill | CLI/维护面（可选） | 实体消歧提示；不能创建或覆盖实体映射 |
-| `datasage.answer-boundary/v1` | Profile Skill | CLI/维护面（可选） | 解释提示；插件不注册 prompt 副本 |
-| `datasage.delivery-analysis/v1` | Profile Skill | CLI/维护面（可选） | 出库 L3 分析提示；不能替代工具证据 |
+| `datasage.query-rules/v1` | Profile Skill | Skill 读取会话（可选） | 请求构造提示；可用字段以 live schema/catalog 为准 |
+| `datasage.entity-guidance/v1` | Profile Skill | Skill 读取会话（可选） | 实体消歧提示；不能创建或覆盖实体映射 |
+| `datasage.answer-boundary/v1` | Profile Skill | Skill 读取会话（可选） | 解释提示；插件不注册 prompt 副本 |
+| `datasage.delivery-analysis/v1` | Profile Skill | Skill 读取会话（可选） | 出库 L3 分析提示；不能替代工具证据 |
+| `datasage.receipt-analysis/v1` | Profile Skill | Skill 读取会话（可选） | 可选方法；不替代合同或工具证据 |
+| `datasage.target-analysis/v1` | Profile Skill | Skill 读取会话（可选） | 可选方法；不替代合同或工具证据 |
+| `datasage.inventory-analysis/v1` | Profile Skill | Skill 读取会话（可选） | 可选方法；不替代合同或工具证据 |
+| `datasage.pattern-matching-analysis/v1` | Profile Skill | Skill 读取会话（可选） | 可选方法；不替代合同或工具证据 |
+| `datasage.profit-analysis/v1` | Profile Skill | Skill 读取会话（可选） | 可选方法；不替代合同或工具证据 |
+| `datasage.receivable-analysis/v1` | Profile Skill | Skill 读取会话（可选） | 可选方法；不替代合同或工具证据 |
+| `datasage.cross-domain-analysis/v1` | Profile Skill | Skill 读取会话（可选） | 可选方法；不替代合同或工具证据 |
 
 `*-semantics.yaml`、typed capability contract、实体 registry 和公开工具结果分别
 拥有指标定义、执行事实、实体身份和当前证据；`datasage.entity-maintainer-rationale/v1`
@@ -201,7 +225,7 @@ fixture，要求压缩后保留用户纠正、当前 period/scope/entity/metric 
 
 ### Hermes 内建 Skill 选择约束
 
-Hermes 官方同步内建 Skill；本 Profile 不修改官方内容。当前 core 为60个，启用办公文件能力 `docx`、`xlsx`、`pdf`、`powerpoint`，同时接受宿主不可禁用的 essential `hermes-agent`。`skills.disabled` 关闭其余当前及遗留入口；这不会额外改变企微已配置的五个直接可见工具（`clarify`、三个 DataSage 工具和 `execute_code`）；本机 Python 的权限边界见上文。`ocr-and-documents` 已不属于当前 core，不声明为启用能力。
+Hermes 官方同步内建 Skill；本 Profile 不修改官方内容。当前 core 为60个，启用办公文件能力 `docx`、`xlsx`、`pdf`、`powerpoint`，同时接受宿主不可禁用的 essential `hermes-agent`。`skills.disabled` 关闭其余当前及遗留入口；Skill 选择与渠道工具面分别配置。候选配套宿主的本地装配已观察到 `clarify`、三个 DataSage 工具、`execute_code`、`skills_list` 与 `skill_view`，真实渠道加载仍待验。本机 Python 的权限边界见上文。`ocr-and-documents` 已不属于当前 core，不声明为启用能力。
 
 每次宿主升级做完整快照差异审查；新增、删除或重命名必须更新 `tests/fixtures/reviewed_host_skills.json` 与 denylist，并检查 `metadata.hermes.related_skills`。Profile 显式关闭独立的 `curator.enabled` 和 background review，使调试中的能力集合由 Git 维护。普通 CLI 用于源码维护，业务调用仍受现有 WeCom/trusted replay 授权约束。
 
