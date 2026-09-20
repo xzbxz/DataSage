@@ -60,15 +60,24 @@
 
 ## 测试与回退
 
-### X03 网关执行配置（待目录范围确认）
+D03 已按“保留当前投影，不继续压缩”收口。查询职责抽取后，`result_projection.py` 保留
+typed state、单位/范围/账本、截断/缺失披露和分支证据；既有安装回归（1317通过、2环境跳过）中，
+[`test_c01_c02_public.py`](../tests/test_c01_c02_public.py) 验证失败分支不污染其他分支和部分结果保留，
+[`test_compact_payloads.py`](../tests/test_compact_payloads.py) 验证大结果完整进入原生spillover，
+[`test_analysis_evidence.py`](../tests/test_analysis_evidence.py) 与
+[`test_business_contracts.py`](../tests/test_business_contracts.py) 验证截断、未定义值及限制披露。
+这些证据支持本次投影兼容结论，不证明真实模型费用下降；完整成本与质量对照仍由D01/H05单独记录。
+
+### X03 网关执行配置（已接入，运行验收暂缓）
 
 配置仅作用于 `gateway-service/Hermes_Gateway_datasage-canary-next.cmd` 和同名 `.vbs`
 启动的单 Profile Gateway 子进程；同 Profile 的维护 CLI、本机运营脚本保持原环境。
-直接运行 `hermes gateway run` 不会读取这两个入口的覆盖设置，不能据此宣称隔离已启用。
+直接运行 `hermes gateway run`，以及 Windows 的 `hermes gateway start/restart` 直接派生路径，
+不会读取这两个入口的覆盖设置；授权启动隔离实例时应使用上述已配置入口，不能把其他启动路径标为已隔离。
 
 | 宿主来源（相对本 Profile） | 容器路径 | 模式 |
 | --- | --- | --- |
-| `workspace/execution-input`（专用空目录，拟作为网关共享的已批准输入） | `/input` | 只读 |
+| `workspace/execution-input`（已批准的网关共享输入目录，当前为空） | `/input` | 只读 |
 | `skills/business-analytics/datasage` | `/root/.hermes/skills/business-analytics/datasage` | 只读 |
 | 不挂宿主目录；每个容器独立的 128 MiB tmpfs | `/output` | 容器内读写 |
 
@@ -82,9 +91,11 @@
 使用 `docker_auto_mounts=explicit`、关闭网络和宿主持久化、只读根文件系统，限制为2核/4 GiB。
 入口在实际启动时检查专用机器；后端不可用就停止，不退回 local。
 
-当前只完成配置草案与合成检查，活动入口未替换、Gateway未启动。
-确认目录范围后，仅替换这两个入口并保留原文件供回退，不改业务权限或共享Profile配置。
-回退应先保持网关停用，再恢复原入口；不能把未隔离的 local 当作自动恢复方案。
+两个正式入口已安装上述配置，并通过安装后的 `--inspect-terminal` 检查；Gateway未启动。
+将来获得启动授权后，通过 `wscript.exe //B //Nologo <Profile>\gateway-service\Hermes_Gateway_datasage-canary-next.vbs`
+启动该隔离入口；只检查配置时使用 `cscript.exe //Nologo` 调用同一文件并传入 `--inspect-terminal`，不会启动服务。
+原文件保存在各自同名 `.before-x03` 文件中，已确认可恢复原字节。业务权限与共享Profile配置未改。
+回退应先保持网关停用，再恢复这两个备份；不能把未隔离的 local 当作自动恢复方案。
 原生服务重装/更新可能重建入口，届时应核对这些配置差量。当前状态以既有任务清单为准。
 
 在仅含源码和合成数据的临时 Profile 目录使用宿主 Python：
