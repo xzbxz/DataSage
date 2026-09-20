@@ -2,17 +2,58 @@
 from pathlib import Path
 from decimal import Decimal
 from xml.etree import ElementTree as ET
-import zipfile,math,json
-from .legacy_xlsx import gen_workbook_xlsx
+import zipfile,math,json,re
+from .legacy_xlsx import gen_workbook_xlsx,requires_exact_text
 from . import result_completeness
 
 FIELDS={'metric_value':'源记录数','fabric_rolls':'完整卷数','fabric_known_rolls':'已知卷数','fabric_tagged_rolls':'完整标签卷数','fabric_known_tagged_rolls':'已知标签卷数','fabric_ddp_rmb':'完整DDP人民币','fabric_known_ddp_rmb':'已知DDP人民币','fabric_tagged_ddp_rmb':'完整标签DDP人民币','fabric_known_tagged_ddp_rmb':'已知标签DDP人民币','fabric_sales_rmb':'完整销售人民币','fabric_known_sales_rmb':'已知销售人民币','fabric_tagged_ddp_gap_rmb':'完整标签DDP差额','fabric_known_tagged_ddp_gap_rmb':'已知标签DDP差额','fabric_tag_rate':'自身标签发生率','fabric_tag_contribution':'标签卷数贡献率','fabric_missing_rolls':'缺卷数行','fabric_unknown_tags':'未知标签行','fabric_formation_pending':'形成时期待核验行','fabric_multiple_roots':'多根血缘行','fabric_scope_unknown':'范围待核验行','fabric_read_at':'读取时点','fabric_etl_min':'最早ETL','fabric_etl_max':'最晚ETL'}
+AMOUNT_FIELDS={field for field in FIELDS if field.endswith('_rmb')}
 
 def n(value):
     if value is None:return None
     try:
         x=Decimal(str(value));return x if x.is_finite() else None
     except Exception:return None
+
+def _export_fact(value,label,precision_labels):
+    parsed=n(value)
+    if parsed is not None:
+        if requires_exact_text(parsed):precision_labels.append(label)
+        return parsed
+    return str(value) if value is not None else '未知'
+
+def _mark_precision(value,label,precision_labels):
+    if isinstance(value,bool):return
+    if isinstance(value,(int,Decimal)) and requires_exact_text(value):
+        precision_labels.append(label)
+
+
+def _chart_text_width(font,text):
+    try:
+        return float(font.getlength(text))
+    except AttributeError:
+        left,_,right,_=font.getbbox(text)
+        return float(right-left)
+
+
+def _wrap_chart_label(text,font,max_width):
+    lines=[]
+    for raw in str(text or '').splitlines() or ['']:
+        current=''
+        for token in re.findall(r'\d+|[A-Za-z]+|.',raw):
+            if current and _chart_text_width(font,current+token)>max_width:
+                lines.append(current);current=''
+            if _chart_text_width(font,token)<=max_width:
+                current+=token
+                continue
+            for character in token:
+                candidate=current+character
+                if current and _chart_text_width(font,candidate)>max_width:
+                    lines.append(current);current=character
+                else:
+                    current=candidate
+        lines.append(current)
+    return lines or ['']
 
 def _identity_fields(dimensions):
     refs=[];states=[]
@@ -93,20 +134,30 @@ def observations(doc):
 def chart(path,title,rows,series):
     from PIL import Image,ImageDraw,ImageFont
     font_path=Path('C:/Windows/Fonts/msyh.ttc');font=ImageFont.truetype(str(font_path),15);bold=ImageFont.truetype(str(font_path),19)
-    height=115+len(rows)*65;im=Image.new('RGB',(1000,max(180,height)),'white');d=ImageDraw.Draw(im)
+    label_width=190;label_line_height=22
+    layout=[]
+    for row in rows:
+        label_lines=_wrap_chart_label(row.get('group',''),font,label_width)
+        row_height=max(65,len(label_lines)*label_line_height+10,len(series)*25+10)
+        layout.append((row,label_lines,row_height))
+    height=115+sum(row_height for _,_,row_height in layout);im=Image.new('RGB',(1000,max(180,height)),'white');d=ImageDraw.Draw(im)
     d.text((20,15),title,font=bold,fill='#172d46')
     colors=['#24679c','#bd7433'];values=[float(n(r['facts'].get(f)) or 0) for r in rows for f,_ in series]
     rate=all(f in ('fabric_tag_rate','fabric_tag_contribution') for f,_ in series);maximum=max(values+[1])
     for k,(_,label) in enumerate(series):d.rectangle((20+k*270,51,35+k*270,66),fill=colors[k]);d.text((43+k*270,47),label,font=font,fill='#172d46')
-    for i,row in enumerate(rows):
-        y=91+i*65;d.text((20,y),str(row['group']),font=font,fill='#172d46')
+    y=91
+    for row,label_lines,row_height in layout:
+        for line_index,line in enumerate(label_lines):
+            d.text((20,y+line_index*label_line_height),line,font=font,fill='#172d46')
         for j,(field,_) in enumerate(series):
             value=n(row['facts'].get(field));yy=y+j*25
             if value is None:d.text((230,yy),'未知，不填零',font=font,fill='#855c38');continue
-            if value<0:d.text((230,yy),'负值需核对：'+str(value),font=font,fill='#855c38');continue
+            displayed=f'{float(value)*100:.1f}%' if rate else str(value)
+            if value<0:d.text((230,yy),'负值需核对：'+displayed,font=font,fill='#855c38');continue
             width=int(float(value)/maximum*610)
             if width>0:d.rectangle((230,yy,230+width,yy+17),fill=colors[j])
-            d.text((850,yy-2),f'{float(value)*100:.1f}%' if rate else str(value),font=font,fill='#172d46')
+            d.text((850,yy-2),displayed,font=font,fill='#172d46')
+        y+=row_height
     im.save(path,'PNG')
 
 def embed_charts(book,images,start_row):
@@ -153,15 +204,16 @@ def embed_coverage_markers(book,markers,start_sheet=2):
     temp.replace(book)
 
 def export_report(doc,out):
-    out=Path(out);out.mkdir(parents=True,exist_ok=True);data=observations(doc);sheets=[];overview=[];overview_formats={};images=[]
+    out=Path(out);out.mkdir(parents=True,exist_ok=True);data=observations(doc);sheets=[];overview=[];overview_formats={};images=[];precision_labels=[]
     for item in data:
         for row in item['rows']:
             f=row['facts']
             if item['name'].endswith(('总览','overall')):
                 for field,label in FIELDS.items():
                     if field in f:
-                        overview.append([item['name'],label,n(f[field]) if n(f[field]) is not None else str(f[field]) if f[field] is not None else '未知'])
+                        overview.append([item['name'],label,_export_fact(f[field],f"{item['name']} · {label}",precision_labels)])
                         if field in ('fabric_tag_rate','fabric_tag_contribution'):overview_formats[(len(overview),2)]='percent'
+                        if field in AMOUNT_FIELDS:overview_formats[(len(overview),2)]='amount'
         fields=[f for f in FIELDS if any(f in r['facts'] for r in item['rows'])]
         identity_headers=[]
         if any(r.get('identity_refs') for r in item['rows']):identity_headers.append(('identity_refs','维度身份引用'))
@@ -171,9 +223,12 @@ def export_report(doc,out):
         coverage_headers=['status','data_state','completeness','truncated','returned_group_count','population_group_count','observed_at','unknown_items']
         headers=['分组']+[FIELDS[f] for f in fields]+[label for _,label in identity_headers]+coverage_headers
         c=item['coverage'];coverage_values=[c['status'],c['data_state'],c['completeness'],c['truncated'],c['returned_group_count'],c['population_group_count'] if c['population_group_count'] is not None else '未知',c['observed_at'] or '未知',json.dumps(c.get('unknown_items') or {},ensure_ascii=False,sort_keys=True,default=str)]
-        rows=[[r['group']]+[n(r['facts'].get(f)) if n(r['facts'].get(f)) is not None else str(r['facts'][f]) if r['facts'].get(f) is not None else '未知' for f in fields]+[r.get(key,'未知') for key,_ in identity_headers]+coverage_values for r in item['rows']]
+        _mark_precision(c['returned_group_count'],f"{item['name']} · 返回分组数",precision_labels)
+        _mark_precision(c['population_group_count'],f"{item['name']} · 总体分组数",precision_labels)
+        rows=[[r['group']]+[_export_fact(r['facts'].get(f),f"{item['name']} · {FIELDS[f]}",precision_labels) for f in fields]+[r.get(key,'未知') for key,_ in identity_headers]+coverage_values for r in item['rows']]
         if not rows:rows=[['覆盖证据']+['']*(len(headers)-1-len(coverage_values))+coverage_values]
         formats={i+1:'percent' for i,f in enumerate(fields) if f in ('fabric_tag_rate','fabric_tag_contribution')}
+        formats.update({i+1:'amount' for i,f in enumerate(fields) if f in AMOUNT_FIELDS})
         sheets.append((item['name'],headers,rows,formats))
         if '渠道' in item['name'] or 'channels' in item['name']:
             for label,series in [('发生率与贡献率',[('fabric_tag_rate','渠道自身发生率'),('fabric_tag_contribution','标签问题贡献率')]),('标签卷数',[('fabric_known_tagged_rolls','源标签卷数已知部分')])]:
@@ -184,6 +239,12 @@ def export_report(doc,out):
         overview.append(['表覆盖',item['name'],c['completeness']+'；返回'+str(c['returned_group_count'])+'组；总体'+('未知' if c['population_group_count'] is None else str(c['population_group_count']))+'组'])
     overview.append(['状态','生成范围',doc.get('status','saved_observation')])
     overview.append(['边界','来源','各表保留原读取/ETL时间；DDP差额不是损失，源归一渠道不是责任归因'])
+    precision_labels=list(dict.fromkeys(precision_labels))
+    if precision_labels:
+        ratio_precision=any(any(token in label for token in ('自身标签发生率','标签卷数贡献率')) for label in precision_labels)
+        note='超出Excel数值精度或范围的数值保留为精确文本；这些文本不参与Excel数值计算'
+        if ratio_precision:note+='；比例原值未乘100；0.1表示10%'
+        overview.append(['边界','Excel数值精度',note+'；受影响字段：'+'、'.join(precision_labels)])
     sheets.insert(0,('管理层总览',['观察','指标','值'],overview,overview_formats))
     coverage_rows=[]
     for item in data:

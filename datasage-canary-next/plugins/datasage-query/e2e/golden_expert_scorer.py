@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -55,6 +56,22 @@ VERIFICATION_SCOPE = {
     "business_values": "not_verified",
     "business_arithmetic": "not_verified",
 }
+ANSWER_OBSERVATION_SCHEMA = "datasage-final-answer-observations/v1"
+ANSWER_REVIEW_SCHEMA = "datasage-answer-review/v1"
+
+
+def _answer_ground_truth_module() -> Any:
+    """Load the optional H02 evaluator without making it a runtime dependency."""
+
+    path = HERE / "answer_ground_truth.py"
+    spec = importlib.util.spec_from_file_location(
+        "_datasage_answer_ground_truth", path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load answer Ground Truth evaluator {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _is_lower_sha256(value: Any) -> bool:
@@ -968,6 +985,278 @@ def _score_decision_quality(
     }, errors
 
 
+def _not_verified_answer_result(case_id: str, reason: str) -> dict[str, Any]:
+    module = _answer_ground_truth_module()
+    return {
+        "schema": "datasage-final-answer-score/v1",
+        "case_id": case_id,
+        "status": "not_verified",
+        "dimensions": {
+            dimension: {
+                "status": "not_verified",
+                "passed": False,
+                "errors": [reason],
+            }
+            for dimension in module.ANSWER_DIMENSIONS
+        },
+    }
+
+
+def _validate_answer_observations(
+    value: Any,
+    *,
+    candidate: dict[str, Any],
+    suite_case_ids: set[str],
+) -> dict[str, dict[str, Any]]:
+    """Validate answer text sidecar and bind every row to the candidate receipt.
+
+    The sidecar is produced by ``tests.business_replay`` from official export
+    bytes.  The scorer accepts only its hash-bound projection and never reads
+    a final answer copied into a candidate case.
+    """
+
+    if not isinstance(value, dict) or set(value) != {"schema", "source", "answers"}:
+        raise ValueError(
+            "answer observations must contain exactly schema, source, and answers"
+        )
+    if value.get("schema") != ANSWER_OBSERVATION_SCHEMA:
+        raise ValueError(f"answer observations schema must be {ANSWER_OBSERVATION_SCHEMA}")
+    source = value.get("source")
+    export_identity = candidate.get("session_export_sha256")
+    if (
+        not isinstance(source, dict)
+        or set(source) != {"format", "session_export_sha256"}
+        or source.get("format") != OFFICIAL_EXPORT_FORMAT
+        or source.get("session_export_sha256") != export_identity
+    ):
+        raise ValueError("answer observations are not bound to the candidate export")
+    answers = value.get("answers")
+    if not isinstance(answers, list):
+        raise ValueError("answer observations answers must be a list")
+    turns = candidate["canary_receipt"]["turns"]
+    turn_by_id = {turn.get("test_id"): turn for turn in turns}
+    result: dict[str, dict[str, Any]] = {}
+    for index, answer in enumerate(answers):
+        required = {
+            "case_id",
+            "conversation_id",
+            "turn",
+            "session_id",
+            "user_message_id",
+            "final_message_id",
+            "final_answer_sha256",
+            "final_answer_text",
+        }
+        if not isinstance(answer, dict) or set(answer) != required:
+            raise ValueError(f"answer observations[{index}] has invalid keys")
+        case_id = answer.get("case_id")
+        if (
+            not isinstance(case_id, str)
+            or not case_id
+            or case_id not in suite_case_ids
+            or case_id in result
+        ):
+            raise ValueError(f"answer observations[{index}] has an invalid or duplicate case ID")
+        text = answer.get("final_answer_text")
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError(f"answer observations[{index}] final answer text is empty")
+        final_sha = answer.get("final_answer_sha256")
+        if not _is_lower_sha256(final_sha) or final_sha != _sha256(text):
+            raise ValueError(f"answer observations[{case_id!r}] final answer hash is invalid")
+        if (
+            not isinstance(answer.get("conversation_id"), str)
+            or type(answer.get("turn")) is not int
+            or answer["turn"] < 1
+            or not isinstance(answer.get("session_id"), str)
+            or type(answer.get("user_message_id")) is not int
+            or type(answer.get("final_message_id")) is not int
+        ):
+            raise ValueError(f"answer observations[{case_id!r}] binding fields are invalid")
+        turn = turn_by_id.get(case_id)
+        if not isinstance(turn, dict):
+            raise ValueError(f"answer observations[{case_id!r}] is not in candidate receipt")
+        for field in (
+            "conversation_id",
+            "turn",
+            "session_id",
+            "user_message_id",
+            "final_message_id",
+            "final_answer_sha256",
+        ):
+            if turn.get(field) != answer.get(field):
+                raise ValueError(
+                    f"answer observations[{case_id!r}] field {field!r} does not match receipt"
+                )
+        result[case_id] = dict(answer)
+    return result
+
+
+def _validate_answer_reviews(
+    value: Any,
+    *,
+    candidate: dict[str, Any],
+    observations: dict[str, dict[str, Any]],
+    suite_case_ids: set[str],
+) -> dict[str, dict[str, Any]]:
+    module = _answer_ground_truth_module()
+    try:
+        normalized = module.validate_answer_review(value)
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
+    if normalized["session_export_sha256"] != candidate["session_export_sha256"]:
+        raise ValueError("answer review is not bound to the candidate export")
+    rows: dict[str, dict[str, Any]] = {}
+    for row in normalized["cases"]:
+        case_id = row["case_id"]
+        if case_id not in suite_case_ids or case_id in rows:
+            raise ValueError(f"answer review has an invalid or duplicate case ID {case_id!r}")
+        observation = observations.get(case_id)
+        if observation is None or observation["final_answer_sha256"] != row["final_answer_sha256"]:
+            raise ValueError(f"answer review {case_id!r} is not bound to observed answer text")
+        rows[case_id] = row
+    return rows
+
+
+def _answer_scope(
+    answer_validation: dict[str, Any],
+    *,
+    observations_complete: bool,
+) -> dict[str, str]:
+    scope = {
+        "final_answer_text": "verified" if observations_complete else "not_verified",
+        "business_values": "not_verified",
+        "business_arithmetic": "not_verified",
+        "table_text_consistency": "not_verified",
+        "conclusion_boundary": "not_verified",
+    }
+    by_dimension: dict[str, list[str]] = {}
+    for result in answer_validation.get("results", {}).values():
+        for dimension, value in result.get("dimensions", {}).items():
+            by_dimension.setdefault(dimension, []).append(value.get("status"))
+    aliases = {
+        "numbers": "business_values",
+        "units": "business_values",
+        "arithmetic": "business_arithmetic",
+        "table_text_consistency": "table_text_consistency",
+        "conclusion_boundary": "conclusion_boundary",
+    }
+    for dimension, statuses in by_dimension.items():
+        target = aliases.get(dimension)
+        if target is None or not statuses:
+            continue
+        if "failed" in statuses:
+            scope[target] = "failed"
+        elif all(status == "passed" for status in statuses):
+            scope[target] = "verified"
+        else:
+            scope[target] = "not_verified"
+    return scope
+
+
+def _score_answer_layer(
+    suite: dict[str, Any],
+    candidate: dict[str, Any],
+    *,
+    answer_observations: Any = None,
+    answer_ground_truth: Any = None,
+    answer_review: Any = None,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]], dict[str, str]]:
+    """Score optional answer sidecars while leaving absent dimensions pending."""
+
+    case_ids = {case["id"] for case in suite["cases"]}
+    observations: dict[str, dict[str, Any]] = {}
+    if answer_observations is not None:
+        observations = _validate_answer_observations(
+            answer_observations,
+            candidate=candidate,
+            suite_case_ids=case_ids,
+        )
+    ground_truth_cases: dict[str, dict[str, Any]] = {}
+    if answer_ground_truth is not None:
+        module = _answer_ground_truth_module()
+        try:
+            normalized = module.validate_ground_truth(answer_ground_truth)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        ground_truth_cases = {row["case_id"]: row for row in normalized["cases"]}
+        unknown = set(ground_truth_cases).difference(case_ids)
+        if unknown:
+            raise ValueError(
+                f"answer Ground Truth contains cases outside selected suite {sorted(unknown)!r}"
+            )
+    reviews: dict[str, dict[str, Any]] = {}
+    if answer_review is not None:
+        reviews = _validate_answer_reviews(
+            answer_review,
+            candidate=candidate,
+            observations=observations,
+            suite_case_ids=case_ids,
+        )
+
+    results: dict[str, dict[str, Any]] = {}
+    module = _answer_ground_truth_module()
+    for case_id in sorted(case_ids):
+        observation = observations.get(case_id)
+        ground_truth = ground_truth_cases.get(case_id)
+        if observation is None:
+            results[case_id] = _not_verified_answer_result(
+                case_id, "official final answer observation is not supplied"
+            )
+            continue
+        if ground_truth is None:
+            results[case_id] = _not_verified_answer_result(
+                case_id, "independent Ground Truth fixture is not supplied"
+            )
+            continue
+        try:
+            result = module.score_answer_case(
+                ground_truth,
+                observation["final_answer_text"],
+                review=reviews.get(case_id),
+            )
+        except ValueError as exc:
+            result = _not_verified_answer_result(case_id, str(exc))
+            result["status"] = "failed"
+            for dimension in result["dimensions"].values():
+                dimension["status"] = "failed"
+                dimension["passed"] = False
+        result["status"] = module.answer_result_status(result)
+        results[case_id] = result
+    statuses = [result["status"] for result in results.values()]
+    if not answer_observations and not answer_ground_truth:
+        status = "not_verified"
+        reason = "answer observations and independent Ground Truth were not supplied"
+    elif "failed" in statuses:
+        status = "failed"
+        reason = None
+    elif statuses and all(value == "passed" for value in statuses):
+        status = "passed"
+        reason = None
+    else:
+        status = "not_verified"
+        reason = "one or more final-answer dimensions remain unverified"
+    summary = {
+        "schema": "datasage-final-answer-validation/v1",
+        "status": status,
+        "case_count": len(results),
+        "observed_case_count": len(observations),
+        "ground_truth_case_count": len(ground_truth_cases),
+        "reviewed_case_count": sum(
+            1 for review in reviews.values() if review.get("status") == "reviewed"
+        ),
+        "results": results,
+    }
+    if reason:
+        summary["reason"] = reason
+    return summary, results, _answer_scope(
+        summary,
+        observations_complete=(
+            answer_observations is not None
+            and len(observations) == len(case_ids)
+        ),
+    )
+
+
 def select_suite(suite: dict[str, Any], case_ids: list[str]) -> dict[str, Any]:
     """Select a release-gate subset without creating a second scorer contract."""
 
@@ -1068,7 +1357,14 @@ def _validation_scope(
     }
 
 
-def score(suite: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
+def score(
+    suite: dict[str, Any],
+    candidate: dict[str, Any],
+    *,
+    answer_observations: Any = None,
+    answer_ground_truth: Any = None,
+    answer_review: Any = None,
+) -> dict[str, Any]:
     suite_errors = validate_suite(suite)
     if suite_errors:
         raise ValueError("invalid golden suite: " + "; ".join(suite_errors))
@@ -1082,6 +1378,17 @@ def score(suite: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
     expected_ids = {case["id"] for case in suite["cases"]}
     if len(by_id) != len(rows) or set(by_id) != expected_ids:
         raise ValueError("candidate IDs must exactly match golden case IDs")
+    answer_validation, answer_rows, answer_scope = _score_answer_layer(
+        suite,
+        candidate,
+        answer_observations=answer_observations,
+        answer_ground_truth=answer_ground_truth,
+        answer_review=answer_review,
+    )
+    answer_layer_supplied = any(
+        value is not None
+        for value in (answer_observations, answer_ground_truth, answer_review)
+    )
     context_errors: dict[str, list[str]] = {case["id"]: [] for case in suite["cases"]}
     previous_session: dict[str, str] = {}
     for case in suite["cases"]:
@@ -1150,9 +1457,21 @@ def score(suite: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
                     "errors": safety_errors,
                 },
                 "decision_quality": quality_score,
+                "answer_validation": answer_rows[case["id"]],
             }
         )
-        category_counts.setdefault(case["category"], []).append(passed)
+        answer_result = answer_rows[case["id"]]
+        if answer_result.get("status") == "failed":
+            answer_errors = [
+                f"final answer validation: {error}"
+                for dimension in answer_result.get("dimensions", {}).values()
+                for error in dimension.get("errors", [])
+            ]
+            results[-1]["errors"].extend(answer_errors)
+            results[-1]["passed"] = False
+        category_counts.setdefault(case["category"], []).append(
+            results[-1]["passed"]
+        )
     passed = sum(row["passed"] for row in results)
     safety_passed_count = sum(safety_passes)
     expert_passed_count = sum(expert_passes)
@@ -1165,12 +1484,15 @@ def score(suite: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
         "schema": REPORT_SCHEMA,
         "verification_scope": {
             **VERIFICATION_SCOPE,
+            **answer_scope,
             "note": (
                 "This semantic scorer verifies normalized contract shape and "
-                "provenance flags only; final answer wording and business-value "
-                "arithmetic require an external replay/evidence layer."
+                "provenance flags only unless the optional official-export answer "
+                "observation and independent Ground Truth sidecars are supplied. "
+                "Conclusion and recommendation boundaries require independent review."
             ),
         },
+        "answer_validation": answer_validation,
         "validation_scope": _validation_scope(results, live_ids),
         "summary": {
             "total": len(results),
@@ -1199,9 +1521,15 @@ def score(suite: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
             "passed": bool(results)
             and safety_passed_count == len(results)
             and expert_passed_count == expert_required
-            and formal_release_eligible,
+            and formal_release_eligible
+            and (
+                not answer_layer_supplied
+                or answer_validation["status"] == "passed"
+            ),
             "requires_both_scores": True,
             "formal_release_eligible": formal_release_eligible,
+            "answer_validation_required": answer_layer_supplied,
+            "answer_validation_status": answer_validation["status"],
         },
         "categories": {
             name: {
@@ -1233,6 +1561,24 @@ def main(argv: list[str] | None = None) -> int:
         help="Read a strict JSON array of selected case IDs for a data-driven release gate.",
     )
     parser.add_argument("--candidate", type=Path, required=True)
+    parser.add_argument(
+        "--answer-observations",
+        type=Path,
+        help=(
+            "Optional JSON sidecar produced from official session-export bytes by "
+            "tests.business_replay.extract_final_answer_observations."
+        ),
+    )
+    parser.add_argument(
+        "--answer-ground-truth",
+        type=Path,
+        help="Optional independently reviewed SQL/manual Ground Truth fixture.",
+    )
+    parser.add_argument(
+        "--answer-review",
+        type=Path,
+        help="Optional independently reviewed conclusion/advice sidecar.",
+    )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     suite = _load(args.cases)
@@ -1255,7 +1601,23 @@ def main(argv: list[str] | None = None) -> int:
         case_ids = value
     if case_ids:
         suite = select_suite(suite, case_ids)
-    report = score(suite, _load(args.candidate))
+    report = score(
+        suite,
+        _load(args.candidate),
+        answer_observations=(
+            _load(args.answer_observations)
+            if args.answer_observations is not None
+            else None
+        ),
+        answer_ground_truth=(
+            _load(args.answer_ground_truth)
+            if args.answer_ground_truth is not None
+            else None
+        ),
+        answer_review=(
+            _load(args.answer_review) if args.answer_review is not None else None
+        ),
+    )
     rendered = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     if args.output:
         _write_text_atomic(args.output, rendered)

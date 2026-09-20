@@ -40,8 +40,56 @@ class RepairWorkbookPrecisionTests(unittest.TestCase):
             xlsx.gen_workbook_xlsx([('Sheet', ['Quantity'], [[value]])], output, legacy_layout=True)
             with zipfile.ZipFile(output) as archive:
                 sheet = ET.fromstring(archive.read('xl/worksheets/sheet1.xml'))
-            rendered = sheet.find(".//s:c[@r='A2']/s:v", NS).text
+                workbook = ET.fromstring(archive.read('xl/workbook.xml'))
+                sheet_names = [node.attrib['name'] for node in workbook.findall('s:sheets/s:sheet', NS)]
+                precision_sheet = archive.read('xl/worksheets/sheet2.xml').decode('utf-8')
+            cell = sheet.find(".//s:c[@r='A2']", NS)
+            rendered = cell.find('s:is/s:t', NS).text
+            self.assertEqual('inlineStr', cell.attrib['t'])
             self.assertEqual(value, Decimal(rendered))
+            self.assertIn('数值精度说明', sheet_names)
+            self.assertIn('不参与Excel数值计算', precision_sheet)
+
+    def test_precision_sheet_name_conflict_gets_unique_suffix(self):
+        value = Decimal('12345678901234567890')
+        with TemporaryDirectory() as tmp:
+            output = Path(tmp) / 'synthetic.xlsx'
+            xlsx.gen_workbook_xlsx(
+                [('数值精度说明', ['Value'], [[value]])],
+                output,
+            )
+            with zipfile.ZipFile(output) as archive:
+                workbook = ET.fromstring(archive.read('xl/workbook.xml'))
+            sheet_names = [node.attrib['name'] for node in workbook.findall('s:sheets/s:sheet', NS)]
+            self.assertEqual(['数值精度说明', '数值精度说明_2'], sheet_names)
+
+    def test_tiny_nonzero_decimal_is_not_published_as_numeric_zero(self):
+        values = [Decimal('1E-400'), Decimal('-1E-400'), Decimal('1E-308'), Decimal('1E-307'), Decimal('0')]
+        for legacy in (False, True):
+            with TemporaryDirectory() as tmp:
+                output = Path(tmp) / 'tiny.xlsx'
+                xlsx.gen_workbook_xlsx([('Values', ['Value'], [[value] for value in values])], output, legacy_layout=legacy)
+                with zipfile.ZipFile(output) as archive:
+                    sheet = ET.fromstring(archive.read('xl/worksheets/sheet1.xml'))
+                for index, value in enumerate(values, 2):
+                    cell = sheet.find(f".//s:c[@r='A{index}']", NS)
+                    if index < 5:
+                        self.assertEqual('inlineStr', cell.attrib.get('t'))
+                        self.assertEqual(value, Decimal(cell.find('s:is/s:t', NS).text))
+                    else:
+                        self.assertIsNone(cell.attrib.get('t'))
+                        self.assertEqual(value, Decimal(cell.find('s:v', NS).text))
+
+    def test_business_text_cannot_suppress_precision_disclosure(self):
+        with TemporaryDirectory() as tmp:
+            output = Path(tmp) / 'labels.xlsx'
+            xlsx.gen_workbook_xlsx([('Business', ['Label', 'Value'], [
+                ['Excel数值精度', Decimal('123456789012345.67')]
+            ])], output)
+            with zipfile.ZipFile(output) as archive:
+                workbook = ET.fromstring(archive.read('xl/workbook.xml'))
+                names = [node.attrib['name'] for node in workbook.findall('s:sheets/s:sheet', NS)]
+            self.assertIn('数值精度说明', names)
 
     def test_legacy_percent_is_rejected_before_artifact_is_published(self):
         with TemporaryDirectory() as tmp:
