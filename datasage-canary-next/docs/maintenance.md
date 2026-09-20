@@ -60,6 +60,33 @@
 
 ## 测试与回退
 
+### X03 网关执行配置（待目录范围确认）
+
+配置仅作用于 `gateway-service/Hermes_Gateway_datasage-canary-next.cmd` 和同名 `.vbs`
+启动的单 Profile Gateway 子进程；同 Profile 的维护 CLI、本机运营脚本保持原环境。
+直接运行 `hermes gateway run` 不会读取这两个入口的覆盖设置，不能据此宣称隔离已启用。
+
+| 宿主来源（相对本 Profile） | 容器路径 | 模式 |
+| --- | --- | --- |
+| `workspace/execution-input`（专用空目录，拟作为网关共享的已批准输入） | `/input` | 只读 |
+| `skills/business-analytics/datasage` | `/root/.hermes/skills/business-analytics/datasage` | 只读 |
+| 不挂宿主目录；每个容器独立的 128 MiB tmpfs | `/output` | 容器内读写 |
+
+不挂载整个 Home、cache、report_runs、用户文档、凭据、会话或状态。
+输出使用绝对 `/output/...` 路径，由既有原生文件取回/媒体路径保存；远程 Python 内核
+有自己的工作目录，不把它假定为终端的 `cwd`。首次大查询结果与聚合预算 spillover
+均在需要时建立执行容器，继续使用原生临时文件回退，不要求模型重新查询数据。
+
+后端沿用已安装 Podman 的 Docker 接口及专用机器 `datasage-r4-01a0b8d5`，镜像固定为
+`public.ecr.aws/docker/library/python@sha256:de572b33eae61a53675a87bbd02b5e365df7b6b2b06c9276124e965cec08c452`。
+使用 `docker_auto_mounts=explicit`、关闭网络和宿主持久化、只读根文件系统，限制为2核/4 GiB。
+入口在实际启动时检查专用机器；后端不可用就停止，不退回 local。
+
+当前只完成配置草案与合成检查，活动入口未替换、Gateway未启动。
+确认目录范围后，仅替换这两个入口并保留原文件供回退，不改业务权限或共享Profile配置。
+回退应先保持网关停用，再恢复原入口；不能把未隔离的 local 当作自动恢复方案。
+原生服务重装/更新可能重建入口，届时应核对这些配置差量。当前状态以既有任务清单为准。
+
 在仅含源码和合成数据的临时 Profile 目录使用宿主 Python：
 
 ```text
