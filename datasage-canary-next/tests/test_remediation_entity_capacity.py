@@ -95,5 +95,99 @@ class EntityCapacityTests(unittest.TestCase):
         self.assertEqual(4, state['peak'])
         self.assertEqual(0, plugin.tools._ACTIVE_QUERY_CALLS)
 
+    def test_parallel_worker_failure_releases_leased_slots_for_next_full_batch(self):
+        source = {
+            'schema': 'datasage-query-source-evidence/v1',
+            'identity_sha256': '1' * 64,
+            'connection_verified': True,
+            'transport_mode': 'plaintext',
+            'transport_policy_verified': True,
+            'grant_policy': 'strict_object_read_only',
+            'grants_verified': True,
+            'read_only': True,
+            'source_commitment_sha256': '2' * 64,
+            'security_evidence_sha256': '',
+        }
+        db_security = importlib.import_module(f'{spec.name}.db_security')
+        source['security_evidence_sha256'] = (
+            db_security._source_evidence_hash(source)
+        )
+        requests = [
+            {
+                'request_id': f'parallel-{index}',
+                'domain': 'delivery',
+                'metric': 'delivery_amount',
+            }
+            for index in range(3)
+        ]
+        state = {
+            'phase': 'failure',
+            'calls': 0,
+            'active': 0,
+            'peak': 0,
+        }
+        lock = threading.Lock()
+        barrier = threading.Barrier(4)
+
+        def database(sql, params, limit, *, deadline_at=None):
+            del sql, params, limit, deadline_at
+            with lock:
+                state['calls'] += 1
+                fail_this_call = state['phase'] == 'failure' and state['calls'] == 1
+                if state['phase'] == 'full':
+                    state['active'] += 1
+                    state['peak'] = max(state['peak'], state['active'])
+            if fail_this_call:
+                raise RuntimeError('synthetic single worker failure')
+            if state['phase'] == 'full':
+                try:
+                    try:
+                        barrier.wait(timeout=2)
+                    except threading.BrokenBarrierError:
+                        pass
+                finally:
+                    with lock:
+                        state['active'] -= 1
+            return (
+                [
+                    {
+                        'metric_value': '10.00',
+                        '__matched_row_count': 1,
+                        'missing_value_count': 0,
+                        'known_value_count': 1,
+                        'metric_data_state': 'complete',
+                    }
+                ],
+                False,
+                source,
+            )
+
+        with patch.object(plugin.tools, '_execute_with_source', side_effect=database):
+            first = json.loads(plugin.tools.datasage_query({'requests': requests}))
+        self.assertEqual('partial', first['status'])
+        self.assertEqual(3, len(first['results']))
+        self.assertEqual(1, sum(result['status'] == 'failed' for result in first['results']))
+        self.assertEqual(2, sum(result['status'] == 'success' for result in first['results']))
+        self.assertEqual(0, plugin.tools._ACTIVE_QUERY_CALLS)
+
+        state['phase'] = 'full'
+        state['calls'] = 0
+        barrier = threading.Barrier(4)
+        full_requests = [
+            {
+                'request_id': f'full-{index}',
+                'domain': 'delivery',
+                'metric': 'delivery_amount',
+            }
+            for index in range(4)
+        ]
+        with patch.object(plugin.tools, '_execute_with_source', side_effect=database):
+            second = json.loads(
+                plugin.tools.datasage_query({'requests': full_requests})
+            )
+        self.assertEqual('success', second['status'])
+        self.assertEqual(4, state['peak'])
+        self.assertEqual(0, plugin.tools._ACTIVE_QUERY_CALLS)
+
 
 if __name__ == '__main__': unittest.main()

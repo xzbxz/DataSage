@@ -37,6 +37,7 @@ contracts = importlib.import_module(f"{TEST_PACKAGE}.contracts")
 db_executor = importlib.import_module(f"{TEST_PACKAGE}.db_executor")
 db_runtime = importlib.import_module(f"{TEST_PACKAGE}.db_runtime")
 db_security = importlib.import_module(f"{TEST_PACKAGE}.db_security")
+execution = importlib.import_module(f"{TEST_PACKAGE}.query_execution")
 entities = importlib.import_module(f"{TEST_PACKAGE}.entities")
 runtime_health = importlib.import_module(f"{TEST_PACKAGE}.runtime_health")
 sql_identifiers = importlib.import_module(f"{TEST_PACKAGE}.sql_identifiers")
@@ -608,9 +609,9 @@ class ModuleDependencyTests(unittest.TestCase):
         connection = Connection()
         source = {"source_identity": "warehouse-a"}
         with mock.patch.object(
-            tools, "_connect", return_value=connection
+            execution, "_connect", return_value=connection
         ) as connect, mock.patch.object(
-            tools,
+            execution,
             "confirm_mysql_read_only_transaction",
             return_value=source,
         ) as confirm:
