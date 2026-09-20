@@ -36,6 +36,13 @@ department. Preserve both returned dimensions when they are available.
 | Business time | Governed event time differs from record creation time; ranges are start-inclusive/end-exclusive, and snapshots differ from flows. |
 | External-customer population | The metric contract defines internal/external scope and entity roles. A name does not establish these attributes. |
 | Return settlement | Return-settlement periods can differ from the underlying delivery period. |
+| Quantity unit | Keep quantities separated by their returned unit; a raw code does not establish a meaning or conversion. |
+
+Follow the live delivery contract's unit meanings, not a code's spelling or a
+phonetic guess. A registered unit can be queryable while its meaning remains
+unconfirmed: `tao` must stay `tao` (含义待确认), never “套” or another inferred
+unit. Current delivery quantity metrics require separate unit groups or a
+single-unit filter; do not sum or convert different units.
 
 `pending` and `current-master` describe returned states. A current-master fact
 may support current action without representing a completed historical period.

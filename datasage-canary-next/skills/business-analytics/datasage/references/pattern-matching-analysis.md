@@ -53,6 +53,14 @@ people, products, or periods without a compatible population.
 - Truncation, unknown identity, non-single products, and amount conflicts
   narrow the claim; they are not resolved by guessing.
 
+For `linked_delivery_amount`, conflicting linked amounts for the same stable
+detail leave that detail unresolved. Do not choose the row that happens to
+match a sales-side amount and count the disputed detail as verified. Keep it
+out of the known subset, retain unaffected details separately, and leave the
+complete governed total unknown until the conflict is resolved. Use matched
+outbound currency only for a verified link; an unverified raw amount must not
+gain a currency label merely from a candidate match.
+
 ## Review prompts
 
 Open question: should a task-created cohort and linked-delivery amounts be
