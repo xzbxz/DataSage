@@ -45,6 +45,14 @@ class PatternTests(unittest.TestCase):
         self.sale(1,100);self.sale(2,50)
         self.row(detail=1,amount=100);self.row(task=2,execute=21,detail=1,amount=90);self.row(detail=2,amount=50)
         f=self.value('linked_delivery_amount');self.assertIsNone(f['metric_value']);self.assertEqual(50,f['known_subset_value']);self.assertGreater(f['unresolved_amount_rows'],0)
+        grouped=self.result(self.run_pattern('linked_delivery_amount',dimensions=['task','currency']))
+        self.assertEqual(2,len(grouped['rows']))
+        self.assertTrue(all(f['metric_value'] is None for f in facts(grouped)))
+        self.assertEqual([0,50],sorted(f['known_subset_value'] for f in facts(grouped)))
+        self.assertTrue(all(f['currency_known_amount']==50 for f in facts(grouped)))
+        self.assertTrue(all(f['unresolved_amount_rows']>0 for f in facts(grouped)))
+        # Confirmed source currency is metadata, not proof that the raw amount passed.
+        self.assertEqual({'VND'},{d['value'] for row in grouped['rows'] for d in row['dimensions'] if d['label']=='已核验出库币种'})
     def test_transaction_currency_not_requirement_currency_and_no_fx(self):
         self.sale(1,10,'VND');self.sale(2,20,'THB');self.sale(3,30,None)
         self.row(detail=1,amount=10,currency=None);self.row(detail=2,amount=20,currency='VND');self.row(detail=3,amount=30,currency='VND')

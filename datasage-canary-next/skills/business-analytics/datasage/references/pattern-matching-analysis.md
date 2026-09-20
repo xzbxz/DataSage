@@ -57,9 +57,12 @@ For `linked_delivery_amount`, conflicting linked amounts for the same stable
 detail leave that detail unresolved. Do not choose the row that happens to
 match a sales-side amount and count the disputed detail as verified. Keep it
 out of the known subset, retain unaffected details separately, and leave the
-complete governed total unknown until the conflict is resolved. Use matched
-outbound currency only for a verified link; an unverified raw amount must not
-gain a currency label merely from a candidate match.
+complete governed total unknown until the conflict is resolved. A uniquely
+identified outbound detail can have a confirmed source currency even while
+the linked amount is disputed. Preserve that currency as source metadata,
+without presenting the disputed amount as a verified amount in that currency.
+A candidate match alone does not establish either fact; keep currency unknown
+when its own source evidence is missing or conflicting.
 
 ## Review prompts
 
