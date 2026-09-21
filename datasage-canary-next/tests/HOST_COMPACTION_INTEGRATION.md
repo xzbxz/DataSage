@@ -8,6 +8,12 @@ implementation.
 The producer is `tests/test_host_compaction_e2e.py`. It imports the pinned
 Hermes host and executes the real in-process path:
 
+The fixture continues to name the official commit. A history-preserving revert
+may have a different HEAD while restoring identical source: the producer checks
+the same version, exact Git tree equality with that official commit, and a clean
+host worktree. A changed tree or dirty source still fails; the recorded host
+commit remains the actual HEAD, never relabeled as the official commit.
+
 ```text
 AIAgent.run_conversation
   -> build_turn_context / preflight compression

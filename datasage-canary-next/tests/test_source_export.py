@@ -69,10 +69,17 @@ class SourceExportTests(unittest.TestCase):
 
     def test_config_template_preserves_switches_and_replaces_identity_and_path(self) -> None:
         original = yaml.safe_load((ROOT / "config.yaml").read_text(encoding="utf-8"))
-        original_channel_id = original["platforms"]["wecom"]["home_channel"]["chat_id"]
+        original_channel_id = "synthetic-private-export-channel"
         with TemporaryDirectory(prefix="datasage-source-export-test-") as temporary:
             workspace = Path(temporary)
             candidate = self._copy_candidate(workspace)
+            # The installed config may already be portable. Supply a synthetic
+            # identity/path so redaction is tested independently of local values.
+            candidate_config = yaml.safe_load((candidate / "config.yaml").read_text(encoding="utf-8"))
+            candidate_config["platforms"]["wecom"]["home_channel"].update(
+                chat_id=original_channel_id, name="Synthetic channel", user_id="synthetic-owner")
+            candidate_config["lsp"]["servers"]["pyright"]["command"][0] = "C:/synthetic-tools/pyright.cmd"
+            (candidate / "config.yaml").write_text(yaml.safe_dump(candidate_config), encoding="utf-8")
             output = workspace / "package"
             source_export.export_source(candidate, output)
             exported = yaml.safe_load((output / "config.yaml").read_text(encoding="utf-8"))

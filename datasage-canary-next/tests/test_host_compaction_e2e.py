@@ -295,14 +295,23 @@ def _host_identity(host_root: Path) -> dict[str, str]:
 
 
 def _validate_pinned_host(
-    fixture: dict[str, object], host_identity: dict[str, str]
+    fixture: dict[str, object], host_identity: dict[str, str], host_root: Path
 ) -> None:
     pinned = fixture.get("pinned_host")
-    if pinned != host_identity:
+    if not isinstance(pinned, dict) or pinned.get("hermes_version") != host_identity.get("hermes_version"):
         raise RuntimeError(
             f"Hermes host does not match fixture pinned_host: "
             f"expected={pinned!r}, actual={host_identity!r}"
         )
+    # A directional revert preserves history, hence changes HEAD without changing
+    # official source. Pin the tracked tree and cleanliness, not history shape.
+    def tree(ref: str) -> str:
+        return subprocess.run(
+            ["git", "-c", "safe.directory=*", "-C", str(host_root),
+             "rev-parse", ref + "^{tree}"], check=True, capture_output=True,
+            text=True, encoding="utf-8").stdout.strip()
+    if tree(str(pinned["hermes_git_commit"])) != tree(host_identity["hermes_git_commit"]) or _git_status(host_root):
+        raise RuntimeError("Hermes tracked source differs from pinned official tree or worktree is dirty")
 
 
 def _validate_release_preconditions(host_root: Path) -> None:
@@ -701,7 +710,7 @@ def build_evidence(*, enforce_clean: bool = True) -> dict[str, object]:
     fixture = _read_json_object(FIXTURE_PATH)
     host_root = _host_root()
     host_identity = _host_identity(host_root)
-    _validate_pinned_host(fixture, host_identity)
+    _validate_pinned_host(fixture, host_identity, host_root)
 
     producer_repo_path = _git_repo_path(PRODUCER_RELATIVE_PATH)
     fixture_repo_path = _git_repo_path(FIXTURE_RELATIVE_PATH)
@@ -744,7 +753,7 @@ def build_evidence(*, enforce_clean: bool = True) -> dict[str, object]:
 def _build_test_child_payload() -> dict[str, object]:
     fixture = _read_json_object(FIXTURE_PATH)
     host_root = _host_root()
-    _validate_pinned_host(fixture, _host_identity(host_root))
+    _validate_pinned_host(fixture, _host_identity(host_root), host_root)
     captured_request, compression_count, summary_prefix = _run_host_chain(
         fixture, host_root
     )
@@ -782,6 +791,21 @@ def _write_report(path: Path, report: dict[str, object]) -> None:
 
 
 class HostCompactionEvidenceTest(unittest.TestCase):
+
+    def test_host_pin_accepts_equivalent_history_but_rejects_changed_or_dirty_source(self):
+        fixture = {"pinned_host": {"hermes_version": "0.21.1", "hermes_git_commit": "official"}}
+        actual = {"hermes_version": "0.21.1", "hermes_git_commit": "revert-history"}
+        with patch(__name__ + ".subprocess.run", return_value=SimpleNamespace(stdout="same-tree\n")), \
+             patch(__name__ + "._git_status", return_value=""):
+            _validate_pinned_host(fixture, actual, Path("synthetic-host"))
+        with patch(__name__ + ".subprocess.run", side_effect=[SimpleNamespace(stdout="official-tree"), SimpleNamespace(stdout="modified-tree")]), \
+             patch(__name__ + "._git_status", return_value=""):
+            with self.assertRaisesRegex(RuntimeError, "differs"):
+                _validate_pinned_host(fixture, actual, Path("synthetic-host"))
+        with patch(__name__ + ".subprocess.run", return_value=SimpleNamespace(stdout="same-tree")), \
+             patch(__name__ + "._git_status", return_value=" M run_agent.py"):
+            with self.assertRaisesRegex(RuntimeError, "dirty"):
+                _validate_pinned_host(fixture, actual, Path("synthetic-host"))
 
     def test_raw_host_chain_runs_in_one_shot_child(self) -> None:
         child_env = dict(os.environ)

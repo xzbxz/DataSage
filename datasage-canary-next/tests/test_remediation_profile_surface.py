@@ -78,14 +78,15 @@ class RemediationProfileSurfaceTests(unittest.TestCase):
             platform_toolsets["cli"],
         )
         self.assertEqual(
-            ["clarify", "datasage-query", "code_execution", "skills-readonly"],
+            ["clarify", "datasage-query", "skills"],
             platform_toolsets["wecom"],
         )
-        self.assertNotIn("skills", platform_toolsets["wecom"])
+        self.assertNotIn("skills-readonly", platform_toolsets["wecom"])
+        self.assertNotIn("code_execution", platform_toolsets["wecom"])
         self.assertNotIn("hermes-wecom", platform_toolsets["wecom"])
 
-    def test_resolved_wecom_tools_include_official_code_without_extra_bundles(self):
-        """Check visible tools; execute_code itself has local file authority."""
+    def test_resolved_wecom_tools_use_native_skills_without_arbitrary_execution(self):
+        """Native Skill management is approval-gated; unrestricted execution is absent."""
 
         os.environ.setdefault("HERMES_HOME", str(PROFILE_ROOT))
         try:
@@ -105,12 +106,14 @@ class RemediationProfileSurfaceTests(unittest.TestCase):
             expanded = resolve_toolset(toolset)
             resolved_tools.update(expanded or [toolset])
 
-        self.assertIn("execute_code", resolved_tools)
         self.assertTrue({"skills_list", "skill_view"}.issubset(resolved_tools))
-        self.assertNotIn("skill_manage", resolved_tools)
+        self.assertIn("skill_manage", resolved_tools)
+        self.assertIs(config["skills"]["write_approval"], True)
         self.assertIs(config["skills"]["inline_shell"], False)
+        self.assertIs(config["agent"]["execution_guidance"], False)
 
         forbidden_exact = {
+            "execute_code",
             "terminal",
             "process",
             "read",
@@ -144,7 +147,7 @@ class RemediationProfileSurfaceTests(unittest.TestCase):
 
         skills_tools = set(resolve_toolset("skills"))
         self.assertTrue(skills_tools)
-        self.assertEqual({"skills_list", "skill_view"}, skills_tools & resolved_tools)
+        self.assertEqual({"skills_list", "skill_view", "skill_manage"}, skills_tools & resolved_tools)
 
     def test_wecom_private_group_and_data_access_match_business_policy(self):
         config = _load_config()
