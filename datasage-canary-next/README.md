@@ -1,14 +1,15 @@
 # DataSage Canary Next
 
-这是本机 `datasage-canary-next` Profile 的源码目录。本轮结构收敛代码已安装，
-角色配置已按授权完成等价格式迁移；网关未重载，历史验收记录不代表当前进程已加载新代码。
-维护方式是在现有 Git 工作区和活动分支上原地修改、测试、审查与提交；
-不创建第二个安装实例，也不使用 `hermes profile install/update` 覆盖这个目录。
+这是本机 `datasage-canary-next` Profile 的源码目录，运行在未定制的官方
+Hermes 0.21.1（基底 `2237be355906fbe6065ce1815711eee52b2d646e`）上。
+维护方式是在当前 Git 原地维护 Profile：修改、测试、审查与提交；不创建第二个安装实例，
+也不使用 `hermes profile install/update` 覆盖这个目录。不维护 Hermes 分叉、不 shadow
+官方工具、不复制宿主组件或注入启动补丁；本次曾引入的五个宿主补丁已定向回退，历史保留。
 
-本机已安装 `skills-readonly` 及配套 Hermes 宿主补丁；原版
-Hermes 0.21.1 不包含该组。它复用原生 Skill 读取，不包含 `skill_manage`，并显式
-关闭 `skills.inline_shell`。七域与跨域方法是可选 reference，SOUL 现有规则保留。
-“已安装”指本机磁盘源码；当前网关是否加载及真实渠道验收仍单独记录，不能由磁盘版本推定。
+业务插件通过官方注册接口提供查询；方法使用官方 `skills` 组的 `skills_list` / `skill_view`。
+官方组同时包含 `skill_manage`，因此不再宣称有独立只读组：`skills.write_approval: true`
+使写入先进入待审批状态，`skills.inline_shell: false` 禁止读取Skill时执行内联命令。
+这是原生审批机制，不是自定义只读安全沙箱；不新增自动批准或替代loader。
 
 `.env`、认证信息、状态库、会话、日志、Memory 及其他运行数据属于用户态，
 不得提交，也不得由发行更新覆盖。企微和数据库权限不属于发行流程的修改范围。
@@ -26,16 +27,19 @@ DataSage 面向公司经营负责人及出库、销售、应收、财务、库�
 公共研究、普通写作、用户文件分析器，也不批准或执行业务决策。
 当前候选目标成熟度为 L3 数据专家；本候选版本不声明 L4 主动管理或主动巡检能力。
 
-候选 WeCom 入口声明 `clarify`、`datasage-query`、官方 `code_execution` 和 `skills-readonly`，所有已认证企微成员
-均可私聊和群聊，并共享七个经营域同一完整的 DataSage 查询面。Profile 不施加
-用户、群组、部门、实体、行或领域过滤；这不替代外部数据库授权。数据库执行仍为
-SELECT-only，并由治理查询合同、只读执行限制和 evidence 边界约束。
+WeCom 的原生 `platform_toolsets` 为 `clarify`、`datasage-query`、`skills`；
+已认证企微成员的私聊/群聊和七域查询权限不变。Profile 不增加用户、群、部门、实体、行或
+领域过滤；数据库仍受SELECT-only、查询合同和证据边界约束，不替代数据库账户授权。
 
-官方 `execute_code` 用于处理已取得的业务结果，沿用 Hermes 原生执行和审批机制，
-不另建恢复工具或分页协议。当前本机 Python 可以读取和修改进程权限内的文件；
-这不是仅限查询结果的文件隔离环境。DataSage 查询工具的 SELECT-only 约束不限制
-Python 的文件访问。原生审批是否再次提示取决于已有审批状态，当前配置也未将审批
-限定为机器所有者。
+企微不再暴露 `code_execution` 或任意终端/文件执行入口：官方基底不能原样提供此前定制的
+双只读挂载策略，不能静默降级到无限本地执行。已有受管计算、查询结果与本地受控报告/
+导出代码保留；通过聊天让模型自由运行Python、生成任意文件的能力目前不提供。
+维护CLI保持原有原生工具集，不能把维护权限视为企微权限。
+
+所有启动路径读取同一份本机 `config.yaml`。CMD/VBS由官方Windows生成器维护，
+`hermes --profile datasage-canary-next gateway start/restart/run` 使用同一Profile原生配置；
+不要求启动Podman，不依赖 `refactor-work` 中的程序。`agent.execution_guidance: false`
+关闭本Profile受限工具面不适用的附加执行指引；SOUL和业务合同继续提供判断边界。
 
 业务员个人目标、分摊实际和完成率使用 `salesperson_allocation` 的 split 账本作为
 独立权威来源；transaction-detail 基表仅用于诊断，不决定销售分摊覆盖，也不得在

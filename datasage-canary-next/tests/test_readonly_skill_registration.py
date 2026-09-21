@@ -9,10 +9,56 @@ re-exported into a new toolset without the host override capability.
 from __future__ import annotations
 
 from pathlib import Path
+import json
+import os
+import socket
+from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 
 class ReadonlySkillRegistrationTests(unittest.TestCase):
+    def test_official_skills_read_and_stage_writes_with_real_profile_config(self):
+        from hermes_constants import set_hermes_home_override, reset_hermes_home_override
+        from tools import skills_tool, skill_manager_tool, write_approval
+        from toolsets import resolve_toolset
+
+        with TemporaryDirectory(prefix="datasage-native-skills-") as directory:
+            home = Path(directory)
+            (home / "config.yaml").write_text(
+                "skills:\n  write_approval: true\n  inline_shell: false\n", encoding="utf-8")
+            skill = home / "skills" / "native-probe"
+            skill.mkdir(parents=True)
+            body = "---\nname: native-probe\ndescription: Synthetic native read.\n---\nOriginal body\n"
+            (skill / "SKILL.md").write_text(body, encoding="utf-8")
+            token = set_hermes_home_override(home)
+            try:
+                with patch.dict(os.environ, {"HERMES_HOME": str(home)}), \
+                     patch.object(Path, "home", return_value=home), \
+                     patch.object(skills_tool, "SKILLS_DIR", home / "skills"), \
+                     patch.object(skill_manager_tool, "SKILLS_DIR", home / "skills"), \
+                     patch.object(socket.socket, "connect", side_effect=AssertionError("network forbidden")), \
+                     patch("sqlite3.connect", side_effect=AssertionError("database forbidden")):
+                    self.assertEqual({"skills_list", "skill_view", "skill_manage"}, set(resolve_toolset("skills")))
+                    read = json.loads(skills_tool.skill_view("native-probe"))
+                    self.assertTrue(read["success"])
+                    self.assertIn("Original body", read["content"])
+                    result = json.loads(skill_manager_tool.skill_manage(
+                        action="create", name="pending-probe", content="Synthetic proposed skill"))
+                    self.assertTrue(result["staged"])
+                    self.assertIsNotNone(write_approval.get_pending(write_approval.SKILLS, result["pending_id"]))
+                    self.assertFalse((home / "skills" / "pending-probe").exists())
+                    self.assertEqual(body, (skill / "SKILL.md").read_text(encoding="utf-8"))
+            finally:
+                reset_hermes_home_override(token)
+
+    def test_official_inline_shell_is_disabled_by_profile_configuration(self):
+        from agent.skill_preprocessing import preprocess_skill_content
+        content = "Inspect this literal: !`echo should-not-execute`"
+        with patch("agent.skill_preprocessing.run_inline_shell", side_effect=AssertionError("shell forbidden")):
+            self.assertEqual(content, preprocess_skill_content(
+                content, None, skills_cfg={"inline_shell": False}))
+
     @staticmethod
     def _context(scope: str):
         from hermes_cli.plugins import PluginContext, PluginManager, PluginManifest

@@ -28,18 +28,17 @@ target、inventory、profit 和 pattern_matching。它提供事实、诊断和�
 过期、不可用或歧义无法消除时，升级到相应的指标/域负责人或人工审批人，
 不得自动批准、承诺或执行。
 
-候选 WeCom 的 Profile toolset 声明 `clarify`、`datasage-query`、官方 `code_execution` 和
-配套宿主提供的 `skills-readonly`；所有已认证企微
-成员均可私聊和群聊，并共享七个经营域同一完整的 DataSage 查询面。Profile 不施加
-用户、群组、部门、实体、行或领域过滤；这不替代外部数据库授权。三个查询工具的数据库执行仍为
-SELECT-only，并由治理查询合同、只读执行限制和 evidence 边界约束。Hermes 原生
-Skill 管理面不向 WeCom 暴露。
+WeCom 的原生 Profile toolset 声明 `clarify`、`datasage-query`、`skills`。
+宿主保持官方0.21.1基底源码，不依赖自定义工具组或宿主补丁。企微认证与七域查询权限不变；
+三个业务工具继续SELECT-only、合同校验和证据约束。官方skills组包含管理入口，写入由
+`skills.write_approval: true` 暂存待人工审批，`skills.inline_shell: false` 禁止内联执行；
+不把原生审批称为严格只读toolset，不新增工具重注册或loader。
 
-官方 `execute_code` 用于处理已取得的业务结果，沿用 Hermes 原生执行和审批机制，
-不另建恢复工具或分页协议。当前本机 Python 可以读取和修改进程权限内的文件；
-这不是仅限查询结果的文件隔离环境。DataSage 查询工具的 SELECT-only 约束不限制
-Python 的文件访问。原生审批是否再次提示取决于已有审批状态，当前配置也未将审批
-限定为机器所有者。
+企微不暴露任意 `execute_code`/终端/文件入口。官方基底无法原样实现此前定制的两目录
+显式挂载约束，故收窄任意执行而不是降级成本地无限执行。受管查询/计算和既有本地受控
+报告导出保留，聊天自由Python/任意文件生成目前不提供。维护CLI工具集保持原有设置。
+CMD/VBS由官方生成器维护，与gateway start/restart/run共用本机Profile配置，不运行
+refactor-work中的依赖。附加通用执行指引通过官方 `agent.execution_guidance: false` 关闭。
 本候选版本无有 owner 的 cron/主动巡检任务，因此不声明 L4 主动管理能力。
 
 业务员个人目标、分摊实际和完成率以 `salesperson_allocation` 的 split 账本为
@@ -75,9 +74,9 @@ Hermes 负责理解问题、选择指标和分析深度、安排工具调用、�
 
 `skills/business-analytics/datasage/SKILL.md` 只说明何时使用 DataSage、如何
 自适应分析和解释证据；已启用原生 Skill 读取的会话可选按需加载方法。
-候选宿主提供 `skills-readonly` 组，只引用原生 `skills_list` / `skill_view`，不含
-`skill_manage`；候选显式关闭 `skills.inline_shell`。读取仍会记录原生 usage 元数据，
-不等于 OS 隔离。WeCom 继续以 SOUL、公开工具 schema 和返回 evidence 为基础，
+使用官方 `skills` 组，不增设只读工具组；管理写入使用官方待审批机制，
+并关闭 `skills.inline_shell`。读取会记录原生usage元数据，不等于OS隔离。
+WeCom 继续以 SOUL、公开工具 schema 和返回 evidence 为基础，
 不以 `skill_view` 或 references 作为查询前置条件。Skill 不拥有指标能力、权限、物理查询或结论
 授权，也不再通过插件实现第二套 reference loader。
 

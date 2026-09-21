@@ -1,5 +1,8 @@
 # DataSage 维护与能力接入
 
+当前维护边界：官方Hermes0.21.1基底2237be3源码不做定制，只在本Profile的Git中维护业务。
+先前宿主补丁与Podman特殊启动入口已撤回；下面相关实验记录只作历史证据，不是现行部署要求。
+
 本 Profile 为 **L3 候选**。量化验收只以 [ARCHITECTURE.md](../ARCHITECTURE.md) 的
 “验收门槛（唯一量化真源）”为准；离线测试通过不等于业务验收或上线批准。
 本文供维护者使用，不是模型处理经营问题时的必读材料。
@@ -162,35 +165,27 @@ B04/B05/G01/G04缺完整业务覆盖与独立评审；B06/D01/D02/D05/H03/H05缺
 及真实恢复/发送等14项仍按用户要求暂缓，X05另需管理员核实旧包暴露史并决定处置。
 不因完成本地工作就把这些条件改记为通过，也不自动开放权限、启动服务或处置旧材料。
 
-### X03 网关执行配置（已接入，运行验收暂缓）
+### 官方宿主与原生启动
 
-配置仅作用于 `gateway-service/Hermes_Gateway_datasage-canary-next.cmd` 和同名 `.vbs`
-启动的单 Profile Gateway 子进程；同 Profile 的维护 CLI、本机运营脚本保持原环境。
-直接运行 `hermes gateway run`，以及 Windows 的 `hermes gateway start/restart` 直接派生路径，
-不会读取这两个入口的覆盖设置；授权启动隔离实例时应使用上述已配置入口，不能把其他启动路径标为已隔离。
+宿主受跟踪源码必须与官方基底 `2237be355906fbe6065ce1815711eee52b2d646e` 的树一致。
+先前五个定制提交通过定向revert撤回，Git历史和实验原始记录保留；不要把它们重新应用为
+Profile的安装前置条件，也不要用Profile monkey patch、shadow工具或复制宿主代码替代。
 
-| 宿主来源（相对本 Profile） | 容器路径 | 模式 |
-| --- | --- | --- |
-| `workspace/execution-input`（已批准的网关共享输入目录，当前为空） | `/input` | 只读 |
-| `skills/business-analytics/datasage` | `/root/.hermes/skills/business-analytics/datasage` | 只读 |
-| 不挂宿主目录；每个容器独立的 128 MiB tmpfs | `/output` | 容器内读写 |
+唯一生效配置是本机Profile的 `config.yaml`。企微原生工具集为
+`clarify`、`datasage-query`、`skills`；官方Skill写审批保持开启、inline shell关闭。
+官方skills组包含管理入口，写入先暂存待人工批准；没有定制的严格只读工具组。
+本Profile用官方 `agent.execution_guidance: false` 关闭与受限工具面冲突的附加执行指引。
+CLI维持其原有工具集，不能据此推定企微有相同权限。
 
-不挂载整个 Home、cache、report_runs、用户文档、凭据、会话或状态。
-输出使用绝对 `/output/...` 路径，由既有原生文件取回/媒体路径保存；远程 Python 内核
-有自己的工作目录，不把它假定为终端的 `cwd`。首次大查询结果与聚合预算 spillover
-均在需要时建立执行容器，继续使用原生临时文件回退，不要求模型重新查询数据。
+原有CMD/VBS由官方 `hermes_cli.gateway_windows` 生成器管理，与原生
+`hermes --profile datasage-canary-next gateway start/restart/run` 共用配置；不注入
+TERMINAL环境、不自动启动Podman、不依赖refactor-work。机器路径/凭据配置与生成入口
+继续Git忽略，保留原字节备份；不要把秘密或机器启动参数写入版本化源码。
 
-后端沿用已安装 Podman 的 Docker 接口及专用机器 `datasage-r4-01a0b8d5`，镜像固定为
-`public.ecr.aws/docker/library/python@sha256:de572b33eae61a53675a87bbd02b5e365df7b6b2b06c9276124e965cec08c452`。
-使用 `docker_auto_mounts=explicit`、关闭网络和宿主持久化、只读根文件系统，限制为2核/4 GiB。
-入口在实际启动时检查专用机器；后端不可用就停止，不退回 local。
-
-两个正式入口已安装上述配置，并通过安装后的 `--inspect-terminal` 检查；Gateway未启动。
-将来获得启动授权后，通过 `wscript.exe //B //Nologo <Profile>\gateway-service\Hermes_Gateway_datasage-canary-next.vbs`
-启动该隔离入口；只检查配置时使用 `cscript.exe //Nologo` 调用同一文件并传入 `--inspect-terminal`，不会启动服务。
-原文件保存在各自同名 `.before-x03` 文件中，已确认可恢复原字节。业务权限与共享Profile配置未改。
-回退应先保持网关停用，再恢复这两个备份；不能把未隔离的 local 当作自动恢复方案。
-原生服务重装/更新可能重建入口，届时应核对这些配置差量。当前状态以既有任务清单为准。
+当前不向企微提供任意代码/终端/文件执行，因为官方基底不能保持原定制容器的显式挂载
+限制。受管查询/计算与现有本地受控报告导出保留；自由Python/任意文件生成没有被伪装成
+已支持。历史容器与已保存材料不删除，Podman不再是此Profile运行前置条件。
+原生配置损坏/导入失败时的行为以官方实现为准，不再承诺已撤回补丁提供的额外保护。
 
 在仅含源码和合成数据的临时 Profile 目录使用宿主 Python：
 
