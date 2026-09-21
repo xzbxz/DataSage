@@ -35,6 +35,13 @@ duplicate/conflict status, and `has_more`/coverage state. Original currency
 comes from the matched outbound detail; the request's desired currency is not
 a conversion instruction.
 
+Verified linkage requires more than stable identity and currency. The live
+validation also requires a non-missing sales-side amount equal to the linked
+amount, compatible salesperson and product, and execution completion before
+delivery. Resolving a linked-amount conflict does not waive those checks;
+missing evidence stays unresolved unless the supplied scenario explicitly
+establishes that the matching conditions are satisfied.
+
 Found, feedback, sample, and linked-record evidence can overlap when the
 contract records them independently. Task and execution statuses, including
 completion-related values, remain source-exact; conflicts and undefined values

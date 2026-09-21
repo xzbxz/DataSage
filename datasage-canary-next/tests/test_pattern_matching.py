@@ -72,6 +72,15 @@ class PatternTests(unittest.TestCase):
         self.conn.execute('UPDATE vk_dwd.pattern_matching_dwd SET delivery_amount=NULL')
         self.assertIsNone(self.value('linked_delivery_amount')['metric_value'])
 
+    def test_identity_currency_and_internal_agreement_do_not_replace_sales_amount_check(self):
+        self.sale(1,30,'VND');self.sale(2,50,'VND')
+        self.row(detail=1,amount=20);self.row(task=2,execute=21,detail=1,amount=20)
+        self.row(task=3,execute=31,detail=2,amount=50)
+        f=self.value('linked_delivery_amount')
+        self.assertIsNone(f['metric_value'])
+        self.assertEqual(50,f['known_subset_value'])
+        self.assertEqual(2,f['unresolved_amount_rows'])
+
     def test_conflicting_states_are_not_final_status_and_presence_counts_overlap(self):
         self.row(found='y',suitable='y',status=2)
         self.row(execute=12,found='n',suitable=None,status=3,execute_status=0)
