@@ -13,6 +13,7 @@ auxiliary:
     # stay staged behind the write_approval gates below.
     enabled: false
 agent:
+  execution_guidance: false
   reasoning_effort: high
 tools:
   # DataSage adds three non-core tools to the standard Hermes host surface.
@@ -32,8 +33,7 @@ platform_toolsets:
   wecom:
     - clarify
     - datasage-query
-    - code_execution
-    - skills-readonly
+    - skills
 privacy:
   redact_pii: true
 security:
