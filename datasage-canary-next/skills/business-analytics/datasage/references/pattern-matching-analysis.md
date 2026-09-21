@@ -64,6 +64,12 @@ without presenting the disputed amount as a verified amount in that currency.
 A candidate match alone does not establish either fact; keep currency unknown
 when its own source evidence is missing or conflicting.
 
+Conflicting candidate amounts do not establish a lower or upper bound on the
+unresolved detail or complete total. Do not present their minimum and maximum
+as the size of the evidence gap. If explicitly asked for scenarios, state each
+assumption separately; the correct amount may differ from every observed
+candidate, so those scenarios do not bound the unknown governed total.
+
 ## Review prompts
 
 Open question: should a task-created cohort and linked-delivery amounts be
