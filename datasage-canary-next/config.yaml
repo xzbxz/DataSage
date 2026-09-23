@@ -178,8 +178,10 @@ platforms:
           allow_from: ["*"]
       # Slash-command gate: the host treats a scope with no admin as ungated,
       # which would let any member approve their own Skill or Memory write.
-      allow_admin_from: ["zhangzhengwei"]
-      group_allow_admin_from: ["zhangzhengwei"]
+      # This bot's callbacks report an open-userid (wo...), not the enterprise
+      # userid, so the approver has to be listed in that form.
+      allow_admin_from: ["wo8gxKDAAA0e36LXk9vXJ_nmbnmE2gzg"]
+      group_allow_admin_from: ["wo8gxKDAAA0e36LXk9vXJ_nmbnmE2gzg"]
       user_allowed_commands:
         - new
         - help
