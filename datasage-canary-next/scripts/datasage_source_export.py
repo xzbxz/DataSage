@@ -70,6 +70,7 @@ _ROOT_FILES = (
     "config.yaml",  # written as a generated, redacted template
     "profile.yaml",
     "docs/maintenance.md",
+    "docs/legacy-checklist-state-20260923.md",
     "docs/remediation-b-batch-20260923.md",
     "docs/remediation-c-batch-20260923.md",
     "docs/rule-ownership-20260923.md",

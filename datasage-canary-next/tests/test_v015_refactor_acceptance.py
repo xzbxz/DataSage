@@ -15,6 +15,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import types
 import unittest
@@ -699,6 +700,48 @@ class HostBoundaryAcceptanceTests(unittest.TestCase):
                 for entry in registration.tools
             )
         )
+
+
+class LegacyChecklistStateTests(unittest.TestCase):
+    """R32: the updated V1.0 ledger must cover every legacy item exactly once."""
+
+    LEDGER = PROFILE_ROOT / "docs/legacy-checklist-state-20260923.md"
+    STATUSES = ("源码已改善", "真实验收待做", "仍缺陷", "无需采用实验")
+    LEGACY_TASK_IDS = frozenset(
+        [f"A{index:02d}" for index in range(1, 6)]
+        + [f"B{index:02d}" for index in range(1, 7)]
+        + [f"C{index:02d}" for index in range(1, 6)]
+        + [f"D{index:02d}" for index in range(1, 6)]
+        + [f"E{index:02d}" for index in range(1, 6)]
+        + [f"F{index:02d}" for index in range(1, 6)]
+        + [f"G{index:02d}" for index in range(1, 5)]
+        + [f"H{index:02d}" for index in range(1, 7)]
+        + [f"I{index:02d}" for index in range(1, 5)]
+        + [f"X{index:02d}" for index in range(1, 6)]
+    )
+
+    def test_state_ledger_covers_every_legacy_item_exactly_once(self) -> None:
+        text = self.LEDGER.read_text(encoding="utf-8")
+        pattern = (
+            r"^\| ([A-Z]\d{2}) \| .+? \| (" + "|".join(self.STATUSES) + r") \|"
+        )
+        ids = [
+            match[0] for match in re.findall(pattern, text, re.MULTILINE)
+        ]
+        self.assertEqual(self.LEGACY_TASK_IDS, set(ids))
+        self.assertEqual(len(self.LEGACY_TASK_IDS), len(ids))
+        self.assertEqual(len(ids), len(set(ids)), "an item must appear once")
+        self.assertEqual(50, len(self.LEGACY_TASK_IDS))
+
+    def test_open_defect_stays_visible_with_its_pending_action(self) -> None:
+        text = self.LEDGER.read_text(encoding="utf-8")
+        rows = [
+            line
+            for line in text.splitlines()
+            if re.match(r"^\| [A-Z]\d{2} \|", line) and " 仍缺陷 " in line
+        ]
+        self.assertEqual(1, len(rows), rows)
+        self.assertIn("config.yaml", rows[0])
 
 
 if __name__ == "__main__":
