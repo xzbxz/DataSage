@@ -14,7 +14,7 @@ from .capability_contract import (
     SNAPSHOT_MONTHS_BEFORE_COMPARISON,
     assert_capability_boundary,
 )
-from . import analytical_handlers, capability_contract, contract_store
+from . import analytical_handlers, capability_contract, contract_store, public_fields
 from .scorecard import performance_scorecard_manifest
 
 _MODEL_PROJECTION_VERSION = "datasage-model-semantic-projection/v5"
@@ -1442,18 +1442,16 @@ def _catalog_expert_index(domain: str, planner: Mapping[str, Any]) -> dict[str, 
 
 
 def _result_fields_projection(definition: Mapping[str, Any], physical: set[str]) -> dict[str, Any]:
-    """Describe declared facts; the existing fact allowlist remains the authority."""
+    """Describe declared facts; the shared public-field allowlist is the authority."""
     raw = definition.get("result_fields")
     if raw is None:
         return {}
-    # Lazy import avoids a module initialization cycle with the executor.
-    from .tools import _PUBLIC_FACT_FIELDS
     if not isinstance(raw, Mapping) or not raw or "metric_value" not in raw:
         raise ContractFailure("CONTRACT_UNAVAILABLE", "Invalid result field semantics.")
     result = {}
     units = definition.get("result_fact_units") or {}
     for field, spec in raw.items():
-        if field not in _PUBLIC_FACT_FIELDS or not isinstance(spec, Mapping):
+        if field not in public_fields.PUBLIC_FACT_FIELDS or not isinstance(spec, Mapping):
             raise ContractFailure("CONTRACT_UNAVAILABLE", "Result field is not publicly permitted.")
         if set(spec) - {"meaning", "unit"} or not isinstance(spec.get("meaning"), str) or not spec["meaning"].strip():
             raise ContractFailure("CONTRACT_UNAVAILABLE", "Invalid result field description.")

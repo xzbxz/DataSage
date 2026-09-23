@@ -4,6 +4,7 @@ import importlib
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import types
@@ -42,6 +43,7 @@ entities = importlib.import_module(f"{TEST_PACKAGE}.entities")
 runtime_health = importlib.import_module(f"{TEST_PACKAGE}.runtime_health")
 sql_identifiers = importlib.import_module(f"{TEST_PACKAGE}.sql_identifiers")
 tools = importlib.import_module(f"{TEST_PACKAGE}.tools")
+public_fields = importlib.import_module(f"{TEST_PACKAGE}.public_fields")
 
 
 class ModuleDependencyTests(unittest.TestCase):
@@ -688,6 +690,50 @@ class ModuleDependencyTests(unittest.TestCase):
         self.assertEqual("DATABASE_IDENTITY_CHANGED", caught.exception.code)
         self.assertEqual("database_security", caught.exception.stage)
         security_delegate.close.assert_called_once()
+
+
+    # -- F07: the catalog projection must not import the execution center ----
+
+    ISOLATION_PACKAGE = "datasage_query_isolation_probe"
+
+    def test_public_field_authority_is_shared_not_owned_by_the_executor(self) -> None:
+        self.assertIs(tools._PUBLIC_FACT_FIELDS, public_fields.PUBLIC_FACT_FIELDS)
+        self.assertIn("metric_value", public_fields.PUBLIC_FACT_FIELDS)
+        self.assertIsInstance(public_fields.PUBLIC_FACT_FIELDS, frozenset)
+
+    def test_catalog_projection_does_not_import_the_execution_center(self) -> None:
+        """A contract-only consumer must never pull in tools.py (F07)."""
+
+        script_source = (
+            "import importlib, sys, types\n"
+            f"package = types.ModuleType({self.ISOLATION_PACKAGE!r})\n"
+            f"package.__path__ = [{str(PLUGIN_ROOT)!r}]\n"
+            f"sys.modules[{self.ISOLATION_PACKAGE!r}] = package\n"
+            f"contracts = importlib.import_module({self.ISOLATION_PACKAGE!r} + '.contracts')\n"
+            "try:\n"
+            "    contracts._result_fields_projection(\n"
+            "        {'result_fields': {'metric_value': {'meaning': 'probe'}}}, set()\n"
+            "    )\n"
+            "except Exception:\n"
+            "    pass\n"
+            "print(','.join(sorted(\n"
+            f"    name for name in sys.modules\n"
+            f"    if name.startswith({self.ISOLATION_PACKAGE!r} + '.')\n"
+            ")))\n"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            script = Path(temporary) / "probe.py"
+            script.write_text(script_source, encoding="utf-8")
+            completed = subprocess.run(
+                [sys.executable, "-B", str(script)],
+                capture_output=True,
+                text=True,
+                check=True,
+                cwd=str(PROFILE_ROOT),
+            )
+        loaded = [name for name in completed.stdout.strip().split(",") if name]
+        self.assertIn(f"{self.ISOLATION_PACKAGE}.public_fields", loaded)
+        self.assertNotIn(f"{self.ISOLATION_PACKAGE}.tools", loaded)
 
 
 if __name__ == "__main__":
