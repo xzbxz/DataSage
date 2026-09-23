@@ -128,15 +128,19 @@ class SourceExportTests(unittest.TestCase):
             ):
                 self.assertNotIn(str(approver), exported_text)
 
-    def test_every_remediation_record_is_in_the_export_allowlist(self) -> None:
+    def test_every_remediation_record_and_fixture_is_in_the_export_allowlist(self) -> None:
         """A new record must not be silently left out of the shareable source."""
 
         allowed = {str(item) for item in source_export.SOURCE_ALLOWLIST}
-        on_disk = sorted(
-            path.name for path in (ROOT / "docs").glob("remediation-*.md")
-        )
-        self.assertTrue(on_disk, "expected remediation records under docs/")
-        missing = [name for name in on_disk if f"docs/{name}" not in allowed]
+        missing: list[str] = []
+        for path in sorted((ROOT / "docs").glob("remediation-*.md")):
+            if f"docs/{path.name}" not in allowed:
+                missing.append(f"docs/{path.name}")
+        fixtures = sorted((ROOT / "tests" / "fixtures").glob("*.json"))
+        self.assertTrue(fixtures, "expected fixtures under tests/fixtures")
+        for path in fixtures:
+            if f"tests/fixtures/{path.name}" not in allowed:
+                missing.append(f"tests/fixtures/{path.name}")
         self.assertEqual([], missing, "add these to the export allowlist")
 
     def test_missing_contract_fails_closed(self) -> None:

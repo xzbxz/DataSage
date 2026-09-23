@@ -81,6 +81,7 @@ _ROOT_FILES = (
     "docs/remediation-r21-20260923.md",
     "docs/remediation-r22-20260923.md",
     "docs/remediation-r23-20260923.md",
+    "docs/remediation-r24-20260923.md",
     "docs/remediation-b-batch-20260923.md",
     "docs/remediation-c-batch-20260923.md",
     "docs/rule-ownership-20260923.md",
@@ -96,6 +97,7 @@ _ROOT_FILES = (
     "tests/test_session_isolation.py",
     "tests/test_prompt_injection_boundary.py",
     "tests/test_execution_budget_isolation.py",
+    "tests/test_external_verification_register.py",
 )
 
 _PLUGIN_PY = _paths(
@@ -454,6 +456,7 @@ _TEST_FIXTURES = _paths(
     (
         "business_acceptance_cases.json",
         "business_replay_contract.json",
+        "external_verification_register.json",
         "host_compaction_ordering.json",
         "legacy_customer_compatibility.json",
         "legacy_report_golden.json",

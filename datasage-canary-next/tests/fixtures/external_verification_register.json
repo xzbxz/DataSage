@@ -1,0 +1,109 @@
+{
+  "schema": "datasage-external-verification/v1",
+  "generated_for": "R24 (database, authorization and freshness closed by external owners) and R22 (retention scope)",
+  "policy": "A pending item blocks a full rollout: the profile is currently in canary mode (production_mode=false, require_tls=false), so plaintext transport, a privileged/legacy account and a source-port mismatch are all permitted. Nothing here may be marked accepted without an independent record, and no item may be changed by the assistant alone.",
+  "not_a_release_gate": true,
+  "items": [
+    {
+      "id": "db_account_grants",
+      "area": "数据库授权",
+      "owner_role": "DBA",
+      "request": "以只读方式核验该账号的实际权限：只读（SELECT 且无 GRANT OPTION）、可见库/表范围、有效期；返回 SHOW GRANTS 原文与账号标识。",
+      "evidence_format": "SHOW GRANTS 输出 + 账号/主机标识 + 核验日期",
+      "config_claim": {
+        "path": "plugins.entries.datasage-query.settings.mysql_allowed_grant_scopes",
+        "value": []
+      },
+      "status": "pending",
+      "independent_evidence": []
+    },
+    {
+      "id": "tls_transport",
+      "area": "传输安全",
+      "owner_role": "DBA＋平台管理员",
+      "request": "核验数据库连接是否强制 TLS 及其服务端身份。注意：当前 profile 为 canary，require_tls 与 production_mode 均为 false，明文传输被允许；若要求全员发布，需先给出开启条件或书面接受该风险的记录。",
+      "evidence_format": "服务端 TLS 配置/证书身份 + 开关决定（开启或书面风险接受）",
+      "config_claim": {
+        "path": "plugins.entries.datasage-query.settings.require_tls",
+        "value": false
+      },
+      "status": "pending",
+      "independent_evidence": []
+    },
+    {
+      "id": "server_identity_allowlist",
+      "area": "服务端身份",
+      "owner_role": "DBA＋平台管理员",
+      "request": "给出目标库的服务端 UUID 并确认白名单策略；production_mode 为 false 时该白名单不被强制。",
+      "evidence_format": "服务端 UUID + 白名单配置与生效证据",
+      "config_claim": {
+        "path": "plugins.entries.datasage-query.settings.production_mode",
+        "value": false
+      },
+      "status": "pending",
+      "independent_evidence": []
+    },
+    {
+      "id": "gateway_visibility_scope",
+      "area": "网关可见范围",
+      "owner_role": "平台管理员",
+      "request": "核验企微侧实际可见范围：哪些成员/群可达机器人、是否有非预期成员；确认与共享数据政策一致。",
+      "evidence_format": "成员/群清单 + 与政策的对照（含差异与处置）",
+      "config_claim": {
+        "path": "platforms.wecom.extra.dm_policy",
+        "value": "allowlist"
+      },
+      "status": "pending",
+      "independent_evidence": []
+    },
+    {
+      "id": "data_refresh_times",
+      "area": "数据时效",
+      "owner_role": "数据开发",
+      "request": "列出各源刷新时点、可见延迟与保留期；标注哪些指标因此只能按所在期间解释。",
+      "evidence_format": "逐源刷新时点表 + 允许最大延迟",
+      "config_claim": null,
+      "status": "pending",
+      "independent_evidence": []
+    },
+    {
+      "id": "log_and_artifact_retention",
+      "area": "日志与产物保留",
+      "owner_role": "数据 owner＋平台管理员",
+      "request": "确认 agent/gateway 日志、本机报表产物与导出物的保留周期、访问范围与销毁方式；与 R22 的用户授权范围一致。",
+      "evidence_format": "书面保留政策 + 访问范围与销毁记录",
+      "config_claim": null,
+      "status": "pending",
+      "independent_evidence": []
+    },
+    {
+      "id": "model_provider_data_scope",
+      "area": "模型供应方数据范围",
+      "owner_role": "平台管理员＋安全 owner",
+      "request": "确认模型供应方对输入数据的处理与保留范围（是否用于训练、保留多久），以及本 profile 使用的模型/供应方标识。",
+      "evidence_format": "供应方条款或数据处理说明 + 本 profile 实际模型配置",
+      "config_claim": {
+        "path": "model.provider",
+        "value": "deepseek"
+      },
+      "status": "pending",
+      "independent_evidence": []
+    },
+    {
+      "id": "authorized_data_scope",
+      "area": "授权数据范围",
+      "owner_role": "业务数据 owner",
+      "request": "书面确认共享渠道成员可见的业务数据范围（域/客户/组织）与该范围的授权依据；登记任何未接受的风险。",
+      "evidence_format": "书面范围授权 + 风险接受或限制措施",
+      "config_claim": null,
+      "status": "pending",
+      "independent_evidence": []
+    }
+  ],
+  "summary": {
+    "total": 8,
+    "pending": 8,
+    "accepted": 0,
+    "rejected": 0
+  }
+}
