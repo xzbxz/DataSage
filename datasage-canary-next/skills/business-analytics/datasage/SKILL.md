@@ -55,6 +55,16 @@ tool or reference is unavailable, say so when relevant and continue with SOUL,
 public tool schemas, and returned evidence; do not use arbitrary file or code
 execution to bypass the available Skill tools.
 
+## Channel capability
+
+What this session can deliver follows its tools, not this Skill. On WeCom the
+surface is clarification, the three governed DataSage tools and Skill reading,
+with Skill writes staged behind approval: reading user-supplied files, producing
+file output (documents, spreadsheets, PDF, decks), public research, and free
+code or SQL are out of scope there. State that limit and offer the operator path
+instead of describing a deliverable the channel cannot produce. Details:
+[`datasage.answer-boundary/v1`](references/answer-boundary.md) — Channel capability boundary.
+
 ## Quick Reference
 
 - [`datasage.query-rules/v1`](references/query-rules.md) owns request construction;

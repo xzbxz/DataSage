@@ -830,6 +830,36 @@ class ProductionSafetyTests(unittest.TestCase):
                 )
 
 class DistributionBoundaryTests(unittest.TestCase):
+    # The WeCom channel surface (R13): declared toolsets in config.yaml and the
+    # concrete tool names they resolve to.
+    WECOM_DECLARED_TOOLSETS = ("clarify", "datasage-query", "skills")
+    WECOM_SURFACE_TOOLS = frozenset(
+        {
+            "clarify",
+            "datasage_catalog",
+            "datasage_entity_resolve",
+            "datasage_query",
+            "skill_manage",
+            "skill_view",
+            "skills_list",
+        }
+    )
+    # Tools that would make a capability the boundary text calls absent reachable
+    # from this channel: file reads/writes, shell, free code execution, web.
+    CHANNEL_ABSENT_TOOLS = frozenset(
+        {
+            "read_file",
+            "write_file",
+            "patch",
+            "search_files",
+            "terminal",
+            "process_manage",
+            "execute_code",
+            "web_search",
+            "web_extract",
+        }
+    )
+
     @staticmethod
     def _catalog_call(request, result):
         return {
@@ -2428,6 +2458,64 @@ class DistributionBoundaryTests(unittest.TestCase):
                         "an env reference can expand to empty and silently "
                         "disable the approval gate",
                     )
+
+    def test_wecom_surface_matches_the_documented_capability_boundary(self) -> None:
+        """The channel promise must equal the tools the channel really has.
+
+        The declared toolset list comes from this profile's config; the concrete
+        tool names come from the host's own toolset resolution plus the plugin's
+        real register() output.  If a tool the boundary text declares absent ever
+        reaches this channel, this fails instead of the promise drifting.
+        """
+
+        config = yaml.safe_load(
+            (PROFILE_ROOT / "config.yaml").read_text(encoding="utf-8")
+        )
+        declared = [str(name) for name in config["platform_toolsets"]["wecom"]]
+        self.assertEqual(list(self.WECOM_DECLARED_TOOLSETS), declared)
+
+        host_root = Path(
+            os.environ.get(
+                "HERMES_AGENT_ROOT", PROFILE_ROOT.parent.parent / "hermes-agent"
+            )
+        )
+        spec = importlib.util.spec_from_file_location(
+            "_wecom_surface_host_toolsets", host_root / "toolsets.py"
+        )
+        if spec is None or spec.loader is None:
+            self.fail(f"cannot load the host toolset definitions from {host_root}")
+        host_toolsets = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(host_toolsets)
+
+        surface = set()
+        for name in declared:
+            if name in host_toolsets.TOOLSETS:
+                surface.update(host_toolsets.resolve_toolset(name))
+        _module, probe = probe_registration(
+            PLUGIN_ROOT, package_name="_wecom_surface_plugin_probe", config={}
+        )
+        surface.update(str(tool["name"]) for tool in probe.tools)
+
+        self.assertEqual(set(self.WECOM_SURFACE_TOOLS), surface)
+        self.assertEqual(
+            set(),
+            set(self.CHANNEL_ABSENT_TOOLS) & surface,
+            "a tool the boundary text declares absent appeared on the channel",
+        )
+
+        boundary = " ".join(
+            (SKILL_PATH.parent / "references" / "answer-boundary.md")
+            .read_text(encoding="utf-8")
+            .split()
+        )
+        for phrase in (
+            "user-supplied files",
+            "file output",
+            "public/external research",
+            "Never report such a task as done",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, boundary)
 
     def test_automatic_review_is_off_and_manual_review_writes_still_stage(self):
         parsed_config = yaml.safe_load(

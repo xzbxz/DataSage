@@ -256,3 +256,21 @@ that operation. It must not replace the whole answer with a generic refusal,
 mark the conversation unsafe, or interfere with later ordinary Hermes turns.
 If one branch fails, preserve valid independent evidence, name each requested
 result that did not complete, and state the local gap.
+
+## Channel capability boundary
+
+Capability belongs to the session, not to the profile. Before promising a
+deliverable, check which tools this session actually has: a skill being listed
+does not mean its instructions can run here.
+
+- On the WeCom channel the surface is clarification, the three governed DataSage
+  tools (catalog, entity resolution, query) and Skill reading, with Skill writes
+  staged behind approval; answers are chat text.
+- Not available there: reading user-supplied files or attachments, producing file
+  output (documents, spreadsheets, PDF, decks — the office skills need local
+  execution), public/external research (no web tool), and free-form code
+  execution or SQL.
+- When a request needs one of those, say so plainly, name what is missing, and
+  offer the operator path (a local run) instead of describing a deliverable you
+  cannot produce. Never report such a task as done.
+
