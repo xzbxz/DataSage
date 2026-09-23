@@ -1,6 +1,8 @@
 """R30: measure the maintenance surface, detect orphan candidates, size a change.
 
-``measure`` counts the maintenance surface, finds files with no inbound reference and no
+``measure`` counts the maintenance surface of the reviewed commit (tracked files only, so
+the numbers reproduce in any checkout), records files that sit outside that commit as
+unreviewed extras awaiting a decision, finds tracked files with no inbound reference and no
 owner, and measures the fan-out of a rule, metric or test change from this workspace and
 from real git history.  ``write`` merges the measurement into the baseline register.
 ``check`` reports drift.
@@ -38,6 +40,50 @@ RETENTION_ARTIFACTS = (
 DISPOSITIONS = ("keep_documented", "add_owner", "merge_with_neighbour", "removal_requires_owner")
 
 
+
+def _tracked(relative: str) -> set[str] | None:
+    """Return the tracked file names under one directory, or None outside a repository.
+
+    Measuring the tracked source keeps the numbers reproducible in any checkout and matches
+    this profile's rule that the reviewed commit - not whatever sits on disk - is the truth
+    source.
+    """
+
+    completed = subprocess.run(
+        ["git", "-C", str(PROFILE_ROOT), "ls-files", "--", relative],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return None
+    return {Path(line).name for line in completed.stdout.splitlines() if line.strip()}
+
+
+def measure_unreviewed_extras() -> list[dict[str, Any]]:
+    """Files present on disk that are not part of the reviewed commit.
+
+    These are recorded for a decision - track them or remove them - and are deliberately
+    excluded from the guarded surface counts, which only cover tracked files.
+    """
+
+    extras: list[dict[str, Any]] = []
+    for relative in ("docs", "tests", "tests/fixtures", "scripts", "plugins/datasage-query"):
+        tracked = _tracked(relative)
+        if tracked is None:
+            return []
+        directory = PROFILE_ROOT / relative
+        for path in sorted(directory.glob("*")):
+            if path.is_file() and path.name not in tracked:
+                extras.append(
+                    {
+                        "path": f"{relative}/{path.name}",
+                        "decision_required": "track it in the reviewed source or remove it",
+                    }
+                )
+    return extras
+
+
 def _lines(path: Path) -> int:
     return len(path.read_text(encoding="utf-8", errors="replace").splitlines())
 
@@ -52,35 +98,46 @@ SELF_WRITTEN = {"maintenance_cost_baseline.json"}
 
 
 def measure_surface() -> dict[str, Any]:
-    categories = {
-        "plugin_modules": sorted(PLUGIN.glob("*.py")),
-        "contract_yaml": sorted(CONTRACTS.glob("*.yaml")) if CONTRACTS.is_dir() else [],
-        "plugin_docs": sorted(PLUGIN.glob("*.md")),
-        "tests": sorted(TESTS.glob("test_*.py")),
-        "test_helpers": sorted(TESTS.glob("*.py")) and sorted(
-            path for path in TESTS.glob("*.py") if not path.name.startswith("test_")
+    projectors = {
+        "plugin_modules": ("plugins/datasage-query", sorted(PLUGIN.glob("*.py"))),
+        "contract_yaml": (
+            "plugins/datasage-query/contracts",
+            sorted(CONTRACTS.glob("*.yaml")) if CONTRACTS.is_dir() else [],
         ),
-        "fixtures": sorted(
-            path for path in FIXTURES.glob("*.json") if path.name not in SELF_WRITTEN
+        "plugin_docs": ("plugins/datasage-query", sorted(PLUGIN.glob("*.md"))),
+        "tests": ("tests", sorted(TESTS.glob("test_*.py"))),
+        "test_helpers": (
+            "tests",
+            sorted(path for path in TESTS.glob("*.py") if not path.name.startswith("test_")),
         ),
-        "scripts": sorted(SCRIPTS.glob("*.py")),
-        "docs": sorted(DOCS.glob("*.md")),
-        "skill_files_all": sorted(SKILLS.rglob("*.md")),
-        "skill_files_datasage": sorted(SKILLS.rglob("datasage/**/*.md")),
+        "fixtures": ("tests/fixtures", sorted(FIXTURES.glob("*.json"))),
+        "scripts": ("scripts", sorted(SCRIPTS.glob("*.py"))),
+        "docs": ("docs", sorted(DOCS.glob("*.md"))),
+        "skill_files_datasage": (
+            "skills/business-analytics/datasage",
+            sorted((SKILLS / "business-analytics" / "datasage").rglob("*.md")),
+        ),
     }
-    return {
-        name: _count(paths)
-        | {
-            "names": [path.name for path in paths],
+    measured: dict[str, Any] = {}
+    for name, (relative, paths) in projectors.items():
+        tracked = _tracked(relative) if relative else None
+        selected = (
+            [path for path in paths if path.name in tracked] if tracked is not None else paths
+        )
+        if name == "fixtures":
+            selected = [path for path in selected if path.name not in SELF_WRITTEN]
+        measured[name] = _count(selected) | {
+            "names": [path.name for path in selected],
+            "source": "tracked files" if tracked is not None else "working copy",
             "note": (
-                "excludes this script's own register: "
-                + ", ".join(sorted(SELF_WRITTEN))
-                if name == "fixtures"
+                "measured from the reviewed commit, excluding this script's own register"
+                if tracked is not None and name == "fixtures"
+                else "measured from the reviewed commit"
+                if tracked is not None
                 else ""
             ),
         }
-        for name, paths in categories.items()
-    }
+    return measured
 
 
 def _inbound_mentions(module: Path) -> int:
@@ -265,6 +322,7 @@ def measure_change_cost() -> dict[str, Any]:
 def measure() -> dict[str, Any]:
     return {
         "surface": measure_surface(),
+        "unreviewed_extras": measure_unreviewed_extras(),
         "orphan_candidates": detect_orphan_candidates(),
         "change_cost": measure_change_cost(),
     }
@@ -287,6 +345,20 @@ def write_register() -> int:
                 merged_item[key] = previous_item[key]
         merged.append(merged_item)
     register["orphan_candidates"] = merged
+    extras = measured["unreviewed_extras"]
+    declared = {
+        entry["path"]: entry for entry in (register.get("declared_unreviewed_extras") or [])
+    }
+    register["declared_unreviewed_extras"] = [
+        {
+            "path": entry["path"],
+            "decision_required": declared.get(entry["path"], entry).get(
+                "decision_required", entry["decision_required"]
+            ),
+            "decision": declared.get(entry["path"], {}).get("decision"),
+        }
+        for entry in extras
+    ]
     register["orphan_totals"] = {
         "total": len(merged),
         "with_owner": sum(1 for item in merged if item.get("owner")),
@@ -309,6 +381,14 @@ def check() -> int:
             problems.append(f"{key} drifted from the workspace")
     if register.get("orphan_candidates") != measured["orphan_candidates"]:
         problems.append("orphan_candidates drifted from the workspace")
+    declared_paths = {
+        entry["path"] for entry in (register.get("declared_unreviewed_extras") or [])
+    }
+    for entry in measured["unreviewed_extras"]:
+        if entry["path"] not in declared_paths:
+            problems.append(
+                f"{entry['path']} is not in the reviewed commit and is not declared"
+            )
     for path in RETENTION_ARTIFACTS:
         if not (PROFILE_ROOT / path).exists():
             problems.append(f"retention artifact disappeared: {path}")

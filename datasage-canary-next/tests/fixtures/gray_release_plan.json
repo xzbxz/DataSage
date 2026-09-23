@@ -1,0 +1,308 @@
+{
+  "schema": "datasage-gray-release-plan/v1",
+  "policy": "按依赖顺序扩围：没有前一阶段的回执不进入下一阶段；每个阶段都写清扩围判据与停止判据；停止判据一旦命中即停止扩围并保留现场。助手只准备步骤与判定口径，不背书、不代签发布；发布背书始终归具名人类 owner。回退与恢复必须在本机克隆里演练过才写进计划。",
+  "topology": {
+    "profile_relative_path": "datasage-canary-next",
+    "host_runtime_requirement": "相邻官方 Hermes 运行时（HERMES_AGENT_ROOT 下需有 hermes_constants.py），工作流入口缺失即拒绝执行",
+    "host_tag": "v2026.9.7-6-g095947d8e",
+    "registered_plugins": [
+      "datasage-query"
+    ],
+    "channels": [
+      "wecom"
+    ],
+    "schedule_registered": false,
+    "production_mode": false,
+    "require_tls": false,
+    "note": "本 worktree 即线上 profile；数据面为只读，运行入口属 operator 边界。"
+  },
+  "blocking_preconditions": {
+    "surfaces": [
+      "domain.delivery",
+      "domain.receipt",
+      "domain.receivable",
+      "domain.target",
+      "domain.inventory",
+      "domain.pattern_matching",
+      "domain.profit",
+      "analysis.cross_domain_reasoning",
+      "security.data_source_and_privacy"
+    ],
+    "source_note": "矩阵状态来自 R27 发布矩阵；外部项来自 R24 登记册（8 项全部 pending）。",
+    "items": [
+      {
+        "id": "db_account_grants",
+        "item": "以只读方式核验该账号的实际权限：只读（SELECT 且无 GRANT OPTION）、可见库/表范围、有效期；返回 SHOW GRANTS 原文与账号标识",
+        "source": "tests/fixtures/external_verification_register.json",
+        "status": "pending"
+      },
+      {
+        "id": "tls_transport",
+        "item": "核验数据库连接是否强制 TLS 及其服务端身份",
+        "source": "tests/fixtures/external_verification_register.json",
+        "status": "pending"
+      },
+      {
+        "id": "server_identity_allowlist",
+        "item": "给出目标库的服务端 UUID 并确认白名单策略；production_mode 为 false 时该白名单不被强制",
+        "source": "tests/fixtures/external_verification_register.json",
+        "status": "pending"
+      },
+      {
+        "id": "gateway_visibility_scope",
+        "item": "核验企微侧实际可见范围：哪些成员/群可达机器人、是否有非预期成员；确认与共享数据政策一致",
+        "source": "tests/fixtures/external_verification_register.json",
+        "status": "pending"
+      },
+      {
+        "id": "data_refresh_times",
+        "item": "列出各源刷新时点、可见延迟与保留期；标注哪些指标因此只能按所在期间解释",
+        "source": "tests/fixtures/external_verification_register.json",
+        "status": "pending"
+      },
+      {
+        "id": "log_and_artifact_retention",
+        "item": "确认 agent/gateway 日志、本机报表产物与导出物的保留周期、访问范围与销毁方式；与 R22 的用户授权范围一致",
+        "source": "tests/fixtures/external_verification_register.json",
+        "status": "pending"
+      },
+      {
+        "id": "model_provider_data_scope",
+        "item": "确认模型供应方对输入数据的处理与保留范围（是否用于训练、保留多久），以及本 profile 使用的模型/供应方标识",
+        "source": "tests/fixtures/external_verification_register.json",
+        "status": "pending"
+      },
+      {
+        "id": "authorized_data_scope",
+        "item": "书面确认共享渠道成员可见的业务数据范围（域/客户/组织）与该范围的授权依据；登记任何未接受的风险",
+        "source": "tests/fixtures/external_verification_register.json",
+        "status": "pending"
+      },
+      {
+        "id": "metric_independent_truth",
+        "item": "215 个指标的独立真值（当前 verified=0）",
+        "source": "tests/fixtures/metric_readiness_register.json",
+        "status": "pending"
+      },
+      {
+        "id": "case_independent_review",
+        "item": "24 个业务案例的独立业务评审（当前 0 案已评审、0 案已执行）",
+        "source": "tests/fixtures/release_matrix.json",
+        "status": "pending"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "id": "stage_0_shadow",
+      "order": 1,
+      "name": "本机只读影子回放（不对外）",
+      "depends_on": [],
+      "expansion_criteria": "本机全部守卫通过且目标用例可复现；无阻断缺陷",
+      "stop_criteria": "出现身份错配、越权数据访问或超时未释放任一即停",
+      "receipt_required": "本机执行记录（命令与结果）",
+      "owner_role": "开发",
+      "status": "not_started",
+      "receipt": null
+    },
+    {
+      "id": "stage_1_owner_dm",
+      "order": 2,
+      "name": "内部 owner 企微私聊灰度",
+      "depends_on": [
+        "stage_0_shadow"
+      ],
+      "expansion_criteria": "运营 owner 私聊可用且无阻断问题；R14 审批回执到位（owner 显示 admin、非 owner 被拒）",
+      "stop_criteria": "审批门失效，或出现越权写入/批准",
+      "receipt_required": "运营 owner 书面确认 + 审批门实测记录",
+      "owner_role": "运营 owner",
+      "status": "not_started",
+      "receipt": null
+    },
+    {
+      "id": "stage_2_small_group",
+      "order": 3,
+      "name": "单一内部群灰度",
+      "depends_on": [
+        "stage_1_owner_dm"
+      ],
+      "expansion_criteria": "R13 渠道回执到位（工具面与隐藏 Skill 与文档一致）；单个内部群无越界答案",
+      "stop_criteria": "非预期成员可达，或答案超出授权数据范围",
+      "receipt_required": "群主确认 + 渠道边界实测记录",
+      "owner_role": "平台管理员",
+      "status": "not_started",
+      "receipt": null
+    },
+    {
+      "id": "stage_3_full_rollout",
+      "order": 4,
+      "name": "全员发布",
+      "depends_on": [
+        "stage_2_small_group"
+      ],
+      "expansion_criteria": "blocking_preconditions 全部 accepted（含 R24 传输安全与授权、R16/R27 各能力面的 owner 决定）；发布矩阵逐能力面与实际一致",
+      "stop_criteria": "任一风险未接受，或矩阵中仍存在 unverified/blocked_external 能力",
+      "receipt_required": "发布 owner 签字（助手不代签）",
+      "owner_role": "发布 owner",
+      "status": "not_started",
+      "receipt": null
+    }
+  ],
+  "rollback": {
+    "method": "measured",
+    "steps": [
+      {
+        "id": "rb_1_freeze",
+        "action": "停止扩围：不注册调度、不打开发送开关，保持 bindings 全 false",
+        "verification": "bindings 开关仍全为 false 且无 cron 作业",
+        "verification_command": "python -B tests/maintenance_cost.py check"
+      },
+      {
+        "id": "rb_2_revert",
+        "action": "在克隆/工作区回退到已复核提交（git revert 或 checkout）",
+        "verification": "工作区干净且回退后守卫仍通过",
+        "verification_command": "git revert --no-commit HEAD && python -B -m unittest discover -s tests -p test_integration_boundaries.py"
+      },
+      {
+        "id": "rb_3_config",
+        "action": "配置以受跟踪的已复核版本为准（宿主规范化差异用 git checkout 恢复）",
+        "verification": "config.yaml 与已复核版本语义一致",
+        "verification_command": "git status --porcelain datasage-canary-next/config.yaml"
+      },
+      {
+        "id": "rb_4_restore",
+        "action": "恢复并复跑守卫，确认回到回退前状态",
+        "verification": "HEAD 与回退前一致、工作区干净、守卫全绿",
+        "verification_command": "git reset --hard HEAD"
+      }
+    ],
+    "rehearsal": {
+      "clone_note": "rehearsed in a local clone only, never in the live profile; the clone carries the reviewed commit plus the working-tree change set (including the repository-root allowlists), committed inside the clone",
+      "self_referential_guard": "tests/test_gray_release_plan.py is excluded from this rehearsal: it is the artifact the rehearsal fills, so it is verified in the workspace after the record lands",
+      "base_commit": "4dccc61",
+      "rehearsal_commit": "ee4549a",
+      "change_set_file_count": 10,
+      "reverted_file_count": 10,
+      "reverted_files": [
+        ".gitignore",
+        "datasage-canary-next/docs/remediation-r30-20260923.md",
+        "datasage-canary-next/docs/remediation-r31-20260923.md",
+        "datasage-canary-next/scripts/datasage_source_export.py",
+        "datasage-canary-next/tests/context_cost.py",
+        "datasage-canary-next/tests/fixtures/context_cost_baseline.json",
+        "datasage-canary-next/tests/fixtures/gray_release_plan.json",
+        "datasage-canary-next/tests/fixtures/maintenance_cost_baseline.json",
+        "datasage-canary-next/tests/maintenance_cost.py",
+        "datasage-canary-next/tests/test_gray_release_plan.py"
+      ],
+      "head_before": "ee4549a",
+      "head_after": "ee4549a",
+      "clean_after_restore": true,
+      "guards_at_head": [
+        {
+          "file": "test_integration_boundaries.py",
+          "returncode": 0,
+          "summary": "Ran 52 tests in 9.972s | OK",
+          "failures": []
+        },
+        {
+          "file": "test_source_export.py",
+          "returncode": 0,
+          "summary": "Ran 13 tests in 54.936s | OK (skipped=1)",
+          "failures": []
+        },
+        {
+          "file": "test_release_matrix.py",
+          "returncode": 0,
+          "summary": "Ran 8 tests in 0.006s | OK",
+          "failures": []
+        },
+        {
+          "file": "test_context_cost_baseline.py",
+          "returncode": 0,
+          "summary": "Ran 6 tests in 0.874s | OK",
+          "failures": []
+        },
+        {
+          "file": "test_maintenance_cost_baseline.py",
+          "returncode": 0,
+          "summary": "Ran 6 tests in 12.684s | OK",
+          "failures": []
+        }
+      ],
+      "guards_after_revert": [
+        {
+          "file": "test_integration_boundaries.py",
+          "returncode": 0,
+          "summary": "Ran 52 tests in 10.153s | OK",
+          "failures": []
+        },
+        {
+          "file": "test_source_export.py",
+          "returncode": 0,
+          "summary": "Ran 13 tests in 55.852s | OK (skipped=1)",
+          "failures": []
+        },
+        {
+          "file": "test_release_matrix.py",
+          "returncode": 0,
+          "summary": "Ran 8 tests in 0.005s | OK",
+          "failures": []
+        },
+        {
+          "file": "test_context_cost_baseline.py",
+          "returncode": 0,
+          "summary": "Ran 6 tests in 0.856s | OK",
+          "failures": []
+        },
+        {
+          "file": "test_maintenance_cost_baseline.py",
+          "returncode": 1,
+          "summary": "Ran 6 tests in 15.696s | FAILED (failures=2)",
+          "failures": [
+            "FAIL: test_the_baseline_still_matches_the_workspace (test_maintenance_cost_baseline.MaintenanceCostBaselineTests.test_the_baseline_still_matches_the_workspace) (key='surface')",
+            "FAIL: test_the_baseline_still_matches_the_workspace (test_maintenance_cost_baseline.MaintenanceCostBaselineTests.test_the_baseline_still_matches_the_workspace) (key='orphan_candidates')"
+          ]
+        }
+      ],
+      "guards_after_restore": [
+        {
+          "file": "test_integration_boundaries.py",
+          "returncode": 0,
+          "summary": "Ran 52 tests in 10.144s | OK",
+          "failures": []
+        },
+        {
+          "file": "test_source_export.py",
+          "returncode": 0,
+          "summary": "Ran 13 tests in 56.816s | OK (skipped=1)",
+          "failures": []
+        },
+        {
+          "file": "test_release_matrix.py",
+          "returncode": 0,
+          "summary": "Ran 8 tests in 0.005s | OK",
+          "failures": []
+        },
+        {
+          "file": "test_context_cost_baseline.py",
+          "returncode": 0,
+          "summary": "Ran 6 tests in 0.909s | OK",
+          "failures": []
+        },
+        {
+          "file": "test_maintenance_cost_baseline.py",
+          "returncode": 0,
+          "summary": "Ran 6 tests in 12.820s | OK",
+          "failures": []
+        }
+      ],
+      "after_revert_note": "回退把变更集整体退回到变更前状态：其中一个守卫在此态为红是真实信息——变更前版本的测量实现不可移植到干净 checkout（本变更集正是为修掉它而做的）。恢复后全部守卫重新变绿。"
+    }
+  },
+  "release_endorsement": {
+    "signed_by": null,
+    "signed_on": null,
+    "note": "助手不代签发布：签名必须由具名发布 owner 完成，且只能在全阶段回执齐全后。"
+  }
+}

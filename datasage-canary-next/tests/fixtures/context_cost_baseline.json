@@ -76,7 +76,7 @@
         "datasage_query"
       ],
       "provided_tool_count": 3,
-      "manifest_bytes": 3541,
+      "manifest_bytes": 3491,
       "channel_tool_count": 7,
       "channel_tool_note": "native clarify + three datasage tools + skills group (R13 probe)"
     },

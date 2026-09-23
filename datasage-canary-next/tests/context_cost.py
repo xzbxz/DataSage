@@ -43,9 +43,28 @@ def _bytes(text: str) -> int:
     return len(text.encode("utf-8"))
 
 
+def _tracked_names(relative: str) -> set[str] | None:
+    """Tracked file names under one directory, so the numbers reproduce in any checkout."""
+
+    import subprocess
+
+    completed = subprocess.run(
+        ["git", "-C", str(PROFILE_ROOT), "ls-files", "--", relative],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return None
+    return {Path(line).name for line in completed.stdout.splitlines() if line.strip()}
+
+
 def measure_skill_context() -> dict[str, Any]:
+    tracked = _tracked_names("skills/business-analytics/datasage")
     files = {}
     for path in sorted(SKILL_ROOT.rglob("*.md")):
+        if tracked is not None and path.name not in tracked:
+            continue
         text = path.read_text(encoding="utf-8")
         files[str(path.relative_to(SKILL_ROOT)).replace("\\", "/")] = {
             "characters": len(text),
@@ -65,10 +84,13 @@ def measure_tool_surface() -> dict[str, Any]:
 
     manifest = yaml.safe_load(PLUGIN_MANIFEST.read_text(encoding="utf-8"))
     provided = [str(name) for name in manifest.get("provides_tools") or []]
+    manifest_text = PLUGIN_MANIFEST.read_text(encoding="utf-8")
     return {
         "provided_tool_names": [name for name in provided],
         "provided_tool_count": len(provided),
-        "manifest_bytes": PLUGIN_MANIFEST.stat().st_size,
+        # Byte count of the reviewed text with line endings normalised, so a checkout with
+        # LF and a working copy with CRLF measure the same.
+        "manifest_bytes": _bytes(manifest_text),
         "channel_tool_count": 7,
         "channel_tool_note": "native clarify + three datasage tools + skills group (R13 probe)",
     }

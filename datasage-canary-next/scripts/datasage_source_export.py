@@ -87,6 +87,7 @@ _ROOT_FILES = (
     "docs/remediation-r28-20260923.md",
     "docs/remediation-r27-20260923.md",
     "docs/remediation-r30-20260923.md",
+    "docs/remediation-r31-20260923.md",
     "docs/remediation-b-batch-20260923.md",
     "docs/remediation-c-batch-20260923.md",
     "docs/rule-ownership-20260923.md",
@@ -111,6 +112,7 @@ _ROOT_FILES = (
     "tests/test_context_cost_baseline.py",
     "tests/test_release_matrix.py",
     "tests/test_maintenance_cost_baseline.py",
+    "tests/test_gray_release_plan.py",
 )
 
 _PLUGIN_PY = _paths(
@@ -477,6 +479,7 @@ _TEST_FIXTURES = _paths(
         "context_cost_baseline.json",
         "release_matrix.json",
         "maintenance_cost_baseline.json",
+        "gray_release_plan.json",
         "reviewed_host_skills.json",
     ),
 )
