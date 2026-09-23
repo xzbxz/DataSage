@@ -81,6 +81,8 @@ _ROOT_FILES = (
     "docs/source-export.md",
     "scripts/datasage_source_export.py",
     "tests/test_source_export.py",
+    "tests/metric_readiness.py",
+    "tests/test_metric_readiness_register.py",
 )
 
 _PLUGIN_PY = _paths(
@@ -442,6 +444,7 @@ _TEST_FIXTURES = _paths(
         "host_compaction_ordering.json",
         "legacy_customer_compatibility.json",
         "legacy_report_golden.json",
+        "metric_readiness_register.json",
         "reviewed_host_skills.json",
     ),
 )
