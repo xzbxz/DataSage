@@ -86,6 +86,7 @@ _ROOT_FILES = (
     "docs/remediation-r26-20260923.md",
     "docs/remediation-r28-20260923.md",
     "docs/remediation-r27-20260923.md",
+    "docs/remediation-r30-20260923.md",
     "docs/remediation-b-batch-20260923.md",
     "docs/remediation-c-batch-20260923.md",
     "docs/rule-ownership-20260923.md",
@@ -97,6 +98,7 @@ _ROOT_FILES = (
     "tests/metric_readiness.py",
     "tests/context_cost.py",
     "tests/release_matrix.py",
+    "tests/maintenance_cost.py",
     "tests/test_metric_readiness_register.py",
     "tests/test_domain_diagnostic_paths.py",
     "tests/test_answer_presentation.py",
@@ -108,6 +110,7 @@ _ROOT_FILES = (
     "tests/test_artifact_integrity.py",
     "tests/test_context_cost_baseline.py",
     "tests/test_release_matrix.py",
+    "tests/test_maintenance_cost_baseline.py",
 )
 
 _PLUGIN_PY = _paths(
@@ -473,6 +476,7 @@ _TEST_FIXTURES = _paths(
         "metric_readiness_register.json",
         "context_cost_baseline.json",
         "release_matrix.json",
+        "maintenance_cost_baseline.json",
         "reviewed_host_skills.json",
     ),
 )

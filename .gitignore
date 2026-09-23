@@ -115,11 +115,14 @@ datasage-canary-next/*
 !datasage-canary-next/tests/test_context_cost_baseline.py
 !datasage-canary-next/tests/context_cost.py
 !datasage-canary-next/tests/release_matrix.py
+!datasage-canary-next/tests/maintenance_cost.py
+!datasage-canary-next/tests/test_maintenance_cost_baseline.py
 !datasage-canary-next/tests/test_release_matrix.py
 !datasage-canary-next/tests/fixtures/metric_readiness_register.json
 !datasage-canary-next/tests/fixtures/external_verification_register.json
 !datasage-canary-next/tests/fixtures/context_cost_baseline.json
 !datasage-canary-next/tests/fixtures/release_matrix.json
+!datasage-canary-next/tests/fixtures/maintenance_cost_baseline.json
 !datasage-canary-next/tests/test_request_contract_equivalence.py
 !datasage-canary-next/tests/test_semantic_inventory.py
 !datasage-canary-next/tests/test_v015_refactor_acceptance.py
@@ -365,6 +368,7 @@ datasage-canary-next/docs/workflow-runtime-acceptance.md
 !datasage-canary-next/docs/remediation-r26-20260923.md
 !datasage-canary-next/docs/remediation-r28-20260923.md
 !datasage-canary-next/docs/remediation-r27-20260923.md
+!datasage-canary-next/docs/remediation-r30-20260923.md
 !datasage-canary-next/docs/remediation-b-batch-20260923.md
 !datasage-canary-next/docs/remediation-c-batch-20260923.md
 !datasage-canary-next/docs/rule-ownership-20260923.md
