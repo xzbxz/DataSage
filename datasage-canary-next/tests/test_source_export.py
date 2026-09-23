@@ -128,6 +128,17 @@ class SourceExportTests(unittest.TestCase):
             ):
                 self.assertNotIn(str(approver), exported_text)
 
+    def test_every_remediation_record_is_in_the_export_allowlist(self) -> None:
+        """A new record must not be silently left out of the shareable source."""
+
+        allowed = {str(item) for item in source_export.SOURCE_ALLOWLIST}
+        on_disk = sorted(
+            path.name for path in (ROOT / "docs").glob("remediation-*.md")
+        )
+        self.assertTrue(on_disk, "expected remediation records under docs/")
+        missing = [name for name in on_disk if f"docs/{name}" not in allowed]
+        self.assertEqual([], missing, "add these to the export allowlist")
+
     def test_missing_contract_fails_closed(self) -> None:
         with TemporaryDirectory(prefix="datasage-source-export-test-") as temporary:
             candidate = self._copy_candidate(Path(temporary))

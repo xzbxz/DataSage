@@ -73,6 +73,8 @@ _ROOT_FILES = (
     "docs/legacy-checklist-state-20260923.md",
     "docs/remediation-r13-20260923.md",
     "docs/remediation-r14-20260923.md",
+    "docs/remediation-r16-20260923.md",
+    "docs/remediation-r17-20260923.md",
     "docs/remediation-b-batch-20260923.md",
     "docs/remediation-c-batch-20260923.md",
     "docs/rule-ownership-20260923.md",
