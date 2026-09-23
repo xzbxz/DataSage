@@ -1,0 +1,234 @@
+{
+  "schema": "datasage-context-cost-baseline/v1",
+  "policy": "Only measured numbers belong in the measured section, and only tests/context_cost.py may write them. Token counts, latency, provider cost and channel round-trip stay unmeasured until a real replay produces them: byte counts must never be converted into token estimates. No cost change may relax a quality gate, and no unapplied optimisation may be described as applied.",
+  "measured": {
+    "skill_context": {
+      "files": {
+        "references/answer-boundary.md": {
+          "characters": 19935,
+          "bytes": 19947,
+          "lines": 335
+        },
+        "references/cross-domain-analysis.md": {
+          "characters": 5291,
+          "bytes": 5295,
+          "lines": 98
+        },
+        "references/delivery-analysis.md": {
+          "characters": 8656,
+          "bytes": 8688,
+          "lines": 159
+        },
+        "references/entity-guidance.md": {
+          "characters": 2916,
+          "bytes": 2916,
+          "lines": 49
+        },
+        "references/inventory-analysis.md": {
+          "characters": 5301,
+          "bytes": 5301,
+          "lines": 102
+        },
+        "references/pattern-matching-analysis.md": {
+          "characters": 6100,
+          "bytes": 6100,
+          "lines": 114
+        },
+        "references/profit-analysis.md": {
+          "characters": 4794,
+          "bytes": 4794,
+          "lines": 93
+        },
+        "references/query-rules.md": {
+          "characters": 10570,
+          "bytes": 10578,
+          "lines": 192
+        },
+        "references/receipt-analysis.md": {
+          "characters": 5675,
+          "bytes": 5675,
+          "lines": 107
+        },
+        "references/receivable-analysis.md": {
+          "characters": 5236,
+          "bytes": 5236,
+          "lines": 101
+        },
+        "references/target-analysis.md": {
+          "characters": 5499,
+          "bytes": 5499,
+          "lines": 108
+        },
+        "SKILL.md": {
+          "characters": 5986,
+          "bytes": 5988,
+          "lines": 115
+        }
+      },
+      "file_count": 12,
+      "total_bytes": 86017,
+      "total_characters": 85959
+    },
+    "tool_surface": {
+      "provided_tool_names": [
+        "datasage_catalog",
+        "datasage_entity_resolve",
+        "datasage_query"
+      ],
+      "provided_tool_count": 3,
+      "manifest_bytes": 3541,
+      "channel_tool_count": 7,
+      "channel_tool_note": "native clarify + three datasage tools + skills group (R13 probe)"
+    },
+    "payloads": {
+      "catalog_expert_index_delivery": {
+        "raw_bytes": 52357,
+        "wire_bytes": 18170,
+        "method": "measured",
+        "measured_from": "wire.enforce_tool_result_budget over contracts.datasage_catalog({'requests': [{'domain': 'delivery', 'view': 'expert_index'}]})"
+      },
+      "catalog_full_delivery": {
+        "raw_bytes": 51710,
+        "wire_bytes": 51764,
+        "method": "measured",
+        "measured_from": "wire.enforce_tool_result_budget over contracts.datasage_catalog({'requests': [{'domain': 'delivery', 'view': 'full'}]})"
+      },
+      "query_rows_100x200chars": {
+        "raw_bytes": 26400,
+        "wire_bytes": 25800,
+        "method": "measured",
+        "measured_from": "wire.enforce_tool_result_budget over a 100-row x 200-char result",
+        "input_note": "synthetic shape at the configured max_rows=100 and 200-char cells"
+      }
+    },
+    "artifacts": {
+      "local_report_text_bytes": 295,
+      "local_report_json_bytes": 4320,
+      "method": "measured",
+      "measured_from": "local_report.render_text + save_artifacts over a 40-fact payload, with runtime pid and paths normalised",
+      "input_note": "synthetic shape; the model's own prose is not produced offline"
+    },
+    "questions": {
+      "acceptance_case_count": 24,
+      "question_bytes_min": 23,
+      "question_bytes_median": 49,
+      "question_bytes_max": 90,
+      "required_properties_median": 3,
+      "configured_max_rows": 100,
+      "configured_max_cell_chars": 2000,
+      "configured_max_concurrent_queries": 4,
+      "configured_call_timeout_seconds": 60,
+      "method": "measured",
+      "measured_from": "business_acceptance_cases.json plus the plugin settings contract"
+    }
+  },
+  "unmeasured": [
+    {
+      "id": "tokens_per_question",
+      "item": "每问输入/输出 token 数",
+      "reason": "本机没有该服务模型的分词器；字节数换算不构成实测",
+      "owner_role": "平台管理员",
+      "how_to_measure": "真实渠道回放时读取供应方返回的 usage 字段",
+      "status": "unmeasured"
+    },
+    {
+      "id": "model_latency",
+      "item": "模型延迟（首字与整体）",
+      "reason": "需要真实模型调用；离线渲染不产生延迟",
+      "owner_role": "平台管理员",
+      "how_to_measure": "真实渠道回放的端到端计时",
+      "status": "unmeasured"
+    },
+    {
+      "id": "provider_cost",
+      "item": "供应方计费",
+      "reason": "需要真实用量与账单数据",
+      "owner_role": "平台管理员＋财务",
+      "how_to_measure": "供应方控制台按月的用量与计费导出",
+      "status": "unmeasured"
+    },
+    {
+      "id": "channel_round_trip",
+      "item": "企微投递往返时延",
+      "reason": "需要真实企微投递；本 profile 未注册调度也未开启发送",
+      "owner_role": "平台管理员",
+      "how_to_measure": "与 R25 的真实测试群投递演练合并计时",
+      "status": "unmeasured"
+    },
+    {
+      "id": "host_context_compaction",
+      "item": "宿主上下文压缩的次数与开销",
+      "reason": "只在长会话真实发生时出现，离线不可复现",
+      "owner_role": "开发",
+      "how_to_measure": "R21 的双人长会话回放，记录压缩次数与耗时",
+      "status": "unmeasured"
+    }
+  ],
+  "degradation_points": [
+    {
+      "id": "compact_catalog_by_default",
+      "change": "目录默认走压缩投影（expert_index），完整视图仍可选",
+      "trigger": "无需触发：已是默认行为",
+      "owner_role": "开发",
+      "status": "already_in_effect",
+      "evidence": "measured.payloads.catalog_expert_index_delivery",
+      "applied": true
+    },
+    {
+      "id": "references_on_demand",
+      "change": "领域方法按需加载：SKILL.md 常驻，references 仅在需要时读取",
+      "trigger": "无需触发：已是当前加载模型",
+      "owner_role": "开发",
+      "status": "already_in_effect",
+      "evidence": "measured.skill_context.files",
+      "applied": true
+    },
+    {
+      "id": "large_result_spillover",
+      "change": "超大结果保留全部分支交给宿主处置，不做静默截断",
+      "trigger": "wire 结果超过宿主尺寸阈值",
+      "owner_role": "开发",
+      "status": "already_in_effect",
+      "evidence": "tests/test_compact_payloads.py",
+      "applied": true
+    },
+    {
+      "id": "reduce_max_rows",
+      "change": "把 max_rows 从 100 降到更低",
+      "trigger": "真实使用中单问 wire 字节长期触顶且业务确认明细可截断",
+      "owner_role": "交付/业务 owner",
+      "status": "candidate_unapplied",
+      "evidence_required": "真实 payload 分布 + 业务方书面确认明细可截断",
+      "applied": false
+    },
+    {
+      "id": "lower_cell_char_limit",
+      "change": "把 max_cell_chars 从 2000 降低",
+      "trigger": "真实样本中单元格长度长期触顶且不影响答案完整性",
+      "owner_role": "数据 owner",
+      "status": "candidate_unapplied",
+      "evidence_required": "真实单元格长度分布 + 完整性影响评估",
+      "applied": false
+    }
+  ],
+  "quality_gates": [
+    {
+      "id": "R19_business_acceptance",
+      "gate": "跨域开放题与高影响建议的盲评门槛（24 案）",
+      "reference": "tests/test_remediation_business_acceptance.py",
+      "status": "unchanged"
+    },
+    {
+      "id": "R20_answer_presentation",
+      "gate": "答案类型的最小内容与同源保真",
+      "reference": "tests/test_answer_presentation.py",
+      "status": "unchanged"
+    },
+    {
+      "id": "R16_numeric_truth",
+      "gate": "业务数值的独立真值登记",
+      "reference": "tests/fixtures/metric_readiness_register.json",
+      "status": "unchanged"
+    }
+  ]
+}

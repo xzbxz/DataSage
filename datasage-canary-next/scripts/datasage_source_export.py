@@ -84,6 +84,7 @@ _ROOT_FILES = (
     "docs/remediation-r24-20260923.md",
     "docs/remediation-r25-20260923.md",
     "docs/remediation-r26-20260923.md",
+    "docs/remediation-r28-20260923.md",
     "docs/remediation-b-batch-20260923.md",
     "docs/remediation-c-batch-20260923.md",
     "docs/rule-ownership-20260923.md",
@@ -93,6 +94,7 @@ _ROOT_FILES = (
     "scripts/datasage_source_export.py",
     "tests/test_source_export.py",
     "tests/metric_readiness.py",
+    "tests/context_cost.py",
     "tests/test_metric_readiness_register.py",
     "tests/test_domain_diagnostic_paths.py",
     "tests/test_answer_presentation.py",
@@ -102,6 +104,7 @@ _ROOT_FILES = (
     "tests/test_external_verification_register.py",
     "tests/test_operational_entry_inventory.py",
     "tests/test_artifact_integrity.py",
+    "tests/test_context_cost_baseline.py",
 )
 
 _PLUGIN_PY = _paths(
@@ -465,6 +468,7 @@ _TEST_FIXTURES = _paths(
         "legacy_customer_compatibility.json",
         "legacy_report_golden.json",
         "metric_readiness_register.json",
+        "context_cost_baseline.json",
         "reviewed_host_skills.json",
     ),
 )
