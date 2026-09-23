@@ -107,5 +107,7 @@
 - R16–R20：需独立业务真值、数据开发与业务 owner 签字；离线不能自证正确。
 - R21 的真实会话部分、R22–R26：需真实渠道、数据库、并发与投递环境；R24 为发布前置。
 - R27–R31 的真实部署/灰度/回退与成本对照：需发布 owner 与真实运行环境。
-- R32：缺少 V1.0 旧 50 项清单与证据包（deep_probes.json、selected_test_outcomes.json 等），
-  无法逐项标注状态；拿到材料后可离线完成。
+- R32：原本缺少 V1.0 旧 50 项清单与证据包（deep_probes.json、selected_test_outcomes.json 等）。
+  2026-09-23 用户提供 `DataSage_Profile_Refactor_Checklist_V1.0_20260919.md` 后已完成逐项状态更新，
+  见 `docs/legacy-checklist-state-20260923.md`（50 项：源码已改善 15、真实验收待做 30、仍缺陷 1、
+  无需采用实验 4）。审查证据包仍未取得，因此「本轮探针」类证据缺失的位置按现有可复跑证据标注。
