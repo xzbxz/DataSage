@@ -224,7 +224,7 @@ fixture，要求压缩后保留用户纠正、当前 period/scope/entity/metric 
 
 ### Hermes 内建 Skill 选择约束
 
-Hermes 官方同步内建 Skill；本 Profile 不修改官方内容。当前 core 为60个，启用办公文件能力 `docx`、`xlsx`、`pdf`、`powerpoint`，同时接受宿主不可禁用的 essential `hermes-agent`。`skills.disabled` 关闭其余当前及遗留入口；Skill 选择与渠道工具面分别配置。候选配套宿主的本地装配已观察到 `clarify`、三个 DataSage 工具、`execute_code`、`skills_list` 与 `skill_view`，真实渠道加载仍待验。本机 Python 的权限边界见上文。`ocr-and-documents` 已不属于当前 core，不声明为启用能力。
+Hermes 官方同步内建 Skill；本 Profile 不修改官方内容。当前 core 为60个，启用办公文件能力 `docx`、`xlsx`、`pdf`、`powerpoint`，同时接受宿主不可禁用的 essential `hermes-agent`。`skills.disabled` 关闭其余当前及遗留入口；Skill 选择与渠道工具面分别配置。当前渠道面是 native `clarify`、三个 DataSage 工具与官方 `skills` 组（该组含管理入口，写入先进入待审批、读取时不执行内联 shell），企微不提供任意代码、终端、文件或公共 Web 工具。更早的候选配套宿主本地装配曾观察到 `execute_code`、`skills_list` 与 `skill_view`；那是锁定官方基底（宿主 0.21.1，基底 `2237be355906fbe6065ce1815711eee52b2d646e`）与撤回定制容器之前的历史观测，不代表当前工具面，真实渠道加载与完整工具枚举仍待实测（见 `docs/maintenance.md` 与 `README.md`）。本机 Python 的权限边界见上文。`ocr-and-documents` 已不属于当前 core，不声明为启用能力。
 
 每次宿主升级做完整快照差异审查；新增、删除或重命名必须更新 `tests/fixtures/reviewed_host_skills.json` 与 denylist，并检查 `metadata.hermes.related_skills`。Profile 显式关闭独立的 `curator.enabled` 和 background review，使调试中的能力集合由 Git 维护。普通 CLI 用于源码维护，业务调用仍受现有 WeCom/trusted replay 授权约束。
 
