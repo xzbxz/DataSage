@@ -1,0 +1,625 @@
+{
+  "schema": "datasage-release-matrix/v1",
+  "policy": "This record prepares evidence; it never signs a release. Only a named owner role may fill release_decision and signoff; the assistant leaves both empty. A model or engine output is never an independent truth: only independent_sql, manual_fixture, owner_statement or expert_review evidence may fill an independent truth. Holdout cases never enter tuning. A failure is never deleted from the matrix: it is listed with its reason and reproduction path, or the capability is recorded as unverified. Data that cannot be reproduced is not written into the matrix at all.",
+  "holdout": {
+    "rule": "跨域与边界案例保留为留出题，不用于调参：只在评审时使用其独立真值。",
+    "case_ids": [
+      "B19",
+      "B20",
+      "B21",
+      "B22",
+      "B23",
+      "B24"
+    ],
+    "tuning_case_ids": [
+      "B01",
+      "B02",
+      "B03",
+      "B04",
+      "B05",
+      "B06",
+      "B07",
+      "B08",
+      "B09",
+      "B10",
+      "B11",
+      "B12",
+      "B13",
+      "B14",
+      "B15",
+      "B16",
+      "B17",
+      "B18"
+    ],
+    "proposed_by": "assistant",
+    "confirmed_by": null,
+    "note": "划分是助手提议，需业务 owner 确认后生效；确认前不得据此声称留出题隔离已完成。"
+  },
+  "truth": [
+    {
+      "case_id": "B01",
+      "title": "毛出库、退货与净额",
+      "domains": [
+        "delivery"
+      ],
+      "holdout": false,
+      "independent_truth": null,
+      "truth_status": "pending",
+      "reviewer_role": null,
+      "reviewed_on": null,
+      "evidence": [],
+      "disagreement": null,
+      "adjudication": null
+    },
+    {
+      "case_id": "B02",
+      "title": "退货率分母",
+      "domains": [
+        "delivery"
+      ],
+      "holdout": false,
+      "independent_truth": null,
+      "truth_status": "pending",
+      "reviewer_role": null,
+      "reviewed_on": null,
+      "evidence": [],
+      "disagreement": null,
+      "adjudication": null
+    },
+    {
+      "case_id": "B03",
+      "title": "跨单位数量",
+      "domains": [
+        "delivery"
+      ],
+      "holdout": false,
+      "independent_truth": null,
+      "truth_status": "pending",
+      "reviewer_role": null,
+      "reviewed_on": null,
+      "evidence": [],
+      "disagreement": null,
+      "adjudication": null
+    },
+    {
+      "case_id": "B04",
+      "title": "登记收款与实际到账",
+      "domains": [
+        "receipt"
+      ],
+      "holdout": false,
+      "independent_truth": null,
+      "truth_status": "pending",
+      "reviewer_role": null,
+      "reviewed_on": null,
+      "evidence": [],
+      "disagreement": null,
+      "adjudication": null
+    },
+    {
+      "case_id": "B05",
+      "title": "缺失汇率",
+      "domains": [
+        "receipt"
+      ],
+      "holdout": false,
+      "independent_truth": null,
+      "truth_status": "pending",
+      "reviewer_role": null,
+      "reviewed_on": null,
+      "evidence": [],
+      "disagreement": null,
+      "adjudication": null
+    },
+    {
+      "case_id": "B06",
+      "title": "净应收与正向风险敞口",
+      "domains": [
+        "receivable"
+      ],
+      "holdout": false,
+      "independent_truth": null,
+      "truth_status": "pending",
+      "reviewer_role": null,
+      "reviewed_on": null,
+      "evidence": [],
+      "disagreement": null,
+      "adjudication": null
+    },
+    {
+      "case_id": "B07",
+      "title": "已确认逾期明细",
+      "domains": [
+        "receivable"
+      ],
+      "holdout": false,
+      "independent_truth": null,
+      "truth_status": "pending",
+      "reviewer_role": null,
+      "reviewed_on": null,
+      "evidence": [],
+      "disagreement": null,
+      "adjudication": null
+    },
+    {
+      "case_id": "B08",
+      "title": "库存成本覆盖不足",
+      "domains": [
+        "inventory"
+      ],
+      "holdout": false,
+      "independent_truth": null,
+      "truth_status": "pending",
+      "reviewer_role": null,
+      "reviewed_on": null,
+      "evidence": [],
+      "disagreement": null,
+      "adjudication": null
+    },
+    {
+      "case_id": "B09",
+      "title": "周转效率证据不足",
+      "domains": [
+        "inventory"
+      ],
+      "holdout": false,
+      "independent_truth": null,
+      "truth_status": "pending",
+      "reviewer_role": null,
+      "reviewed_on": null,
+      "evidence": [],
+      "disagreement": null,
+      "adjudication": null
+    },
+    {
+      "case_id": "B10",
+      "title": "销售分摊目标诊断",
+      "domains": [
+        "target",
+        "delivery"
+      ],
+      "holdout": false,
+      "independent_truth": null,
+      "truth_status": "pending",
+      "reviewer_role": null,
+      "reviewed_on": null,
+      "evidence": [],
+      "disagreement": null,
+      "adjudication": null
+    },
+    {
+      "case_id": "B11",
+      "title": "目标未设置与目标为零",
+      "domains": [
+        "target"
+      ],
+      "holdout": false,
+      "independent_truth": null,
+      "truth_status": "pending",
+      "reviewer_role": null,
+      "reviewed_on": null,
+      "evidence": [],
+      "disagreement": null,
+      "adjudication": null
+    },
+    {
+      "case_id": "B12",
+      "title": "Top5缺少全量分母",
+      "domains": [
+        "receivable"
+      ],
+      "holdout": false,
+      "independent_truth": null,
+      "truth_status": "pending",
+      "reviewer_role": null,
+      "reviewed_on": null,
+      "evidence": [],
+      "disagreement": null,
+      "adjudication": null
+    },
+    {
+      "case_id": "B13",
+      "title": "跨域经营判断",
+      "domains": [
+        "delivery",
+        "receipt",
+        "receivable",
+        "target",
+        "inventory"
+      ],
+      "holdout": false,
+      "independent_truth": null,
+      "truth_status": "pending",
+      "reviewer_role": null,
+      "reviewed_on": null,
+      "evidence": [],
+      "disagreement": null,
+      "adjudication": null
+    },
+    {
+      "case_id": "B14",
+      "title": "变化贡献不等于原因",
+      "domains": [
+        "delivery"
+      ],
+      "holdout": false,
+      "independent_truth": null,
+      "truth_status": "pending",
+      "reviewer_role": null,
+      "reviewed_on": null,
+      "evidence": [],
+      "disagreement": null,
+      "adjudication": null
+    },
+    {
+      "case_id": "B15",
+      "title": "多轮纠正取代旧范围",
+      "domains": [
+        "delivery"
+      ],
+      "holdout": false,
+      "independent_truth": null,
+      "truth_status": "pending",
+      "reviewer_role": null,
+      "reviewed_on": null,
+      "evidence": [],
+      "disagreement": null,
+      "adjudication": null
+    },
+    {
+      "case_id": "B16",
+      "title": "部分失败保留有效证据",
+      "domains": [
+        "delivery",
+        "receipt",
+        "target"
+      ],
+      "holdout": false,
+      "independent_truth": null,
+      "truth_status": "pending",
+      "reviewer_role": null,
+      "reviewed_on": null,
+      "evidence": [],
+      "disagreement": null,
+      "adjudication": null
+    },
+    {
+      "case_id": "B17",
+      "title": "实体角色澄清",
+      "domains": [
+        "delivery"
+      ],
+      "holdout": false,
+      "independent_truth": null,
+      "truth_status": "pending",
+      "reviewer_role": null,
+      "reviewed_on": null,
+      "evidence": [],
+      "disagreement": null,
+      "adjudication": null
+    },
+    {
+      "case_id": "B18",
+      "title": "高影响建议需要审批",
+      "domains": [
+        "receivable"
+      ],
+      "holdout": false,
+      "independent_truth": null,
+      "truth_status": "pending",
+      "reviewer_role": null,
+      "reviewed_on": null,
+      "evidence": [],
+      "disagreement": null,
+      "adjudication": null
+    },
+    {
+      "case_id": "B19",
+      "title": "出库与毛利同看：结构贡献不等于原因",
+      "domains": [
+        "delivery",
+        "profit"
+      ],
+      "holdout": true,
+      "independent_truth": null,
+      "truth_status": "pending",
+      "reviewer_role": null,
+      "reviewed_on": null,
+      "evidence": [],
+      "disagreement": null,
+      "adjudication": null
+    },
+    {
+      "case_id": "B20",
+      "title": "出库与回款应收同看：登记额不是现金流",
+      "domains": [
+        "delivery",
+        "receipt",
+        "receivable"
+      ],
+      "holdout": true,
+      "independent_truth": null,
+      "truth_status": "pending",
+      "reviewer_role": null,
+      "reviewed_on": null,
+      "evidence": [],
+      "disagreement": null,
+      "adjudication": null
+    },
+    {
+      "case_id": "B21",
+      "title": "库存与出库同向增长：不是压货的证明",
+      "domains": [
+        "inventory",
+        "delivery"
+      ],
+      "holdout": true,
+      "independent_truth": null,
+      "truth_status": "pending",
+      "reviewer_role": null,
+      "reviewed_on": null,
+      "evidence": [],
+      "disagreement": null,
+      "adjudication": null
+    },
+    {
+      "case_id": "B22",
+      "title": "目标与实际：同一账本才可比，缺口不归人",
+      "domains": [
+        "target",
+        "delivery"
+      ],
+      "holdout": true,
+      "independent_truth": null,
+      "truth_status": "pending",
+      "reviewer_role": null,
+      "reviewed_on": null,
+      "evidence": [],
+      "disagreement": null,
+      "adjudication": null
+    },
+    {
+      "case_id": "B23",
+      "title": "相关性反例：同向变化不是因果",
+      "domains": [
+        "delivery"
+      ],
+      "holdout": true,
+      "independent_truth": null,
+      "truth_status": "pending",
+      "reviewer_role": null,
+      "reviewed_on": null,
+      "evidence": [],
+      "disagreement": null,
+      "adjudication": null
+    },
+    {
+      "case_id": "B24",
+      "title": "证据不足仍继续合理分析，但不给健康结论",
+      "domains": [
+        "delivery",
+        "profit",
+        "inventory"
+      ],
+      "holdout": true,
+      "independent_truth": null,
+      "truth_status": "pending",
+      "reviewer_role": null,
+      "reviewed_on": null,
+      "evidence": [],
+      "disagreement": null,
+      "adjudication": null
+    }
+  ],
+  "capabilities": {
+    "domain.delivery": {
+      "surface": "domain.delivery",
+      "sample": 36,
+      "pass": 0,
+      "sample_source": "tests/fixtures/metric_readiness_register.json",
+      "reproduction_path": "tests/test_metric_readiness_register.py",
+      "reproducible": true,
+      "failure_reason": "36 个指标中 0 个有独立证据（R16 登记册）",
+      "status": "unverified",
+      "released": false,
+      "release_decision": null,
+      "release_decision_owner": null
+    },
+    "domain.receipt": {
+      "surface": "domain.receipt",
+      "sample": 13,
+      "pass": 0,
+      "sample_source": "tests/fixtures/metric_readiness_register.json",
+      "reproduction_path": "tests/test_metric_readiness_register.py",
+      "reproducible": true,
+      "failure_reason": "13 个指标中 0 个有独立证据（R16 登记册）",
+      "status": "unverified",
+      "released": false,
+      "release_decision": null,
+      "release_decision_owner": null
+    },
+    "domain.receivable": {
+      "surface": "domain.receivable",
+      "sample": 51,
+      "pass": 0,
+      "sample_source": "tests/fixtures/metric_readiness_register.json",
+      "reproduction_path": "tests/test_metric_readiness_register.py",
+      "reproducible": true,
+      "failure_reason": "51 个指标中 0 个有独立证据（R16 登记册）",
+      "status": "unverified",
+      "released": false,
+      "release_decision": null,
+      "release_decision_owner": null
+    },
+    "domain.target": {
+      "surface": "domain.target",
+      "sample": 8,
+      "pass": 0,
+      "sample_source": "tests/fixtures/metric_readiness_register.json",
+      "reproduction_path": "tests/test_metric_readiness_register.py",
+      "reproducible": true,
+      "failure_reason": "8 个指标中 0 个有独立证据（R16 登记册）",
+      "status": "unverified",
+      "released": false,
+      "release_decision": null,
+      "release_decision_owner": null
+    },
+    "domain.inventory": {
+      "surface": "domain.inventory",
+      "sample": 34,
+      "pass": 0,
+      "sample_source": "tests/fixtures/metric_readiness_register.json",
+      "reproduction_path": "tests/test_metric_readiness_register.py",
+      "reproducible": true,
+      "failure_reason": "34 个指标中 0 个有独立证据（R16 登记册）",
+      "status": "unverified",
+      "released": false,
+      "release_decision": null,
+      "release_decision_owner": null
+    },
+    "domain.pattern_matching": {
+      "surface": "domain.pattern_matching",
+      "sample": 3,
+      "pass": 0,
+      "sample_source": "tests/fixtures/metric_readiness_register.json",
+      "reproduction_path": "tests/test_metric_readiness_register.py",
+      "reproducible": true,
+      "failure_reason": "3 个指标中 0 个有独立证据（R16 登记册）",
+      "status": "unverified",
+      "released": false,
+      "release_decision": null,
+      "release_decision_owner": null
+    },
+    "domain.profit": {
+      "surface": "domain.profit",
+      "sample": 70,
+      "pass": 0,
+      "sample_source": "tests/fixtures/metric_readiness_register.json",
+      "reproduction_path": "tests/test_metric_readiness_register.py",
+      "reproducible": true,
+      "failure_reason": "70 个指标中 0 个有独立证据（R16 登记册）",
+      "status": "unverified",
+      "released": false,
+      "release_decision": null,
+      "release_decision_owner": null
+    },
+    "channel.wecom_surface": {
+      "surface": "channel.wecom_surface",
+      "reproduction_path": "tests/test_integration_boundaries.py::test_wecom_surface_matches_the_documented_capability_boundary",
+      "sample": 7,
+      "pass": 7,
+      "sample_source": "R13 channel probe (7 tools visible)",
+      "reproducible": true,
+      "failure_reason": "真实渠道回执未到：办公 Skill 隐藏与工具边界只在本机验证",
+      "status": "partial",
+      "released": false,
+      "release_decision": null,
+      "release_decision_owner": null
+    },
+    "reports.operational_entries": {
+      "surface": "reports.operational_entries",
+      "reproduction_path": "tests/test_operational_entry_inventory.py",
+      "sample": 16,
+      "pass": 16,
+      "sample_source": "scripts/datasage_*.py inventory (16 entries)",
+      "reproducible": true,
+      "failure_reason": "真实调度与真实发送未演练；全部入口默认关闭",
+      "status": "partial",
+      "released": false,
+      "release_decision": null,
+      "release_decision_owner": null
+    },
+    "answers.business_presentation": {
+      "surface": "answers.business_presentation",
+      "reproduction_path": "tests/test_answer_presentation.py",
+      "sample": 4,
+      "pass": 4,
+      "sample_source": "four answer types in references/answer-boundary.md",
+      "reproducible": true,
+      "failure_reason": "真实渠道的答案评审未做",
+      "status": "partial",
+      "released": false,
+      "release_decision": null,
+      "release_decision_owner": null
+    },
+    "analysis.domain_diagnostic_paths": {
+      "surface": "analysis.domain_diagnostic_paths",
+      "reproduction_path": "tests/test_domain_diagnostic_paths.py",
+      "sample": 8,
+      "pass": 8,
+      "sample_source": "8 domain method files with a Diagnostic path section",
+      "reproducible": true,
+      "failure_reason": "业务 owner 未评审诊断链与重要性基准",
+      "status": "partial",
+      "released": false,
+      "release_decision": null,
+      "release_decision_owner": null
+    },
+    "analysis.cross_domain_reasoning": {
+      "surface": "analysis.cross_domain_reasoning",
+      "reproduction_path": "tests/test_remediation_business_acceptance.py",
+      "sample": 24,
+      "pass": 0,
+      "sample_source": "tests/fixtures/business_acceptance_cases.json",
+      "reproducible": true,
+      "failure_reason": "24 案中 0 案有独立业务评审，0 案实际执行过",
+      "status": "unverified",
+      "released": false,
+      "release_decision": null,
+      "release_decision_owner": null
+    },
+    "artifacts.integrity_and_recipients": {
+      "surface": "artifacts.integrity_and_recipients",
+      "reproduction_path": "tests/test_artifact_integrity.py",
+      "sample": 8,
+      "pass": 8,
+      "sample_source": "8 injected artifact items in the R26 record",
+      "reproducible": true,
+      "failure_reason": "真实客户端打开与真实接收人复核未做",
+      "status": "partial",
+      "released": false,
+      "release_decision": null,
+      "release_decision_owner": null
+    },
+    "security.data_source_and_privacy": {
+      "surface": "security.data_source_and_privacy",
+      "reproduction_path": "tests/test_external_verification_register.py",
+      "sample": 8,
+      "pass": 0,
+      "sample_source": "8 external verification items in the R24 register",
+      "reproducible": true,
+      "failure_reason": "canary 模式：production_mode 与 require_tls 均为 false，明文传输被允许；R24 登记册 8 项全部 pending",
+      "status": "blocked_external",
+      "released": false,
+      "release_decision": null,
+      "release_decision_owner": null
+    },
+    "operations.authorisation_and_lifecycle": {
+      "surface": "operations.authorisation_and_lifecycle",
+      "reproduction_path": "tests/test_operational_entry_inventory.py",
+      "sample": 16,
+      "pass": 16,
+      "sample_source": "16 operational entries with default-off gates",
+      "reproducible": true,
+      "failure_reason": "调度未注册、发送开关全关；真实周期续期与投递演练待 owner 授权",
+      "status": "partial",
+      "released": false,
+      "release_decision": null,
+      "release_decision_owner": null
+    }
+  },
+  "capability_counts": {
+    "surfaces": 15,
+    "domains": 7,
+    "metrics_total": 215,
+    "metrics_verified": 0,
+    "cases_total": 24,
+    "cases_reviewed": 0
+  },
+  "retired": [],
+  "signoff": {
+    "signed_by": null,
+    "signed_on": null,
+    "note": "助手只准备证据，不代签发布；签名必须由具名 owner 角色完成。"
+  }
+}
