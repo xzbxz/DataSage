@@ -76,6 +76,45 @@ def _session_value(name: str) -> str:
     return str(value).strip() if value is not None else ""
 
 
+_SESSION_LAYER_ENGAGED = "engaged"
+_SESSION_LAYER_UNBOUND = "unbound"
+_SESSION_LAYER_INCOMPATIBLE = "incompatible"
+
+
+def session_layer_state() -> str:
+    """Report whether the host session layer can supply a bound identity.
+
+    ``incompatible`` means the session layer exists and is engaged but exposes
+    neither the public getter nor the expected ContextVar map: a host upgrade
+    changed the private surface.  The gate still fails closed, and the denial
+    reason names the compatibility break instead of looking like "no identity
+    is bound".  A process without a gateway session layer (plain CLI) reports
+    ``unbound``.
+    """
+
+    try:
+        from gateway import session_context
+    except ImportError:
+        return _SESSION_LAYER_UNBOUND
+    except Exception:
+        return _SESSION_LAYER_INCOMPATIBLE
+
+    engaged = getattr(session_context, "session_context_engaged", None)
+    if not callable(engaged):
+        return _SESSION_LAYER_INCOMPATIBLE
+    try:
+        if not engaged():
+            return _SESSION_LAYER_UNBOUND
+    except Exception:
+        return _SESSION_LAYER_INCOMPATIBLE
+
+    if callable(getattr(session_context, "get_bound_session_env", None)):
+        return _SESSION_LAYER_ENGAGED
+    if isinstance(getattr(session_context, "_VAR_MAP", None), Mapping):
+        return _SESSION_LAYER_ENGAGED
+    return _SESSION_LAYER_INCOMPATIBLE
+
+
 def _principal_ref() -> str:
     """Return a one-way reference for the host-bound session principal."""
 
@@ -127,6 +166,9 @@ def _identity_allowed() -> tuple[bool, str]:
     authorization dimensions: every authenticated member with a non-empty
     bound user ID shares the same DataSage admission in DM and group chats.
     """
+
+    if session_layer_state() == _SESSION_LAYER_INCOMPATIBLE:
+        return False, "session_layer_incompatible"
 
     platform = _session_value("HERMES_SESSION_PLATFORM").lower()
     source = _session_value("HERMES_SESSION_SOURCE")

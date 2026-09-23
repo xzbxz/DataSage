@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import builtins
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
+from contextvars import ContextVar
 import copy
 from datetime import date, datetime
 import hashlib
@@ -13,6 +15,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import types
 import unittest
 from unittest import mock
@@ -346,6 +349,84 @@ class StrictSessionIdentityTests(unittest.TestCase):
                 "",
                 entitlements._session_value("HERMES_SESSION_USER_ID"),
             )
+
+    # -- R15: bound identity isolation across threads and compatibility -------
+
+    def _contextvar_session(self):
+        user = ContextVar("HERMES_SESSION_USER_ID", default="")
+        engaged = ContextVar("datasage_probe_engaged", default=False)
+        session_context = types.SimpleNamespace(
+            session_context_engaged=lambda: engaged.get(),
+            _VAR_MAP={"HERMES_SESSION_USER_ID": user},
+            _UNSET=None,
+        )
+        return session_context, user, engaged
+
+    def test_bound_identities_do_not_leak_between_concurrent_threads(self):
+        session_context, user, engaged = self._contextvar_session()
+        barrier = threading.Barrier(2)
+        seen: dict[str, list[str]] = {}
+
+        def bind_and_read(name: str) -> None:
+            engaged.set(True)
+            user.set(name)
+            barrier.wait(timeout=10)
+            seen[name] = [
+                entitlements._session_value("HERMES_SESSION_USER_ID") for _ in range(5)
+            ]
+
+        threads = [
+            threading.Thread(target=bind_and_read, args=(name,))
+            for name in ("user-a", "user-b")
+        ]
+        with self._gateway(session_context):
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=20)
+        self.assertEqual(
+            {"user-a": ["user-a"] * 5, "user-b": ["user-b"] * 5},
+            seen,
+        )
+
+    def test_ended_binding_is_not_reused_by_the_same_worker_thread(self):
+        session_context, user, engaged = self._contextvar_session()
+
+        def bind() -> str:
+            engaged.set(True)
+            token = user.set("user-a")
+            value = entitlements._session_value("HERMES_SESSION_USER_ID")
+            user.reset(token)  # the host tears the binding down with the request
+            engaged.set(False)
+            return value
+
+        def read_after_teardown() -> str:
+            return entitlements._session_value("HERMES_SESSION_USER_ID")
+
+        with self._gateway(session_context), ThreadPoolExecutor(max_workers=1) as pool:
+            first = pool.submit(bind).result()
+            second = pool.submit(read_after_teardown).result()
+        self.assertEqual("user-a", first)
+        self.assertEqual("", second)
+
+    def test_incompatible_session_layer_reports_a_compatibility_reason(self):
+        session_context = types.SimpleNamespace(session_context_engaged=lambda: True)
+        with self._gateway(session_context), self.assertLogs(
+            entitlements.logger, level="INFO"
+        ) as logs:
+            self.assertEqual("incompatible", entitlements.session_layer_state())
+            self.assertFalse(entitlements.authorized("datasage_query", {}))
+        self.assertIn("session_layer_incompatible", "\n".join(logs.output))
+
+    def test_unbound_session_layer_keeps_the_missing_identity_reason(self):
+        session_context = types.SimpleNamespace(session_context_engaged=lambda: False)
+        with self._gateway(session_context):
+            self.assertEqual("unbound", entitlements.session_layer_state())
+            with mock.patch.dict(os.environ, {"HERMES_SESSION_USER_ID": "forged"}):
+                allowed, reason = entitlements._identity_allowed()
+        self.assertFalse(allowed)
+        self.assertEqual("bound_user_identity_missing", reason)
+
 
 class GitGovernedSkillTests(unittest.TestCase):
     def test_plugin_exposes_skill_and_no_answer_mutation_hooks(self):
