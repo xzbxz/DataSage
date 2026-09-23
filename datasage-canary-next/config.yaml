@@ -163,6 +163,17 @@ skills:
     - weights-and-biases
     - xurl
     - youtube-content
+  # R13: on WeCom these skills are listed but not executable — their own
+  # instructions need a local shell or file tool this channel does not expose.
+  # Hidden there only; the CLI keeps them (they stay out of the global list).
+  # `hermes-agent` is host-essential (agent/skill_utils.py ESSENTIAL_SKILLS) and
+  # cannot be hidden; the Skill boundary text covers that case instead.
+  platform_disabled:
+    wecom:
+      - docx
+      - pdf
+      - powerpoint
+      - xlsx
 platforms:
   wecom:
     enabled: true

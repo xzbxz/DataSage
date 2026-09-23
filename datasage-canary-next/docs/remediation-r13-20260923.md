@@ -16,8 +16,10 @@
   这正是 F09 验收点「Skill 可见但根本无工具执行还说已完成」的结构性来源。
 - 已落地：把能力边界写进 Skill（面向模型的行为约束）＋一条守卫测试，使「文档承诺」与
   「实测工具面」绑定，任一侧漂移都会失败。
-- 待批：用原生 `skills.platform_disabled.wecom` 把上述 5 个不可执行 Skill 从企微索引里隐藏
-  （第 5 节）。这是限制类改动，不新增任何宿主权限。
+- 已落地（2026-09-23，按建议）：用原生 `skills.platform_disabled.wecom` 把 4 个办公 Skill
+  从企微索引中隐藏（`docx`、`pdf`、`powerpoint`、`xlsx`），本机 CLI 保留。
+  **`hermes-agent` 隐藏不了**：宿主把它列为 ESSENTIAL 并从所有禁用集合中减去
+  （`agent/skill_utils.py:270,285`），因此它只能由第 4 节的文字边界覆盖。
 
 ## 2. 证据
 
@@ -28,6 +30,7 @@
 | 通道外工具集 | web / file / terminal / code_execution / vision / tts / memory / session_search / todo / delegation 全部不在通道内 | 同上展开结果 |
 | Skill 可执行性扫描 | 启用 6 个、可执行 1 个、受阻 5 个 | 逐个 `SKILL.md` 扫描 shell/文件/代码/网络依赖信号；办公 Skill 明确要求本地运行 `python scripts/…` |
 | 写入审批 | Skill 写入仍进待批准（R14） | `skills.write_approval: true`；R14 记录 |
+| 隐藏后的按平台解析 | wecom 禁用 84 个（全局 80 + 办公 4）；cli 与未指定平台仍为 80，4 个办公 Skill 未被禁用；`hermes-agent` 在任何平台都未被禁用 | 宿主 `agent.skill_utils.get_disabled_skill_names(platform)`，`HERMES_HOME` 指向本 profile |
 
 ## 3. 逐任务承诺矩阵
 
@@ -54,21 +57,25 @@
   「文档声明不可用」的那些能力对应的工具不得出现在通道面、以及边界文本必须包含那几条承诺。
   任一侧漂移（例如日后给企微加了文件工具）都会失败并要求同步修改。
 
-## 5. 待批的最小配置改动（需要产品 owner 决定）
+## 5. 已落地的配置改动
 
 ```yaml
 skills:
   platform_disabled:
-    wecom: [hermes-agent, docx, pdf, powerpoint, xlsx]
+    wecom: [docx, pdf, powerpoint, xlsx]
 ```
 
-- 效果：这 5 个 Skill 不再出现在企微的 Skill 索引里（本机 CLI 不受影响，资产保留）。
+- 效果：这 4 个办公 Skill 不再出现在企微的 Skill 索引里；本机 CLI 不受影响（它们不在全局
+  `disabled` 里，资产保留、operator 路径照旧）。
 - 理由：实测它们的指令依赖企微没有的 shell/文件工具；隐藏可结构性消除「看起来能做、
   实际做不了」的误导路径。
-- 未采用的替代：只写文档、保持可见（即当前状态）。文档能约束模型表述，但索引里仍会
-  给出无法执行的 Skill。
-- 该键是宿主原生能力（`skills.platform_disabled.<platform>`，`agent/skill_utils.py`），
-  不需要新代码，也不新增任何宿主权限。
+- `hermes-agent` 无法隐藏：宿主 `agent/skill_utils.py:270` 定义
+  `ESSENTIAL_SKILLS = {"hermes-agent"}`，第 285 行会把该名字从最终禁用集合里减去。
+  因此它对企微仍可见，其限制由第 4 节的文字边界负责表述。
+- 该键是宿主原生能力（`skills.platform_disabled.<platform>`），不需要新代码，也不新增
+  任何宿主权限。
+- 守卫测试 `test_wecom_hides_the_skills_it_cannot_execute` 断言：隐藏列表恰好是这 4 个、
+  不得与全局 `disabled` 重叠（CLI 必须保留）、且不得把 `hermes-agent` 写进去。
 
 ## 6. 待人工验证（V04 / V05 / V21）
 
@@ -78,7 +85,7 @@ skills:
 | 2 | 发「把上面的数据导成 Excel 发我」 | 说明不能产出文件；可给文本表格 |
 | 3 | 发「帮我查一下行业公开数据」 | 说明本渠道无外部检索能力 |
 | 4 | 发一个正常问数问题 | 正常返回带口径与期间的数值（回归） |
-| 5 | 若第 5 节配置获批：重启网关后发「Skill 有哪些」 | 列表中不再出现那 5 个办公/宿主类 Skill |
+| 5 | 重启网关后发「Skill 有哪些」 | 列表中不再出现这 4 个办公 Skill（`hermes-agent` 仍会列出，属宿主保留项） |
 
 回执（对话截图或原文）交回后，R13 才算完成真实验收部分。
 

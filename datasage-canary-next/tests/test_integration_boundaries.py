@@ -2517,6 +2517,33 @@ class DistributionBoundaryTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, boundary)
 
+    def test_wecom_hides_the_skills_it_cannot_execute(self) -> None:
+        """Skills needing a local shell or file tool stay out of the WeCom index.
+
+        The four office skills are hidden for WeCom only: the global disabled list
+        must keep them, so the CLI and local operator paths are unaffected.
+        ``hermes-agent`` cannot appear here — the host treats it as essential and
+        subtracts it from every disabled set, so the Skill text covers it instead.
+        """
+
+        config = yaml.safe_load(
+            (PROFILE_ROOT / "config.yaml").read_text(encoding="utf-8")
+        )
+        skills_config = config["skills"]
+        hidden = [
+            str(name)
+            for name in (skills_config.get("platform_disabled") or {}).get(
+                "wecom", []
+            )
+        ]
+        self.assertEqual(["docx", "pdf", "powerpoint", "xlsx"], hidden)
+        self.assertEqual(
+            set(),
+            set(hidden) & {str(name) for name in (skills_config.get("disabled") or [])},
+            "hidden-for-WeCom skills must stay enabled for the CLI",
+        )
+        self.assertNotIn("hermes-agent", hidden)
+
     def test_automatic_review_is_off_and_manual_review_writes_still_stage(self):
         parsed_config = yaml.safe_load(
             (PROFILE_ROOT / "config.yaml").read_text(encoding="utf-8")
