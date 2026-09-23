@@ -299,7 +299,7 @@
     },
     "fixtures": {
       "files": 11,
-      "lines": 5992,
+      "lines": 6098,
       "names": [
         "business_acceptance_cases.json",
         "business_replay_contract.json",
@@ -342,7 +342,7 @@
     },
     "docs": {
       "files": 25,
-      "lines": 2110,
+      "lines": 2111,
       "names": [
         "legacy-checklist-state-20260923.md",
         "maintenance.md",

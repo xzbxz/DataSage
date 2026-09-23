@@ -298,6 +298,112 @@
         }
       ],
       "after_revert_note": "回退把变更集整体退回到变更前状态：其中一个守卫在此态为红是真实信息——变更前版本的测量实现不可移植到干净 checkout（本变更集正是为修掉它而做的）。恢复后全部守卫重新变绿。"
+    },
+    "rehearsal_reconfirm": {
+      "clone_note": "rehearsed in a local clone only, never in the live profile; the clone carries the reviewed commit plus the working-tree change set (including the repository-root allowlists), committed inside the clone",
+      "base_commit": "6f5c35c",
+      "head_before": "6f5c35c",
+      "head_after": "6f5c35c",
+      "clean_after_restore": true,
+      "change_set_file_count": 4,
+      "reverted_file_count": 4,
+      "guards_at_head": [
+        {
+          "file": "test_integration_boundaries.py",
+          "returncode": 0,
+          "summary": "Ran 52 tests in 10.026s | OK",
+          "failures": []
+        },
+        {
+          "file": "test_source_export.py",
+          "returncode": 0,
+          "summary": "Ran 13 tests in 54.677s | OK (skipped=1)",
+          "failures": []
+        },
+        {
+          "file": "test_release_matrix.py",
+          "returncode": 0,
+          "summary": "Ran 8 tests in 0.005s | OK",
+          "failures": []
+        },
+        {
+          "file": "test_context_cost_baseline.py",
+          "returncode": 0,
+          "summary": "Ran 6 tests in 0.885s | OK",
+          "failures": []
+        },
+        {
+          "file": "test_maintenance_cost_baseline.py",
+          "returncode": 0,
+          "summary": "Ran 6 tests in 25.426s | OK",
+          "failures": []
+        }
+      ],
+      "guards_after_revert": [
+        {
+          "file": "test_integration_boundaries.py",
+          "returncode": 0,
+          "summary": "Ran 52 tests in 10.309s | OK",
+          "failures": []
+        },
+        {
+          "file": "test_source_export.py",
+          "returncode": 0,
+          "summary": "Ran 13 tests in 57.640s | OK (skipped=1)",
+          "failures": []
+        },
+        {
+          "file": "test_release_matrix.py",
+          "returncode": 0,
+          "summary": "Ran 8 tests in 0.006s | OK",
+          "failures": []
+        },
+        {
+          "file": "test_context_cost_baseline.py",
+          "returncode": 0,
+          "summary": "Ran 6 tests in 0.884s | OK",
+          "failures": []
+        },
+        {
+          "file": "test_maintenance_cost_baseline.py",
+          "returncode": 0,
+          "summary": "Ran 6 tests in 12.684s | OK",
+          "failures": []
+        }
+      ],
+      "guards_after_restore": [
+        {
+          "file": "test_integration_boundaries.py",
+          "returncode": 0,
+          "summary": "Ran 52 tests in 10.258s | OK",
+          "failures": []
+        },
+        {
+          "file": "test_source_export.py",
+          "returncode": 0,
+          "summary": "Ran 13 tests in 56.708s | OK (skipped=1)",
+          "failures": []
+        },
+        {
+          "file": "test_release_matrix.py",
+          "returncode": 0,
+          "summary": "Ran 8 tests in 0.005s | OK",
+          "failures": []
+        },
+        {
+          "file": "test_context_cost_baseline.py",
+          "returncode": 0,
+          "summary": "Ran 6 tests in 0.885s | OK",
+          "failures": []
+        },
+        {
+          "file": "test_maintenance_cost_baseline.py",
+          "returncode": 0,
+          "summary": "Ran 6 tests in 25.119s | OK",
+          "failures": []
+        }
+      ],
+      "note": "环境感知修复后的复验：变更集较小（仅登记册），回退/恢复同样干净。"
     }
   },
   "release_endorsement": {
