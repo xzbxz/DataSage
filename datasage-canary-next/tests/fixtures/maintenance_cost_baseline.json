@@ -130,7 +130,7 @@
     },
     "tests": {
       "files": 146,
-      "lines": 42251,
+      "lines": 42279,
       "names": [
         "test_acceptance_delivery.py",
         "test_analysis_evidence.py",
@@ -284,7 +284,7 @@
     },
     "test_helpers": {
       "files": 7,
-      "lines": 2516,
+      "lines": 2573,
       "names": [
         "business_replay.py",
         "context_cost.py",
@@ -342,7 +342,7 @@
     },
     "docs": {
       "files": 25,
-      "lines": 2109,
+      "lines": 2110,
       "names": [
         "legacy-checklist-state-20260923.md",
         "maintenance.md",

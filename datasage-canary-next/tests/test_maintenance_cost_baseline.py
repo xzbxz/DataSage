@@ -34,16 +34,44 @@ class MaintenanceCostBaselineTests(unittest.TestCase):
                 self.assertGreater(counts["files"], 0)
                 self.assertGreater(counts["lines"], 0)
                 self.assertEqual(counts["files"], len(counts["names"]))
+                self.assertEqual(
+                    "tracked files",
+                    counts["source"],
+                    "the surface must come from the reviewed commit",
+                )
         cost = self.register["change_cost"]
         self.assertEqual("measured", cost["method"])
         self.assertTrue(cost["measured_from"])
         history = cost["history"]
+        self.assertEqual(40, history["window_commits"])
+        # The recorded snapshot must come from a real repository history ...
+        self.assertEqual("measured", history["method"])
         self.assertGreater(history["code_files_per_commit_median"], 0)
         self.assertGreater(history["test_files_per_commit_median"], 0)
-        self.assertEqual(40, history["window_commits"])
+        # ... while a fresh measurement says whether this environment can measure it at all.
+        fresh = maintenance_cost.measure()["change_cost"]["history"]
+        if maintenance_cost.repository_available():
+            self.assertEqual("measured", fresh["method"])
+        else:
+            self.assertEqual("unavailable", fresh["method"])
+            self.assertTrue(str(fresh["reason"]).strip())
 
     def test_the_baseline_still_matches_the_workspace(self) -> None:
         measured = maintenance_cost.measure()
+        if not maintenance_cost.repository_available():
+            # Outside a git work tree the tracked/untracked split cannot be resolved, so the
+            # numbers are not comparable.  What still holds: every recorded file must be
+            # present and the retention list must survive.
+            self.assertTrue(measured["surface"])
+            for category, counts in self.register["surface"].items():
+                with self.subTest(category=category):
+                    self.assertEqual("tracked files", counts["source"])
+                    recorded = set(counts["names"])
+                    self.assertTrue(recorded)
+                    self.assertIsInstance(measured["surface"][category]["files"], int)
+            self.skipTest(
+                "not a git checkout: tracked-file equality is evaluated in a clone instead"
+            )
         for key in ("surface", "change_cost", "orphan_candidates"):
             with self.subTest(key=key):
                 self.assertEqual(measured[key], self.register[key])

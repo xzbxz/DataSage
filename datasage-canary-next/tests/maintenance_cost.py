@@ -41,6 +41,19 @@ DISPOSITIONS = ("keep_documented", "add_owner", "merge_with_neighbour", "removal
 
 
 
+
+def repository_available() -> bool:
+    """Whether this directory is inside a git work tree, so tracked files can be resolved."""
+
+    completed = subprocess.run(
+        ["git", "-C", str(PROFILE_ROOT), "rev-parse", "--is-inside-work-tree"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return completed.returncode == 0 and completed.stdout.strip() == "true"
+
+
 def _tracked(relative: str) -> set[str] | None:
     """Return the tracked file names under one directory, or None outside a repository.
 
@@ -58,6 +71,21 @@ def _tracked(relative: str) -> set[str] | None:
     if completed.returncode != 0:
         return None
     return {Path(line).name for line in completed.stdout.splitlines() if line.strip()}
+
+
+
+def _category_directory(category: str) -> Path:
+    return {
+        "plugin_modules": PLUGIN,
+        "contract_yaml": CONTRACTS if CONTRACTS.is_dir() else PLUGIN,
+        "plugin_docs": PLUGIN,
+        "tests": TESTS,
+        "test_helpers": TESTS,
+        "fixtures": FIXTURES,
+        "scripts": SCRIPTS,
+        "docs": DOCS,
+        "skill_files_datasage": SKILLS / "business-analytics" / "datasage",
+    }[category]
 
 
 def measure_unreviewed_extras() -> list[dict[str, Any]]:
@@ -276,6 +304,12 @@ def _git_history_cost() -> dict[str, Any]:
     code = files_touched("plugins/datasage-query")
     docs = files_touched("docs")
     tests = files_touched("tests")
+    if not repository_available():
+        return {
+            "window_commits": 40,
+            "method": "unavailable",
+            "reason": "not a git checkout: tracked history cannot be measured here",
+        }
     return {
         "window_commits": 40,
         "code_files_per_commit_median": int(statistics.median(code)) if code else 0,
@@ -376,6 +410,29 @@ def check() -> int:
     register = json.loads(REGISTER_PATH.read_text(encoding="utf-8"))
     problems: list[str] = []
     measured = measure()
+
+    if not repository_available():
+        # Outside a git work tree the tracked/untracked split cannot be resolved, so the
+        # numbers are not comparable.  What still holds: every file the register recorded
+        # must be present, every surface must declare that it was taken from the reviewed
+        # commit, and the retention list must survive.
+        print("not a git checkout: tracked-file equality is not evaluated here")
+        for category, counts in register["surface"].items():
+            if counts.get("source") != "tracked files":
+                problems.append(f"{category} was not measured from the reviewed commit")
+        for category in ("plugin_modules", "contract_yaml", "plugin_docs", "tests",
+                         "test_helpers", "fixtures", "scripts", "docs", "skill_files_datasage"):
+            directory = _category_directory(category)
+            recorded = set(register["surface"].get(category, {}).get("names", []))
+            if recorded and not recorded.issubset({p.name for p in directory.glob("*")}):
+                problems.append(f"{category}: a recorded file is missing from this copy")
+        for path in RETENTION_ARTIFACTS:
+            if not (PROFILE_ROOT / path).exists():
+                problems.append(f"retention artifact disappeared: {path}")
+        for problem in problems:
+            print(problem)
+        return 1 if problems else 0
+
     for key in ("surface", "change_cost"):
         if register.get(key) != measured[key]:
             problems.append(f"{key} drifted from the workspace")
