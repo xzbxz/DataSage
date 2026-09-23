@@ -69,7 +69,13 @@ def _display_width(value):
     return max((sum(2 if unicodedata.east_asian_width(c) in ('W','F') else 1 for c in line) for line in str(value or '').splitlines()),default=0)
 
 def _xml_text(value):
-    return escape(re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]','�',str(value if value is not None else '')))
+    text = ''.join(ch for ch in str(value if value is not None else '')
+                   if unicodedata.category(ch) != 'Cf')
+    # Zero-width joiners and bidi controls (Unicode Cf) carry no visible business
+    # meaning but can reorder or hide what a reader sees in a cell, so the
+    # artifact keeps only what can be read.  C0 controls become a replacement
+    # character rather than an invalid XML byte.
+    return escape(re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]','\ufffd',text))
 
 def _column_name(index: int) -> str:
     result = ""
@@ -80,7 +86,11 @@ def _column_name(index: int) -> str:
     return result
 
 def _safe_workbook_sheet_title(title: str, used: set[str]) -> str:
-    base = re.sub(r"[\\/*?:\[\]]", "_", str(title or "Sheet")).strip(" '") or "Sheet"
+    visible = "".join(
+        character for character in str(title or "")
+        if unicodedata.category(character) != "Cf"
+    )
+    base = re.sub(r"[\\/*?:\[\]]", "_", visible).strip(" '") or "Sheet"
     candidate = base[:31]
     suffix = 2
     while candidate.casefold() in used:

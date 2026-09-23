@@ -12,6 +12,7 @@ from pathlib import Path
 import json
 import re
 import sys
+import unicodedata
 
 from . import contract_store, result_completeness, settings, tools, wire
 
@@ -164,6 +165,10 @@ def execute_report(bindings, report_id=None):
 
 def _display(value):
     if value is None:return '未知'
+    # Invisible formatting characters (Unicode Cf: zero-width joiners, bidi
+    # overrides) can reorder or hide what a reader sees; the channel text keeps
+    # only visible characters, then neutralises delivery directives.
+    value=''.join(ch for ch in str(value) if unicodedata.category(ch)!='Cf')
     # Untrusted source labels must not become official MEDIA delivery directives.
     value=str(value).replace('\r','\\r').replace('\n','\\n')
     value=re.sub('MEDIA', 'ＭＥＤＩＡ', value, flags=re.I)
