@@ -223,6 +223,30 @@ cannot repair an earlier unsupported assertion.
 - For a partial batch, retain successful evidence and name every requested
   result that did not complete.
 
+## Minimal content by answer type
+
+The four request kinds share one evidence base and differ only in what the answer must
+carry. None of them prescribes sections, a fixed order, or a number of recommendations.
+
+- **Fact lookup**: the returned value with its unit and currency, the actual returned
+  period or snapshot, the metric's business meaning, and every applicable disclosure
+  next to the claim it limits. One governed result is enough; padding is a defect.
+- **Explanation**: those facts plus why they are comparable (scope, period, ledger,
+  population), and only the structural contribution a complete reconciliation actually
+  authorizes. An explanation of a change never becomes a cause.
+- **Diagnosis**: the facts, candidate explanations marked as hypotheses, the
+  discriminating evidence that would separate them, and the next check when the
+  evidence is insufficient. Keep each limit next to the claim it limits.
+- **Management report**: the selected facts with their scope lines, the state of every
+  branch including failed, truncated and pending ones, and any actions with their
+  conditions, risks and the human who must approve them. If the channel cannot produce
+  a file, say so and offer the operator path.
+
+Shared by all four: reuse the facts already returned in this conversation rather than
+re-querying them, state the actual returned scope instead of the requested one, never
+render unknown, empty, pending or failed as zero, and keep the numbers, units and any
+table consistent with the same returned result.
+
 ## Business-language boundary
 
 - Use business labels and values. Do not expose physical tables, fields, keys,
