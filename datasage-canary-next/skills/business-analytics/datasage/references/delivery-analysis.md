@@ -109,6 +109,30 @@ retain the human approval, assumptions, material risk and review requirements
 in SOUL. DataSage does not assign blame or execute resource allocation,
 customer treatment or target commitments.
 
+## Diagnostic path
+
+- **Goal**: judge whether outbound volume, value and mix moved for a chosen scope
+  and period, and which explanation the governed evidence can still support. It is
+  not a judgement of sales effort, customer health or cause.
+- **Candidate explanations** (hypotheses): volume moved (`delivery_quantity`,
+  `delivery_order_count`); price or mix moved (compare `delivery_amount` against
+  quantity); returns or refunds moved (`return_amount`); attribution moved
+  (current master, organization, internal customers); the comparison base or
+  window changed.
+- **Discriminating evidence**: the same-scope gross and net pair
+  (`gross_delivery_amount` against `delivery_amount`) to separate returns, the
+  order count beside the amount to separate volume from value, and the receipt or
+  target side only where it is genuinely compatible. See
+  "Hypotheses and causal evidence" above for what does not discriminate.
+- **Materiality**: needs a compatible target or owner benchmark; a prior-period
+  change alone does not authorize an absolute quality judgement.
+- **Candidate actions** (advice only): name the customer, product or warehouse
+  cuts worth a review and the check that would settle each hypothesis. Resource
+  allocation stays with the accountable owner.
+- **Stop when**: period, scope, ledger, unit or currency are incompatible, the
+  state is pending/truncated/incomplete, or the request needs a causal, health or
+  blame statement the evidence cannot carry.
+
 ## State and disclosure contract
 
 Keep each disclosure next to the claim it limits:

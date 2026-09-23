@@ -60,6 +60,29 @@ the requested window.
 - Do not use current customer master attributes to rewrite historical facts or
   snapshots, and do not infer a universal credit threshold.
 
+## Diagnostic path
+
+- **Goal**: judge the size and age profile of what is owed, and which customers
+  or departments carry it. It is not a credit decision or a loss estimate.
+- **Candidate explanations** (hypotheses): sales really grew on the affected
+  accounts; receipts slowed (compare `receipt_amount`/`net_receipt_amount` in the
+  same period); the aging profile shifted (e.g. `aging_91_120_amount` rising
+  against `aging_0_30_amount`); master or organization attribution changed;
+  currency or unit scope changed.
+- **Discriminating evidence**: the same-scope aging bands, the matched
+  `open_receivable_amount` / `positive_debt_amount` snapshot with its bill date,
+  and the receipt side in a compatible period. Absolute proximity does not
+  establish equal risk.
+- **Materiality**: ageing buckets need the credit policy or a compatible target.
+  Where credit days or policy are missing, the answer is unable-to-determine, not
+  "no overdue".
+- **Candidate actions** (advice only): list the customers to review with their
+  balances and ages; for anything above the owner's threshold, route to the
+  credit owner. DataSage does not set credit limits or approve releases.
+- **Stop when**: policy or credit days are missing, the snapshot's freshness is
+  unknown, `receivable_quantity` would be summed across units, or the request
+  needs a capability that is not governed (cash, liquidity, customer loss).
+
 ## Review prompts
 
 Open question: when positive debt and aging-over-90 are reviewed together,

@@ -75,6 +75,7 @@ _ROOT_FILES = (
     "docs/remediation-r14-20260923.md",
     "docs/remediation-r16-20260923.md",
     "docs/remediation-r17-20260923.md",
+    "docs/remediation-r18-20260923.md",
     "docs/remediation-b-batch-20260923.md",
     "docs/remediation-c-batch-20260923.md",
     "docs/rule-ownership-20260923.md",
@@ -85,6 +86,7 @@ _ROOT_FILES = (
     "tests/test_source_export.py",
     "tests/metric_readiness.py",
     "tests/test_metric_readiness_register.py",
+    "tests/test_domain_diagnostic_paths.py",
 )
 
 _PLUGIN_PY = _paths(

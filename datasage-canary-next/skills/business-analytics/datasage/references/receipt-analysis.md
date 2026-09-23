@@ -66,6 +66,30 @@ result.
   scope and do not describe it as all usages. Default internal-customer wording
   does not override an explicit filter.
 
+## Diagnostic path
+
+- **Goal**: judge whether receipts keep pace with what was shipped and settled,
+  and where the gap sits. This is not a liquidity or collection-quality verdict.
+- **Candidate explanations** (hypotheses, not causes): shipments themselves moved
+  (`delivery_amount`); returns or refunds moved (`return_amount`, `refund_amount`,
+  `actual_refund_amount`); recording lag or a different attribution
+  (`receipt_amount` vs `actual_receipt_amount`); customer or product mix changed;
+  the paired comparison's asymmetric population did the work.
+- **Discriminating evidence**: the paired `delivery_receipt_comparison` for the
+  same window, then the same-period `delivery_amount` beside `net_receipt_amount`,
+  plus returns/refunds, and the salesperson split (`allocated_net_receipt_amount`)
+  only where that ledger is exposed. A trend, ranking or single cut does not
+  discriminate.
+- **Materiality**: needs a compatible target (`receipt_target_completion`) or an
+  owner-stated benchmark. Without one, report the change and say that its
+  importance is undetermined.
+- **Candidate actions** (advice only): ask the customer owner to check settlement
+  timing, and re-read after the return-settlement period closes. Anything touching
+  credit or customer treatment needs the human approver.
+- **Stop when**: the comparison's population or period is incompatible, the state
+  is pending/incomplete/truncated, currencies cannot be isolated, or the requested
+  capability (cash, collection quality) is not governed.
+
 ## Review prompts
 
 Open question: for a complete month and fixed customer department/currency,

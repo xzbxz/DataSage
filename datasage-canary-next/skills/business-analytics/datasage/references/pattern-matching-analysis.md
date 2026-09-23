@@ -77,6 +77,29 @@ as the size of the evidence gap. If explicitly asked for scenarios, state each
 assumption separately; the correct amount may differ from every observed
 candidate, so those scenarios do not bound the unknown governed total.
 
+## Diagnostic path
+
+- **Goal**: judge how much delivered value is linked to a task or person under the
+  contract's attribution rules, and where the links failed. It is not proof that a
+  task caused an outbound, nor a performance rating.
+- **Candidate explanations** (hypotheses): the link rules really matched fewer
+  details; the task window differs from the delivery window; identity is unknown
+  or conflicting; the population is truncated; the same detail appears in more
+  than one task or person group.
+- **Discriminating evidence**: `linked_delivery_amount` against
+  `person_attributed_delivery_amount` for the same details, plus
+  `task_recorded_summary` and the returned unknown/conflict counts. Conflicting
+  linked amounts for one stable detail stay unresolved - keep them out of the
+  known subset instead of choosing the convenient row.
+- **Materiality**: the linked share needs an owner-stated expectation; the
+  complete governed total stays unknown while details are unresolved.
+- **Candidate actions** (advice only): list the affected details or groups for the
+  operations owner to reconcile; re-read after the window closes. Never present a
+  link as proof of cause or credit.
+- **Stop when**: the time basis is not the verified one, identities conflict or
+  are unknown, the result is truncated, or the requested judgement is causality
+  or performance.
+
 ## Review prompts
 
 Open question: should a task-created cohort and linked-delivery amounts be

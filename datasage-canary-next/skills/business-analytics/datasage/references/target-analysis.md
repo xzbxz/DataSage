@@ -67,6 +67,31 @@ transaction-ledger result alone does not authorize an allocation answer.
 - Ordinary breakdown is not structural contribution; structural contribution
   needs the contract's compatible, complete reconciliation and residual.
 
+## Diagnostic path
+
+- **Goal**: judge whether the committed target is being met for a compatible
+  scope and period, and where the shortfall sits. It is not a judgement of the
+  salesperson's ability or of the target's fairness.
+- **Candidate explanations** (hypotheses): shipments moved (`delivery_amount`);
+  the target itself changed (`delivery_target_amount` in a different period or
+  version); population or organization scope changed (internal customers,
+  department equivalence); the ledger used for actual differs from the ledger
+  used for the target.
+- **Discriminating evidence**: `delivery_target_completion` with its returned
+  scope and period state, the matching `delivery_target_amount`, and a
+  same-metric customer breakdown; `delivery_target_completion`'s complete
+  target-gap decomposition where the tool authorizes it. Never divide one
+  ledger's completion by another ledger's completion.
+- **Materiality**: the gap's importance needs the owner's threshold or the
+  returned target relationship; an unfinished period is not a closed result.
+- **Candidate actions** (advice only): name the customers or departments with the
+  largest compatible gap for follow-up, and the checks that would settle the
+  shortfall. Committing to a target or reallocating resource is the responsible
+  owner's decision, never the assistant's.
+- **Stop when**: ledgers, populations, periods or units are incompatible, the
+  target is missing or zero, the period is unfinished, or the split-ledger gate
+  is not activated.
+
 ## Review prompts
 
 Open question: for a complete natural month by customer department, should

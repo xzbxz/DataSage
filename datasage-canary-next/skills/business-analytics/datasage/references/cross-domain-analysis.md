@@ -57,6 +57,30 @@ candidate evidence list, not a requirement to query every domain.
 - Keep recommendations conditional, with assumptions and verification; do not
   execute allocations, credit changes, customer treatment, or target changes.
 
+## Diagnostic path
+
+- **Goal**: judge an operating question that genuinely spans domains (outbound and
+  profit, outbound and receipts or receivables, inventory and sales, target and
+  actual) without pretending the domains share one ledger.
+- **Candidate explanations** (hypotheses): volume moved; price or mix moved; timing
+  or attribution differs between the domains; one side's population is narrower
+  (internal customers, unknown buckets, returns, truncation).
+- **Discriminating evidence**: for each pairing, the two compatible metrics read in
+  the same window, then one component that separates the explanations - e.g.
+  delivery against the matching month's gross profit or margin; delivery against
+  `net_receipt_amount` (not cash); current inventory against same-period
+  `delivery_quantity`; `delivery_target_completion` against its own target ledger.
+  Keys, windows and units must match before any relation is stated.
+- **Materiality**: a cross-domain reading needs an owner benchmark; without one,
+  keep the finding descriptive. Structural contribution requires a complete
+  compatible reconciliation and never establishes a cause.
+- **Candidate actions** (advice only): name the specific checks that would confirm
+  or drop each hypothesis, and hand any resource, credit or customer decision to
+  the accountable owner.
+- **Stop when**: the two sides cannot be made compatible, one side is
+  incomplete/pending/truncated, or the question asks for a causal or health
+  verdict that the evidence cannot carry.
+
 ## Review prompts
 
 Open question: which flow/snapshot/report family, department mapping, ledger,

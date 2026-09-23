@@ -261,12 +261,29 @@ class ExpertAuthorityInventoryTests(unittest.TestCase):
         self.assertFalse((PROFILE_ROOT / ".no-bundled-skills").exists())
         self.assertEqual(REVIEWED_NATIVE_SKILLS, set(inventory) - disabled)
         self.assertEqual(set(inventory) - REVIEWED_NATIVE_SKILLS, disabled.intersection(inventory))
+        platform_disabled = {
+            str(name)
+            for name in (config["skills"].get("platform_disabled") or {}).get(
+                "wecom", []
+            )
+        }
         with mock.patch.dict(os.environ, {"HERMES_HOME": str(PROFILE_ROOT)}):
             hermes_skill_utils._raw_config_cache_clear()
             try:
+                # R13: WeCom additionally hides the office skills whose instructions
+                # need a local shell or file tool.  hermes-agent is host-essential,
+                # so it can never appear in either set.
+                self.assertEqual(
+                    disabled | platform_disabled,
+                    hermes_skill_utils.get_disabled_skill_names(platform="wecom"),
+                )
                 self.assertEqual(
                     disabled,
-                    hermes_skill_utils.get_disabled_skill_names(platform="wecom"),
+                    hermes_skill_utils.get_disabled_skill_names(platform="cli"),
+                )
+                self.assertEqual(
+                    set(), platform_disabled & disabled,
+                    "skills hidden for WeCom must stay enabled for the CLI",
                 )
             finally:
                 hermes_skill_utils._raw_config_cache_clear()

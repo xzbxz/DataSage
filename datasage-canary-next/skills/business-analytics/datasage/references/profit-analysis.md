@@ -54,6 +54,31 @@ observation, including the possibility of later updates.
   controllability, or collection result.
 - Do not use a current customer owner to fill historical report attribution.
 
+## Diagnostic path
+
+- **Goal**: judge recorded revenue, gross profit, margin and expense coverage for
+  a chosen grain, and what moved them. It is not finalized net profit.
+- **Candidate explanations** (hypotheses): volume moved (compare the matching
+  delivery metrics in a compatible period); price or discount moved
+  (`customer_month_discount_amount`); cost moved (`customer_month_purchase_cost`,
+  `customer_month_inventory_cost`, `customer_month_logistics_expense`); returns
+  moved (`customer_month_return_amount`); attribution moved (report grain or
+  current-master enrichment).
+- **Discriminating evidence**: the same-grain revenue, cost and gross-profit
+  metrics for the same month, then the expense components and coverage. The four
+  report grains (customer-month, department-month, product-month, order-lifetime)
+  are separate ledgers: differences between them are observations unless a
+  complete compatible bridge is returned.
+- **Materiality**: margin and expense verdicts need the owner's benchmark; missing
+  expenses are not zero, and coverage states decide whether a margin may be read
+  at all.
+- **Candidate actions** (advice only): list the customers or products whose cost
+  or discount moved, with the covered/uncovered split. Pricing, write-offs or
+  customer-treatment decisions belong to the business owner.
+- **Stop when**: grains or periods are mixed, expenses are missing (unfilled),
+  a currency cannot be isolated, or the result would be presented as closed net
+  profit.
+
 ## Review prompts
 
 Open question: for a complete month by department, is the department-month

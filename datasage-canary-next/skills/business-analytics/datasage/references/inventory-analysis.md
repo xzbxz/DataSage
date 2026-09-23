@@ -60,6 +60,29 @@ and basis as returned evidence rather than creating a new business rule.
 - A snapshot or turnover result does not prove inventory health, cause, loss,
   or responsibility. Keep unknown and incomplete coverage beside the claim.
 
+## Diagnostic path
+
+- **Goal**: judge how much capital sits in inventory, how old it is, and which
+  products or warehouses carry it. It is not an inventory-health verdict.
+- **Candidate explanations** (hypotheses): purchasing outpaced sales; sales of the
+  affected products slowed (compare `delivery_quantity`/`delivery_amount` in a
+  compatible period); valuation moved (`month_end_inventory_ddp_rmb` vs
+  `month_end_inventory_cost_rmb` are different measures, not a bridge); the slow
+  pool changed (`idk_unpriced_pool`); coverage is incomplete (missing cost rows).
+- **Discriminating evidence**: current value by warehouse
+  (`current_inventory_amount_rmb`) beside the month-end snapshot, ageing
+  (`current_warehouse_age_days`, and `oldest_inventory_days` where returned),
+  turnover (`inventory_turnover_days`) and the slow-pool counts. Keep quantities
+  in their own units.
+- **Materiality**: needs an owner-stated benchmark or target; turnover is
+  undefined while its period inputs or cost coverage are missing.
+- **Candidate actions** (advice only): list the products or warehouses to review
+  with their values, ages and coverage gaps; disposal, write-down or purchasing
+  changes need the operations owner's approval.
+- **Stop when**: meters/yards/kilograms/pieces would be summed, cost coverage is
+  incomplete, the snapshot period is not the one being discussed, or the request
+  needs an ungoverned capability (physical age, loss, health).
+
 ## Review prompts
 
 Open question: for a product request, and only where each metric's declared
