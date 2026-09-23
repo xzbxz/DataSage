@@ -73,9 +73,10 @@
 
 | 运行 | 范围 | 结果 |
 | --- | --- | --- |
-| B 批等价环境 | 1439 项（临时副本 + 父级 .gitignore + 已提交 config.yaml） | 0 失败、2 错误（宿主 checkout 路径）、2 跳过 |
-| 宿主路径修正后 | 同上 + `HERMES_AGENT_ROOT` 指向真实宿主 | 0 失败、0 错误、2 跳过 |
-| 本轮新增用例 | `test_integration_boundaries`（49）、`test_expert_authority_inventory`（10）、`test_source_export`（11） | 全部通过（1 项符号链接环境跳过） |
+| B 批等价环境（临时副本 + 父级 `.gitignore` + 已提交 config.yaml） | 1439 项 | 0 失败、2 错误（宿主 checkout 路径，属副本环境）、2 跳过 |
+| 同一副本 + `HERMES_AGENT_ROOT` 指向真实宿主 | 1439 项 | OK、1 跳过（0 失败 0 错误） |
+| C 批内容（同上环境） | 1447 项 | OK、1 跳过（0 失败 0 错误） |
+| 本轮新增用例 | `test_integration_boundaries`（48）、`test_expert_authority_inventory`（11）、`test_source_export`（12） | 全部通过（1 项符号链接环境跳过） |
 
 ## 3. 待人工处理的 config.yaml 注释（R10）
 
