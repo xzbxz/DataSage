@@ -379,5 +379,38 @@ print(json.dumps({'config_path': str(get_config_path()), 'command': spec.command
                 self.assertIn(f"{prefix}/tests/{test}", names)
 
 
+    # -- R29: the bundled driver must stay traceable and unmodified -----------
+
+    def test_vendored_pymysql_matches_the_recorded_provenance(self):
+        vendor_root = ROOT / "plugins/datasage-query/vendor"
+        files = sorted(
+            path
+            for path in vendor_root.rglob("*")
+            if path.is_file() and "__pycache__" not in path.parts
+        )
+        digest = hashlib.sha256(
+            "\n".join(
+                f"{path.relative_to(vendor_root).as_posix()}\0"
+                f"{hashlib.sha256(path.read_bytes()).hexdigest()}"
+                for path in files
+            ).encode()
+        ).hexdigest()
+        recorded = (ROOT / "docs/vendor-provenance-20260923.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(25, len(files))
+        self.assertIn(f"`{digest}`", recorded)
+        self.assertIn("licenses/LICENSE", recorded)
+        metadata = (vendor_root / "pymysql-1.2.0.dist-info/METADATA").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Name: PyMySQL", metadata)
+        self.assertIn("Version: 1.2.0", metadata)
+        self.assertGreater(
+            (vendor_root / "pymysql-1.2.0.dist-info/licenses/LICENSE").stat().st_size,
+            500,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

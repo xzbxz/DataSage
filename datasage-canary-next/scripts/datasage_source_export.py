@@ -70,6 +70,10 @@ _ROOT_FILES = (
     "config.yaml",  # written as a generated, redacted template
     "profile.yaml",
     "docs/maintenance.md",
+    "docs/remediation-b-batch-20260923.md",
+    "docs/remediation-c-batch-20260923.md",
+    "docs/rule-ownership-20260923.md",
+    "docs/vendor-provenance-20260923.md",
     "docs/structure-convergence.md",
     "docs/source-export.md",
     "scripts/datasage_source_export.py",
