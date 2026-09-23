@@ -6,6 +6,7 @@ This module owns path containment and the file-signature cache.  Callers map
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from functools import lru_cache
@@ -36,6 +37,93 @@ class ContractStoreError(Exception):
         self.reason_code = reason_code
 
 
+def _readonly(*_args: Any, **_kwargs: Any) -> Any:
+    """Refuse in-place mutation of pinned contract data (F05)."""
+
+    raise TypeError("pinned contract data is read-only")
+
+
+class _FrozenDict(dict):
+    """Mapping view that keeps ``dict`` semantics but cannot be mutated.
+
+    A plain ``MappingProxyType`` would break ``isinstance(value, dict)`` and
+    JSON serialisation for existing consumers, so the view stays a ``dict``
+    subclass and only the mutating methods are refused.
+    """
+
+    __slots__ = ()
+
+    __setitem__ = _readonly
+    __delitem__ = _readonly
+    clear = _readonly
+    pop = _readonly
+    popitem = _readonly
+    setdefault = _readonly
+    update = _readonly
+
+    def __copy__(self) -> dict:
+        """Explicit mutation boundary: a plain mutable shallow copy."""
+
+        return dict(self)
+
+    def __deepcopy__(self, memo: dict) -> dict:
+        """Explicit mutation boundary: a plain mutable deep copy."""
+
+        return copy.deepcopy(dict(self), memo)
+
+
+class _FrozenList(list):
+    """Sequence view that keeps ``list`` semantics but cannot be mutated."""
+
+    __slots__ = ()
+
+    __setitem__ = _readonly
+    __delitem__ = _readonly
+    __iadd__ = _readonly
+    __imul__ = _readonly
+    append = _readonly
+    clear = _readonly
+    extend = _readonly
+    insert = _readonly
+    pop = _readonly
+    remove = _readonly
+    reverse = _readonly
+    sort = _readonly
+
+    def __copy__(self) -> list:
+        """Explicit mutation boundary: a plain mutable shallow copy."""
+
+        return list(self)
+
+    def __deepcopy__(self, memo: dict) -> list:
+        """Explicit mutation boundary: a plain mutable deep copy."""
+
+        return copy.deepcopy(list(self), memo)
+
+
+def freeze_contract(value: Any) -> Any:
+    """Return a recursively read-only view of a parsed contract.
+
+    The frozen structure is built with the base-class operations so the
+    overridden mutators above are never consulted while constructing it.
+    Scalars and unknown types are returned unchanged.
+    """
+
+    if isinstance(value, dict):
+        frozen = _FrozenDict.__new__(_FrozenDict)
+        dict.__init__(frozen)
+        for key, item in value.items():
+            dict.__setitem__(frozen, key, freeze_contract(item))
+        return frozen
+    if isinstance(value, list):
+        frozen_list = _FrozenList.__new__(_FrozenList)
+        list.__init__(frozen_list)
+        for item in value:
+            list.append(frozen_list, freeze_contract(item))
+        return frozen_list
+    return value
+
+
 _SNAPSHOT_LOCK = threading.RLock()
 _CONTRACT_SNAPSHOT: dict[str, Any] | None = None
 _SNAPSHOT_BOOTSTRAP_COUNT = 0
@@ -59,6 +147,20 @@ PINNED_CONTRACT_PATHS = tuple(
             capability_contract.TARGET_GAP_CONTRACT_PATH,
         )
     )
+)
+
+# F03: ``operations.yaml`` and ``legacy-workflows.json`` belong to the operator
+# and legacy entry points, not to the three query tools.  Pinning them in the
+# same strict group meant one malformed operator file stopped the whole query
+# surface from registering.  They keep the same bytes, digest and
+# restart-refresh semantics, but their read failure is recorded per file
+# instead of raised, and their own readers still fail closed.
+OPERATOR_CONTRACT_PATHS = (
+    "plugins/datasage-query/contracts/operations.yaml",
+    "plugins/datasage-query/contracts/legacy-workflows.json",
+)
+QUERY_CONTRACT_PATHS = tuple(
+    path for path in PINNED_CONTRACT_PATHS if path not in OPERATOR_CONTRACT_PATHS
 )
 
 
@@ -157,8 +259,32 @@ def _snapshot_view(snapshot: dict[str, Any]) -> dict[str, Any]:
             }
             for relative, entry in snapshot["entries"].items()
         },
+        "operator_failures": {
+            relative: dict(failure)
+            for relative, failure in snapshot.get("operator_failures", {}).items()
+        },
         "manifest_digest": snapshot["manifest_digest"],
     }
+
+
+def _pin_one_contract(relative_path: str) -> dict[str, Any]:
+    """Read, parse and describe one contract file for the snapshot."""
+
+    path, content, digest = _read_current_contract_bytes(relative_path)
+    text = content.decode("utf-8")
+    parsed = parse_yaml_cached(str(path), digest, text)
+    return {
+        "path": str(path),
+        "sha256": digest,
+        "content": bytes(content),
+        "parsed": parsed,
+    }
+
+
+# Failure kinds a contract file can raise while being pinned.  Kept in one
+# place so the strict query group and the tolerant operator group agree on
+# what "unreadable contract" means.
+_PINNABLE_ERRORS = (OSError, RuntimeError, UnicodeError, ValueError, yaml.YAMLError)
 
 
 def _pin_contract_snapshot() -> dict[str, Any]:
@@ -168,6 +294,12 @@ def _pin_contract_snapshot() -> dict[str, Any]:
     one process-lifetime snapshot under the lock.  Later callers reuse the
     cached bytes and parsed mappings; file changes take effect after the
     process is restarted.
+
+    Query contracts stay strict: the three registered tools cannot run without
+    them, so a failure still fails closed.  Operator/legacy contracts are
+    pinned from the same bytes, but a broken operator file is recorded under
+    ``operator_failures`` rather than preventing query registration (F03), and
+    its own readers still fail closed on the operator path.
     """
 
     global _CONTRACT_SNAPSHOT, _SNAPSHOT_BOOTSTRAP_COUNT
@@ -183,33 +315,38 @@ def _pin_contract_snapshot() -> dict[str, Any]:
 
         entries: dict[str, dict[str, Any]] = {}
         try:
-            for relative_path in PINNED_CONTRACT_PATHS:
-                path, content, digest = _read_current_contract_bytes(relative_path)
-                text = content.decode("utf-8")
-                parsed = parse_yaml_cached(str(path), digest, text)
-                entries[relative_path] = {
-                    "path": str(path),
-                    "sha256": digest,
-                    "content": bytes(content),
-                    "parsed": parsed,
-                }
+            for relative_path in QUERY_CONTRACT_PATHS:
+                entries[relative_path] = _pin_one_contract(relative_path)
         except ContractStoreError as exc:
             raise ContractStoreError(
                 exc.code,
                 exc.message,
                 reason_code=exc.reason_code or "snapshot_contract_read_unavailable",
             ) from exc
-        except (
-            OSError,
-            RuntimeError,
-            UnicodeError,
-            ValueError,
-            yaml.YAMLError,
-        ) as exc:
+        except _PINNABLE_ERRORS as exc:
             raise _snapshot_error("snapshot_contract_read_unavailable") from exc
+
+        operator_failures: dict[str, dict[str, str]] = {}
+        for relative_path in OPERATOR_CONTRACT_PATHS:
+            try:
+                entries[relative_path] = _pin_one_contract(relative_path)
+            except ContractStoreError as exc:
+                operator_failures[relative_path] = {
+                    "reason_code": "operator_contract_unavailable",
+                    "cause_code": exc.code,
+                    "message": exc.message,
+                }
+            except _PINNABLE_ERRORS as exc:
+                operator_failures[relative_path] = {
+                    "reason_code": "operator_contract_unavailable",
+                    "cause_code": exc.__class__.__name__,
+                    "message": str(exc) or exc.__class__.__name__,
+                }
+
         _CONTRACT_SNAPSHOT = {
             "profile_root": root,
             "entries": entries,
+            "operator_failures": operator_failures,
             "manifest_digest": _snapshot_manifest_digest(root, entries),
         }
         _SNAPSHOT_BOOTSTRAP_COUNT += 1
@@ -240,6 +377,15 @@ def _cached_contract(relative_path: str) -> tuple[Path, dict[str, Any]]:
         raise
     entry = snapshot["entries"].get(key)
     if entry is None:
+        failure = (snapshot.get("operator_failures") or {}).get(key)
+        if failure is not None:
+            # The query surface registered without this operator/legacy file;
+            # its own reader must still fail closed with the recorded cause.
+            raise ContractStoreError(
+                "CONTRACT_UNAVAILABLE",
+                "operator contract is unavailable in this process",
+                reason_code=failure["reason_code"],
+            )
         raise _snapshot_error(
             "contract_path_not_in_snapshot",
             "contract path is not part of the registered snapshot",
@@ -285,6 +431,12 @@ def contract_snapshot_status() -> dict[str, Any]:
             snapshot["manifest_digest"] if snapshot is not None else None
         ),
         "file_count": len(snapshot["entries"]) if snapshot is not None else 0,
+        "operator_contracts_loaded": bool(
+            snapshot is not None and not snapshot.get("operator_failures")
+        ),
+        "operator_contracts_unavailable": sorted(
+            (snapshot.get("operator_failures") or {}) if snapshot is not None else {}
+        ),
         "drifted": root_changed,
         "drift_reason": "profile_root_changed" if root_changed else None,
         "reason_code": "CONTRACT_SNAPSHOT_ROOT_CHANGED" if root_changed else None,
@@ -307,20 +459,66 @@ def bootstrap_contract_snapshot_for_tests() -> dict[str, Any]:
     return dict(contract_snapshot_status())
 
 
+class DuplicateContractKeyError(yaml.YAMLError):
+    """A contract mapping repeats the same explicit key at one level (F06)."""
+
+
+class _ContractLoader(yaml.SafeLoader):
+    """SafeLoader that refuses duplicate explicit keys inside one mapping.
+
+    ``<<`` merge keys stay legal: the document's own keys are checked first and
+    the merged pairs are expanded afterwards, so an explicit key may still
+    override a merged value exactly as the YAML merge specification allows.
+    Parsing remains safe-loading; this only adds a same-level key check.
+    """
+
+    def construct_mapping(self, node: Any, deep: bool = False) -> Any:
+        if isinstance(node, yaml.MappingNode):
+            seen: set[Any] = set()
+            for key_node, _value_node in node.value:
+                if key_node.tag == "tag:yaml.org,2002:merge":
+                    continue
+                key = self.construct_object(key_node, deep=deep)
+                try:
+                    repeated = key in seen
+                except TypeError:  # unhashable key: leave it to SafeLoader
+                    continue
+                if repeated:
+                    mark = key_node.start_mark
+                    raise DuplicateContractKeyError(
+                        f"duplicate explicit key {key!r} at line "
+                        f"{mark.line + 1} column {mark.column + 1}"
+                    )
+                seen.add(key)
+            self.flatten_mapping(node)
+        return super().construct_mapping(node, deep=deep)
+
+
 @lru_cache(maxsize=64)
 def parse_yaml_cached(
     path_text: str, content_sha256: str, content_text: str
 ) -> dict[str, Any]:
     del path_text, content_sha256
-    value = yaml.safe_load(content_text)
+    value = yaml.load(content_text, Loader=_ContractLoader)
     if not isinstance(value, dict):
         raise ContractStoreError(
             "CONTRACT_UNAVAILABLE", "contract root must be a mapping"
         )
-    return value
+    # F05: the parsed object is cached and shared by every reader, so it is
+    # published as a recursively read-only view.  A consumer that needs to
+    # modify contract data must copy it explicitly instead of editing the
+    # process cache.
+    return freeze_contract(value)
 
 
 def read_yaml(relative_path: str) -> dict[str, Any]:
+    """Return the pinned, read-only parsed contract for ``relative_path``.
+
+    The digest recorded for the entry always describes the source bytes; this
+    returned mapping is the process-lifetime parsed view of those bytes and
+    cannot be mutated in place.
+    """
+
     try:
         _path, entry = _cached_contract(relative_path)
         return entry["parsed"]

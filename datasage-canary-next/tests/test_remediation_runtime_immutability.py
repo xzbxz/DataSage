@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import importlib
 import importlib.util
+import json
 import os
 from pathlib import Path
 import sys
@@ -230,6 +231,111 @@ class RuntimeContractImmutabilityTests(unittest.TestCase):
             values = list(pool.map(lambda _item: contract_store.read_yaml(relative_path), range(32)))
         self.assertEqual([values[0]] * len(values), values)
         self.assertEqual(1, contract_store._SNAPSHOT_BOOTSTRAP_COUNT)
+
+
+    # -- F03: query registration must not depend on operator/legacy files ----
+
+    OPERATIONS = "plugins/datasage-query/contracts/operations.yaml"
+    LEGACY = "plugins/datasage-query/contracts/legacy-workflows.json"
+
+    def _corrupt(self, relative_path: str) -> None:
+        (self.root / relative_path).write_text("value: [unclosed\n", encoding="utf-8")
+        contract_store.reset_contract_snapshot_for_tests()
+
+    def test_broken_operator_contract_does_not_block_query_registration(self) -> None:
+        self._corrupt(self.OPERATIONS)
+        context = _Context()
+        plugin.register(context)
+        self.assertEqual(
+            ["datasage_catalog", "datasage_entity_resolve", "datasage_query"],
+            context.registered,
+        )
+        status = contract_store.contract_snapshot_status()
+        self.assertTrue(status["loaded"])
+        self.assertFalse(status["operator_contracts_loaded"])
+        self.assertEqual([self.OPERATIONS], status["operator_contracts_unavailable"])
+        self.assertEqual(
+            len(contract_store.PINNED_CONTRACT_PATHS) - 1, status["file_count"]
+        )
+        # The operator reader still fails closed, with its own reason code.
+        with self.assertRaises(contract_store.ContractStoreError) as raised:
+            contract_store.read_yaml(self.OPERATIONS)
+        self.assertEqual("operator_contract_unavailable", raised.exception.reason_code)
+        # A healthy legacy contract in the same group is still pinned.
+        self.assertIn("value", contract_store.read_yaml(self.LEGACY))
+
+    def test_missing_operator_contract_is_recorded_not_raised(self) -> None:
+        (self.root / self.LEGACY).unlink()
+        contract_store.reset_contract_snapshot_for_tests()
+        contract_store.pin_contract_snapshot()
+        status = contract_store.contract_snapshot_status()
+        self.assertTrue(status["loaded"])
+        self.assertFalse(status["operator_contracts_loaded"])
+        self.assertEqual([self.LEGACY], status["operator_contracts_unavailable"])
+        with self.assertRaises(contract_store.ContractStoreError) as raised:
+            contract_store.read_yaml(self.LEGACY)
+        self.assertEqual("operator_contract_unavailable", raised.exception.reason_code)
+
+    def test_broken_query_contract_still_fails_closed(self) -> None:
+        self._corrupt("plugins/datasage-query/contracts/query-policy.yaml")
+        with self.assertRaises(contract_store.ContractStoreError):
+            contract_store.pin_contract_snapshot()
+        self.assertFalse(contract_store.contract_snapshot_status()["loaded"])
+        context = _Context()
+        with self.assertRaises(contract_store.ContractStoreError):
+            plugin.register(context)
+        self.assertEqual([], context.registered)
+
+
+    # -- F05: the pinned parse result is a read-only view -------------------
+
+    def test_pinned_contract_view_refuses_mutation_for_later_readers(self) -> None:
+        relative = "plugins/datasage-query/contracts/query-policy.yaml"
+        first = contract_store.read_yaml(relative)
+        with self.assertRaises(TypeError):
+            first["version"] = "tampered"
+        with self.assertRaises(TypeError):
+            first.update({"version": "tampered"})
+        second = contract_store.read_yaml(relative)
+        self.assertIs(first, second)
+        self.assertEqual(first["version"], second["version"])
+        self.assertNotEqual("tampered", second["version"])
+
+    def test_read_only_view_covers_nested_mappings_and_sequences(self) -> None:
+        (self.root / self.OPERATIONS).write_text(
+            "version: nested\nrows:\n  - id: 1\n    labels: [a, b]\n",
+            encoding="utf-8",
+        )
+        contract_store.reset_contract_snapshot_for_tests()
+        parsed = contract_store.read_yaml(self.OPERATIONS)
+        self.assertIsInstance(parsed, dict)
+        self.assertIsInstance(parsed["rows"], list)
+        with self.assertRaises(TypeError):
+            parsed["rows"].append({"id": 2})
+        with self.assertRaises(TypeError):
+            parsed["rows"][0]["id"] = 2
+        with self.assertRaises(TypeError):
+            parsed["rows"][0]["labels"].append("c")
+        # Ordinary consumption still works: dict/list semantics and JSON.
+        self.assertEqual(1, parsed.get("rows")[0]["id"])
+        self.assertEqual(1, json.loads(json.dumps(parsed))["rows"][0]["id"])
+
+    def test_mutation_attempt_does_not_reach_concurrent_readers(self) -> None:
+        relative = "plugins/datasage-query/contracts/datasets.yaml"
+        contract_store.pin_contract_snapshot()
+
+        def attempt(_item: int) -> str:
+            view = contract_store.read_yaml(relative)
+            try:
+                view["version"] = "tampered"
+            except TypeError:
+                pass
+            return str(view["version"])
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            values = list(pool.map(attempt, range(32)))
+        self.assertEqual(1, len(set(values)))
+        self.assertEqual(values[0], contract_store.read_yaml(relative)["version"])
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib
 import json
 import os
@@ -27,6 +28,7 @@ sys.modules.setdefault(PACKAGE, package)
 
 capability_contract = importlib.import_module(f"{PACKAGE}.capability_contract")
 contracts = importlib.import_module(f"{PACKAGE}.contracts")
+contract_store = importlib.import_module(f"{PACKAGE}.contract_store")
 
 
 class ContractRemediationTests(unittest.TestCase):
@@ -310,6 +312,63 @@ class ContractRemediationTests(unittest.TestCase):
             with self.subTest(table=table):
                 self.assertTrue(set(definition.get("domains", [])) <= supported)
                 self.assertNotIn("order", definition.get("domains", []))
+
+
+    # -- F06: duplicate explicit keys are refused, legal merges are kept -----
+
+    def test_duplicate_explicit_yaml_key_is_rejected(self) -> None:
+        with self.assertRaises(contract_store.DuplicateContractKeyError) as raised:
+            contract_store.parse_yaml_cached(
+                "synthetic-duplicate.yaml", "0" * 64, "metric: first\nmetric: second\n"
+            )
+        self.assertIn("duplicate explicit key", str(raised.exception))
+
+    def test_duplicate_key_inside_a_nested_mapping_is_rejected(self) -> None:
+        with self.assertRaises(contract_store.DuplicateContractKeyError):
+            contract_store.parse_yaml_cached(
+                "synthetic-nested-duplicate.yaml",
+                "1" * 64,
+                "top:\n  metric: first\n  metric: second\n",
+            )
+
+    def test_same_key_at_different_levels_is_still_allowed(self) -> None:
+        parsed = contract_store.parse_yaml_cached(
+            "synthetic-levels.yaml",
+            "2" * 64,
+            "metric: outer\nchild:\n  metric: inner\n",
+        )
+        self.assertEqual("outer", parsed["metric"])
+        self.assertEqual("inner", parsed["child"]["metric"])
+
+    def test_legal_merge_and_explicit_override_are_preserved(self) -> None:
+        parsed = contract_store.parse_yaml_cached(
+            "synthetic-merge.yaml",
+            "3" * 64,
+            "base: &base\n  metric: first\n  unit: 万元\n"
+            "merged:\n  <<: *base\n  metric: second\n",
+        )
+        self.assertEqual("first", parsed["base"]["metric"])
+        self.assertEqual("second", parsed["merged"]["metric"])
+        self.assertEqual("万元", parsed["merged"]["unit"])
+
+    def test_non_mapping_root_still_fails_closed(self) -> None:
+        with self.assertRaises(contract_store.ContractStoreError):
+            contract_store.parse_yaml_cached(
+                "synthetic-list.yaml", "4" * 64, "- a\n- b\n"
+            )
+
+    def test_current_contract_files_parse_without_duplicate_reports(self) -> None:
+        for path in sorted(CONTRACT_ROOT.iterdir()):
+            if path.suffix not in {".yaml", ".json"}:
+                continue
+            with self.subTest(contract=path.name):
+                content = path.read_text(encoding="utf-8")
+                parsed = contract_store.parse_yaml_cached(
+                    str(path),
+                    hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                    content,
+                )
+                self.assertIsInstance(parsed, dict)
 
 
 if __name__ == "__main__":

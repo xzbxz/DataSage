@@ -152,6 +152,10 @@ def runtime_identity_status(*, profile_root: Path | None = None) -> dict[str, An
         "path_integrity_verified": True,
         "active_profile_path": str(active_root),
         "contract_snapshot_loaded": True,
+        # A degraded operator/legacy contract no longer blocks query
+        # readiness, so it must be visible here instead of silently absent
+        # (F03).  The operator entry point itself still fails closed.
+        "operator_contracts_loaded": snapshot.get("operator_contracts_loaded") is True,
     }
 
 
