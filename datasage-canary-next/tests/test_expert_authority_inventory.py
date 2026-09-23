@@ -412,5 +412,22 @@ class ExpertAuthorityInventoryTests(unittest.TestCase):
                 self.assertIn(forbidden_role, lowered)
 
 
+    def test_local_skill_name_does_not_collide_with_a_bundled_skill(self):
+        """F09/C05: a bundled Skill must not shadow the local DataSage Skill."""
+
+        frontmatter = yaml.safe_load(
+            (SKILL_ROOT / "SKILL.md")
+            .read_text(encoding="utf-8")
+            .split("---", 2)[1]
+        )
+        local_name = frontmatter["name"]
+        bundled = _bundled_skill_inventory()
+        self.assertNotIn(
+            local_name,
+            bundled,
+            f"bundled Skill {local_name!r} would shadow the local DataSage Skill",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
