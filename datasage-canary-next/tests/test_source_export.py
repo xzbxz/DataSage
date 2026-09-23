@@ -80,6 +80,10 @@ class SourceExportTests(unittest.TestCase):
             candidate_config["platforms"]["wecom"]["home_channel"].update(
                 chat_id=original_channel_id, name="Synthetic channel", user_id="synthetic-owner")
             candidate_config["lsp"]["servers"]["pyright"]["command"][0] = "C:/synthetic-tools/pyright.cmd"
+            candidate_config["platforms"]["wecom"]["extra"].update(
+                allow_admin_from=["synthetic-approver"],
+                group_allow_admin_from=["synthetic-approver"],
+            )
             (candidate / "config.yaml").write_text(yaml.safe_dump(candidate_config), encoding="utf-8")
             output = workspace / "package"
             source_export.export_source(candidate, output)
@@ -108,6 +112,21 @@ class SourceExportTests(unittest.TestCase):
                     self.assertEqual("", value, key)
             self.assertNotIn("C:/Users/", (output / "config.yaml").read_text(encoding="utf-8"))
             self.assertNotIn(original_channel_id, (output / "config.yaml").read_text(encoding="utf-8"))
+            # Approver ids are identities too: the installed profile keeps them,
+            # the shareable template must not.
+            exported_extra = exported["platforms"]["wecom"]["extra"]
+            self.assertEqual(
+                ["${WECOM_APPROVER_USER_ID}"], exported_extra["allow_admin_from"]
+            )
+            self.assertEqual(
+                ["${WECOM_APPROVER_USER_ID}"], exported_extra["group_allow_admin_from"]
+            )
+            exported_text = (output / "config.yaml").read_text(encoding="utf-8")
+            self.assertNotIn("synthetic-approver", exported_text)
+            for approver in (
+                original["platforms"]["wecom"]["extra"].get("allow_admin_from") or []
+            ):
+                self.assertNotIn(str(approver), exported_text)
 
     def test_missing_contract_fails_closed(self) -> None:
         with TemporaryDirectory(prefix="datasage-source-export-test-") as temporary:

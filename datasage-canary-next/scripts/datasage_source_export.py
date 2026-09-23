@@ -623,6 +623,14 @@ def _sanitize_config(text: str) -> str:
         if key in home_channel:
             home_channel[key] = "${WECOM_HOME_CHANNEL}"
 
+    # Approver identities follow the same rule as the home channel: the installed
+    # profile keeps the real WeCom user id, the shareable template names the env
+    # placeholder.  An empty list stays empty (no gate configured -> no leak).
+    platform_extra = mapping_at("platforms", "wecom", "extra")
+    for key in ("allow_admin_from", "group_allow_admin_from"):
+        if platform_extra.get(key):
+            platform_extra[key] = ["${WECOM_APPROVER_USER_ID}"]
+
     pyright = mapping_at("lsp", "servers", "pyright")
     command = pyright.get("command")
     if isinstance(command, list) and command:
@@ -742,7 +750,7 @@ def _write_manifest(
         "config": {
             "source_config": "config.yaml",
             "output_config": "config.yaml",
-            "transformation": "channel identities and absolute LSP path replaced with environment placeholders",
+            "transformation": "channel identities, approver ids and absolute LSP path replaced with environment placeholders",
         },
         "runtime_excluded": [
             ".env",

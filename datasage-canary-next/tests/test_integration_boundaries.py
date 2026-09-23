@@ -2394,6 +2394,41 @@ class DistributionBoundaryTests(unittest.TestCase):
                 self.assertNotEqual([], host_global_config_violations(drifted))
 
 
+    def test_wecom_slash_admin_gate_is_enabled_for_both_scopes(self) -> None:
+        """A chat member must not be able to approve their own Skill or Memory write.
+
+        The host disables slash-command gating for a scope that names no admin
+        (gateway/slash_access.py: enabled = bool(admin_ids)), which makes every
+        admitted member an admin — including for /skills approval off.  The admin
+        list must therefore be present as a literal id: an env reference expands
+        to an empty string when unset and silently re-disables the gate.
+        """
+
+        config = yaml.safe_load(
+            (PROFILE_ROOT / "config.yaml").read_text(encoding="utf-8")
+        )
+        extra = config["platforms"]["wecom"]["extra"]
+        for scope, key in (
+            ("dm", "allow_admin_from"),
+            ("group", "group_allow_admin_from"),
+        ):
+            with self.subTest(scope=scope):
+                admins = [
+                    str(item).strip()
+                    for item in (extra.get(key) or [])
+                    if str(item).strip()
+                ]
+                self.assertTrue(
+                    admins, f"{key} must name at least one approver for {scope}"
+                )
+                for admin in admins:
+                    self.assertNotIn(
+                        "${",
+                        admin,
+                        "an env reference can expand to empty and silently "
+                        "disable the approval gate",
+                    )
+
     def test_automatic_review_is_off_and_manual_review_writes_still_stage(self):
         parsed_config = yaml.safe_load(
             (PROFILE_ROOT / "config.yaml").read_text(encoding="utf-8")

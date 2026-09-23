@@ -176,7 +176,10 @@ platforms:
       groups:
         "*":
           allow_from: ["*"]
-      allow_admin_from: []
+      # Slash-command gate: the host treats a scope with no admin as ungated,
+      # which would let any member approve their own Skill or Memory write.
+      allow_admin_from: ["zhangzhengwei"]
+      group_allow_admin_from: ["zhangzhengwei"]
       user_allowed_commands:
         - new
         - help

@@ -6,13 +6,14 @@
 ## 1. 结论
 
 - 源码层可用：宿主原生写审批路径存在且测试全绿（24 项）。
-- 配置层**不满足 R14 验收条件**：企微侧斜杠命令门控处于「关闭」状态，任何被
-  `allow_from: ['*']` 允许的成员都能执行 `/skills pending|approve|reject|approval off`
-  与 `/memory ...`。也就是说，普通业务成员可以批准自己触发的知识写入，也可以把
-  审批闸门整体关掉。
-- 这不是宿主缺陷：宿主按设计「该作用域未配置管理员 = 不启用门控」
-  （`gateway/slash_access.py:93`）。本 profile 的 `allow_admin_from` 为空，因此
-  门控被判定为未启用。修法属原生配置，不需要改代码。
+- 配置层**已修复（2026-09-23，选项 A 落地）**：`allow_admin_from` 与
+  `group_allow_admin_from` 现指定运营 owner 的企微 user id，两个作用域的斜杠门控均启用；
+  非管理员只剩 `help`/`whoami` 与 `new`/`help`/`status`，无法再自批或关闭闸门。
+- 修复前的问题（已复现）：`allow_admin_from` 为空时宿主按设计判定「该作用域未配置管理员
+  = 不启用门控」（`gateway/slash_access.py:93`），任何被 `allow_from: ['*']` 放行的成员都会
+  被当作管理员，可执行 `/skills pending|approve|reject|approval off` 与 `/memory ...`。
+- 仍未完成的部分是需要真人在真实企微会话里执行的验证（第 5 节），本项在这些步骤完成前
+  不能标记为完全通过。
 
 ## 2. 证据
 
@@ -35,24 +36,29 @@
 
 ## 4. 待批配置建议（原生配置，不新增代码）
 
-### 选项 A — 指定运营 owner 为企微审批人（需要群内审批时推荐）
+> 状态：选项 A 已于 2026-09-23 落地并提交；B/C 未采用。以下保留三选项原文以便复核。
+
+### 选项 A — 指定运营 owner 为企微审批人（**已落地，2026-09-23**）
 
 ```yaml
 platforms:
   wecom:
     extra:
-      allow_admin_from: ["${env:WECOM_APPROVER_USER_ID}"]
-      group_allow_admin_from: ["${env:WECOM_APPROVER_USER_ID}"]
+      allow_admin_from: ["zhangzhengwei"]        # 运营 owner（DM）
+      group_allow_admin_from: ["zhangzhengwei"]  # 运营 owner（群）
 ```
 
-- 效果：门控启用；非管理员只剩 `help`/`whoami` 与 `new`/`help`/`status`；owner 可在会话内
-  审批。
-- 真实 user id 放 profile 的 `.env`，不进可分享源码（符合 R29 的「无具体渠道标识」要求）。
-- **风险（必须同时加护栏）**：变量未设置时展开为空，`admin_ids` 为空会让门控退回关闭
-  （fail-open）。因此该配置落地时必须配一条校验测试：解析后两个作用域都至少有一个管理员。
-- 该护栏测试在配置落地前无法通过（现状就是空管理员），所以建议「配置 + 测试」同一次提交。
+- 效果（用宿主自身的 `policy_from_extra` 实测）：dm 与 group 均 `enabled=True`、
+  管理员仅 `zhangzhengwei`；访客 `is_admin=False`、`can_run(访客,/skills)=False`、
+  `can_run(访客,/memory)=False`，而 `new`/`help`/`status` 仍可用。
+- 采用**字面量**而非 `${env:...}`：变量未设置时展开为空会让 `admin_ids` 为空、门控退回
+  关闭（fail-open）。配套测试 `test_wecom_slash_admin_gate_is_enabled_for_both_scopes`
+  断言两个作用域都至少有一个管理员、且该位置不得使用环境引用；该测试在配置落地前为红色。
+- 该 id 属身份信息，分享物不得携带：导出器（`scripts/datasage_source_export.py`）现把
+  `allow_admin_from`/`group_allow_admin_from` 替换为 `${WECOM_APPROVER_USER_ID}`，
+  与 `home_channel` 的处理一致；导出测试断言真实 id 不出现在模板中。
 
-### 选项 B — 企微侧不留审批人（审批只在本地 CLI 做）
+### 选项 B — 企微侧不留审批人（审批只在本地 CLI 做）｜未采用
 
 - 用不可匹配的**字面量**占位 id（例如 `cli-only-approver`）使门控启用，但没有任何企微成员
   匹配它；成员只能 `help`/`new`/`status`。
