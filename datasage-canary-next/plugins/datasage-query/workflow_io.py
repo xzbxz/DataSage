@@ -11,6 +11,13 @@ from . import legacy_workflow as wf,operations
 
 class IOErrorBoundary(wf.WorkflowError):pass
 
+def local_sales_reference(job,binding):
+    return job=='sales_price' and local_price_reference(job,binding)
+
+def local_price_reference(job,binding):
+    operation=binding.get('operation')
+    return job in ('sales_price','purchase_price') and isinstance(operation,dict) and operation.get('reference_source')=='profile_local'
+
 def require_action(job,action):
     from .contract_store import profile_root
     binding=load_activation(profile_root(),job,for_registration=action=='register_schedule_enabled')
@@ -34,6 +41,11 @@ def load_activation(profile,job,*,for_registration=False):
     if binding.get('price_accept_enabled') and job not in ('idk','sales_price','purchase_price'):raise IOErrorBoundary('PRICE_ACCEPT_ACTION_NOT_ALLOWED')
     if binding.get('price_accept_enabled') and job in ('sales_price','purchase_price') and (binding.get('operation') or {}).get('reference_source','legacy_database')=='legacy_database':raise IOErrorBoundary('LEGACY_DATABASE_REFERENCE_IS_READ_ONLY')
     if binding.get('send_enabled') and job in ('slow_task','sales_price') and binding.get('customer_mapping_enabled') is not True:raise IOErrorBoundary('CUSTOMER_MAPPING_NOT_ENABLED_FOR_LEGACY_DELIVERY')
+    if local_price_reference(job,binding):
+        try:operations.validate_binding(binding['operation'])
+        except operations.OperationError as exc:raise IOErrorBoundary(str(exc)) from exc
+        if binding['operation'].get('kind')!=('sales_prices' if job=='sales_price' else 'purchase_prices'):raise IOErrorBoundary('OPERATION_KIND_MISMATCH')
+        if binding.get('send_enabled') and binding.get('price_accept_enabled') is not True:raise IOErrorBoundary('PROFILE_PRICE_REFERENCE_WRITE_NOT_ENABLED')
     return binding
 
 def private_root(profile):
@@ -63,6 +75,27 @@ def run_lock(profile,job):
     except FileExistsError:raise IOErrorBoundary('WORKFLOW_BUSY_OR_STALE_LOCK_REVIEW_REQUIRED')
     try:os.close(fd);yield
     finally:path.unlink()
+
+@contextmanager
+def sales_run_lock(profile):
+    with price_run_lock(profile,'sales_price'):yield
+
+@contextmanager
+def price_run_lock(profile,job):
+    """Reuse Hermes' OS-backed lock; process death releases it without deleting state."""
+    if job not in ('sales_price','purchase_price'):raise IOErrorBoundary('PRICE_LOCK_SCOPE_INVALID')
+    from hermes_cli.active_sessions import _FileLock
+    root=private_root(profile)
+    if (root/(job+'.lock')).exists():raise IOErrorBoundary('WORKFLOW_BUSY_OR_STALE_LOCK_REVIEW_REQUIRED')
+    path=root/(job+'.process.lock')
+    if path.is_symlink() or (hasattr(path,'is_junction') and path.is_junction()) or not path.resolve().is_relative_to(root.resolve()):raise IOErrorBoundary('WORKFLOW_STATE_PATH_INVALID')
+    lock=_FileLock(path)
+    try:lock.__enter__()
+    except (RuntimeError,OSError) as exc:raise IOErrorBoundary('WORKFLOW_SALES_LOCK_UNAVAILABLE' if job=='sales_price' else 'WORKFLOW_PURCHASE_LOCK_UNAVAILABLE') from exc
+    try:
+        if (root/(job+'.lock')).exists():raise IOErrorBoundary('WORKFLOW_BUSY_OR_STALE_LOCK_REVIEW_REQUIRED')
+        yield
+    finally:lock.__exit__(None,None,None)
 
 def read_recipients(profile,binding):
     # The old filename is a parameter compatibility alias, never a second source.
@@ -242,6 +275,10 @@ def _deliver_notifications(components,transport,progress,*,force=False):
 def make_transport(profile,job,binding):
     targets=binding.get('target_map') or {}
     platforms={t.get('platform') for t in targets.values() if isinstance(t,dict)}
+    if 'wecom_webhook' in platforms:
+        if platforms!={'wecom_webhook'} or job!='purchase_price':raise IOErrorBoundary('MIXED_DELIVERY_TRANSPORTS_NOT_ALLOWED')
+        from .wecom_app_transport import ProductionWebhookTransport
+        return ProductionWebhookTransport(job,profile)
     if 'wecom_app_http' in platforms:
         if platforms!={'wecom_app_http'}:raise IOErrorBoundary('MIXED_DELIVERY_TRANSPORTS_NOT_ALLOWED')
         from .wecom_app_transport import AppTransport
@@ -402,13 +439,13 @@ def run_bound(profile,job,*,transport=None,writer_factory=None,snapshot_factory=
     configure_runtime(profile)
     snapshot_factory=snapshot_factory or (lambda:tools._ConsistentSnapshotExecutor(deadline_at=time.monotonic()+120))
     transport=transport or (make_transport(profile,job,binding) if binding.get('send_enabled') else None)
-    if binding.get('send_enabled') and job not in ('slow_report','idk'):
+    if binding.get('send_enabled') and job not in ('slow_report','idk') and not local_price_reference(job,binding):
         # Avoid committing a freeze before discovering the official transport cannot
         # deliver the necessary file type or target namespace.
         targets=binding.get('target_map') or {}
         if not targets:raise IOErrorBoundary('EXPLICIT_OFFICIAL_TARGET_MAPPING_REQUIRED')
         transport.preflight([{'account':a,'kind':'file' if job in ('slow_task','slow_report','sales_price','fabric') else 'text','text':''} for a in targets])
-    with run_lock(profile,job):
+    with (price_run_lock(profile,job) if job in ('sales_price','purchase_price') else run_lock(profile,job)):
         if job=='idk':
             from datetime import timezone,timedelta
             from .idk_batch import IdkBatchStore,IdkBatchError,batch_root
@@ -418,7 +455,13 @@ def run_bound(profile,job,*,transport=None,writer_factory=None,snapshot_factory=
                 idk_store=IdkBatchStore(batch_root(profile),idk_week)
                 if idk_store.exists():idk_head=idk_store.load()
             except IdkBatchError as exc:raise IOErrorBoundary(str(exc)) from exc
-        if idk_head is not None:
+        if local_price_reference(job,binding):
+            # Run-folder labels only. The sales reader supplies the real database
+            # observation clock; pending recovery must not require another query.
+            from datetime import timezone,timedelta
+            local_now=datetime.now(timezone(timedelta(hours=8)));y,w,_=local_now.isocalendar()
+            week=f'{y}-W{w:02d}';month=local_now.strftime('%Y-%m')
+        elif idk_head is not None:
             week=idk_week;month=local_now.strftime('%Y-%m')
         elif report_head is not None:
             week=report_head['week'];month=report_head['month']
@@ -447,6 +490,12 @@ def _produce_and_execute(profile,job,binding,out,week,month,progress,snapshots,t
     if job=='idk':
         from .idk_runner import run
         return run(profile,binding,out,week,progress,transport)
+    if local_sales_reference(job,binding):
+        from .sales_price_runner import run
+        return run(profile,binding,out,week,month,progress,snapshots,transport)
+    if job=='purchase_price' and local_price_reference(job,binding):
+        from .purchase_price_runner import run
+        return run(profile,binding,out,week,month,progress,snapshots,transport)
     recipients=read_recipients(profile,binding) if job in ('slow_task','sales_price') and binding.get('customer_mapping_enabled') else {'regions':{} }
     if job=='slow_task':
         if binding.get('send_enabled') and any(v.get('status') in ('unknown','in_flight','unverified_success','not_delivered') for v in progress.data['components'].values()):

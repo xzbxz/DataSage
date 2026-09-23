@@ -287,11 +287,17 @@ def customer_sheets(customers_by_goods: Mapping[str, Iterable[Sequence[Any]]]) -
 
 
 def manager_customer_sheets(rows_by_goods: Mapping[str, Iterable[Sequence[Any]]]) -> list[tuple[str, list[str], list[list[Any]]]]:
-    """Return old manager sheets in deterministic sorted product order."""
+    """Keep approved unassigned customers; label only their displayed Sales cell."""
 
     sheets: list[tuple[str, list[str], list[list[Any]]]] = []
     for goods_no in sorted(rows_by_goods or {}):
-        sheets.append((str(goods_no), ["Sales", "Customer No", "Customer"], [list(row) for row in rows_by_goods[goods_no]]))
+        rows = []
+        for row in rows_by_goods[goods_no]:
+            shown = list(row)
+            if shown and (shown[0] is None or isinstance(shown[0], str) and not shown[0].strip()):
+                shown[0] = "Unassigned"
+            rows.append(shown)
+        sheets.append((str(goods_no), ["Sales", "Customer No", "Customer"], rows))
     return sheets or [("Summary", ["Sales", "Customer No", "Customer"], [])]
 
 

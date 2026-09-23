@@ -14,7 +14,9 @@ def normalized_current(side,rows):
         for name,value in zip(bridge.SPECS[side]['keys'],key):row[name]=int(value) if name=='goods_id' else value
         result.append(row)
     return result
-def plan(side,before,current,at):
+def plan(side,before,current,at,*,exact_prices=False):
+    if type(exact_prices) is not bool:raise ValueError('CONTINUITY_EXACT_PRICES_FLAG_INVALID')
+    if exact_prices and side!='sales':raise ValueError('CONTINUITY_EXACT_PRICES_SALES_ONLY')
     normalized=normalized_current(side,current)
     document=bridge.compare(side,before,normalized,at)
     old={bridge.key_of(side,r):dict(r) for r in before};raw_by_key={};identity_complete=True
@@ -63,7 +65,7 @@ def plan(side,before,current,at):
             if any(row.get(k) in (None,'') for k in bridge.SPECS[side]['basis']):reason='current_recorded_basis_missing'
             if side=='sales':
                 price=op._number(row.get('ddp_price'))
-                if price is not None and price!=price.quantize(Decimal('0.01')):reason='snapshot_decimal_precision_insufficient'
+                if not exact_prices and price is not None and price!=price.quantize(Decimal('0.01')):reason='snapshot_decimal_precision_insufficient'
                 previous=old.get(key,{}).get('current_record')
                 if isinstance(previous,str):previous=json.loads(previous)
                 if not previous:notes['historical_unit_tax_unrecorded_nominal_comparison']+=1
@@ -84,6 +86,7 @@ def plan(side,before,current,at):
         event['continuation']='advance_after_required_receipts'
         if prior is None:initialized.append(list(key));next_id+=1
     document['event_counts']=dict(Counter(e['event'] for e in document['events']))
+    document['storage_precision_mode']='exact_json' if exact_prices else 'legacy_decimal_2'
     document['deliverable_event_count']=sum(e['deliverable'] for e in document['events'])
     document['continuation']={'policy':'recorded_prices_per_key_v2_legacy_reentry','advanced_keys':len(advanced),'new_reference_keys':len(initialized),'removed_absent_reference_keys':len(removed),'retained_reference_keys':sum(k in retained and list(k) not in advanced for k in old),'anomaly_count':len(anomalies),'anomaly_counts':dict(Counter(a['reason'] for a in anomalies)),'notes':dict(notes)}
     document['scope_notice']+=' 异常按键保留旧参考；完整观察中离开监控池的键移出比较基线，这不代表业务删除或撤销。重新进入时只建立参考，不提醒，不把缺旧价当零。身份不完整时不据此删除旧参考。仅在同次观察中来源报价ID、供应商、颜色均相同且货号只差首尾空白时，沿用较新的已观测参考防止别名重复提醒。'

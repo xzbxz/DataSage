@@ -88,6 +88,16 @@ class LegacyPriceCompatibilityTests(unittest.TestCase):
         manager = compat.manager_customer_sheets({"G2": [["Sales", "C1", "客户"]]})
         self.assertEqual(["Sales", "Customer No", "Customer"], manager[0][1])
 
+    def test_unassigned_manager_display_preserves_customer_rows_and_source(self):
+        import copy
+        source={'G2':[[None,'C1','One'],['','C2','Two'],[' \t','C3','Three'],['Named Owner','C4','Four']]}
+        before=copy.deepcopy(source)
+        sheet=compat.manager_customer_sheets(source)[0]
+        self.assertEqual(['Sales','Customer No','Customer'],sheet[1])
+        self.assertEqual([['Unassigned','C1','One'],['Unassigned','C2','Two'],['Unassigned','C3','Three'],['Named Owner','C4','Four']],sheet[2])
+        self.assertEqual(before,source)
+        self.assertEqual([row[1:] for row in source['G2']],[row[1:] for row in sheet[2]])
+
     def test_purchase_normal_rows_follow_old_down_then_up_layout(self):
         text = compat.purchase_message(
             [

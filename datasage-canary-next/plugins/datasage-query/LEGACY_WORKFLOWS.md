@@ -42,7 +42,7 @@ the dispatch, because the official script runner does not pass arbitrary CLI arg
 | datasage_legacy_slow_report.py | legacy-slow-report | Saturday 19:00; monthly follows weekly |
 | datasage_legacy_idk.py | legacy-idk | Monday 12:00 |
 | datasage_legacy_sales_price.py | legacy-sales-price | Hourly; exact minute not present in this Git object |
-| datasage_legacy_purchase_price.py | legacy-purchase-price | Not recoverable from this Git object |
+| datasage_legacy_purchase_price.py | legacy-purchase-price | Hourly (user-confirmed 2026-09-19); exact minute not established |
 | datasage_legacy_fabric.py | legacy-fabric | On demand; no proved legacy scheduled job |
 
 The IDK timing above is the user's 2026-09-19 override: Monday 12:00
@@ -159,9 +159,14 @@ Completed legacy forced resend scenarios remain distinct from failure recovery.
 Real sending remains disabled and untested; this is an implemented migration
 path, not a claim of production acceptance or atomic text/file delivery.
 
-Missing historical material: purchase scheduled wrapper/runtime cadence and
-webhook/user target settings are not in the referenced tree; no secret URL was
-read to fill that gap. Dynamic employee/customer rosters and old persisted runtime
+Purchase's current intent is confirmed by the user: one observation per hour,
+changes summarized to the existing group, unchanged observations silent, without
+personal customer or manager attachments. This definition does not register or
+enable a job. The referenced tree still lacks the old purchase scheduled wrapper,
+exact minute and concrete production webhook identity. The available approved
+acceptance-test group is not automatically treated as the old production group;
+the proposed test minute :12 is not a historical production fact.
+Dynamic employee/customer rosters and old persisted runtime
 plans are not static Git configuration and have not been assumed empty. Formal
 low-price loss/responsibility conclusions still require the production ETL and
 ownership evidence previously identified; a ten-sheet preview is not completion

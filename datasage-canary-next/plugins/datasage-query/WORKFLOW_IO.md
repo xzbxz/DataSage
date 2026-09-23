@@ -141,10 +141,21 @@ counts cannot be promoted to a passing new binding.
 
 The official `cronjob` adapter can create a **paused** fixed script/no_agent job
 after a separate registration gate. It lists existing names first and does not
-create duplicates or alter unrelated/active jobs. UTC+8 is verified. Missing
-purchase timing and sales minute offset must come from the old external runtime
-configuration; known schedules are reused. This method has not been called
+create duplicates or alter unrelated/active jobs. UTC+8 is verified. Purchase's
+hourly frequency and existing-group intent were user-confirmed on 2026-09-19;
+its exact production minute is not yet evidenced. The user has now supplied
+a production robot group target; configuration remains disabled. Exact
+minute offsets require reviewed configuration before registration; the proposed
+test minute :12 is not adopted as a production fact. This method has not been called
 against real cron state in this implementation batch.
+
+Purchase's formal entry still defaults to read-only `legacy_database` comparison.
+An explicit `profile_local` mode now shares the price reference and batch engine
+with sales; its group/initialization boundaries are documented below. Acceptance
+storage and the approved test webhook are not a production purchase route.
+`production_group_binding=user_supplied_disabled`: the user supplied the target
+after pausing historical lookup; old-target equivalence is unproved. No private-recipient fallback or customer/manager workbook is
+added to the confirmed hourly group-delivery intent.
 
 ## Production data and reports
 
@@ -341,3 +352,147 @@ There is no same-week reobserve/regeneration command in this implementation;
 operators must not delete the plan or change keys to bypass partial/unknown state.
 IDK reminders do not advance price acceptance baselines. Production takeover
 remains deferred; source installation does not prove a running process loaded it.
+# Sales reminders with an explicit Profile-local reference
+
+Approved compatibility exception (2026-09-19): manager workbooks retain customers
+with valid identity and the existing product/region/purchase match even when
+their sales owner is absent. Display an empty/whitespace Sales value as
+`Unassigned` (未分配), matching the English template. This is presentation only:
+keep the source owner absent, retain the same customer rows, and do not assign
+them to personal sales workbooks. The old manager script's omission is not
+restored. Customer relationship row counts are not distinct customer counts.
+
+`operation.reference_source: profile_local` is an explicit local-reference
+mode. For sales it requires all four existing regions and the unchanged registered sales
+selection/comparison rules. Omission or `legacy_database` retains the original
+read-only legacy-reference behavior. Purchase uses the same shared mechanism
+through its own explicitly selected mode below. Generic
+`operations.execute` / `--accept-snapshot` cannot initialize this mode.
+
+The ordinary fixed `datasage_legacy_sales_price.py` entry selects this mode only
+from a separately reviewed local binding. A configuration example, deliberately
+inactive and without recipients or credentials:
+
+```json
+{
+  "kind": "legacy_execution",
+  "enabled": false,
+  "read_enabled": false,
+  "customer_mapping_enabled": true,
+  "send_enabled": false,
+  "price_accept_enabled": false,
+  "register_schedule_enabled": false,
+  "operation": {
+    "kind": "sales_prices",
+    "regions": ["HCM", "HN", "BKK", "IDK"],
+    "limit": 10000,
+    "reference_source": "profile_local"
+  }
+}
+```
+
+Do not activate this example as part of source installation. A formal local
+run that sends requires both `send_enabled` and `price_accept_enabled`, existing
+customer-mapping admission, and an explicitly initialized trustworthy reference.
+A preview never sends or advances the reference. With no reference, only a
+silent-initialization candidate can be previewed; current prices, old database
+snapshots and test-accepted snapshots are never imported automatically.
+
+For an operator-supplied JSON object containing `rows` and `provenance`,
+`scripts/datasage_slow_report.py --sales-reference-plan <local-json-path>` writes
+an initialization review plan. It makes no source query, initializes no head,
+and does not prove historical delivery. The first reference's origin and time
+must be reviewed before any explicit initialization; the store exposes a
+separate reviewed initialization API, not an implicit operation in a reminder.
+No CLI activation command or scheduled takeover is introduced here.
+
+Each new batch fixes its before/after prices, observation time, customer/role
+evidence, message bodies, complete attachment bytes and resolved destinations
+before sending. Pending recovery uses those files and the existing shared
+Progress, notification fingerprints and transport; it does not reread source
+prices or roles. For example, pending 100→95 remains 100→95 even if the source
+later becomes 90. Only after required components are provider-accepted may
+the local reference advance to 95; the next observation can then compare 95→90.
+Provider acceptance never means human read, customer need, or sales follow-up.
+
+Known partial failures continue only unaccepted components; an accepted body
+and failed workbook resume the workbook. Unknown/in-flight results require
+review and cannot be bypassed with new content. Target, body or attachment
+changes block recovery. No-change, new-key and reentry behavior remains the
+existing silent policy; anomalous keys retain their previous reference while
+healthy keys follow the already reviewed per-key continuation. No comparison
+threshold is added. Exact decimal strings are used in JSON; the old two-decimal
+storage guard remains the default for existing database-backed callers.
+
+Reference/pending/commit markers share one atomic JSON head. Immutable batch
+evidence retains observation and receipt bindings. The price entries reuse
+Hermes' OS file lock; process exit releases it, while old marker locks are
+explicitly held for review. The original slow-task, slow-report, IDK and legacy
+read-only price flows are not redesigned. Source installation does not start or reload them.
+
+The reminder continues to cover affected regions' existing eligible sales and
+customer-service recipients. A salesperson without matched historical buyers
+still gets the price body but no workbook. Personal buyer sheets and manager
+summaries match the last twelve months by product number **and region**, not by
+changed color. They do not represent transactions at the new price or current
+customer demand. Existing manager qualification and no-buyer behavior remain.
+
+Still deferred: actual initial reference choice, production takeover time,
+hourly minute, and stopping/handing over the old maintainer. This implementation
+does not write either business or test databases, create a scheduler, replace
+the official transport, or introduce a release pipeline.
+
+## Purchase: shared local reference, one explicit group
+
+The business intent is hourly observation of the existing four-region ready/
+active-promotion pool. Purchase identity is product number + color + supplier;
+included and excluded tax prices are compared independently in the same recorded
+currency and unit. The existing comparator, anomaly handling and new/reentry
+silent policy remain authoritative. There are no customer or employee lookups,
+personal attachments, manager workbooks or private-message fallbacks.
+
+The fixed `datasage_legacy_purchase_price.py` entry can select
+`operation.kind: purchase_prices` and `reference_source: profile_local` through
+a separately reviewed binding. It uses the same `PriceReferenceStore` and
+`PriceWorkflowEngine` implementation as sales, with separate purchase paths,
+schemas, Progress scope and batch bindings. Sales' previous module/API/head
+format remain compatible; no existing state is migrated.
+
+Purchase prepares a complete group Markdown batch before any send. Complete
+records are stably ordered down then up, with tax-excluded direction first;
+opposite tax-side movements both remain visible, and unchanged tax sides are
+not displayed. Every part includes the fixed observation timestamp, adjustment
+dates, batch count and part i/N. The final escaped UTF-8 message is budgeted at
+4000 bytes within the existing Markdown limit; an oversized single record
+blocks before sending instead of being truncated or turned into an attachment.
+
+Only explicit successful provider business results may advance the reference.
+An HTTP success, helper exit code 0 or arbitrary message identifier alone is
+insufficient. A purchase-specific receipt gate delegates to the existing
+transport; it adds no HTTP sender or scheduler. Nonzero business codes such as
+40058 are failures. Missing/unknown outcomes remain for review. All required
+parts must be accepted before the shared atomic reference commit; accepted
+parts are skipped on recovery, and a newer source quote cannot replace an
+unfinished sealed batch. Empty/truncated source does not clear the reference.
+
+`--purchase-reference-plan <local-json-path>` creates an operator review plan
+only, using rows/provenance and exact decimal strings. It does not query a live
+source, initialize a purchase reference, activate a group or infer historical
+delivery. With no head, an ordinary read-only run may produce a silent
+initialization candidate; formal sending remains blocked.
+
+The user supplied a production robot webhook. Its URL belongs only in the
+existing private credential JSON's `production_webhooks.purchase_price` entry,
+with its own `enabled: false` gate. The separately disabled workflow binding
+uses `platform: wecom_webhook`, `target_kind: robot_group`,
+`webhook_ref: purchase_price` and a SHA256 `target_ref`; raw credentials never
+enter sealed batches or receipts. The transport reuses the existing HTTP,
+target-lock and delivery-fence primitives. The acceptance-test webhook remains
+separate. Offline verification uses synthetic targets and fake HTTP/transport;
+it does not prove online validity or identity with the old group. No personal
+target is accepted as a substitute.
+
+Production sending approval, initial reference, exact hourly minute and old-maintainer
+handover remain deferred. No actual group lookup/send/upload, database write,
+reference initialization, cron registration, gateway restart, Git push or
+repackaging is authorized by this code installation.

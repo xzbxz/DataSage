@@ -64,10 +64,11 @@ def validate_binding(binding):
     if kind not in options or set(binding)-common-options[kind] or type(binding.get('limit')) is not int or not 1<=binding['limit']<=10000:
         raise OperationError('OPERATION_BINDING_INVALID')
     if kind in ('sales_prices','purchase_prices'):
-        if 'reference_source' in binding and binding['reference_source']!='legacy_database':raise OperationError('OPERATION_REFERENCE_SOURCE_INVALID')
+        if 'reference_source' in binding and binding['reference_source'] not in {'legacy_database','profile_local'}:raise OperationError('OPERATION_REFERENCE_SOURCE_INVALID')
         regions=binding.get('regions')
         if not isinstance(regions,list) or not regions or len(set(regions))!=len(regions) or not set(regions)<=set(policy()['regions']):
             raise OperationError('OPERATION_REGIONS_INVALID')
+        if binding.get('reference_source')=='profile_local' and set(regions)!=set(policy()['regions']):raise OperationError('PROFILE_REFERENCE_REQUIRES_ORIGINAL_REGION_SCOPE')
     if kind=='idk_unpriced' and (type(binding.get('window_days',0)) is not int or not 0<=binding.get('window_days',0)<=366):
         raise OperationError('OPERATION_WINDOW_INVALID')
     if kind=='fabric_review':
@@ -304,6 +305,7 @@ def execute(profile,report_id,binding):
     from . import tools
     from .local_report import _assert_local_context
     _assert_local_context();binding=validate_binding(binding)
+    if binding.get('reference_source')=='profile_local':raise OperationError('PROFILE_LOCAL_REFERENCE_REQUIRES_WORKFLOW_ENTRY')
     if binding.get('reference_source')=='legacy_database':
         from .legacy_price_bridge import observe
         return observe(binding)

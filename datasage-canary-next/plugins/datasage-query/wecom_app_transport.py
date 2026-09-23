@@ -1,15 +1,18 @@
-"""Finite WeCom application HTTP transport for legacy business notifications.
+"""Finite WeCom application and purchase robot HTTP transports.
 
-Uses Hermes configuration and httpx; no gateway, scheduler, webhook or WS client.
+Uses Hermes configuration and httpx; no gateway, scheduler or WS client.
 Network methods are reachable only through the existing send activation gate.
-Tokens stay in memory, and exceptions/receipts never include HTTP URLs or secrets.
+Application tokens and robot webhook keys stay in memory; exceptions,
+progress and receipts never include HTTP URLs or secrets.
 """
 from contextlib import contextmanager, ExitStack
 from pathlib import Path
 import hashlib
 import io
+import json
 import logging
 from copy import deepcopy
+import math
 import re
 import time
 import zipfile
@@ -318,3 +321,166 @@ class AppTransport:
         return {'success': type(code) is int and code == 0 and not invalid,
                 'message_id': value.get('msgid'),
                 'raw_response': {'errcode': code, 'invalid_recipient': invalid}}
+
+
+class ProductionWebhookTransport(AppTransport):
+    """Bounded production robot transport for the purchase group.
+
+    This reuses the application transport's target fence, delivery lock,
+    component fingerprinting, HTTP client, timeout handling and URL log
+    filter.  The production credential is resolved from the existing private
+    acceptance credential file under its own ``production_webhooks`` field;
+    the URL and key never enter a target map, progress record, receipt, or
+    exception.
+    """
+
+    WEBHOOK_REF = 'purchase_price'
+    PLATFORM = 'wecom_webhook'
+    TARGET_KIND = 'robot_group'
+    MIN_INTERVAL_SECONDS = 3.2
+
+    def __init__(self, job, profile, *, webhook_ref=WEBHOOK_REF,
+                 client_factory=None, clock=None, sleeper=None):
+        if job != 'purchase_price' or webhook_ref != self.WEBHOOK_REF:
+            raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_REF_INVALID')
+        self.webhook_ref = webhook_ref
+        self._credential = None
+        self._clock = clock or time.time
+        self._sleeper = sleeper or time.sleep
+        super().__init__(job, profile, app_loader=lambda: [], client_factory=client_factory)
+
+    def _resolve(self):
+        # Import lazily: acceptance_delivery uses AppTransport for its two
+        # offline acceptance children, so importing it at module load would
+        # create a circular dependency.
+        from .acceptance_delivery import load_production_webhook
+
+        binding = workflow.require_action(self.job, 'send_enabled')
+        credential = load_production_webhook(self.profile, self.webhook_ref)
+        targets = binding.get('target_map') if isinstance(binding, dict) else None
+        if not isinstance(targets, dict) or len(targets) != 1:
+            raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_TARGET_REQUIRED')
+        checked = {}
+        for account, target in targets.items():
+            required = {'platform', 'target_kind', 'target_ref', 'webhook_ref'}
+            if (not isinstance(account, str) or not account.strip()
+                or not isinstance(target, dict) or set(target) != required
+                or target.get('platform') != self.PLATFORM
+                or target.get('target_kind') != self.TARGET_KIND
+                or target.get('webhook_ref') != self.webhook_ref
+                or not isinstance(target.get('target_ref'), str)
+                or not re.fullmatch(r'[0-9a-f]{64}', target['target_ref'])
+                or target['target_ref'] != credential['sha256']):
+                raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_TARGET_INVALID')
+            checked[account] = dict(target)
+        return checked, credential
+
+    def _binding(self):
+        targets, credential = self._resolve()
+        self._credential = credential
+        return {'target_map': targets}
+
+    def _gate(self):
+        targets, credential = self._resolve()
+        if targets != self.target_map:
+            raise workflow.IOErrorBoundary('DELIVERY_CONFIGURATION_CHANGED')
+        if self._credential is None or credential['sha256'] != self._credential['sha256']:
+            raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_CONFIGURATION_CHANGED')
+
+    def normalize(self, components, progress):
+        for item in components:
+            if (not isinstance(item, dict) or item.get('kind') != 'text'
+                or item.get('message_format') != 'markdown'
+                or item.get('mention_all')):
+                raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_MARKDOWN_ONLY')
+            if not isinstance(item.get('text'), str):
+                raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_MARKDOWN_ONLY')
+            if len(item['text'].encode('utf-8')) > 4096:
+                raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_MESSAGE_TOO_LARGE')
+        return list(components)
+
+    def preflight(self, components):
+        self._gate()
+        self.targets = {}
+        self.files = {}
+        if len(components) > 2000:
+            raise workflow.IOErrorBoundary('NOTIFICATION_BATCH_TOO_LARGE')
+        for item in components:
+            target = self.target_map.get(item.get('account'))
+            if (not isinstance(target, dict) or item.get('kind') != 'text'
+                or item.get('message_format') != 'markdown'
+                or item.get('mention_all')
+                or not isinstance(item.get('text'), str)):
+                raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_MARKDOWN_ONLY')
+            if len(item['text'].encode('utf-8')) > 4096:
+                raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_MESSAGE_TOO_LARGE')
+            self.targets[item['account']] = dict(target)
+
+    def target_key(self, account):
+        target = self.targets.get(account) or self.target_map.get(account)
+        if not isinstance(target, dict):
+            raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_TARGET_REQUIRED')
+        return workflow.wf.digest(['webhook', target['webhook_ref'], target['target_ref']])
+
+    def prepare(self, items, progress):
+        # The robot endpoint has no safe read-only target verification call.
+        # Fence checks still happen before the first send, and send outcomes
+        # remain the only provider acceptance evidence.
+        checked = set()
+        for item in items:
+            key = self.target_key(item['account'])
+            if key not in checked:
+                self._check_fence(item, progress)
+                checked.add(key)
+            if item.get('kind') != 'text' or item.get('message_format') != 'markdown':
+                raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_MARKDOWN_ONLY')
+
+    def _rate_limit(self):
+        path = workflow.private_root(self.profile) / ('webhook-send-clock-' + self.webhook_ref + '.json')
+        if path.is_symlink() or not path.resolve().is_relative_to(workflow.private_root(self.profile).resolve()):
+            raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_RATE_CLOCK_INVALID')
+        now = float(self._clock())
+        if not math.isfinite(now):
+            raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_RATE_CLOCK_INVALID')
+        last = 0.0
+        if path.exists():
+            try:
+                value = json.loads(path.read_text(encoding='utf-8'))
+                last = value.get('last_attempt')
+                if type(last) not in (int, float) or not math.isfinite(float(last)) or float(last) < 0:
+                    raise ValueError()
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+                raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_RATE_CLOCK_INVALID') from None
+        wait = self.MIN_INTERVAL_SECONDS - (now - float(last))
+        if wait > 4:
+            raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_RATE_CLOCK_REVIEW_REQUIRED')
+        if wait > 0:
+            self._sleeper(wait)
+            now = float(self._clock())
+            if not math.isfinite(now):
+                raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_RATE_CLOCK_INVALID')
+        workflow.operations._atomic(path, {'last_attempt': now})
+
+    def send(self, item):
+        self._gate()
+        if (item.get('kind') != 'text' or item.get('message_format') != 'markdown'
+            or item.get('mention_all') or not isinstance(item.get('text'), str)):
+            raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_MARKDOWN_ONLY')
+        if item.get('account') not in self.target_map:
+            raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_TARGET_REQUIRED')
+        if len(item['text'].encode('utf-8')) > 4096:
+            raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_MESSAGE_TOO_LARGE')
+        self._rate_limit()
+        value = self._request(
+            'POST', 'webhook/send',
+            params={'key': self._credential['key']},
+            json={'msgtype': 'markdown', 'markdown': {'content': item['text']}},
+        )
+        code = value.get('errcode')
+        if type(code) is not int:
+            return {'success': False, 'raw_response': {'errcode': None}}
+        return {
+            'success': code == 0,
+            'message_id': value.get('msgid') if code == 0 else None,
+            'raw_response': {'errcode': code},
+        }

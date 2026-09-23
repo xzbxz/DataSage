@@ -296,10 +296,34 @@ def main(profile, argv=None):
     parser.add_argument('--resume-report-week',help='Resume an existing sealed slow-report week (YYYY-Www); never creates a historical batch.')
     parser.add_argument('--replay-reason',help='Required reason for explicit refreeze or force resend.')
     parser.add_argument('--accept-snapshot', help='Explicitly accept a reviewed local observation digest; never writes the business database.')
+    parser.add_argument('--sales-reference-plan', help='Read an operator-provided JSON reference candidate and write a review-only initialization plan; never activates a reference.')
+    parser.add_argument('--purchase-reference-plan', help='Review a local purchase-reference JSON candidate only; never initializes a reference or a group route.')
     args=parser.parse_args(argv)
     try:
         if Path(get_hermes_home()).resolve()!=profile.resolve():raise ReportError('REPORT_PROFILE_MISMATCH')
         _assert_local_context()
+        if args.sales_reference_plan or args.purchase_reference_plan:
+            if args.sales_reference_plan and args.purchase_reference_plan:raise ReportError('WORKFLOW_ARGUMENT_CONFLICT')
+            if args.legacy_run or args.legacy_preview or args.report_id or args.accept_snapshot or args.refreeze or args.force_resend or args.replay_reason or args.regenerate_report or args.resume_report_week:raise ReportError('WORKFLOW_ARGUMENT_CONFLICT')
+            from .sales_reference import SalesReferenceStore,SalesReferenceError
+            from .workflow_io import private_root
+            from . import operations
+            import uuid
+            side='purchase' if args.purchase_reference_plan else 'sales'
+            source=Path(args.purchase_reference_plan or args.sales_reference_plan)
+            if source.is_symlink() or not source.is_file():raise ReportError(side.upper()+'_REFERENCE_PLAN_INPUT_INVALID')
+            try:
+                value=json.loads(source.read_text(encoding='utf-8'))
+                if not isinstance(value,dict) or set(value)!={'rows','provenance'}:raise ReportError(side.upper()+'_REFERENCE_PLAN_INPUT_INVALID')
+                if side=='purchase':
+                    from .price_reference import PriceReferenceStore
+                    plan=PriceReferenceStore(profile,side='purchase').initialization_plan(value['rows'],value['provenance'])
+                else:plan=SalesReferenceStore(profile).initialization_plan(value['rows'],value['provenance'])
+            except (ValueError,TypeError,SalesReferenceError) as exc:raise ReportError(side.upper()+'_REFERENCE_PLAN_INVALID: '+type(exc).__name__) from None
+            target=private_root(profile)/(side+'-reference-initialization-preview-'+uuid.uuid4().hex+'.json')
+            operations._atomic(target,plan)
+            print(side.upper()+'_REFERENCE_REVIEW_ONLY '+str(target)+'; no reference initialized, no historical delivery inferred')
+            return 0
         if (args.refreeze or args.force_resend or args.replay_reason or args.regenerate_report or args.resume_report_week) and not args.legacy_run:raise ReportError('WORKFLOW_REPLAY_REQUIRES_LEGACY_RUN')
         if args.legacy_run:
             if args.legacy_preview or args.report_id or args.accept_snapshot:raise ReportError('WORKFLOW_ARGUMENT_CONFLICT')
@@ -312,6 +336,14 @@ def main(profile, argv=None):
                     print('WORKFLOW_QUERY_INCOMPLETE',file=sys.stderr);return 3
                 if args.legacy_run=='slow_task' and result.get('coverage_review_required'):
                     print('WORKFLOW_COMPLETED_WITH_COVERAGE_EXCEPTIONS: review customer coverage artifacts; generated packages are not complete business coverage')
+                elif args.legacy_run=='sales_price' and result.get('prepared_only'):
+                    print('WORKFLOW_PREPARED_NOT_SENT: local sales reference preview; no reference advanced')
+                elif args.legacy_run=='sales_price' and result.get('execution_state')=='same_hour_already_committed':
+                    print('WORKFLOW_ALREADY_COMPLETED_NO_SEND: sealed sales observation already committed for this hour')
+                elif args.legacy_run=='purchase_price' and result.get('prepared_only'):
+                    print('WORKFLOW_PREPARED_NOT_SENT: local purchase reference preview; no group delivery or reference advance')
+                elif args.legacy_run=='purchase_price' and result.get('execution_state')=='same_hour_already_committed':
+                    print('WORKFLOW_ALREADY_COMPLETED_NO_SEND: sealed purchase observation already committed for this hour')
                 elif args.legacy_run=='idk' and result.get('delivery_state')=='empty_no_task':
                     print('WORKFLOW_EMPTY_NO_TASK: IDK complete selection is empty; no notification sent')
                 elif args.legacy_run in ('slow_report','idk') and result.get('prepared_only'):
@@ -339,6 +371,7 @@ def main(profile, argv=None):
             try:
                 operations.validate_binding(operation)
                 if args.accept_snapshot:
+                    if operation.get('reference_source')=='profile_local':raise operations.OperationError('PROFILE_REFERENCE_REQUIRES_REVIEWED_INITIALIZATION')
                     expected=operations.scope_fingerprint(operation)
                     operations.accept_snapshot(profile,selected,args.accept_snapshot,expected_scope=expected)
                     print('SNAPSHOT_ACCEPTED_LOCALLY; delivery remains not_requested')

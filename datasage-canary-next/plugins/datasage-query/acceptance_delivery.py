@@ -289,6 +289,49 @@ def load_settings(profile):
         raise workflow.IOErrorBoundary('ACCEPTANCE_APPLICATION_REQUIRED')
     return doc
 
+
+def load_production_webhook(profile, webhook_ref='purchase_price'):
+    """Resolve one explicitly enabled production robot from the shared private file.
+
+    The legacy top-level acceptance ``enabled`` flag is intentionally ignored
+    here.  Production use has its own per-reference switch and URL digest, so
+    adding a disabled production candidate cannot accidentally enable a send.
+    The returned URL and key stay in memory; callers must persist only the
+    reference and digest.
+    """
+    if webhook_ref != 'purchase_price':
+        raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_REF_INVALID')
+    path=Path(profile)/SECRET_FILE
+    if path.is_symlink() or not path.is_file() or path.stat().st_size>16384:
+        raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_CONFIGURATION_REQUIRED')
+    try:doc=json.loads(path.read_text(encoding='utf-8'))
+    except Exception:raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_CONFIGURATION_INVALID') from None
+    if not isinstance(doc,dict) or doc.get('version')!=1:
+        raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_CONFIGURATION_INVALID')
+    entries=doc.get('production_webhooks')
+    if not isinstance(entries,dict) or set(entries)!={webhook_ref} or not isinstance(entries.get(webhook_ref),dict):
+        raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_CONFIGURATION_REQUIRED')
+    entry=entries[webhook_ref]
+    if set(entry)!={'enabled','url','sha256'}:
+        raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_CONFIGURATION_INVALID')
+    if entry.get('enabled') is not True:
+        raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_DISABLED')
+    url=entry.get('url')
+    digest=entry.get('sha256')
+    if (not isinstance(url,str) or not 1<=len(url)<=2048 or any(ord(c)<32 for c in url)
+        or not isinstance(digest,str) or not re.fullmatch(r'[0-9a-f]{64}',digest)):
+        raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_CONFIGURATION_INVALID')
+    parts=urlsplit(url);query=parse_qs(parts.query,keep_blank_values=True)
+    try:port=parts.port
+    except ValueError:raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_CONFIGURATION_INVALID') from None
+    if (parts.scheme!='https' or parts.hostname!='qyapi.weixin.qq.com' or parts.username is not None
+        or parts.password is not None or port is not None
+        or parts.path!='/cgi-bin/webhook/send' or parts.fragment or set(query)!={'key'}
+        or len(query['key'])!=1 or not query['key'][0] or any(ord(c)<32 for c in query['key'][0])
+        or hashlib.sha256(url.encode()).hexdigest()!=digest):
+        raise workflow.IOErrorBoundary('PRODUCTION_WEBHOOK_CONFIGURATION_INVALID')
+    return {'webhook_ref':webhook_ref,'url':url,'key':query['key'][0],'sha256':digest}
+
 def runtime_home(profile):
     home=Path(profile)/'report_runs'/'reminder_acceptance'
     if any(p.is_symlink() for p in (home,home.parent)) or not home.resolve().is_relative_to(Path(profile).resolve()):

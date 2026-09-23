@@ -126,13 +126,15 @@
       "new_key": "baseline_only"
     },
     "purchase_price": {
-      "report_id": "legacy-purchase-price",
-      "schedule": null,
+        "report_id": "legacy-purchase-price",
+        "schedule": "hourly",
+        "schedule_origin": "user_confirmed_2026-09-19; exact_minute_not_established; not_registered",
       "sequence": [
         "decreases_then_increases_text"
       ],
       "new_key": "baseline_only",
-      "target": "runtime_webhook_or_recipient_unresolved"
+        "target": "user_confirmed_existing_group; production_group_binding=user_supplied_disabled; online_validity_and_old_identity_unverified",
+        "delivery_intent": "one_hourly_observation; summarize_changes_to_existing_group; unchanged_is_silent; no_personal_customer_or_manager_attachments"
     },
     "fabric": {
       "report_id": "legacy-fabric",
