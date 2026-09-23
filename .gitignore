@@ -106,6 +106,7 @@ datasage-canary-next/*
 !datasage-canary-next/tests/test_metric_readiness_register.py
 !datasage-canary-next/tests/test_domain_diagnostic_paths.py
 !datasage-canary-next/tests/test_answer_presentation.py
+!datasage-canary-next/tests/test_session_isolation.py
 !datasage-canary-next/tests/fixtures/metric_readiness_register.json
 !datasage-canary-next/tests/test_request_contract_equivalence.py
 !datasage-canary-next/tests/test_semantic_inventory.py
@@ -344,6 +345,7 @@ datasage-canary-next/docs/workflow-runtime-acceptance.md
 !datasage-canary-next/docs/remediation-r18-20260923.md
 !datasage-canary-next/docs/remediation-r19-20260923.md
 !datasage-canary-next/docs/remediation-r20-20260923.md
+!datasage-canary-next/docs/remediation-r21-20260923.md
 !datasage-canary-next/docs/remediation-b-batch-20260923.md
 !datasage-canary-next/docs/remediation-c-batch-20260923.md
 !datasage-canary-next/docs/rule-ownership-20260923.md
