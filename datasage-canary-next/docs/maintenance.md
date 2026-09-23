@@ -187,6 +187,21 @@ TERMINAL环境、不自动启动Podman、不依赖refactor-work。`config.yaml`�
 已支持。历史容器与已保存材料不删除，Podman不再是此Profile运行前置条件。
 原生配置损坏/导入失败时的行为以官方实现为准，不再承诺已撤回补丁提供的额外保护。
 
+### 宿主写回 config.yaml 的处理
+
+宿主 `agent/onboarding.py` 会在展示首次提示时自行写入 `onboarding.seen.<flag>`，
+并按规范化格式重写 Profile 的 `config.yaml`；规范化的直接后果是注释与排版丢失。
+
+- 受跟踪的 `config.yaml` 以已评审版本为准。工作区出现规范化差异是主机运行副作用，
+  不是代码缺陷，也不代表选项被改动。
+- 恢复：先用 `git diff` 复核差异；确认只有注释/排版变化（以及 `onboarding.seen` 标记）
+  后，用 `git checkout -- datasage-canary-next/config.yaml` 恢复已评审版本。
+- 若规范化同时改动了非注释内容，视作一次配置变更：先判断是否有意为之，再决定提交或恢复；
+  不要用恢复动作掩盖真实的选项修改。
+- `tests/test_integration_boundaries.py` 按名容忍 `onboarding.seen.* = true`，其余宿主全局块
+  （`terminal`/`sessions`/`streaming`/`compression`）继续拒绝；该容忍只覆盖这一个主机托管标记，
+  不构成放宽配置边界。
+
 在仅含源码和合成数据的临时 Profile 目录使用宿主 Python：
 
 ```text

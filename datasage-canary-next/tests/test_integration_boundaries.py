@@ -44,6 +44,39 @@ SKILL_PATH = (
 PACKAGE_NAME = "_datasage_query_integration_tests"
 HERMES_CORE_TOOL_NAMES = hermes_tool_search._core_tool_names()
 
+# Host-global blocks a Profile config must never carry: they change channel,
+# session or compaction behaviour outside this Profile's review.
+HOST_GLOBAL_CONFIG_BLOCKS = ("terminal:", "sessions:", "streaming:", "compression:")
+# ``onboarding.seen.<flag>`` is written by the host itself (agent/onboarding.py)
+# and only records that a first-touch hint was shown.  It is tolerated by name
+# so ordinary host writes do not masquerade as an unreviewed config change, but
+# nothing else may appear in that section.
+HOST_MANAGED_CONFIG_BLOCKS = ("onboarding",)
+
+
+def host_global_config_violations(config_text: str) -> list[str]:
+    """Return the unreviewed host-global blocks found in a profile config."""
+
+    violations = [
+        block for block in HOST_GLOBAL_CONFIG_BLOCKS if f"\n{block}" in config_text
+    ]
+    parsed = yaml.safe_load(config_text)
+    parsed = parsed if isinstance(parsed, dict) else {}
+    for block in HOST_MANAGED_CONFIG_BLOCKS:
+        section = parsed.get(block)
+        if section is None:
+            continue
+        if not isinstance(section, dict) or set(section) != {"seen"}:
+            violations.append(f"{block}: unexpected keys")
+            continue
+        seen = section["seen"]
+        if not isinstance(seen, dict) or any(
+            not isinstance(key, str) or value is not True
+            for key, value in seen.items()
+        ):
+            violations.append(f"{block}.seen must map flag names to True")
+    return violations
+
 
 def _install_test_package() -> None:
     package = types.ModuleType(PACKAGE_NAME)
@@ -2329,14 +2362,37 @@ class DistributionBoundaryTests(unittest.TestCase):
             set(approvals),
         )
         self.assertIs(approvals["destructive_slash_confirm"], False)
-        for host_global_block in (
-            "terminal:",
-            "sessions:",
-            "streaming:",
-            "onboarding:",
-            "compression:",
+        self.assertEqual([], host_global_config_violations(config))
+
+    def test_host_global_blocks_are_rejected_but_host_onboarding_is_fenced(self):
+        """The config surface guard keeps its teeth under ordinary host writes."""
+
+        self.assertEqual(
+            [], host_global_config_violations("model:\n  provider: deepseek\n")
+        )
+        for block in ("terminal", "sessions", "streaming", "compression"):
+            with self.subTest(block=block):
+                self.assertIn(
+                    f"{block}:",
+                    host_global_config_violations(
+                        f"model:\n  provider: x\n{block}:\n  enabled: true\n"
+                    ),
+                )
+        # The host's own first-touch flag is tolerated by name only.
+        self.assertEqual(
+            [],
+            host_global_config_violations(
+                "onboarding:\n  seen:\n    tool_progress_prompt: true\n"
+            ),
+        )
+        for drifted in (
+            "onboarding:\n  seen:\n    tool_progress_prompt: false\n",
+            "onboarding:\n  seen: true\n",
+            "onboarding:\n  profile_build: off\n",
         ):
-            self.assertNotIn(f"\n{host_global_block}", config)
+            with self.subTest(config=drifted):
+                self.assertNotEqual([], host_global_config_violations(drifted))
+
 
     def test_automatic_review_is_off_and_manual_review_writes_still_stage(self):
         parsed_config = yaml.safe_load(

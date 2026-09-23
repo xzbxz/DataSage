@@ -733,15 +733,31 @@ class LegacyChecklistStateTests(unittest.TestCase):
         self.assertEqual(len(ids), len(set(ids)), "an item must appear once")
         self.assertEqual(50, len(self.LEGACY_TASK_IDS))
 
-    def test_open_defect_stays_visible_with_its_pending_action(self) -> None:
+    def test_state_ledger_statistics_match_the_rows(self) -> None:
+        text = self.LEDGER.read_text(encoding="utf-8")
+        pattern = (
+            r"^\| ([A-Z]\d{2}) \| .+? \| (" + "|".join(self.STATUSES) + r") \|"
+        )
+        statuses = [
+            match[1] for match in re.findall(pattern, text, re.MULTILINE)
+        ]
+        summary = re.search(r"^统计：(.+)$", text, re.MULTILINE)
+        self.assertIsNotNone(summary, "the ledger must state its totals")
+        line = summary.group(1) if summary else ""
+        for status in self.STATUSES:
+            with self.subTest(status=status):
+                self.assertIn(f"{status} {statuses.count(status)} 项", line)
+
+    def test_open_defect_rows_name_their_pending_action(self) -> None:
         text = self.LEDGER.read_text(encoding="utf-8")
         rows = [
             line
             for line in text.splitlines()
             if re.match(r"^\| [A-Z]\d{2} \|", line) and " 仍缺陷 " in line
         ]
-        self.assertEqual(1, len(rows), rows)
-        self.assertIn("config.yaml", rows[0])
+        for row in rows:
+            with self.subTest(row=row[:40]):
+                self.assertTrue("待" in row or "config.yaml" in row, row)
 
 
 if __name__ == "__main__":

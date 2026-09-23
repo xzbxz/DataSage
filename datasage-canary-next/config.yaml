@@ -25,8 +25,11 @@ platform_toolsets:
   cli:
     - hermes-cli
     - datasage-query
-  # The paired host candidate adds native Skill reads without skill_manage.
-  # WeCom exposes clarification, governed evidence and official code processing. Every
+  # WeCom tool surface: native clarification, the three governed DataSage tools
+  # and the official `skills` group.  That group contains management entries, so
+  # Skill writes are staged behind skills.write_approval and inline shell stays
+  # off; the channel exposes no arbitrary code, terminal, file or web tool, and
+  # the retired execute_code experiment is not part of the current surface. Every
   # host-authenticated member with a non-empty identity is intentionally
   # admitted in both DM and group chats; this Profile adds no per-user,
   # group, department, entity, row, domain, or metric filter.
