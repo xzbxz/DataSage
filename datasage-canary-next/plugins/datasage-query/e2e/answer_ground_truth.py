@@ -59,6 +59,40 @@ UNKNOWN_MARKERS = (
     "na",
     "null",
 )
+# F04: a value the answer only denies, quotes, hypothesises or declares unknown
+# is not an assertion of that fact.  The marker is looked for in the connector
+# between the fact label and its first number only, so an unrelated marker later
+# in the same clause cannot downgrade a real assertion into a non-assertion.
+NON_ASSERTION_MARKERS = (
+    "并不是",
+    "不是",
+    "并非",
+    "非为",
+    "不等于",
+    "未达到",
+    "未达",
+    "尚未",
+    "没有达到",
+    # quoted, illustrative or hypothetical rather than asserted
+    "参考",
+    "参照",
+    "参见",
+    "例如",
+    "比如",
+    "示例",
+    "假设",
+    "假如",
+    "如果",
+    "举例",
+    # the clause itself declares the value unknown
+    "未知",
+    "缺失",
+    "未提供",
+    "无法确认",
+    "无法核实",
+    "不可得",
+    "不确定",
+)
 NUMBER_RE = re.compile(
     r"(?<![0-9.])[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:[eE][-+]?\d+)?(?![0-9])"
 )
@@ -298,6 +332,11 @@ def validate_ground_truth(value: Any) -> dict[str, Any]:
             for fact_index, fact in enumerate(facts)
         ]
         fact_ids = {fact["id"] for fact in normalized_facts}
+        # F02: a duplicate normalized ID used to collapse two different facts
+        # into one entry, so an omitted value could still score "passed".  The
+        # normalized ID (already stripped) is what uniqueness is judged on.
+        if len(fact_ids) != len(normalized_facts):
+            raise AnswerGroundTruthError(f"{label}.facts IDs must be unique")
         arithmetic = item.get("arithmetic")
         if not isinstance(arithmetic, list):
             raise AnswerGroundTruthError(f"{label}.arithmetic must be a list")
@@ -601,6 +640,21 @@ def _label_atoms(
     return atoms
 
 
+def _assertion_connector(text: str) -> str:
+    """Return the clause text between the fact label and its first number."""
+
+    folded = _fold(text)
+    match = NUMBER_RE.search(folded)
+    return folded if match is None else folded[: match.start()]
+
+
+def _asserts_its_value(text: str) -> bool:
+    """True when a clause states the value instead of denying or quoting it."""
+
+    connector = _assertion_connector(text)
+    return not any(marker in connector for marker in NON_ASSERTION_MARKERS)
+
+
 def _fact_occurrence(
     text: str, fact: dict[str, Any], *, table: bool | None = None
 ) -> dict[str, Any]:
@@ -619,6 +673,7 @@ def _fact_occurrence(
                     "unit_ok": expected_unit,
                     "wrong_unit": other_unit,
                     "unknown": any(marker in _fold(atom) for marker in UNKNOWN_MARKERS),
+                    "asserted": _asserts_its_value(atom),
                 }
             )
     # A heading such as ``2026年9月目标完成情况`` contains date digits but no
@@ -640,11 +695,16 @@ def _fact_occurrence(
         ]
     numbers = [number for atom in atoms for number in atom["numbers"]]
     numeric_atoms = [atom for atom in atoms if atom["numbers"]]
+    asserted_numbers = [
+        number for atom in atoms if atom["asserted"] for number in atom["numbers"]
+    ]
     return {
         "lines": lines,
         "atoms": atoms,
         "numbers": numbers,
         "numeric_atoms": numeric_atoms,
+        "unasserted": bool(numbers) and not asserted_numbers,
+        "asserted_numbers": asserted_numbers,
         "ambiguous": any(len(atom["numbers"]) != 1 for atom in numeric_atoms),
         "unit_missing": any(not atom["unit_ok"] for atom in numeric_atoms),
         "wrong_unit": any(atom["wrong_unit"] for atom in numeric_atoms),
@@ -731,6 +791,14 @@ def score_answer_case(
         tolerance = fact_tolerance(fact)
         if not occurrence["lines"]:
             number_errors.append(f"fact {fact_id!r} label is missing")
+        elif occurrence["unasserted"]:
+            # F04: ``目标并不是100万元`` / ``目标未知（参考100万元）`` must not
+            # pass the numeric dimension.  Denial, quotation and an explicitly
+            # unknown statement are ambiguous for a scorer, so they go to the
+            # existing human-review path instead of being reported as answered.
+            number_unverified.append(
+                f"fact {fact_id!r} value is only denied, quoted or declared unknown"
+            )
         elif not occurrence["numbers"]:
             number_errors.append(f"fact {fact_id!r} numeric value is missing")
         elif not all(_near(value, expected, tolerance) for value in occurrence["numbers"]):

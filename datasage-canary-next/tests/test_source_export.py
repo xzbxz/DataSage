@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import importlib.util
 import json
@@ -251,6 +252,131 @@ print(json.dumps({'config_path': str(get_config_path()), 'command': spec.command
                 for name in tuple(sys.modules):
                     if name == package_name or name.startswith(package_name + "."):
                         sys.modules.pop(name, None)
+
+    # -- R03: the exported package must close over its own imports ----------
+    #
+    # F01 reproduced a package whose promised price/report entry points still
+    # referenced six modules the whitelist never copied.  Registration alone
+    # cannot see that: the imports sit inside functions, so the artifact loads
+    # and only fails when the operator path is used.  These tests enumerate the
+    # produced artifact's own relative imports instead of trusting the list.
+
+    PRICE_ENTRY_MODULES = (
+        "price_reference.py",
+        "price_workflow.py",
+        "purchase_price_content.py",
+        "purchase_price_runner.py",
+        "sales_price_runner.py",
+        "sales_reference.py",
+    )
+    PRICE_ENTRY_TESTS = (
+        "test_price_reference.py",
+        "test_price_workflow.py",
+        "test_purchase_price_content.py",
+        "test_purchase_price_recovery.py",
+        "test_purchase_price_target_schema.py",
+        "test_purchase_reference_entry.py",
+        "test_purchase_webhook_transport.py",
+        "test_sales_price_recovery.py",
+        "test_sales_price_runner.py",
+        "test_sales_reference.py",
+        "test_sales_reference_entry.py",
+    )
+
+    @staticmethod
+    def _init_bound_names(source: str) -> set[str]:
+        """Names a package ``__init__`` binds, for ``from . import name``."""
+
+        names: set[str] = set()
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            return names
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names.add(node.name)
+            elif isinstance(node, ast.Assign):
+                names.update(
+                    target.id for target in node.targets if isinstance(target, ast.Name)
+                )
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                names.add(node.target.id)
+            elif isinstance(node, ast.Import):
+                names.update(alias.asname or alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                names.update(alias.asname or alias.name for alias in node.names)
+        return names
+
+    def _unresolved_relative_imports(self, package_root: Path) -> list[str]:
+        """Every internal relative import in the artifact must resolve."""
+
+        unresolved: list[str] = []
+        for path in sorted(package_root.rglob("*.py")):
+            if "__pycache__" in path.parts:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.ImportFrom) or not node.level:
+                    continue
+                base = path.parent
+                for _ in range(node.level - 1):
+                    base = base.parent
+                if not base.is_dir() or package_root not in base.parents and base != package_root:
+                    # A relative import that leaves the artifact is a different
+                    # concern; this test only judges in-package closure.
+                    continue
+                if node.module:
+                    module = base.joinpath(*node.module.split("."))
+                    if module.with_suffix(".py").exists() or (module / "__init__.py").exists():
+                        continue
+                    unresolved.append(
+                        f"{path.relative_to(package_root)}:{node.lineno} from .{node.module}"
+                    )
+                    continue
+                init = base / "__init__.py"
+                # ``from . import converters`` may name a module or a name the
+                # package __init__ itself binds (e.g. pymysql.VERSION_STRING).
+                allowed = self._init_bound_names(init.read_text(encoding="utf-8")) if init.exists() else set()
+                for alias in node.names:
+                    if alias.name in allowed:
+                        continue
+                    if (base / f"{alias.name}.py").exists() or (base / alias.name / "__init__.py").exists():
+                        continue
+                    unresolved.append(
+                        f"{path.relative_to(package_root)}:{node.lineno} from . import {alias.name}"
+                    )
+        return unresolved
+
+    def test_exported_package_has_no_broken_internal_relative_imports(self) -> None:
+        with TemporaryDirectory(prefix="datasage-source-export-test-") as temporary:
+            workspace = Path(temporary)
+            candidate = self._copy_candidate(workspace)
+            archive = workspace / "review.tar.gz"
+            source_export.export_source(candidate, archive)
+            extracted = workspace / "extracted"
+            extracted.mkdir()
+            with tarfile.open(archive, "r:gz") as handle:
+                handle.extractall(extracted, filter="data")
+            home = extracted / source_export.PACKAGE_NAME
+            unresolved = self._unresolved_relative_imports(home / "plugins/datasage-query")
+            self.assertEqual(unresolved, [])
+            # The four edges F01 reproduced must be present in the artifact.
+            for module in self.PRICE_ENTRY_MODULES:
+                self.assertTrue((home / "plugins/datasage-query" / module).is_file())
+
+    def test_price_entry_modules_and_their_tests_are_exported(self) -> None:
+        with TemporaryDirectory(prefix="datasage-source-export-test-") as temporary:
+            workspace = Path(temporary)
+            candidate = self._copy_candidate(workspace)
+            archive = workspace / "review.tar.gz"
+            source_export.export_source(candidate, archive)
+            with tarfile.open(archive, "r:gz") as handle:
+                names = {member.name for member in handle.getmembers()}
+            prefix = source_export.PACKAGE_NAME
+            for module in self.PRICE_ENTRY_MODULES:
+                self.assertIn(f"{prefix}/plugins/datasage-query/{module}", names)
+            for test in self.PRICE_ENTRY_TESTS:
+                self.assertIn(f"{prefix}/tests/{test}", names)
 
 
 if __name__ == "__main__":

@@ -531,5 +531,71 @@ class AnswerGroundTruthTests(unittest.TestCase):
         )
 
 
+    # -- F02/F04: the scorer itself is an audited object ---------------------
+
+    REDUCED_ANSWER = "2026年9月目标为100.00万元，实际为80.00万元。"
+
+    def _two_fact_case(self) -> dict:
+        """Case with two distinct fact IDs and no arithmetic/table assertions."""
+
+        reduced = copy.deepcopy(self.ground_truth)
+        case = reduced["cases"][0]
+        case["facts"] = [
+            copy.deepcopy(case["facts"][0]),
+            copy.deepcopy(case["facts"][1]),
+        ]
+        case["arithmetic"] = []
+        case["table_text"] = []
+        return GT.validate_ground_truth(reduced)["cases"][0]
+
+    def test_duplicate_fact_id_is_rejected_instead_of_collapsing_two_facts(self):
+        payload = copy.deepcopy(self.ground_truth)
+        duplicate = copy.deepcopy(payload["cases"][0]["facts"][1])
+        duplicate["id"] = "target"  # 100.00 was target, 80.00 is the duplicate
+        payload["cases"][0]["facts"].append(duplicate)
+        with self.assertRaisesRegex(GT.AnswerGroundTruthError, "unique"):
+            GT.validate_ground_truth(payload)
+
+    def test_normalized_fact_id_collision_is_rejected(self):
+        payload = copy.deepcopy(self.ground_truth)
+        payload["cases"][0]["facts"][1]["id"] = " target "
+        with self.assertRaisesRegex(GT.AnswerGroundTruthError, "unique"):
+            GT.validate_ground_truth(payload)
+
+    def test_distinct_fact_ids_keep_a_missing_value_failing(self):
+        case = self._two_fact_case()
+        answered = GT.score_answer_case(case, self.REDUCED_ANSWER)
+        self.assertEqual("passed", answered["dimensions"]["numbers"]["status"])
+        # The value the duplicate-ID fixture used to hide must fail as missing.
+        omitted = GT.score_answer_case(case, "2026年9月实际为80.00万元。")
+        self.assertEqual("failed", omitted["dimensions"]["numbers"]["status"])
+        self.assertEqual("failed", GT.answer_result_status(omitted))
+
+    def test_denied_quoted_or_unknown_value_cannot_pass_the_numeric_dimension(self):
+        case = self._two_fact_case()
+        non_assertions = (
+            "2026年9月目标并不是100.00万元，实际为80.00万元。",
+            "2026年9月目标未知（参考100.00万元），实际为80.00万元。",
+            "2026年9月目标参考100.00万元，实际为80.00万元。",
+            "2026年9月目标未达到100.00万元，实际为80.00万元。",
+        )
+        for text in non_assertions:
+            with self.subTest(text=text):
+                result = GT.score_answer_case(case, text)
+                self.assertNotEqual(
+                    "passed", result["dimensions"]["numbers"]["status"]
+                )
+                self.assertEqual("not_verified", GT.answer_result_status(result))
+
+    def test_assertion_marker_after_the_value_does_not_downgrade_a_real_answer(self):
+        # The non-assertion check is scoped to the label-to-number connector, so
+        # a genuine answer that mentions a reference after its value still passes.
+        case = self._two_fact_case()
+        result = GT.score_answer_case(
+            case, "2026年9月目标为100.00万元（参考口径），实际为80.00万元。"
+        )
+        self.assertEqual("passed", result["dimensions"]["numbers"]["status"])
+
+
 if __name__ == "__main__":
     unittest.main()
