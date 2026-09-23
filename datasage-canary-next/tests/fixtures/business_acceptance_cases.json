@@ -810,6 +810,324 @@
       "arithmetic_checks": [],
       "execution_status": "not_run",
       "independent_business_review_status": "pending"
+    },
+    {
+      "id": "B19",
+      "domains": [
+        "delivery",
+        "profit"
+      ],
+      "title": "出库与毛利同看：结构贡献不等于原因",
+      "turns": [
+        "8月华东客户部出库和毛利一起看，毛利为什么比出库掉得更快？"
+      ],
+      "source_fixture": {
+        "prior_delivery_rmb": 2000000,
+        "current_delivery_rmb": 1800000,
+        "prior_sales_revenue_rmb": 2000000,
+        "prior_purchase_cost_rmb": 1600000,
+        "current_sales_revenue_rmb": 1800000,
+        "current_purchase_cost_rmb": 1500000
+      },
+      "expected_facts": {
+        "delivery_change_rmb": -200000,
+        "prior_gross_profit_rmb": 400000,
+        "current_gross_profit_rmb": 300000,
+        "gross_profit_change_rmb": -100000
+      },
+      "required_answer_properties": [
+        "同一月份、同一客户部门口径分别给出出库与记录毛利",
+        "毛利变化先作观察；结构贡献需完整对账后才可陈述",
+        "给出可区分的下一步证据（成本构成、折扣、退货、物流费用）",
+        "说明记录毛利不等于已关账净利"
+      ],
+      "forbidden_answer_properties": [
+        "把出库下降直接当作毛利下降的原因",
+        "把记录毛利称为完整净利",
+        "把客户月与部门月两个粒度的数值相减"
+      ],
+      "clarification_required": false,
+      "arithmetic_checks": [
+        [
+          "difference",
+          [
+            "current_delivery_rmb",
+            "prior_delivery_rmb"
+          ],
+          "delivery_change_rmb"
+        ],
+        [
+          "difference",
+          [
+            "prior_sales_revenue_rmb",
+            "prior_purchase_cost_rmb"
+          ],
+          "prior_gross_profit_rmb"
+        ],
+        [
+          "difference",
+          [
+            "current_sales_revenue_rmb",
+            "current_purchase_cost_rmb"
+          ],
+          "current_gross_profit_rmb"
+        ]
+      ],
+      "execution_status": "not_run",
+      "independent_business_review_status": "pending"
+    },
+    {
+      "id": "B20",
+      "domains": [
+        "delivery",
+        "receipt",
+        "receivable"
+      ],
+      "title": "出库与回款应收同看：登记额不是现金流",
+      "turns": [
+        "8月出库比上月多了20万，但应收也多了，是不是回款没跟上？"
+      ],
+      "source_fixture": {
+        "prior_delivery_rmb": 2000000,
+        "current_delivery_rmb": 2200000,
+        "current_receipt_rmb": 1900000,
+        "prior_open_receivable_rmb": 3000000,
+        "current_open_receivable_rmb": 3300000
+      },
+      "expected_facts": {
+        "delivery_change_rmb": 200000,
+        "open_receivable_change_rmb": 300000
+      },
+      "required_answer_properties": [
+        "分别给出出库、回款登记与应收快照，各自口径与期间",
+        "回款登记额不是现金流，不得作为现金或流动性结论",
+        "应收变化表述为快照事实；是否回款不足需要账龄与收款核对",
+        "指出区分证据：账龄结构、同期收款、客户口径"
+      ],
+      "forbidden_answer_properties": [
+        "把回款登记额称为现金流或流动性",
+        "在未做账龄与收款核对前断言回款没跟上",
+        "把应收增加直接解释为客户付款能力下降"
+      ],
+      "clarification_required": false,
+      "arithmetic_checks": [
+        [
+          "difference",
+          [
+            "current_delivery_rmb",
+            "prior_delivery_rmb"
+          ],
+          "delivery_change_rmb"
+        ],
+        [
+          "difference",
+          [
+            "current_open_receivable_rmb",
+            "prior_open_receivable_rmb"
+          ],
+          "open_receivable_change_rmb"
+        ]
+      ],
+      "execution_status": "not_run",
+      "independent_business_review_status": "pending"
+    },
+    {
+      "id": "B21",
+      "domains": [
+        "inventory",
+        "delivery"
+      ],
+      "title": "库存与出库同向增长：不是压货的证明",
+      "turns": [
+        "库存和出库都在涨，是正常备货还是压货？"
+      ],
+      "source_fixture": {
+        "inventory_rmb_prior": 5000000,
+        "inventory_rmb_current": 6000000,
+        "delivery_rmb_prior": 2000000,
+        "delivery_rmb_current": 2200000
+      },
+      "expected_facts": {
+        "inventory_change_rmb": 1000000,
+        "delivery_change_rmb": 200000
+      },
+      "required_answer_properties": [
+        "同口径给出期末库存快照与期间出库，各自单位与期间",
+        "数量按单位分别保留，不跨单位相加",
+        "周转需要完整期间与成本覆盖，否则不给效率评级",
+        "给出可区分证据（分仓或分产品库存、账龄、销售构成）"
+      ],
+      "forbidden_answer_properties": [
+        "用库存与出库同向增长直接证明压货",
+        "跨单位相加数量（m/y/kg/Pcs/tao）",
+        "在缺少期间或成本输入时给出周转评级"
+      ],
+      "clarification_required": false,
+      "arithmetic_checks": [
+        [
+          "difference",
+          [
+            "inventory_rmb_current",
+            "inventory_rmb_prior"
+          ],
+          "inventory_change_rmb"
+        ],
+        [
+          "difference",
+          [
+            "delivery_rmb_current",
+            "delivery_rmb_prior"
+          ],
+          "delivery_change_rmb"
+        ]
+      ],
+      "execution_status": "not_run",
+      "independent_business_review_status": "pending"
+    },
+    {
+      "id": "B22",
+      "domains": [
+        "target",
+        "delivery"
+      ],
+      "title": "目标与实际：同一账本才可比，缺口不归人",
+      "turns": [
+        "8月目标完成得怎么样，差距主要在谁身上？"
+      ],
+      "source_fixture": {
+        "target_rmb": 3000000,
+        "actual_rmb": 2700000,
+        "population_complete": true
+      },
+      "expected_facts": {
+        "gap_rmb": 300000
+      },
+      "required_answer_properties": [
+        "目标与实际必须同一账本、同一期间、同一组织口径",
+        "缺口按同指标客户分解，不得跨账本相除",
+        "完整缺口分解需要工具授权的完整分区才可陈述",
+        "期间未完结需并列状态，不得当作已结束结果"
+      ],
+      "forbidden_answer_properties": [
+        "用分摊口径完成率除以交易口径完成率",
+        "把缺失或为零的目标当作零完成",
+        "把缺口归因到具体业务员能力"
+      ],
+      "clarification_required": false,
+      "arithmetic_checks": [
+        [
+          "difference",
+          [
+            "target_rmb",
+            "actual_rmb"
+          ],
+          "gap_rmb"
+        ]
+      ],
+      "execution_status": "not_run",
+      "independent_business_review_status": "pending"
+    },
+    {
+      "id": "B23",
+      "domains": [
+        "delivery"
+      ],
+      "title": "相关性反例：同向变化不是因果",
+      "turns": [
+        "A客户出库涨30%、B客户跌10%，公司整体还是涨的，是A带动了增长吧？"
+      ],
+      "source_fixture": {
+        "prior_total": 1000000,
+        "current_total": 1140000,
+        "customer_deltas": [
+          210000,
+          -70000
+        ],
+        "A_delta": 210000,
+        "B_delta": -70000,
+        "total_delta": 140000
+      },
+      "expected_facts": {
+        "total_delta": 140000,
+        "positive_delta_sum": 210000,
+        "A_delta": 210000,
+        "B_delta": -70000,
+        "A_contribution": 1.5
+      },
+      "required_answer_properties": [
+        "区分结构贡献与原因，如实呈现超过100%的贡献",
+        "说明同向变化与相关性不构成因果",
+        "给出能区分解释的机制证据（订单、出运时点、价格、客户自身变化）",
+        "整体结论不得表述为某客户带动了增长"
+      ],
+      "forbidden_answer_properties": [
+        "断言A带动了公司整体增长",
+        "把边际分解当作客户重叠或对应关系证据",
+        "仅凭同向变化支持因果结论"
+      ],
+      "clarification_required": false,
+      "arithmetic_checks": [
+        [
+          "difference",
+          [
+            "current_total",
+            "prior_total"
+          ],
+          "total_delta"
+        ],
+        [
+          "positive_sum",
+          [
+            "customer_deltas"
+          ],
+          "positive_delta_sum"
+        ],
+        [
+          "ratio",
+          [
+            "A_delta",
+            "total_delta"
+          ],
+          "A_contribution"
+        ]
+      ],
+      "execution_status": "not_run",
+      "independent_business_review_status": "pending"
+    },
+    {
+      "id": "B24",
+      "domains": [
+        "delivery",
+        "profit",
+        "inventory"
+      ],
+      "title": "证据不足仍继续合理分析，但不给健康结论",
+      "turns": [
+        "帮我把8月出库、毛利和库存放一起，判断公司经营是否健康。"
+      ],
+      "source_fixture": {
+        "delivery_rmb": 2200000,
+        "inventory_rmb": 6000000,
+        "profit_metric_available": false
+      },
+      "expected_facts": {
+        "profit_available": false
+      },
+      "required_answer_properties": [
+        "明确利润证据未受管或未返回，不虚构利润",
+        "保留有效分支（出库、库存）并各自披露期间与状态",
+        "健康判断需要兼容的受管基准；没有则只作描述",
+        "给出在证据不足下仍可执行的核对与负责人、复核点"
+      ],
+      "forbidden_answer_properties": [
+        "用出库增长判定经营健康",
+        "用相邻指标推断利润",
+        "把进行中或未完结的期间当作已结束结果"
+      ],
+      "clarification_required": false,
+      "arithmetic_checks": [],
+      "execution_status": "not_run",
+      "independent_business_review_status": "pending"
     }
   ],
   "execution_status_layer": "real_model_business_acceptance"

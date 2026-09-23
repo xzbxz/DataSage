@@ -76,6 +76,7 @@ _ROOT_FILES = (
     "docs/remediation-r16-20260923.md",
     "docs/remediation-r17-20260923.md",
     "docs/remediation-r18-20260923.md",
+    "docs/remediation-r19-20260923.md",
     "docs/remediation-b-batch-20260923.md",
     "docs/remediation-c-batch-20260923.md",
     "docs/rule-ownership-20260923.md",

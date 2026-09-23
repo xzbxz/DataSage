@@ -50,9 +50,9 @@ class BusinessAcceptanceFixtureTests(unittest.TestCase):
         self.assertTrue(case['forbidden_answer_properties'])
 
     def test_coverage_and_unmeasured_status_are_explicit(self):
-        self.assertEqual(18, len(self.cases))
-        self.assertEqual(18, len(self.suite['cases']))
-        expected_case_domains = ('delivery', 'receipt', 'receivable', 'inventory', 'target')
+        self.assertEqual(24, len(self.cases))
+        self.assertEqual(24, len(self.suite['cases']))
+        expected_case_domains = ('delivery', 'receipt', 'receivable', 'inventory', 'target', 'profit')
         self.assertEqual(len(expected_case_domains), len(set(expected_case_domains)))
         self.assertEqual(set(expected_case_domains),
                          {domain for case in self.cases.values() for domain in case['domains']})
@@ -65,6 +65,43 @@ class BusinessAcceptanceFixtureTests(unittest.TestCase):
             self.assertTrue(case['turns'])
             self.assertTrue(case['required_answer_properties'])
             self.assertTrue(case['forbidden_answer_properties'])
+
+    def test_cross_domain_pairings_keep_their_acceptance_boundaries(self):
+        """R19: the four pairings plus both boundary cases keep their hard limits."""
+
+        pairings = {
+            'B19': {'delivery', 'profit'},
+            'B20': {'delivery', 'receipt', 'receivable'},
+            'B21': {'inventory', 'delivery'},
+            'B22': {'target', 'delivery'},
+            'B23': {'delivery'},
+            'B24': {'delivery', 'profit', 'inventory'},
+        }
+        for case_id, domains in pairings.items():
+            case = self.cases[case_id]
+            with self.subTest(case=case_id):
+                self.assertEqual(domains, set(case['domains']))
+                self.assertTrue(case['required_answer_properties'])
+                self.assertTrue(case['forbidden_answer_properties'])
+                self.assertFalse(case['clarification_required'])
+        # Structure is not cause, and a linked metric is not a mechanism.
+        self.assertTrue(any('结构贡献' in item for item in self.cases['B19']['required_answer_properties']))
+        self.assertTrue(any('原因' in item for item in self.cases['B19']['forbidden_answer_properties']))
+        self.assertTrue(any('因果' in item for item in self.cases['B23']['forbidden_answer_properties']))
+        # A receipt registration is not cash flow.
+        self.assertTrue(any('现金流' in item for item in self.cases['B20']['forbidden_answer_properties']))
+        # Recorded gross profit is not closed net profit.
+        self.assertTrue(any('净利' in item for item in self.cases['B19']['forbidden_answer_properties']))
+        # Nothing may be executed, and advice needs an owner and a review point.
+        self.assertTrue(any('健康' in item for item in self.cases['B24']['forbidden_answer_properties']))
+        self.assertTrue(any('复核点' in item for item in self.cases['B24']['required_answer_properties']))
+        # The pairings stay open questions: no fixed route or mandatory sequence.
+        for case_id in pairings:
+            case = self.cases[case_id]
+            joined = ' '.join(case['required_answer_properties'])
+            with self.subTest(case=case_id, rule='no_fixed_route'):
+                self.assertNotIn('按顺序', joined)
+                self.assertNotIn('第一步', joined)
 
 
 if __name__ == '__main__': unittest.main()
