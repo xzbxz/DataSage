@@ -4,7 +4,7 @@
   "surface": {
     "plugin_modules": {
       "files": 80,
-      "lines": 38797,
+      "lines": 38877,
       "names": [
         "__init__.py",
         "acceptance_delivery.py",
@@ -130,7 +130,7 @@
     },
     "tests": {
       "files": 147,
-      "lines": 42432,
+      "lines": 42665,
       "names": [
         "test_acceptance_delivery.py",
         "test_analysis_evidence.py",
@@ -285,7 +285,7 @@
     },
     "test_helpers": {
       "files": 8,
-      "lines": 2649,
+      "lines": 2660,
       "names": [
         "business_replay.py",
         "context_cost.py",
@@ -320,7 +320,7 @@
     },
     "scripts": {
       "files": 16,
-      "lines": 1097,
+      "lines": 1099,
       "names": [
         "datasage_legacy_fabric.py",
         "datasage_legacy_idk.py",
@@ -343,8 +343,8 @@
       "note": "measured from the reviewed commit"
     },
     "docs": {
-      "files": 27,
-      "lines": 2239,
+      "files": 29,
+      "lines": 2350,
       "names": [
         "audit-fixes-20260924.md",
         "legacy-checklist-state-20260923.md",
@@ -369,9 +369,11 @@
         "remediation-r30-20260923.md",
         "remediation-r31-20260923.md",
         "remediation-v4-apply-20260924.md",
+        "remediation-v5-apply-20260924.md",
         "rule-ownership-20260923.md",
         "source-export.md",
         "structure-convergence.md",
+        "system-review-v5-20260924.md",
         "vendor-provenance-20260923.md"
       ],
       "source": "tracked files",
@@ -381,6 +383,7 @@
       "files": 12,
       "lines": 1561,
       "names": [
+        "SKILL.md",
         "answer-boundary.md",
         "cross-domain-analysis.md",
         "delivery-analysis.md",
@@ -391,8 +394,7 @@
         "query-rules.md",
         "receipt-analysis.md",
         "receivable-analysis.md",
-        "target-analysis.md",
-        "SKILL.md"
+        "target-analysis.md"
       ],
       "source": "tracked files",
       "note": "measured from the reviewed commit"

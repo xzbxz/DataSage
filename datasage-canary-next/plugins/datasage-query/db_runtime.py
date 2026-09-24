@@ -19,7 +19,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Sequence
 
-from agent.secret_scope import get_secret
+from .settings import get_secret
 
 from . import contract_store, settings, db_executor
 from .db_security import (

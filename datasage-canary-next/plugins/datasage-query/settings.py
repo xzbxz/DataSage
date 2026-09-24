@@ -1,4 +1,4 @@
-"""DataSage behavior settings supplied by the Hermes plugin context."""
+"""DataSage settings and deferred access to the official Hermes secret scope."""
 
 from __future__ import annotations
 
@@ -54,3 +54,17 @@ def get_list(key: str) -> list[str]:
         for item in value
         if isinstance(item, str) and item.strip()
     ]
+
+
+def get_secret(name: str, default: Any = None) -> Any:
+    """Delegate at use time to Hermes; never copy its scope or read os.environ.
+
+    Importing a compiler/catalog/security rule must not require the secret
+    subsystem. An actual credential read still requires the official host and
+    propagates import/scope failures; absence is NOT treated as a default value.
+    No getter or secret is cached, so the current bound scope is used each time.
+    """
+
+    from agent.secret_scope import get_secret as host_get_secret
+
+    return host_get_secret(name, default)

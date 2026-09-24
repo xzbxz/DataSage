@@ -102,5 +102,16 @@ class WorkflowReportGateTests(unittest.TestCase):
         self.assertTrue(returned["report_delivery_gate"]["allowed"])
 
 
+    def test_count_mismatch_never_calls_delivery_even_if_document_says_complete(self):
+        document = _document()
+        document["report_complete"] = True
+        document["delivery_allowed"] = True
+        document["query_packets"][0]["results"][0]["row_count"] = 12
+        returned, sent = self._run(document)
+        self.assertEqual([], sent)
+        self.assertEqual("blocked_incomplete_report", returned["delivery"])
+        self.assertIn("0:ROW_COUNT_MISMATCH", returned["report_delivery_gate"]["reason_codes"])
+
+
 if __name__ == "__main__":
     unittest.main()

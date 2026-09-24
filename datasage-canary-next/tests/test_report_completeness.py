@@ -313,5 +313,102 @@ class ResultCompletenessTests(unittest.TestCase):
             self.assertIn("RAW_QUERY_EVIDENCE_MISSING", all_xml)
 
 
+    def test_declared_row_count_cannot_replace_delivered_rows(self):
+        for count in (0, 1, 3, True, -1, "invalid"):
+            with self.subTest(declared=count):
+                raw = result()
+                raw["row_count"] = count
+                summary = completeness.summarize_result(raw)
+                self.assertEqual(2, summary["returned_group_count"])
+                self.assertFalse(summary["report_complete"])
+                self.assertFalse(completeness.report_delivery_gate([raw])["allowed"])
+
+    def test_raw_rows_are_required_and_malformed_containers_do_not_raise(self):
+        for missing in (True, False):
+            for raw_value in (None, 123, {}, "not rows", [{}, "broken"]):
+                with self.subTest(missing=missing, raw=raw_value):
+                    raw = result()
+                    if missing:
+                        raw.pop("rows")
+                        raw["claim_ledger"] = raw_value
+                    else:
+                        raw["rows"] = raw_value
+                    self.assertFalse(completeness.report_delivery_gate([raw])["allowed"])
+
+    def test_raw_ledger_and_compact_wire_have_same_valid_coverage(self):
+        raw = result()
+        raw["claim_ledger"] = raw.pop("rows")
+        self.assertTrue(completeness.report_delivery_gate([raw])["allowed"])
+        no_count = result()
+        no_count.pop("row_count")
+        self.assertTrue(completeness.report_delivery_gate([no_count])["allowed"])
+        string_count = result()
+        string_count["row_count"] = "2"
+        self.assertTrue(completeness.report_delivery_gate([string_count])["allowed"])
+
+    def test_empty_state_cannot_hide_delivered_rows(self):
+        raw = result(data_state="empty")
+        self.assertFalse(completeness.report_delivery_gate([raw])["allowed"])
+        raw.update(rows=[], row_count=0)
+        self.assertNotIn("EMPTY_STATE_HAS_ROWS", completeness.summarize_result(raw).get("integrity_errors", []))
+        # Existing policy still treats empty evidence as limited, not a complete report.
+        self.assertFalse(completeness.report_delivery_gate([raw])["allowed"])
+
+    def test_ranking_population_never_invents_a_source_row_count(self):
+        raw = result()
+        for row in raw["rows"]:
+            row["facts"].pop("fabric_population_groups", None)
+            row["facts"].pop("fabric_scope_rows", None)
+        raw["ranking_evidence"] = {"population_count": 10}
+        summary = completeness.summarize_result(raw)
+        self.assertEqual(10, summary["population_group_count"])
+        self.assertIsNone(summary["population_row_count"])
+        raw["population_row_count"] = 200
+        self.assertEqual(200, completeness.summarize_result(raw)["population_row_count"])
+
+    def test_embedded_error_and_stale_packet_success_both_block_delivery(self):
+        raw = result()
+        raw["error"] = {"code": "SYNTHETIC_FAILURE"}
+        self.assertFalse(completeness.report_delivery_gate([raw])["allowed"])
+        doc = {
+            "expected_request_ids": ["table"],
+            "query_packets": [{"status": "success", "error": raw["error"], "results": [result()]}],
+        }
+        self.assertFalse(completeness.gate_for_document(doc)["allowed"])
+
+    def test_blank_expected_id_is_not_a_valid_evidence_binding(self):
+        doc = {
+            "expected_request_ids": [" "],
+            "query_packets": [{"status": "success", "results": [result(" ")]}],
+        }
+        self.assertFalse(completeness.gate_for_document(doc)["allowed"])
+
+
+    def test_report_projects_raw_claim_ledger_without_erasing_rows(self):
+        raw = result("only", row_count=1, population=1)
+        raw["claim_ledger"] = raw.pop("rows")
+        document = {"status": "success", "expected_request_ids": ["only"],
+                    "query_packets": [{"status": "success", "results": [raw]}]}
+        self.assertTrue(completeness.gate_for_document(document)["allowed"])
+        item = fabric.observations(document)[0]
+        self.assertEqual(1, len(item["rows"]))
+        self.assertEqual("12", item["rows"][0]["facts"]["metric_value"])
+        self.assertEqual(1, item["coverage"]["returned_group_count"])
+        self.assertTrue(item["coverage"]["report_complete"])
+        self.assertNotIn("rows", raw)  # projection never mutates upstream evidence
+
+    def test_report_keeps_packet_error_and_missing_row_evidence(self):
+        raw = result("only", row_count=1, population=1)
+        document = {"expected_request_ids": ["only"], "query_packets": [
+            {"status": "success", "error": {"code": "SYNTHETIC_FAILURE"}, "results": [raw]}]}
+        self.assertFalse(fabric.observations(document)[0]["coverage"]["report_complete"])
+        document["query_packets"][0].pop("error")
+        raw.pop("rows")
+        raw["row_count"] = 0
+        item = fabric.observations(document)[0]
+        self.assertIn("ROW_EVIDENCE_MISSING", item["coverage"]["integrity_errors"])
+        self.assertFalse(item["coverage"]["report_complete"])
+
+
 if __name__ == "__main__":
     unittest.main()

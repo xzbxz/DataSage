@@ -12,7 +12,7 @@ from types import MappingProxyType
 from typing import Any
 import uuid
 
-from agent.secret_scope import get_secret
+from .settings import get_secret
 
 from . import contract_store, settings
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 import context_cost
 
@@ -117,6 +118,23 @@ class ContextCostBaselineTests(unittest.TestCase):
                 self.assertEqual("unchanged", gate["status"])
                 self.assertTrue((PROFILE_ROOT / gate["reference"]).exists())
         self.assertIn("No cost change may relax a quality gate", self.register["policy"])
+
+
+    def test_identical_artifact_text_has_identical_cost_for_lf_and_crlf(self) -> None:
+        local_report = context_cost._plugin("local_report")
+        original_save = local_report.save_artifacts
+        expected = context_cost.measure_artifacts()
+
+        def save_with_crlf(*args, **kwargs):
+            run = original_save(*args, **kwargs)
+            target = run / "report.txt"
+            text = target.read_text(encoding="utf-8")
+            target.write_bytes(text.replace("\n", "\r\n").encode("utf-8"))
+            return run
+
+        with patch.object(local_report, "save_artifacts", side_effect=save_with_crlf):
+            actual = context_cost.measure_artifacts()
+        self.assertEqual(expected, actual)
 
 
 if __name__ == "__main__":

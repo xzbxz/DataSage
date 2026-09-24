@@ -174,13 +174,15 @@ def measure_artifacts() -> dict[str, Any]:
                 runtime[key] = f"<{key}>"
         normalised = json.dumps(document, ensure_ascii=False, indent=2)
         report_json = _bytes(normalised)
-        report_txt = (run / "report.txt").stat().st_size
+        # Text I/O normalises CRLF/CR to LF before UTF-8 counting.
+        # Compare identical content across hosts, not native newline encoding.
+        report_txt = _bytes((run / "report.txt").read_text(encoding="utf-8"))
     return {
         "local_report_text_bytes": report_txt,
         "local_report_json_bytes": report_json,
         "method": "measured",
         "measured_from": "local_report.render_text + save_artifacts over a 40-fact payload, "
-        "with runtime pid and paths normalised",
+        "with runtime pid/paths and text newlines (LF) normalised",
         "input_note": "synthetic shape; the model's own prose is not produced offline",
     }
 

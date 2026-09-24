@@ -8,7 +8,7 @@ and protects the retention artifacts from being dropped to shrink the maintenanc
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import unittest
 
 import maintenance_cost
@@ -25,6 +25,15 @@ def _register() -> dict:
 class MaintenanceCostBaselineTests(unittest.TestCase):
     def setUp(self) -> None:
         self.register = _register()
+
+    def test_surface_path_order_is_identical_across_platforms(self) -> None:
+        names = ["references/query.md", "SKILL.md", "references/Analysis.md"]
+        expected = sorted(names)
+        for path_type in (PurePosixPath, PureWindowsPath):
+            with self.subTest(path_type=path_type.__name__):
+                paths = [path_type(name) for name in reversed(names)]
+                ordered = sorted(paths, key=maintenance_cost._path_sort_key)
+                self.assertEqual(expected, [path.as_posix() for path in ordered])
 
     def test_the_surface_and_change_cost_are_measured_not_estimated(self) -> None:
         surface = self.register["surface"]

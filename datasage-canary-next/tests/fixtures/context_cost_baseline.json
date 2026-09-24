@@ -102,10 +102,10 @@
       }
     },
     "artifacts": {
-      "local_report_text_bytes": 295,
+      "local_report_text_bytes": 291,
       "local_report_json_bytes": 4320,
       "method": "measured",
-      "measured_from": "local_report.render_text + save_artifacts over a 40-fact payload, with runtime pid and paths normalised",
+      "measured_from": "local_report.render_text + save_artifacts over a 40-fact payload, with runtime pid/paths and text newlines (LF) normalised",
       "input_note": "synthetic shape; the model's own prose is not produced offline"
     },
     "questions": {

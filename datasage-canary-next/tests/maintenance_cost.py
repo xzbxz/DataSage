@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePath
 import statistics
 import sys
 from typing import Any
@@ -120,6 +120,12 @@ def _lines(path: Path) -> int:
     return len(path.read_text(encoding="utf-8", errors="replace").splitlines())
 
 
+def _path_sort_key(path: PurePath) -> str:
+    """Use a case-sensitive POSIX spelling, not the host Path ordering."""
+
+    return path.as_posix()
+
+
 def _count(paths: list[Path]) -> dict[str, int]:
     return {"files": len(paths), "lines": sum(_lines(path) for path in paths)}
 
@@ -158,6 +164,9 @@ def measure_surface() -> dict[str, Any]:
         )
         if name == "fixtures":
             selected = [path for path in selected if path.name not in SELF_WRITTEN]
+        # WindowsPath sorts case-insensitively; register order must not depend
+        # on the operating system (for example SKILL.md versus references/).
+        selected = sorted(selected, key=_path_sort_key)
         measured[name] = _count(selected) | {
             "names": [path.name for path in selected],
             "source": "tracked files" if tracked is not None else "working copy",

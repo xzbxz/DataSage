@@ -14,7 +14,7 @@ from typing import Any
 from types import CodeType
 from datetime import datetime, timezone
 
-from agent.secret_scope import get_secret
+from .settings import get_secret
 from .db_security import (
     DatabaseSecurityError,
     _canary_allowed_source_port_pairs,

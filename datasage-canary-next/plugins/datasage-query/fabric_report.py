@@ -81,15 +81,16 @@ def _row(row):
     return result
 
 
-def _item(name,result,*,packet_status=None,preview=False):
+def _item(name,result,*,packet_status=None,packet_error=None,preview=False):
     result=result if isinstance(result,dict) else {}
     raw={**result}
     if packet_status is not None:
         if packet_status!='success':raw['status']=packet_status
         elif 'status' not in raw:raw['status']='missing_result_status'
-    rows=raw.get('rows') if isinstance(raw.get('rows'),list) else []
-    raw['rows']=rows
-    raw.setdefault('row_count',len(rows))
+    if packet_error not in (None,{}):raw['error']=packet_error
+    # Consume the same raw/compact row envelope as the gate. Do not turn a
+    # missing collection into fabricated empty evidence before summarising it.
+    rows=result_completeness._rows(raw)
     coverage=result_completeness.summarize_result(raw)
     if preview:
         coverage={**coverage,'completeness':'limited','report_complete':False,
@@ -105,17 +106,18 @@ def observations(doc):
     result=[];names=['出库总览','出库渠道','出库形成时期','库存总览','库存渠道','库存形成时期']
     expected=doc.get('expected_request_ids')
     if isinstance(doc.get('query_packets'),list) and isinstance(expected,list) and all(isinstance(item,str) for item in expected):
-        raw_by_id={};packet_status_by_id={}
+        raw_by_id={};packet_status_by_id={};packet_error_by_id={}
         for packet in doc['query_packets']:
             if not isinstance(packet,dict) or not isinstance(packet.get('results'),list):continue
             for item in packet['results']:
                 if isinstance(item,dict) and isinstance(item.get('request_id'),str) and item['request_id'] not in raw_by_id:
                     raw_by_id[item['request_id']]=item
                     packet_status_by_id[item['request_id']]=packet.get('status')
+                    packet_error_by_id[item['request_id']]=packet.get('error')
         for i,request_id in enumerate(expected):
             if request_id in raw_by_id:
                 packet_status=packet_status_by_id.get(request_id) or 'missing_packet_status'
-                result.append(_item(names[i] if i<len(names) else str(i),raw_by_id[request_id],packet_status=packet_status))
+                result.append(_item(names[i] if i<len(names) else str(i),raw_by_id[request_id],packet_status=packet_status,packet_error=packet_error_by_id.get(request_id)))
             else:
                 result.append(_item(names[i] if i<len(names) else str(i),{'request_id':request_id,'status':'missing_result','data_state':'incomplete'},packet_status='missing_result'))
         return result
@@ -128,35 +130,60 @@ def observations(doc):
             continue
         for j,item in enumerate(rows):
             name=names[i] if i<len(names) and j==0 else (names[i]+'#'+str(j+1) if i<len(names) else str(i)+'#'+str(j+1))
-            result.append(_item(name,item,packet_status=packet.get('status') or 'missing_packet_status'))
+            result.append(_item(name,item,packet_status=packet.get('status') or 'missing_packet_status',packet_error=packet.get('error')))
     return result
 
 def chart(path,title,rows,series):
+    """Render exact value labels; only bar geometry is scaled, never source values."""
     from PIL import Image,ImageDraw,ImageFont
     font_path=Path('C:/Windows/Fonts/msyh.ttc');font=ImageFont.truetype(str(font_path),15);bold=ImageFont.truetype(str(font_path),19)
     label_width=190;label_line_height=22
-    layout=[]
+    rate=all(f in ('fabric_tag_rate','fabric_tag_contribution') for f,_ in series)
+    layout=[];positive_values=[];value_width=130
     for row in rows:
+        values=[]
+        for field,_ in series:
+            value=n(row['facts'].get(field))
+            displayed=(f'{value*100:.1f}%' if rate else str(value)) if value is not None else ''
+            if value is not None and value>0:positive_values.append(value)
+            value_width=max(value_width,min(930,math.ceil(_chart_text_width(font,displayed))))
+            values.append((value,displayed))
+        layout.append((row,values))
+    canvas_width=max(1000,850+value_width+20)
+    title_lines=_wrap_chart_label(title,bold,canvas_width-40)
+    heading_extra=max(0,len(title_lines)-1)*26
+    measured=[]
+    for row,values in layout:
         label_lines=_wrap_chart_label(row.get('group',''),font,label_width)
-        row_height=max(65,len(label_lines)*label_line_height+10,len(series)*25+10)
-        layout.append((row,label_lines,row_height))
-    height=115+sum(row_height for _,_,row_height in layout);im=Image.new('RGB',(1000,max(180,height)),'white');d=ImageDraw.Draw(im)
-    d.text((20,15),title,font=bold,fill='#172d46')
-    colors=['#24679c','#bd7433'];values=[float(n(r['facts'].get(f)) or 0) for r in rows for f,_ in series]
-    rate=all(f in ('fabric_tag_rate','fabric_tag_contribution') for f,_ in series);maximum=max(values+[1])
-    for k,(_,label) in enumerate(series):d.rectangle((20+k*270,51,35+k*270,66),fill=colors[k]);d.text((43+k*270,47),label,font=font,fill='#172d46')
-    y=91
-    for row,label_lines,row_height in layout:
-        for line_index,line in enumerate(label_lines):
-            d.text((20,y+line_index*label_line_height),line,font=font,fill='#172d46')
-        for j,(field,_) in enumerate(series):
-            value=n(row['facts'].get(field));yy=y+j*25
-            if value is None:d.text((230,yy),'未知，不填零',font=font,fill='#855c38');continue
-            displayed=f'{float(value)*100:.1f}%' if rate else str(value)
-            if value<0:d.text((230,yy),'负值需核对：'+displayed,font=font,fill='#855c38');continue
-            width=int(float(value)/maximum*610)
-            if width>0:d.rectangle((230,yy,230+width,yy+17),fill=colors[j])
-            d.text((850,yy-2),displayed,font=font,fill='#172d46')
+        value_lines=[(value,_wrap_chart_label(text,font,value_width)) for value,text in values]
+        series_height=sum(max(25,len(lines)*22) for _,lines in value_lines)
+        row_height=max(65,len(label_lines)*label_line_height+10,series_height+10)
+        measured.append((label_lines,value_lines,row_height))
+    height=115+heading_extra+sum(row_height for _,_,row_height in measured)
+    im=Image.new('RGB',(canvas_width,max(180,height)),'white');d=ImageDraw.Draw(im)
+    for index,line in enumerate(title_lines):d.text((20,15+index*26),line,font=bold,fill='#172d46')
+    colors=['#24679c','#bd7433'];maximum=max(positive_values+[Decimal(1)])
+    for k,(_,label) in enumerate(series):
+        d.rectangle((20+k*270,51+heading_extra,35+k*270,66+heading_extra),fill=colors[k%len(colors)])
+        d.text((43+k*270,47+heading_extra),label,font=font,fill='#172d46')
+    y=91+heading_extra
+    for label_lines,value_lines,row_height in measured:
+        for line_index,line in enumerate(label_lines):d.text((20,y+line_index*label_line_height),line,font=font,fill='#172d46')
+        yy=y
+        for j,(value,lines) in enumerate(value_lines):
+            if value is None:
+                d.text((230,yy),'未知，不填零',font=font,fill='#855c38')
+            else:
+                if value<0:
+                    for index,line in enumerate(_wrap_chart_label('负值需核对：'+''.join(lines),font,canvas_width-250)):
+                        d.text((230,yy+index*22),line,font=font,fill='#855c38')
+                else:
+                    # Keep finite Decimal inputs out of binary float overflow.
+                    width=int(value/maximum*610)
+                    if width>0:d.rectangle((230,yy,230+width,yy+17),fill=colors[j%len(colors)])
+                if value>=0:
+                    for index,line in enumerate(lines):d.text((850,yy-2+index*22),line,font=font,fill='#172d46')
+            yy+=max(25,len(lines)*22)
         y+=row_height
     im.save(path,'PNG')
 

@@ -46,7 +46,7 @@ def _rows(result: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     rows = result.get("rows")
     if not isinstance(rows, list):
         rows = result.get("claim_ledger")
-    return [row for row in rows or () if isinstance(row, Mapping)]
+    return [row for row in rows if isinstance(row, Mapping)] if isinstance(rows, list) else []
 
 
 def _consistent_field(result: Mapping[str, Any], field: str) -> int | None:
@@ -62,13 +62,16 @@ def _consistent_field(result: Mapping[str, Any], field: str) -> int | None:
     return values[0] if values and len(set(values)) == 1 else None
 
 
-def _first_field(result: Mapping[str, Any], fields: Sequence[str]) -> int | None:
+def _first_field(
+    result: Mapping[str, Any], fields: Sequence[str], *, ranking_fallback: bool = False
+) -> int | None:
     for field in fields:
         value = _consistent_field(result, field)
         if value is not None:
             return value
     ranking = result.get("ranking_evidence")
-    if isinstance(ranking, Mapping):
+    if ranking_fallback and isinstance(ranking, Mapping):
+        # A ranking population counts groups, never source/fact rows.
         return _integer(ranking.get("population_count"))
     return None
 
@@ -128,14 +131,43 @@ def _unknown(result: Mapping[str, Any]) -> dict[str, Any]:
     return found
 
 
+def _row_integrity_errors(result: Mapping[str, Any]) -> list[str]:
+    """Validate the delivered row envelope, not merely its declared count.
+
+    This is a local report gate, not a second metric/evidence implementation.
+    Both raw claim ledgers and the existing compact wire rows remain accepted.
+    """
+    raw_rows = result.get("rows") if "rows" in result else result.get("claim_ledger")
+    errors: list[str] = []
+    if not isinstance(raw_rows, list):
+        errors.append("ROW_EVIDENCE_MISSING")
+        count = 0
+    else:
+        count = len(raw_rows)
+        if any(not isinstance(row, Mapping) for row in raw_rows):
+            errors.append("ROW_EVIDENCE_INVALID")
+    if "row_count" in result:
+        declared = _integer(result["row_count"])
+        if declared is None:
+            errors.append("ROW_COUNT_INVALID")
+        elif declared != count:
+            errors.append("ROW_COUNT_MISMATCH")
+    if result.get("data_state") == "empty" and count:
+        errors.append("EMPTY_STATE_HAS_ROWS")
+    if result.get("error") not in (None, {}):
+        errors.append("RESULT_ERROR_PRESENT")
+    return errors
+
+
 def summarize_result(result: Mapping[str, Any] | None) -> dict[str, Any]:
     """Project one result for display/gating without changing the result."""
 
     value = result if isinstance(result, Mapping) else {}
     rows = _rows(value)
-    returned = _integer(value.get("row_count"))
-    if returned is None:
-        returned = len(rows)
+    # Display what is actually present. A forged/stale count must not describe
+    # rows that the report never received.
+    returned = len(rows)
+    integrity_errors = _row_integrity_errors(value)
     status = value.get("status") if isinstance(value.get("status"), str) else "missing_result"
     data_state = value.get("data_state")
     truncated = value.get("truncated")
@@ -146,6 +178,7 @@ def summarize_result(result: Mapping[str, Any] | None) -> dict[str, Any]:
         and truncated is False
         and completeness == "complete"
         and not (data_state == "rows" and returned == 0)
+        and not integrity_errors
     )
     return {
         "request_id": value.get("request_id"),
@@ -154,12 +187,13 @@ def summarize_result(result: Mapping[str, Any] | None) -> dict[str, Any]:
         "completeness": completeness,
         "truncated": truncated,
         "returned_group_count": returned,
-        "population_group_count": _first_field(value, _GROUP_FIELDS),
+        "population_group_count": _first_field(value, _GROUP_FIELDS, ranking_fallback=True),
         "population_row_count": _first_field(value, _ROW_FIELDS),
         "observed_at": next(iter(observed.values()), None),
         "observed_times": observed,
         "unknown_items": _unknown(value),
         "report_complete": report_complete,
+        **({"integrity_errors": integrity_errors} if integrity_errors else {}),
     }
 
 
@@ -171,6 +205,8 @@ def _gate_from_summaries(summaries: Sequence[Mapping[str, Any]]) -> dict[str, An
     for item in summaries:
         request_id = str(item.get("request_id") or "unknown")
         status = str(item.get("status") or "missing_result")
+        for code in item.get("integrity_errors", []):
+            reasons.add(f"{request_id}:{code}")
         if status != "success":
             reasons.add(f"{request_id}:STATUS_{status.upper()}")
         if item.get("truncated") is True:
@@ -212,7 +248,7 @@ def gate_for_document(document: Mapping[str, Any] | None) -> dict[str, Any]:
     if (
         not isinstance(expected, list)
         or not expected
-        or any(not isinstance(item, str) for item in expected)
+        or any(not isinstance(item, str) or not item.strip() for item in expected)
         or len(set(expected)) != len(expected)
     ):
         return _fail_gate("REQUEST_ID_SET_MISMATCH")
@@ -241,6 +277,9 @@ def gate_for_document(document: Mapping[str, Any] | None) -> dict[str, Any]:
             missing.append(f"packet_{index}")
             continue
         bound = dict(result)
+        if packet.get("error") not in (None, {}):
+            # Preserve a packet failure even if its status was stale success.
+            bound["error"] = packet["error"]
         if packet.get("status") != "success":
             bound["status"] = packet.get("status") if isinstance(packet.get("status"), str) else "missing_packet_status"
         raw_by_id[request_id] = bound

@@ -233,5 +233,103 @@ class ReferenceAuthorityRegressions(unittest.TestCase):
         self.assertEqual([p.as_posix() for p in sort(PureWindowsPath)], [p.as_posix() for p in sort(PurePosixPath)])
 
 
+class DeferredHostSecretRegressions(unittest.TestCase):
+    """Pure delegation checks; this is not a substitute Hermes integration."""
+
+    def test_pure_data_rules_import_without_requesting_the_host_secret_scope(self):
+        import builtins
+        original_import = builtins.__import__
+        seen = []
+
+        def watching_import(name, *args, **kwargs):
+            if name == "agent.secret_scope":
+                seen.append(name)
+                raise ModuleNotFoundError("synthetic host boundary")
+            return original_import(name, *args, **kwargs)
+
+        with mock.patch("builtins.__import__", side_effect=watching_import):
+            for module in ("settings", "db_runtime", "db_security", "runtime_health"):
+                importlib.reload(importlib.import_module(f"{PACKAGE}.{module}"))
+        self.assertEqual([], seen)
+
+    def test_missing_host_secret_api_never_falls_back_to_process_environment(self):
+        import builtins
+        original_import = builtins.__import__
+        settings = importlib.import_module(f"{PACKAGE}.settings")
+
+        def missing_scope(name, *args, **kwargs):
+            if name == "agent.secret_scope":
+                raise ModuleNotFoundError("synthetic missing secret scope")
+            return original_import(name, *args, **kwargs)
+
+        with mock.patch.dict("os.environ", {"SYNTHETIC_SECRET": "must-not-read"}), \
+                mock.patch("builtins.__import__", side_effect=missing_scope):
+            with self.assertRaises(ModuleNotFoundError):
+                settings.get_secret("SYNTHETIC_SECRET", "default")
+
+    def test_secret_read_delegates_at_each_call_without_caching_scope(self):
+        import builtins
+        original_import = builtins.__import__
+        settings = importlib.import_module(f"{PACKAGE}.settings")
+        delegate = mock.Mock(side_effect=["scope-A", "scope-B"])
+
+        def unit_spy(name, *args, **kwargs):
+            if name == "agent.secret_scope":
+                return types.SimpleNamespace(get_secret=delegate)
+            return original_import(name, *args, **kwargs)
+
+        # The spy checks argument forwarding only; no host is installed/mocked globally.
+        with mock.patch("builtins.__import__", side_effect=unit_spy):
+            self.assertEqual("scope-A", settings.get_secret("SYNTHETIC_SECRET", None))
+            self.assertEqual("scope-B", settings.get_secret("SYNTHETIC_SECRET", "d"))
+        self.assertEqual([mock.call("SYNTHETIC_SECRET", None), mock.call("SYNTHETIC_SECRET", "d")],
+                         delegate.call_args_list)
+
+
+class ReportChartNumericalRegressions(unittest.TestCase):
+    """Font substitution isolates numerical/layout behavior from Windows pixels."""
+    def _chart(self, amount, title="Synthetic source-backed values"):
+        from PIL import Image, ImageDraw, ImageFont
+        from tempfile import TemporaryDirectory
+        fabric = importlib.import_module(f"{PACKAGE}.fabric_report")
+        font = ImageFont.load_default(size=15)
+        calls = []
+        original_text = ImageDraw.ImageDraw.text
+        def capture(draw, position, text, *args, **kwargs):
+            calls.append((position, str(text), kwargs.get("font")))
+            return original_text(draw, position, text, *args, **kwargs)
+        with TemporaryDirectory() as tmp, \
+                mock.patch.object(ImageFont, "truetype", return_value=font), \
+                mock.patch.object(ImageDraw.ImageDraw, "text", capture):
+            path = Path(tmp) / "synthetic.png"
+            fabric.chart(path, title, [{"group": "SYN-A", "facts": {"fabric_rolls": amount}}],
+                         [("fabric_rolls", "Rolls")])
+            with Image.open(path) as image:
+                size = image.size
+        return size, calls, fabric
+
+    def test_finite_decimal_beyond_float_range_does_not_crash(self):
+        size, calls, _ = self._chart("1E400")
+        self.assertIn("1E+400", [text for _, text, _ in calls])
+        self.assertGreaterEqual(size[0], 1000)
+
+    def test_long_exact_value_is_not_clipped_or_rounded(self):
+        value = "123456789012345.67"
+        size, calls, fabric = self._chart(value)
+        numerical = [(position, text, font) for position, text, font in calls if text == value]
+        self.assertEqual(1, len(numerical))
+        position, text, font = numerical[0]
+        self.assertLessEqual(position[0] + fabric._chart_text_width(font, text), size[0] - 15)
+
+    def test_long_title_and_tiny_source_value_remain_present(self):
+        title = "SYNTHETIC TITLE " * 40
+        size, calls, fabric = self._chart("1E-400", title)
+        title_parts = [text for position, text, font in calls if position[0] == 20 and position[1] < 700]
+        self.assertTrue(any("SYNTHETIC" in text for text in title_parts))
+        self.assertIn("1E-400", [text for _, text, _ in calls])
+        for position, text, font in calls:
+            self.assertLessEqual(position[0] + fabric._chart_text_width(font, text), size[0])
+
+
 if __name__ == '__main__':
     unittest.main()

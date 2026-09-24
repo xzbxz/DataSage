@@ -405,3 +405,7 @@ datasage-canary-next/docs/workflow-runtime-acceptance.md
 !datasage-canary-next/skills/business-analytics/datasage/references/profit-analysis.md
 !datasage-canary-next/skills/business-analytics/datasage/references/receivable-analysis.md
 !datasage-canary-next/skills/business-analytics/datasage/references/cross-domain-analysis.md
+
+# Source-only systematic review record; no runtime state included.
+!datasage-canary-next/docs/system-review-v5-20260924.md
+!datasage-canary-next/docs/remediation-v5-apply-20260924.md
