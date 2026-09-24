@@ -130,7 +130,7 @@
     },
     "tests": {
       "files": 147,
-      "lines": 42425,
+      "lines": 42432,
       "names": [
         "test_acceptance_delivery.py",
         "test_analysis_evidence.py",
@@ -285,7 +285,7 @@
     },
     "test_helpers": {
       "files": 8,
-      "lines": 2638,
+      "lines": 2649,
       "names": [
         "business_replay.py",
         "context_cost.py",
@@ -422,7 +422,7 @@
     },
     "history": {
       "window_commits": 40,
-      "code_files_per_commit_median": 6,
+      "code_files_per_commit_median": 7,
       "code_commits": 40,
       "doc_files_per_commit_median": 4,
       "doc_commits": 40,

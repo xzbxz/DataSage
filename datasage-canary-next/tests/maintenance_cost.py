@@ -4,7 +4,11 @@
 the numbers reproduce in any checkout), records files that sit outside that commit as
 unreviewed extras awaiting a decision, finds tracked files with no inbound reference and no
 owner, and measures the fan-out of a rule, metric or test change from this workspace and
-from real git history.  ``write`` merges the measurement into the baseline register.
+from real git history.
+
+The git-history medians are a dated snapshot, not a live comparison: every new commit can
+shift them, so ``check`` compares the surface, the orphan candidates and the fan-out only,
+and the guard requires the history block to keep its provenance instead.  ``write`` merges the measurement into the baseline register.
 ``check`` reports drift.
 
 Orphan detection never concludes "useless": it records the evidence (zero inbound
@@ -434,10 +438,17 @@ def check() -> int:
         return 1 if problems else 0
 
     for key in ("surface", "change_cost"):
-        if register.get(key) != measured[key]:
+        # change_cost.history is a dated snapshot of the commit set, so it is excluded from
+        # the live comparison; a fresh commit would otherwise fail this guard for no reason.
+        stored = {k: v for k, v in register.get(key, {}).items() if k != "history"}
+        current = {k: v for k, v in measured[key].items() if k != "history"}
+        if stored != current:
             problems.append(f"{key} drifted from the workspace")
     if register.get("orphan_candidates") != measured["orphan_candidates"]:
         problems.append("orphan_candidates drifted from the workspace")
+    history = register.get("change_cost", {}).get("history") or {}
+    if not history.get("method") or not history.get("window_commits"):
+        problems.append("the change-cost history snapshot lost its provenance")
     declared_paths = {
         entry["path"] for entry in (register.get("declared_unreviewed_extras") or [])
     }

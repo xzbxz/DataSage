@@ -72,9 +72,16 @@ class MaintenanceCostBaselineTests(unittest.TestCase):
             self.skipTest(
                 "not a git checkout: tracked-file equality is evaluated in a clone instead"
             )
-        for key in ("surface", "change_cost", "orphan_candidates"):
+        for key in ("surface", "orphan_candidates"):
             with self.subTest(key=key):
                 self.assertEqual(measured[key], self.register[key])
+        # change_cost.history is a dated snapshot of the commit set: comparing it live would
+        # fail on every new commit, so only the fan-out part is compared here.
+        for key in ("metric_change", "rule_change", "test_change", "method", "measured_from"):
+            with self.subTest(key=key):
+                self.assertEqual(
+                    measured["change_cost"][key], self.register["change_cost"][key]
+                )
 
     def test_every_orphan_candidate_has_evidence_and_a_disposition(self) -> None:
         candidates = self.register["orphan_candidates"]
