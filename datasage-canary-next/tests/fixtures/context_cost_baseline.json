@@ -4,15 +4,20 @@
   "measured": {
     "skill_context": {
       "files": {
+        "SKILL.md": {
+          "characters": 5986,
+          "bytes": 5988,
+          "lines": 115
+        },
         "references/answer-boundary.md": {
           "characters": 19935,
           "bytes": 19947,
           "lines": 335
         },
         "references/cross-domain-analysis.md": {
-          "characters": 5291,
-          "bytes": 5295,
-          "lines": 98
+          "characters": 5486,
+          "bytes": 5490,
+          "lines": 100
         },
         "references/delivery-analysis.md": {
           "characters": 8656,
@@ -25,9 +30,9 @@
           "lines": 49
         },
         "references/inventory-analysis.md": {
-          "characters": 5301,
-          "bytes": 5301,
-          "lines": 102
+          "characters": 5580,
+          "bytes": 5580,
+          "lines": 106
         },
         "references/pattern-matching-analysis.md": {
           "characters": 6100,
@@ -35,9 +40,9 @@
           "lines": 114
         },
         "references/profit-analysis.md": {
-          "characters": 4794,
-          "bytes": 4794,
-          "lines": 93
+          "characters": 5053,
+          "bytes": 5053,
+          "lines": 96
         },
         "references/query-rules.md": {
           "characters": 10570,
@@ -45,9 +50,9 @@
           "lines": 192
         },
         "references/receipt-analysis.md": {
-          "characters": 5675,
-          "bytes": 5675,
-          "lines": 107
+          "characters": 6015,
+          "bytes": 6015,
+          "lines": 112
         },
         "references/receivable-analysis.md": {
           "characters": 5236,
@@ -55,19 +60,14 @@
           "lines": 101
         },
         "references/target-analysis.md": {
-          "characters": 5499,
-          "bytes": 5499,
-          "lines": 108
-        },
-        "SKILL.md": {
-          "characters": 5986,
-          "bytes": 5988,
-          "lines": 115
+          "characters": 5784,
+          "bytes": 5784,
+          "lines": 111
         }
       },
       "file_count": 12,
-      "total_bytes": 86017,
-      "total_characters": 85959
+      "total_bytes": 87375,
+      "total_characters": 87317
     },
     "tool_surface": {
       "provided_tool_names": [

@@ -5,12 +5,13 @@ from __future__ import annotations
 from functools import wraps
 from collections import Counter
 import json
+import math
 import time
 from . import db_executor, settings
 from typing import Any, Callable, Mapping
 
 def _compact_json(payload: dict[str, Any]) -> str:
-    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
 
 _CATALOG_METRIC_FIELDS = (
@@ -444,41 +445,65 @@ def compact_query_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return compact
 
 
-def enforce_tool_result_budget(tool_name: str, result: Any) -> str:
-    """Return compact valid JSON and leave host-size handling to Hermes."""
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Reject ambiguous wire objects instead of keeping the last duplicate key."""
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate JSON object key")
+        value[key] = item
+    return value
 
-    if isinstance(result, str):
-        rendered = result
-    else:
-        try:
-            rendered = _compact_json(result)
-        except (TypeError, ValueError):
-            rendered = ""
+
+def _finite_json_float(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value):
+        raise ValueError("non-finite JSON number")
+    return value
+
+
+def _reject_json_constant(text: str) -> Any:
+    raise ValueError("non-standard JSON numeric constant")
+
+
+def enforce_tool_result_budget(tool_name: str, result: Any) -> str:
+    """Return unambiguous standard JSON; leave size handling to Hermes.
+
+    Producers already validate business numbers. This final transport boundary
+    must also reject malformed provider/adapter output, without replacing bad
+    numbers with zero/null or leaking an exception/partial serialization.
+    """
     try:
-        decoded = json.loads(rendered)
-    except (TypeError, json.JSONDecodeError):
-        decoded = None
-    if isinstance(decoded, dict):
+        rendered = result if isinstance(result, str) else _compact_json(result)
+        decoded = json.loads(
+            rendered,
+            parse_constant=_reject_json_constant,
+            parse_float=_finite_json_float,
+            object_pairs_hook=_unique_json_object,
+        )
+        if not isinstance(decoded, dict):
+            raise ValueError("tool result must be a JSON object")
         if tool_name == "datasage_catalog":
             decoded = compact_catalog_payload(decoded)
         elif tool_name == "datasage_query":
             decoded = compact_query_payload(decoded)
-        return _compact_json(decoded)
-
-    reason = "INVALID_TOOL_RESULT"
-    replacement = _compact_json(
-        {
-            "status": "failed",
-            "results": [],
-            "error": {
-                "code": reason,
-                "message": "The tool did not produce a valid JSON object.",
-                "retryable": False,
-            },
-            "tool": tool_name,
-        }
-    )
-    return replacement
+        rendered = _compact_json(decoded)
+        # An unpaired surrogate is not a valid UTF-8 model/tool transport value.
+        rendered.encode("utf-8")
+        return rendered
+    except (TypeError, ValueError, OverflowError, RecursionError):
+        return _compact_json(
+            {
+                "status": "failed",
+                "results": [],
+                "error": {
+                    "code": "INVALID_TOOL_RESULT",
+                    "message": "The tool did not produce a valid JSON object.",
+                    "retryable": False,
+                },
+                "tool": tool_name,
+            }
+        )
 
 
 def bounded_json_handler(tool_name: str, handler: Callable[..., Any]):

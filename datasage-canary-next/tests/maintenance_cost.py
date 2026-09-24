@@ -435,9 +435,11 @@ def check() -> int:
                 problems.append(f"{category} was not measured from the reviewed commit")
         for category in ("plugin_modules", "contract_yaml", "plugin_docs", "tests",
                          "test_helpers", "fixtures", "scripts", "docs", "skill_files_datasage"):
-            directory = _category_directory(category)
             recorded = set(register["surface"].get(category, {}).get("names", []))
-            if recorded and not recorded.issubset({p.name for p in directory.glob("*")}):
+            # Reuse the measured category enumeration, including nested Skill
+            # references. A top-level glob falsely reports those files missing.
+            present = set(measured["surface"].get(category, {}).get("names", []))
+            if recorded and not recorded.issubset(present):
                 problems.append(f"{category}: a recorded file is missing from this copy")
         for path in RETENTION_ARTIFACTS:
             if not (PROFILE_ROOT / path).exists():

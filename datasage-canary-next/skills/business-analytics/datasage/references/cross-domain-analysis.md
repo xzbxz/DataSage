@@ -77,9 +77,11 @@ candidate evidence list, not a requirement to query every domain.
 - **Candidate actions** (advice only): name the specific checks that would confirm
   or drop each hypothesis, and hand any resource, credit or customer decision to
   the accountable owner.
-- **Stop when**: the two sides cannot be made compatible, one side is
-  incomplete/pending/truncated, or the question asks for a causal or health
-  verdict that the evidence cannot carry.
+- **Stop when** (only the unsupported joint comparison or verdict): the two sides
+  cannot be made compatible, an operand is incomplete/pending/truncated, or
+  the evidence cannot support the requested causal or health verdict. This
+  does not stop the whole analysis: preserve valid independent observations,
+  explain the local gap, and identify the next verification when useful.
 
 ## Review prompts
 

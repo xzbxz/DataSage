@@ -4,7 +4,7 @@
   "surface": {
     "plugin_modules": {
       "files": 80,
-      "lines": 38877,
+      "lines": 39028,
       "names": [
         "__init__.py",
         "acceptance_delivery.py",
@@ -129,8 +129,8 @@
       "note": "measured from the reviewed commit"
     },
     "tests": {
-      "files": 147,
-      "lines": 42665,
+      "files": 148,
+      "lines": 43047,
       "names": [
         "test_acceptance_delivery.py",
         "test_analysis_evidence.py",
@@ -171,6 +171,7 @@
         "test_idk_delivery.py",
         "test_idk_entry.py",
         "test_idk_observation.py",
+        "test_independent_review.py",
         "test_installed_workflow.py",
         "test_integration_boundaries.py",
         "test_interface_capability_evidence.py",
@@ -285,7 +286,7 @@
     },
     "test_helpers": {
       "files": 8,
-      "lines": 2660,
+      "lines": 2662,
       "names": [
         "business_replay.py",
         "context_cost.py",
@@ -320,7 +321,7 @@
     },
     "scripts": {
       "files": 16,
-      "lines": 1099,
+      "lines": 1102,
       "names": [
         "datasage_legacy_fabric.py",
         "datasage_legacy_idk.py",
@@ -343,10 +344,11 @@
       "note": "measured from the reviewed commit"
     },
     "docs": {
-      "files": 29,
-      "lines": 2350,
+      "files": 31,
+      "lines": 2552,
       "names": [
         "audit-fixes-20260924.md",
+        "independent-review-20260924.md",
         "legacy-checklist-state-20260923.md",
         "maintenance.md",
         "remediation-b-batch-20260923.md",
@@ -370,6 +372,7 @@
         "remediation-r31-20260923.md",
         "remediation-v4-apply-20260924.md",
         "remediation-v5-apply-20260924.md",
+        "remediation-v6-apply-20260924.md",
         "rule-ownership-20260923.md",
         "source-export.md",
         "structure-convergence.md",
@@ -381,7 +384,7 @@
     },
     "skill_files_datasage": {
       "files": 12,
-      "lines": 1561,
+      "lines": 1578,
       "names": [
         "SKILL.md",
         "answer-boundary.md",
@@ -425,7 +428,7 @@
     },
     "history": {
       "window_commits": 40,
-      "code_files_per_commit_median": 7,
+      "code_files_per_commit_median": 8,
       "code_commits": 40,
       "doc_files_per_commit_median": 4,
       "doc_commits": 40,

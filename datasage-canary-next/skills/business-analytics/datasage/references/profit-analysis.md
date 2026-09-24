@@ -60,10 +60,13 @@ observation, including the possibility of later updates.
   a chosen grain, and what moved them. It is not finalized net profit.
 - **Candidate explanations** (hypotheses): volume moved (compare the matching
   delivery metrics in a compatible period); price or discount moved
-  (`customer_month_discount_amount`); cost moved (`customer_month_purchase_cost`,
-  `customer_month_inventory_cost`, `customer_month_logistics_expense`); returns
-  moved (`customer_month_return_amount`); attribution moved (report grain or
-  current-master enrichment).
+  (`customer_month_discount_amount`); recorded purchase cost or logistics expense
+  moved (`customer_month_purchase_cost`, `customer_month_logistics_expense`);
+  the cancelled-order inventory DDP deduction moved
+  (`customer_month_inventory_cost`); returns moved (`customer_month_return_amount`);
+  attribution moved (report grain or current-master enrichment). The inventory
+  deduction is not general inventory accounting cost and is already included
+  in the source gross profit; do not subtract it again during explanation.
 - **Discriminating evidence**: the same-grain revenue, cost and gross-profit
   metrics for the same month, then the expense components and coverage. The four
   report grains (customer-month, department-month, product-month, order-lifetime)

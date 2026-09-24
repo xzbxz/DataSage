@@ -88,9 +88,12 @@ transaction-ledger result alone does not authorize an allocation answer.
   largest compatible gap for follow-up, and the checks that would settle the
   shortfall. Committing to a target or reallocating resource is the responsible
   owner's decision, never the assistant's.
-- **Stop when**: ledgers, populations, periods or units are incompatible, the
-  target is missing or zero, the period is unfinished, or the split-ledger gate
-  is not activated.
+- **Stop when**: a proposed comparison uses incompatible ledgers, populations,
+  periods or units, or the split-ledger gate is not activated. A missing or zero
+  target blocks an unsupported completion ratio; an unfinished period blocks
+  a closed-period verdict, not all analysis. Preserve valid current actuals,
+  targets, partial-period status and any separately authorized gap. Do not
+  invent a ratio, a target value or an unreturned population to continue.
 
 ## Review prompts
 

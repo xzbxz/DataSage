@@ -67,8 +67,12 @@ and basis as returned evidence rather than creating a new business rule.
 - **Candidate explanations** (hypotheses): purchasing outpaced sales; sales of the
   affected products slowed (compare `delivery_quantity`/`delivery_amount` in a
   compatible period); valuation moved (`month_end_inventory_ddp_rmb` vs
-  `month_end_inventory_cost_rmb` are different measures, not a bridge); the slow
-  pool changed (`idk_unpriced_pool`); coverage is incomplete (missing cost rows).
+  `month_end_inventory_cost_rmb` are different measures, not a bridge); the
+  registered slow-pool composition differs (use its registered-pool metrics);
+  the separate IDK unpriced promotion candidate pool differs
+  (`idk_unpriced_pool`); coverage is incomplete (missing cost rows). The IDK
+  candidate count is not the full registered slow-pool population, product
+  count, price amount, or proof of change without comparable observations.
 - **Discriminating evidence**: current value by warehouse
   (`current_inventory_amount_rmb`) beside the month-end snapshot, ageing
   (`current_warehouse_age_days`, and `oldest_inventory_days` where returned),

@@ -409,3 +409,8 @@ datasage-canary-next/docs/workflow-runtime-acceptance.md
 # Source-only systematic review record; no runtime state included.
 !datasage-canary-next/docs/system-review-v5-20260924.md
 !datasage-canary-next/docs/remediation-v5-apply-20260924.md
+
+# Independent audit: owned regression and review record only.
+!datasage-canary-next/tests/test_independent_review.py
+!datasage-canary-next/docs/independent-review-20260924.md
+!datasage-canary-next/docs/remediation-v6-apply-20260924.md

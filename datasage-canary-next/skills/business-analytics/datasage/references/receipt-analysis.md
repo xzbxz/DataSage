@@ -72,9 +72,14 @@ result.
   and where the gap sits. This is not a liquidity or collection-quality verdict.
 - **Candidate explanations** (hypotheses, not causes): shipments themselves moved
   (`delivery_amount`); returns or refunds moved (`return_amount`, `refund_amount`,
-  `actual_refund_amount`); recording lag or a different attribution
-  (`receipt_amount` vs `actual_receipt_amount`); customer or product mix changed;
-  the paired comparison's asymmetric population did the work.
+  `actual_refund_amount`); the recorded amount and governed conversion basis
+  differ (`receipt_amount` vs `actual_receipt_amount`); customer mix changed;
+  the paired comparison's asymmetric population differs. Both receipt metrics
+  use the same receipt event time and RMB unit, so their difference alone does
+  not discriminate a recording lag or attribution change. Those hypotheses
+  need independent timing or attribution evidence. Product-mix questions need
+  separate compatible delivery evidence; ordinary receipts have no product
+  grouping.
 - **Discriminating evidence**: the paired `delivery_receipt_comparison` for the
   same window, then the same-period `delivery_amount` beside `net_receipt_amount`,
   plus returns/refunds, and the salesperson split (`allocated_net_receipt_amount`)

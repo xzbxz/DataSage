@@ -78,6 +78,13 @@ skills/business-analytics/datasage/references/*
 !skills/business-analytics/datasage/references/entity-guidance.md
 !skills/business-analytics/datasage/references/query-rules.md
 !skills/business-analytics/datasage/references/delivery-analysis.md
+!skills/business-analytics/datasage/references/cross-domain-analysis.md
+!skills/business-analytics/datasage/references/inventory-analysis.md
+!skills/business-analytics/datasage/references/pattern-matching-analysis.md
+!skills/business-analytics/datasage/references/profit-analysis.md
+!skills/business-analytics/datasage/references/receipt-analysis.md
+!skills/business-analytics/datasage/references/receivable-analysis.md
+!skills/business-analytics/datasage/references/target-analysis.md
 
 # Explicit local workflow activation; credentials remain in existing safe config.
 workflow-runtime.json

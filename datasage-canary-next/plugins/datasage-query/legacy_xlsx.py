@@ -68,14 +68,27 @@ def _rendered_cell_value(value, legacy_layout: bool):
 def _display_width(value):
     return max((sum(2 if unicodedata.east_asian_width(c) in ('W','F') else 1 for c in line) for line in str(value or '').splitlines()),default=0)
 
+def _visible_xml_string(value):
+    """Preserve readable text; replace every character forbidden by XML 1.0.
+
+    The prior policy of removing invisible formatting controls remains. Invalid
+    code points use a visible replacement, not deletion or Unicode normalization
+    that could change a business identifier. This is shared by cells and titles.
+    """
+    text = str(value if value is not None else '')
+    visible = []
+    for char in text:
+        if unicodedata.category(char) == 'Cf':
+            continue
+        code = ord(char)
+        valid = (code in (9, 10, 13) or 0x20 <= code <= 0xD7FF
+                 or 0xE000 <= code <= 0xFFFD or 0x10000 <= code <= 0x10FFFF)
+        visible.append(char if valid else '\ufffd')
+    return ''.join(visible)
+
+
 def _xml_text(value):
-    text = ''.join(ch for ch in str(value if value is not None else '')
-                   if unicodedata.category(ch) != 'Cf')
-    # Zero-width joiners and bidi controls (Unicode Cf) carry no visible business
-    # meaning but can reorder or hide what a reader sees in a cell, so the
-    # artifact keeps only what can be read.  C0 controls become a replacement
-    # character rather than an invalid XML byte.
-    return escape(re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]','\ufffd',text))
+    return escape(_visible_xml_string(value))
 
 def _column_name(index: int) -> str:
     result = ""
@@ -86,10 +99,9 @@ def _column_name(index: int) -> str:
     return result
 
 def _safe_workbook_sheet_title(title: str, used: set[str]) -> str:
-    visible = "".join(
-        character for character in str(title or "")
-        if unicodedata.category(character) != "Cf"
-    )
+    visible = _visible_xml_string(title or "")
+    # Attribute whitespace normalization must not silently change sheet names.
+    visible = re.sub(r"[\t\r\n]", " ", visible)
     base = re.sub(r"[\\/*?:\[\]]", "_", visible).strip(" '") or "Sheet"
     candidate = base[:31]
     suffix = 2

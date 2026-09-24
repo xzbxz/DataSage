@@ -16,6 +16,10 @@ import math
 import re
 import time
 import zipfile
+import posixpath
+import stat
+import warnings
+import xml.etree.ElementTree as ET
 
 from . import workflow_io as workflow
 
@@ -49,6 +53,110 @@ def load_apps():
     return [{**extra, 'name': extra.get('name') or 'default'}] if extra.get('corp_id') else []
 
 
+
+class _NoDocumentType(ET.TreeBuilder):
+    def doctype(self, name, pubid, system):
+        raise ValueError('document types are not allowed in workbook parts')
+
+
+def _archive_member_names(entries):
+    """Check portable extraction names without extracting or changing contents."""
+    seen = set()
+    for entry in entries:
+        name = entry.filename
+        parts = name.rstrip('/').split('/')
+        if (not name or name.startswith('/') or '\\' in name
+                or any(part in ('', '.', '..') for part in parts)
+                or any(ord(char) < 32 or char in ':*?"<>|' for char in name)
+                or any(part.endswith((' ', '.')) for part in parts)
+                or stat.S_ISLNK(entry.external_attr >> 16)):
+            raise ValueError('unsafe archive member')
+        canonical = '/'.join(parts).casefold()
+        if canonical in seen:
+            raise ValueError('ambiguous archive member')
+        seen.add(canonical)
+
+
+def _validate_xlsx_xml(xml_parts, member_names):
+    """Validate basic OOXML readability/worksheet targets, not spreadsheet math."""
+    roots = {
+        name: ET.fromstring(data, parser=ET.XMLParser(target=_NoDocumentType()))
+        for name, data in xml_parts.items()
+    }
+    workbook = roots.get('xl/workbook.xml')
+    types = roots.get('[Content_Types].xml')
+    rels = roots.get('xl/_rels/workbook.xml.rels')
+    package_rels = roots.get('_rels/.rels')
+    main_namespaces = (
+        'http://schemas.openxmlformats.org/spreadsheetml/2006/main',
+        'http://purl.oclc.org/ooxml/spreadsheetml/main',
+    )
+    if (workbook is None or types is None or rels is None or package_rels is None
+            or types.tag != '{http://schemas.openxmlformats.org/package/2006/content-types}Types'
+            or not any(workbook.tag == '{'+ns+'}workbook' for ns in main_namespaces)
+            or rels.tag != '{http://schemas.openxmlformats.org/package/2006/relationships}Relationships'
+            or package_rels.tag != rels.tag):
+        raise ValueError('invalid workbook package roots')
+    office_documents = [rel for rel in package_rels
+                        if rel.get('Type', '').rsplit('/', 1)[-1] == 'officeDocument']
+    if (len(office_documents) != 1
+            or office_documents[0].get('TargetMode', 'Internal') != 'Internal'
+            or posixpath.normpath(office_documents[0].get('Target', '').lstrip('/')) != 'xl/workbook.xml'):
+        raise ValueError('package workbook relationship missing')
+    ns = workbook.tag[1:].split('}')[0]
+    relationships = {}
+    for rel in rels:
+        key = rel.get('Id')
+        if not key or key in relationships:
+            raise ValueError('ambiguous workbook relationship')
+        relationships[key] = rel
+        if rel.get('TargetMode', 'Internal') == 'Internal':
+            target = rel.get('Target', '')
+            if not target or '\\' in target or ':' in target:
+                raise ValueError('invalid internal workbook target')
+            path = posixpath.normpath(target.lstrip('/') if target.startswith('/') else 'xl/'+target)
+            if path.startswith('../') or path not in member_names:
+                raise ValueError('internal workbook target missing')
+    sheets = workbook.findall('{'+ns+'}sheets/{'+ns+'}sheet')
+    if not sheets:
+        raise ValueError('workbook has no sheets')
+    for sheet in sheets:
+        ids = [v for k, v in sheet.attrib.items() if k.endswith('}id')]
+        if len(ids) != 1 or ids[0] not in relationships:
+            raise ValueError('worksheet relationship missing')
+        rel = relationships[ids[0]]
+        target = rel.get('Target', '')
+        kind = rel.get('Type', '').rsplit('/', 1)[-1]
+        if (rel.get('TargetMode', 'Internal') != 'Internal'
+                or not target or '\\' in target or ':' in target
+                or kind not in ('worksheet', 'chartsheet')):
+            raise ValueError('invalid worksheet target')
+        path = posixpath.normpath(target.lstrip('/') if target.startswith('/') else 'xl/'+target)
+        if path.startswith('../') or path not in roots:
+            raise ValueError('worksheet target missing')
+        if not any(roots[path].tag == '{'+item+'}'+kind for item in main_namespaces):
+            raise ValueError('invalid worksheet part')
+
+
+def _validate_png_bytes(data):
+    """Use the existing image dependency; verify CRCs and bounded pixel decoding."""
+    try:
+        from PIL import Image
+    except ImportError:
+        raise workflow.IOErrorBoundary('ATTACHMENT_IMAGE_DEPENDENCY_UNAVAILABLE') from None
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(data)) as image:
+                if image.format != 'PNG':
+                    raise ValueError('not png')
+                image.verify()
+            with Image.open(io.BytesIO(data)) as image:
+                image.load()
+    except Exception:
+        raise workflow.IOErrorBoundary('ATTACHMENT_PNG_INVALID') from None
+
+
 def file_snapshot(path, profile):
     path = Path(path)
     root = profile / 'report_runs' / 'legacy_execution'
@@ -79,15 +187,21 @@ def file_snapshot(path, profile):
                     raise ValueError('archive bounds')
                 if suffix == '.xlsx' and not {'[Content_Types].xml', 'xl/workbook.xml'} <= set(names):
                     raise ValueError('not xlsx')
+                _archive_member_names(entries)
+                xml_parts = {}
                 for entry in sorted(entries, key=lambda e: e.filename):
                     # Ignore ZIP timestamps/compression, which change on regeneration.
+                    member = archive.read(entry)
                     digest.update(entry.filename.encode('utf-8') + b'\0')
-                    digest.update(hashlib.sha256(archive.read(entry)).digest())
+                    digest.update(hashlib.sha256(member).digest())
+                    if suffix == '.xlsx' and entry.filename.endswith(('.xml', '.rels')):
+                        xml_parts[entry.filename] = member
+                if suffix == '.xlsx':
+                    _validate_xlsx_xml(xml_parts, set(names))
         except Exception:
             raise workflow.IOErrorBoundary('ATTACHMENT_ARCHIVE_INVALID') from None
     else:
-        if not data.startswith(b'\x89PNG\r\n\x1a\n'):
-            raise workflow.IOErrorBoundary('ATTACHMENT_PNG_INVALID')
+        _validate_png_bytes(data)
         digest.update(data)
     return name, data, types[suffix], digest.hexdigest()
 
