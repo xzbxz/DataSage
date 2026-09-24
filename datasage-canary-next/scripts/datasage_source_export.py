@@ -71,6 +71,7 @@ _ROOT_FILES = (
     "profile.yaml",
     "docs/maintenance.md",
     "docs/audit-fixes-20260924.md",
+    "docs/remediation-v4-apply-20260924.md",
     "tests/reference_authority.py",
     "tests/test_revision_regressions.py",
     "docs/legacy-checklist-state-20260923.md",
