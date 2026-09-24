@@ -4,7 +4,7 @@
   "surface": {
     "plugin_modules": {
       "files": 80,
-      "lines": 38787,
+      "lines": 38797,
       "names": [
         "__init__.py",
         "acceptance_delivery.py",
@@ -129,8 +129,8 @@
       "note": "measured from the reviewed commit"
     },
     "tests": {
-      "files": 146,
-      "lines": 42279,
+      "files": 147,
+      "lines": 42425,
       "names": [
         "test_acceptance_delivery.py",
         "test_analysis_evidence.py",
@@ -251,6 +251,7 @@
         "test_request_contract_equivalence.py",
         "test_request_validation_boundary.py",
         "test_result_identity_currency.py",
+        "test_revision_regressions.py",
         "test_role_configuration.py",
         "test_sales_price_recovery.py",
         "test_sales_price_runner.py",
@@ -283,14 +284,15 @@
       "note": "measured from the reviewed commit"
     },
     "test_helpers": {
-      "files": 7,
-      "lines": 2573,
+      "files": 8,
+      "lines": 2638,
       "names": [
         "business_replay.py",
         "context_cost.py",
         "maintenance_cost.py",
         "metric_readiness.py",
         "plugin_registration_probe.py",
+        "reference_authority.py",
         "release_matrix.py",
         "role_config_fixture.py"
       ],
@@ -318,7 +320,7 @@
     },
     "scripts": {
       "files": 16,
-      "lines": 1093,
+      "lines": 1096,
       "names": [
         "datasage_legacy_fabric.py",
         "datasage_legacy_idk.py",
@@ -341,9 +343,10 @@
       "note": "measured from the reviewed commit"
     },
     "docs": {
-      "files": 25,
-      "lines": 2111,
+      "files": 26,
+      "lines": 2164,
       "names": [
+        "audit-fixes-20260924.md",
         "legacy-checklist-state-20260923.md",
         "maintenance.md",
         "remediation-b-batch-20260923.md",

@@ -9,6 +9,8 @@ from unittest import mock
 
 import yaml
 
+from reference_authority import rule_link_errors
+
 from plugin_registration_probe import probe_registration
 from agent import skill_utils as hermes_skill_utils
 from tools import skills_sync as hermes_skills_sync
@@ -307,112 +309,19 @@ class ExpertAuthorityInventoryTests(unittest.TestCase):
         self.assertIn("新增、删除或重命名", architecture)
 
 
-    # -- R12: rule material must stay order-insensitive and non-executable ----
-
-    # Peer references may legitimately point at each other.  Each such cycle has
-    # to be an explicitly reviewed pair: an unreviewed cycle means reading order
-    # could decide which document the model treats as the authority.
-    REVIEWED_REFERENCE_CYCLES = {
-        frozenset(
-            {"datasage.answer-boundary/v1", "datasage.delivery-analysis/v1"}
-        ),
-    }
-    SQL_STATEMENT_START = re.compile(
-        r"^\s*(?:SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|WITH)\b"
-    )
+    # -- R12: verify identities, not document typography or graph shape -------
 
     def _rule_documents(self) -> list[Path]:
         return [SKILL_ROOT / "SKILL.md"] + sorted(
             (SKILL_ROOT / "references").glob("*.md")
         )
 
-    @staticmethod
-    def _rule_graph() -> tuple[dict[str, set[str]], dict[str, str]]:
-        owner_by_file: dict[str, str] = {}
-        documents: list[tuple[Path, str]] = []
-        for path in [SKILL_ROOT / "SKILL.md"] + sorted(
-            (SKILL_ROOT / "references").glob("*.md")
-        ):
-            text = path.read_text(encoding="utf-8")
-            documents.append((path, text))
-            defined = re.findall(r"^Rule ID: `([^`]+)`$", text, re.MULTILINE)
-            if defined:
-                owner_by_file[path.name] = defined[0]
-        link_pattern = re.compile(r"\[`(datasage\.[^`]+/v\d+)`\]\(([^)#]+\.md)\)")
-        edges: dict[str, set[str]] = {}
-        for path, text in documents:
-            source = owner_by_file.get(path.name)
-            if source is None:
-                continue
-            for rule_id, link in link_pattern.findall(text):
-                self_target = owner_by_file.get((path.parent / link).resolve().name)
-                if self_target and self_target != source:
-                    edges.setdefault(source, set()).add(self_target)
-        return edges, owner_by_file
-
-    def test_rule_graph_cycles_are_reviewed_so_reading_order_is_order_insensitive(
-        self,
-    ) -> None:
-        edges, owners = self._rule_graph()
-        self.assertTrue(edges, "the rule link graph must not be empty")
-        nodes = set(owners.values())
-        reverse: dict[str, set[str]] = {}
-        for source, children in edges.items():
-            for child in children:
-                reverse.setdefault(child, set()).add(source)
-
-        seen: set[str] = set()
-        order: list[str] = []
-        for start in sorted(nodes):
-            if start in seen:
-                continue
-            stack = [(start, False)]
-            while stack:
-                node, expanded = stack.pop()
-                if expanded:
-                    order.append(node)
-                    continue
-                if node in seen:
-                    continue
-                seen.add(node)
-                stack.append((node, True))
-                for child in sorted(edges.get(node, ())):
-                    if child not in seen:
-                        stack.append((child, False))
-
-        assigned: set[str] = set()
-        unreviewed: list[set[str]] = []
-        for start in reversed(order):
-            if start in assigned:
-                continue
-            component: set[str] = set()
-            stack = [start]
-            while stack:
-                node = stack.pop()
-                if node in assigned:
-                    continue
-                assigned.add(node)
-                component.add(node)
-                stack.extend(sorted(reverse.get(node, ())))
-            if len(component) > 1 and component not in self.REVIEWED_REFERENCE_CYCLES:
-                unreviewed.append(component)
-        self.assertEqual(
-            [],
-            [sorted(component) for component in unreviewed],
-            "unreviewed rule-reference cycle: reading order could change the owner",
-        )
-
-    def test_reference_material_carries_no_executable_or_fenced_content(self) -> None:
-        for path in self._rule_documents():
-            text = path.read_text(encoding="utf-8")
-            with self.subTest(document=path.name):
-                self.assertNotIn("```", text)
-                offenders = [
-                    line.strip()
-                    for line in text.splitlines()
-                    if self.SQL_STATEMENT_START.match(line)
-                ]
-                self.assertEqual([], offenders)
+    def test_rule_links_resolve_to_the_declared_authority(self) -> None:
+        documents = {
+            path: path.read_text(encoding="utf-8")
+            for path in self._rule_documents()
+        }
+        self.assertEqual([], rule_link_errors(documents))
 
     def test_cross_domain_reference_states_its_compatibility_prerequisites(self) -> None:
         text = (

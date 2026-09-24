@@ -59,10 +59,9 @@ UNKNOWN_MARKERS = (
     "na",
     "null",
 )
-# F04: a value the answer only denies, quotes, hypothesises or declares unknown
-# is not an assertion of that fact.  The marker is looked for in the connector
-# between the fact label and its first number only, so an unrelated marker later
-# in the same clause cannot downgrade a real assertion into a non-assertion.
+# These deterministic checks recognise bounded assertion forms, not arbitrary
+# natural language. Unresolved scope is sent to the existing review path;
+# matching a number is never a substitute for independent business review.
 NON_ASSERTION_MARKERS = (
     "并不是",
     "不是",
@@ -93,8 +92,22 @@ NON_ASSERTION_MARKERS = (
     "不可得",
     "不确定",
 )
+UNVERIFIED_SCOPE_RE = re.compile(
+    r"假设|假如|如果|示例|举例|比如|例如|仅供参考|原问题|原文|引用|"
+    r"可能|或许|大概|预计|估计|暂定|约为|"
+    r"尚未(?:核实|确认|验证)|未经(?:核实|确认|验证)|待(?:核实|确认|验证)|"
+    r"不正确|不属实|不成立|有误|(?:说法|结论|数据)(?:是)?错误|"
+    r"\b(?:hypothetical|suppose|assuming|unverified|unconfirmed|quoted)\b",
+    re.IGNORECASE,
+)
+TRAILING_QUALIFIER_RE = re.compile(
+    r"^\s*(?:但|不过|然而)?\s*(?:尚未|未经|待核|待确|无法|不正确|不属实|"
+    r"不成立|有误|这个说法|该说法|以上说法|仅供|仅为)"
+)
+QUOTED_NUMERIC_RE = re.compile(r'“[^”]*[0-9][^”]*”|「[^」]*[0-9][^」]*」|"[^"\n]*[0-9][^"\n]*"')
+
 NUMBER_RE = re.compile(
-    r"(?<![0-9.])[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:[eE][-+]?\d+)?(?![0-9])"
+    r"(?<![0-9.a-z])[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:[eE][-+]?\d+)?(?![0-9])"
 )
 HEX_SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -571,7 +584,7 @@ def _label_atoms(
             # swallowing numbers from another metric.
             value_cell = cells[index + 1] if index + 1 < len(cells) else ""
             atom = f"{cell} {value_cell}"
-            atoms.append({"text": atom, "periods": _period_tokens(atom)})
+            atoms.append({"text": atom, "scope": atom, "periods": _period_tokens(atom)})
         return atoms
 
     delimiters_after = "，,；;。！？!?|\n"
@@ -633,6 +646,21 @@ def _label_atoms(
                     # NFKC/case folding can change string length. Keep offsets
                     # and slices in the same buffer so leading digits survive.
                     "text": folded[position:after],
+                    # Retain the surrounding proposition for assertion scope;
+                    # numbers still come only from the label-attached clause.
+                    "scope": scope,
+                    "question": sentence_after < len(folded) and folded[sentence_after] in "？?",
+                    "conditional_prefix": (
+                        folded[sentence_before + 1:position]
+                        if UNVERIFIED_SCOPE_RE.search(folded[sentence_before + 1:position])
+                        else ""
+                    ),
+                    "qualifier": (
+                        folded[after + 1:sentence_after]
+                        if after < sentence_after and TRAILING_QUALIFIER_RE.match(
+                            folded[after + 1:sentence_after]
+                        ) else ""
+                    ),
                     "periods": _period_tokens(period_scope),
                 }
             )
@@ -648,11 +676,53 @@ def _assertion_connector(text: str) -> str:
     return folded if match is None else folded[: match.start()]
 
 
-def _asserts_its_value(text: str) -> bool:
-    """True when a clause states the value instead of denying or quoting it."""
+def _asserts_its_value(text: str, scope: str = "") -> bool:
+    """Recognise a bounded positive assertion; never claim full NLP coverage."""
 
+    folded = _fold(scope or text)
     connector = _assertion_connector(text)
-    return not any(marker in connector for marker in NON_ASSERTION_MARKERS)
+    if re.search(r"至少|至多|超过|大于|小于|不低于|不高于|[<>≥≤≠]", connector):
+        return False
+    if any(marker in connector for marker in NON_ASSERTION_MARKERS):
+        return False
+    if "?" in folded or UNVERIFIED_SCOPE_RE.search(folded) or QUOTED_NUMERIC_RE.search(folded):
+        return False
+    return True
+
+
+def _fact_bindings(text: str, fact: dict[str, Any], table: bool | None):
+    """Keep the heading of a contiguous Markdown table as assertion context.
+
+    A preceding hypothetical/quoted heading is not a verified table result.
+    This is contextual evidence only; it never supplies numeric cell values.
+    """
+    previous_nonempty = ""
+    table_context = ""
+    in_table = False
+    for line in text.splitlines() or [text]:
+        is_table = _is_table_line(line)
+        if is_table and not in_table:
+            table_context = previous_nonempty
+        if not is_table and line.strip():
+            previous_nonempty = line
+        in_table = is_table or (in_table and not line.strip())
+        if table is not None and is_table is not table:
+            continue
+        for binding in _label_atoms(line, fact, table=is_table):
+            scope = binding.get("scope", binding["text"])
+            if binding.get("conditional_prefix"):
+                scope = binding["conditional_prefix"] + " " + scope
+            if binding.get("qualifier"):
+                scope += " " + binding["qualifier"]
+            if binding.get("question"):
+                scope += "?"
+            if is_table and (
+                UNVERIFIED_SCOPE_RE.search(_fold(table_context))
+                or any(marker in _fold(table_context) for marker in UNKNOWN_MARKERS)
+            ):
+                scope = table_context + " " + scope
+            binding["scope"] = scope
+            yield binding
 
 
 def _fact_occurrence(
@@ -660,22 +730,25 @@ def _fact_occurrence(
 ) -> dict[str, Any]:
     lines = _lines_for_fact(text, fact, table=table)
     atoms: list[dict[str, Any]] = []
-    for line in lines:
-        for atom_binding in _label_atoms(line, fact, table=_is_table_line(line)):
-            atom = atom_binding["text"]
-            numbers = _parse_numbers(atom)
-            expected_unit, other_unit = _line_unit_ok(atom, fact["unit"])
-            atoms.append(
-                {
-                    "text": atom,
-                    "periods": set(atom_binding["periods"]),
-                    "numbers": numbers,
-                    "unit_ok": expected_unit,
-                    "wrong_unit": other_unit,
-                    "unknown": any(marker in _fold(atom) for marker in UNKNOWN_MARKERS),
-                    "asserted": _asserts_its_value(atom),
-                }
-            )
+    for atom_binding in _fact_bindings(text, fact, table):
+        atom = atom_binding["text"]
+        scope = atom_binding["scope"]
+        numbers = _parse_numbers(atom)
+        expected_unit, other_unit = _line_unit_ok(atom, fact["unit"])
+        atoms.append(
+            {
+                "text": atom,
+                "periods": set(atom_binding["periods"]),
+                "numbers": numbers,
+                "unit_ok": expected_unit,
+                "wrong_unit": other_unit,
+                "unknown": any(marker in _fold(atom) for marker in UNKNOWN_MARKERS),
+                "asserted": _asserts_its_value(atom, scope),
+                "uncertain": "?" in _fold(scope) or bool(UNVERIFIED_SCOPE_RE.search(_fold(scope)))
+                    or bool(QUOTED_NUMERIC_RE.search(_fold(scope)))
+                    or any(marker in _fold(scope) for marker in UNKNOWN_MARKERS),
+            }
+        )
     # A heading such as ``2026年9月目标完成情况`` contains date digits but no
     # unit and is not an answer value.  If a fact has a unit-bearing value (or
     # an explicitly wrong unit) elsewhere, discard such context atoms while
@@ -695,6 +768,8 @@ def _fact_occurrence(
         ]
     numbers = [number for atom in atoms for number in atom["numbers"]]
     numeric_atoms = [atom for atom in atoms if atom["numbers"]]
+    asserted_atoms = [atom for atom in numeric_atoms if atom["asserted"]]
+    checked_atoms = asserted_atoms or numeric_atoms
     asserted_numbers = [
         number for atom in atoms if atom["asserted"] for number in atom["numbers"]
     ]
@@ -705,9 +780,10 @@ def _fact_occurrence(
         "numeric_atoms": numeric_atoms,
         "unasserted": bool(numbers) and not asserted_numbers,
         "asserted_numbers": asserted_numbers,
-        "ambiguous": any(len(atom["numbers"]) != 1 for atom in numeric_atoms),
-        "unit_missing": any(not atom["unit_ok"] for atom in numeric_atoms),
-        "wrong_unit": any(atom["wrong_unit"] for atom in numeric_atoms),
+        "needs_review": any(atom["uncertain"] for atom in atoms),
+        "ambiguous": any(len(atom["numbers"]) != 1 for atom in checked_atoms),
+        "unit_missing": any(not atom["unit_ok"] for atom in checked_atoms),
+        "wrong_unit": any(atom["wrong_unit"] for atom in checked_atoms),
         "unknown": any(atom["unknown"] for atom in atoms),
     }
 
@@ -791,7 +867,7 @@ def score_answer_case(
         tolerance = fact_tolerance(fact)
         if not occurrence["lines"]:
             number_errors.append(f"fact {fact_id!r} label is missing")
-        elif occurrence["unasserted"]:
+        elif occurrence["unasserted"] or occurrence["needs_review"]:
             # F04: ``目标并不是100万元`` / ``目标未知（参考100万元）`` must not
             # pass the numeric dimension.  Denial, quotation and an explicitly
             # unknown statement are ambiguous for a scorer, so they go to the
@@ -799,9 +875,9 @@ def score_answer_case(
             number_unverified.append(
                 f"fact {fact_id!r} value is only denied, quoted or declared unknown"
             )
-        elif not occurrence["numbers"]:
+        elif not occurrence["asserted_numbers"]:
             number_errors.append(f"fact {fact_id!r} numeric value is missing")
-        elif not all(_near(value, expected, tolerance) for value in occurrence["numbers"]):
+        elif not all(_near(value, expected, tolerance) for value in occurrence["asserted_numbers"]):
             number_errors.append(
                 f"fact {fact_id!r} has a value outside tolerance of {format(expected, 'f')}"
             )
@@ -835,8 +911,13 @@ def score_answer_case(
                 f"arithmetic {entry['id']!r} does not agree with its Ground Truth facts"
             )
         observed_occurrence = occurrences[entry["expected_fact"]]
-        observed = observed_occurrence["numbers"]
-        if observed_occurrence["ambiguous"]:
+        observed = observed_occurrence["asserted_numbers"]
+        if any(
+            occurrences[fact["id"]]["ambiguous"]
+            or occurrences[fact["id"]]["unasserted"]
+            or occurrences[fact["id"]]["needs_review"]
+            for fact in (left_fact, right_fact, expected_fact)
+        ):
             arithmetic_unverified.append(
                 f"arithmetic {entry['id']!r} has an ambiguous answer value"
             )
@@ -851,21 +932,24 @@ def score_answer_case(
         fact = facts[entry["fact_id"]]
         table_occurrence = _fact_occurrence(answer_text, fact, table=True)
         text_occurrence = _fact_occurrence(answer_text, fact, table=False)
-        if table_occurrence["ambiguous"] or text_occurrence["ambiguous"]:
+        if any(
+            occurrence["ambiguous"] or occurrence["unasserted"] or occurrence["needs_review"]
+            for occurrence in (table_occurrence, text_occurrence)
+        ):
             table_unverified.append(
                 f"fact {entry['fact_id']!r} has an ambiguous table or prose value"
             )
             continue
-        if entry["require_table"] and not table_occurrence["numbers"]:
+        if entry["require_table"] and not table_occurrence["asserted_numbers"]:
             table_errors.append(f"fact {entry['fact_id']!r} is missing from the table")
-        if entry["require_text"] and not text_occurrence["numbers"]:
+        if entry["require_text"] and not text_occurrence["asserted_numbers"]:
             table_errors.append(f"fact {entry['fact_id']!r} is missing from prose")
-        if table_occurrence["numbers"] and text_occurrence["numbers"]:
+        if table_occurrence["asserted_numbers"] and text_occurrence["asserted_numbers"]:
             tolerance = fact_tolerance(fact)
             if not all(
                 _near(table_value, text_value, tolerance)
-                for table_value in table_occurrence["numbers"]
-                for text_value in text_occurrence["numbers"]
+                for table_value in table_occurrence["asserted_numbers"]
+                for text_value in text_occurrence["asserted_numbers"]
             ):
                 table_errors.append(
                     f"fact {entry['fact_id']!r} differs between table and prose"

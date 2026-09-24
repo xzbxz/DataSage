@@ -418,16 +418,16 @@ print(json.dumps({'config_path': str(get_config_path()), 'command': spec.command
     def test_vendored_pymysql_matches_the_recorded_provenance(self):
         vendor_root = ROOT / "plugins/datasage-query/vendor"
         files = sorted(
-            path
-            for path in vendor_root.rglob("*")
-            if path.is_file() and "__pycache__" not in path.parts
+            (path for path in vendor_root.rglob("*")
+             if path.is_file() and "__pycache__" not in path.parts),
+            key=lambda path: path.relative_to(vendor_root).as_posix(),
         )
         digest = hashlib.sha256(
             "\n".join(
                 f"{path.relative_to(vendor_root).as_posix()}\0"
                 f"{hashlib.sha256(path.read_bytes()).hexdigest()}"
                 for path in files
-            ).encode()
+            ).encode("utf-8")
         ).hexdigest()
         recorded = (ROOT / "docs/vendor-provenance-20260923.md").read_text(
             encoding="utf-8"

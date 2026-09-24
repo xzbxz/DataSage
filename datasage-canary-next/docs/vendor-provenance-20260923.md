@@ -17,10 +17,10 @@
 ## 2. 完整性指纹
 
 - 文件数：25（`vendor/` 下全部文件，排除 `__pycache__`）
-- 算法：对每个文件取 `relative_path + "\0" + sha256(file_bytes)`，按相对路径排序后用 `\n` 连接，
-  再取 sha256。
-- 聚合 sha256：`d46d7da87c801799854de0aaea178718088910b03f23f790f304466221b376e7`
-- 校验：`tests/test_integration_boundaries.py::test_vendored_pymysql_matches_the_recorded_provenance`
+- 算法：对每个文件取 `relative_path + "\0" + sha256(file_bytes)`，将相对路径统一为 POSIX `/` 字符串，以 Unicode 码点顺序排序后用 `\n` 连接，
+  以 UTF-8 编码后再取 sha256。文件内容仍按原始字节计算，不规范化换行。
+- 聚合 sha256：`3bc99825cdfb8c106f87f76d365e6d3b5a80ff26a55c2c3861a168e5bbdab22e`
+- 校验：`tests/test_source_export.py::SourceExportTests.test_vendored_pymysql_matches_the_recorded_provenance`
   会重新计算该指纹并与本文比对；不一致即失败。
 
 ## 3. 更新责任与流程
@@ -37,3 +37,7 @@
 - 本轮只记录来源、许可、指纹与责任；未做全量漏洞扫描，也不把「指纹一致」解释为「依赖安全」。
 - 宿主侧依赖（Hermes 0.21.1 及其 Python 环境）不在此记录范围：宿主按官方基底 `2237be3` 使用，
   不由 Profile 复制或替换。
+
+## 2026-09-24 校正
+
+指纹排序由平台相关的 Path 排序改为明确的相对 POSIX 字符串排序；vendor 的25个文件字节未更改。新指纹只校验本次输入依赖字节的稳定性，不代表独立重新验证了 PyPI 下载来源。

@@ -48,11 +48,13 @@ class _FrozenDict(dict):
 
     A plain ``MappingProxyType`` would break ``isinstance(value, dict)`` and
     JSON serialisation for existing consumers, so the view stays a ``dict``
-    subclass and only the mutating methods are refused.
+    subclass and the normal mutating methods are refused. This is an API
+    ownership guard, not a sandbox against explicit base-class bypasses.
     """
 
     __slots__ = ()
 
+    __init__ = _readonly
     __setitem__ = _readonly
     __delitem__ = _readonly
     clear = _readonly
@@ -60,6 +62,7 @@ class _FrozenDict(dict):
     popitem = _readonly
     setdefault = _readonly
     update = _readonly
+    __ior__ = _readonly
 
     def __copy__(self) -> dict:
         """Explicit mutation boundary: a plain mutable shallow copy."""
@@ -77,6 +80,7 @@ class _FrozenList(list):
 
     __slots__ = ()
 
+    __init__ = _readonly
     __setitem__ = _readonly
     __delitem__ = _readonly
     __iadd__ = _readonly
@@ -472,16 +476,22 @@ class _ContractLoader(yaml.SafeLoader):
     Parsing remains safe-loading; this only adds a same-level key check.
     """
 
-    def construct_mapping(self, node: Any, deep: bool = False) -> Any:
-        if isinstance(node, yaml.MappingNode):
+    def __init__(self, stream: Any) -> None:
+        super().__init__(stream)
+        # Merge flattening mutates shared YAML nodes. Check explicit keys once,
+        # BEFORE that mutation, including nodes reached through a merge alias.
+        self._checked_explicit_nodes: set[Any] = set()
+
+    def flatten_mapping(self, node: Any) -> None:
+        if node not in self._checked_explicit_nodes:
             seen: set[Any] = set()
             for key_node, _value_node in node.value:
                 if key_node.tag == "tag:yaml.org,2002:merge":
                     continue
-                key = self.construct_object(key_node, deep=deep)
+                key = self.construct_object(key_node, deep=False)
                 try:
                     repeated = key in seen
-                except TypeError:  # unhashable key: leave it to SafeLoader
+                except TypeError:  # SafeLoader reports unsupported complex keys.
                     continue
                 if repeated:
                     mark = key_node.start_mark
@@ -490,8 +500,8 @@ class _ContractLoader(yaml.SafeLoader):
                         f"{mark.line + 1} column {mark.column + 1}"
                     )
                 seen.add(key)
-            self.flatten_mapping(node)
-        return super().construct_mapping(node, deep=deep)
+            self._checked_explicit_nodes.add(node)
+        super().flatten_mapping(node)
 
 
 @lru_cache(maxsize=64)
