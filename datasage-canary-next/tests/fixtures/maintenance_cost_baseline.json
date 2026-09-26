@@ -4,7 +4,7 @@
   "surface": {
     "plugin_modules": {
       "files": 80,
-      "lines": 39028,
+      "lines": 39193,
       "names": [
         "__init__.py",
         "acceptance_delivery.py",
@@ -129,8 +129,8 @@
       "note": "measured from the reviewed commit"
     },
     "tests": {
-      "files": 148,
-      "lines": 43047,
+      "files": 151,
+      "lines": 44093,
       "names": [
         "test_acceptance_delivery.py",
         "test_analysis_evidence.py",
@@ -217,6 +217,7 @@
         "test_remediation_analytical_queries.py",
         "test_remediation_business_acceptance.py",
         "test_remediation_business_pilot.py",
+        "test_remediation_catalog_consistency.py",
         "test_remediation_catalog_fact_boundary.py",
         "test_remediation_contracts.py",
         "test_remediation_conversation_receipts.py",
@@ -240,7 +241,9 @@
         "test_remediation_runtime_immutability.py",
         "test_remediation_scope_composability.py",
         "test_remediation_security_runtime.py",
+        "test_remediation_settlement_counts.py",
         "test_remediation_statement_limits.py",
+        "test_remediation_target_formula.py",
         "test_remediation_target_missing_value.py",
         "test_remediation_timeout_wire.py",
         "test_remediation_tools_core.py",
@@ -321,7 +324,7 @@
     },
     "scripts": {
       "files": 16,
-      "lines": 1102,
+      "lines": 1105,
       "names": [
         "datasage_legacy_fabric.py",
         "datasage_legacy_idk.py",
@@ -428,7 +431,7 @@
     },
     "history": {
       "window_commits": 40,
-      "code_files_per_commit_median": 8,
+      "code_files_per_commit_median": 7,
       "code_commits": 40,
       "doc_files_per_commit_median": 4,
       "doc_commits": 40,
@@ -468,26 +471,5 @@
     ],
     "verification": "tests/test_maintenance_cost_baseline.py"
   },
-  "declared_unreviewed_extras": [
-    {
-      "path": "docs/manual-acceptance-checklist-20260917.md",
-      "decision_required": "track it in the reviewed source or remove it",
-      "decision": null
-    },
-    {
-      "path": "docs/price-continuity-acceptance-20260917.md",
-      "decision_required": "track it in the reviewed source or remove it",
-      "decision": null
-    },
-    {
-      "path": "docs/workflow-live-acceptance.md",
-      "decision_required": "track it in the reviewed source or remove it",
-      "decision": null
-    },
-    {
-      "path": "docs/workflow-runtime-acceptance.md",
-      "decision_required": "track it in the reviewed source or remove it",
-      "decision": null
-    }
-  ]
+  "declared_unreviewed_extras": []
 }
