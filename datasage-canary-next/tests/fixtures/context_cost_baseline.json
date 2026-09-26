@@ -5,19 +5,19 @@
     "skill_context": {
       "files": {
         "references/answer-boundary.md": {
-          "characters": 19935,
-          "bytes": 19947,
-          "lines": 335
+          "characters": 20466,
+          "bytes": 20478,
+          "lines": 342
         },
         "references/cross-domain-analysis.md": {
-          "characters": 5486,
-          "bytes": 5490,
-          "lines": 100
+          "characters": 6173,
+          "bytes": 6177,
+          "lines": 110
         },
         "references/delivery-analysis.md": {
-          "characters": 8699,
-          "bytes": 8731,
-          "lines": 159
+          "characters": 9273,
+          "bytes": 9305,
+          "lines": 166
         },
         "references/entity-guidance.md": {
           "characters": 2916,
@@ -25,49 +25,49 @@
           "lines": 49
         },
         "references/inventory-analysis.md": {
-          "characters": 5793,
-          "bytes": 5793,
-          "lines": 108
-        },
-        "references/pattern-matching-analysis.md": {
-          "characters": 6143,
-          "bytes": 6143,
+          "characters": 6136,
+          "bytes": 6136,
           "lines": 114
         },
+        "references/pattern-matching-analysis.md": {
+          "characters": 6509,
+          "bytes": 6509,
+          "lines": 120
+        },
         "references/profit-analysis.md": {
-          "characters": 5571,
-          "bytes": 5571,
-          "lines": 101
+          "characters": 5928,
+          "bytes": 5928,
+          "lines": 107
         },
         "references/query-rules.md": {
-          "characters": 11521,
-          "bytes": 11529,
-          "lines": 204
+          "characters": 12594,
+          "bytes": 12602,
+          "lines": 220
         },
         "references/receipt-analysis.md": {
-          "characters": 6156,
-          "bytes": 6156,
-          "lines": 113
+          "characters": 6563,
+          "bytes": 6563,
+          "lines": 120
         },
         "references/receivable-analysis.md": {
-          "characters": 5512,
-          "bytes": 5512,
-          "lines": 104
+          "characters": 5909,
+          "bytes": 5909,
+          "lines": 110
         },
         "references/target-analysis.md": {
-          "characters": 5784,
-          "bytes": 5784,
-          "lines": 111
+          "characters": 6124,
+          "bytes": 6124,
+          "lines": 117
         },
         "SKILL.md": {
-          "characters": 5986,
-          "bytes": 5988,
-          "lines": 115
+          "characters": 7284,
+          "bytes": 7286,
+          "lines": 136
         }
       },
       "file_count": 12,
-      "total_bytes": 89560,
-      "total_characters": 89502
+      "total_bytes": 95933,
+      "total_characters": 95875
     },
     "tool_surface": {
       "provided_tool_names": [
@@ -82,14 +82,14 @@
     },
     "payloads": {
       "catalog_expert_index_delivery": {
-        "raw_bytes": 52357,
-        "wire_bytes": 18170,
+        "raw_bytes": 59030,
+        "wire_bytes": 23563,
         "method": "measured",
         "measured_from": "wire.enforce_tool_result_budget over contracts.datasage_catalog({'requests': [{'domain': 'delivery', 'view': 'expert_index'}]})"
       },
       "catalog_full_delivery": {
-        "raw_bytes": 51710,
-        "wire_bytes": 51764,
+        "raw_bytes": 58353,
+        "wire_bytes": 58407,
         "method": "measured",
         "measured_from": "wire.enforce_tool_result_budget over contracts.datasage_catalog({'requests': [{'domain': 'delivery', 'view': 'full'}]})"
       },

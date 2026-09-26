@@ -3,8 +3,8 @@
   "policy": "Measured counts only, written by tests/maintenance_cost.py. An orphan candidate is a file with no inbound mention and no owner: that is evidence of low visibility, never a verdict that the file is useless, and no evidence may be invented to justify a removal. Nothing in the retention list may be deleted to reduce maintenance量 - 回执、审计与保留产物不因维护量被删除；未用不等于无用。Every disposition needs an owner before anything moves.",
   "surface": {
     "plugin_modules": {
-      "files": 80,
-      "lines": 39198,
+      "files": 81,
+      "lines": 39594,
       "names": [
         "__init__.py",
         "acceptance_delivery.py",
@@ -13,6 +13,7 @@
         "capability_contract.py",
         "contract_store.py",
         "contracts.py",
+        "currency_basis.py",
         "customer_history.py",
         "db_executor.py",
         "db_runtime.py",
@@ -92,7 +93,7 @@
     },
     "contract_yaml": {
       "files": 12,
-      "lines": 8880,
+      "lines": 10002,
       "names": [
         "datasets.yaml",
         "delivery-semantics.yaml",
@@ -129,8 +130,8 @@
       "note": "measured from the reviewed commit"
     },
     "tests": {
-      "files": 152,
-      "lines": 44316,
+      "files": 156,
+      "lines": 45753,
       "names": [
         "test_acceptance_delivery.py",
         "test_analysis_evidence.py",
@@ -144,6 +145,10 @@
         "test_catalog_business_definitions.py",
         "test_compact_payloads.py",
         "test_context_cost_baseline.py",
+        "test_currency_basis_policy.py",
+        "test_currency_metric_pairs.py",
+        "test_currency_output_consistency.py",
+        "test_currency_paired_amounts.py",
         "test_customer_audit.py",
         "test_customer_history.py",
         "test_customer_lifecycle.py",
@@ -306,7 +311,7 @@
     },
     "fixtures": {
       "files": 11,
-      "lines": 6098,
+      "lines": 6420,
       "names": [
         "business_acceptance_cases.json",
         "business_replay_contract.json",
@@ -325,7 +330,7 @@
     },
     "scripts": {
       "files": 16,
-      "lines": 1107,
+      "lines": 1112,
       "names": [
         "datasage_legacy_fabric.py",
         "datasage_legacy_idk.py",
@@ -389,7 +394,7 @@
     },
     "skill_files_datasage": {
       "files": 12,
-      "lines": 1601,
+      "lines": 1699,
       "names": [
         "SKILL.md",
         "answer-boundary.md",
@@ -433,7 +438,7 @@
     },
     "history": {
       "window_commits": 40,
-      "code_files_per_commit_median": 8,
+      "code_files_per_commit_median": 7,
       "code_commits": 40,
       "doc_files_per_commit_median": 4,
       "doc_commits": 40,
