@@ -10,6 +10,8 @@ from hashlib import sha256
 import importlib
 import json
 import unittest
+from unittest.mock import patch
+from unittest.mock import patch
 
 import test_remediation_remaining_cases as public
 
@@ -394,6 +396,27 @@ class CurrencyBasisPolicyTests(unittest.TestCase):
         self.assertEqual("QUERY_FAILED", result["error"]["code"])
         self.assertEqual(self._fixed_metric_ref("receipt", "actual_receipt_amount_original"), result["business_metric_ref"])
         self.assertEqual(1, len(self.h.sql_trace))
+
+    def test_entity_filtered_scope_does_not_use_whole_table_currencies(self):
+        self._receipts([(10, 7, "USD"), (20, 8, "EUR")])
+        self._ensure_column("vk_dwd", "receive_bill_detail_dwd", "customer_id")
+        self.h.conn.execute("UPDATE vk_dwd.receive_bill_detail_dwd SET customer_id = CASE WHEN currency_no = 'USD' THEN 'A' ELSE 'B' END")
+        self.h.insert("vk_dwd.customer_dwd",
+            "customer_id,customer_no,customer_name,is_delete,is_void",
+            [("A", "A", "Scoped USD", "n", "n"), ("B", "B", "Scoped EUR", "n", "n")])
+        payload, result = self._payload_result(self._request("actual_receipt_amount", metric_filters={"customer": "Scoped USD"}))
+        self.assertEqual(10, public.facts(result)[0]["metric_value"])
+        self._assert_public_basis(payload, result, "original", "actual_receipt_amount_original")
+        self.assertEqual("USD", result["rows"][0]["currency"])
+
+    def test_top_one_does_not_hide_a_second_currency_from_the_probe(self):
+        self._receipts([(100, 7, "USD"), (20, 8, "EUR")])
+        payload, result = self._payload_result(self._request("actual_receipt_amount",
+            dimensions=["currency"], limit=1, order_by={"field": "metric_value", "direction": "desc"}))
+        self.assertEqual(1, len(result["rows"]))
+        self.assertTrue(result["truncated"])
+        self.assertEqual(700, public.facts(result)[0]["metric_value"])
+        self._assert_public_basis(payload, result, "rmb", "actual_receipt_amount")
 
     def test_pending_metric_keeps_its_gate_with_currency_selection(self):
         payload = self.h.query(public.metric("receivable_quantity", "receivable", currency_basis="auto"))
