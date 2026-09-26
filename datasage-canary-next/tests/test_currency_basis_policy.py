@@ -11,7 +11,6 @@ import importlib
 import json
 import unittest
 from unittest.mock import patch
-from unittest.mock import patch
 
 import test_remediation_remaining_cases as public
 
