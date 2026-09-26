@@ -93,7 +93,7 @@
     },
     "contract_yaml": {
       "files": 12,
-      "lines": 11380,
+      "lines": 11382,
       "names": [
         "datasets.yaml",
         "delivery-semantics.yaml",
@@ -131,7 +131,7 @@
     },
     "tests": {
       "files": 159,
-      "lines": 47270,
+      "lines": 47283,
       "names": [
         "test_acceptance_delivery.py",
         "test_analysis_evidence.py",
