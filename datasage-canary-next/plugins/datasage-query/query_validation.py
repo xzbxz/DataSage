@@ -50,6 +50,7 @@ _METRIC_REQUEST_FIELDS = _COMMON_REQUEST_FIELDS | {
     "attribution_mode",
     "delivery_scope",
     "inventory_scope",
+    "currency_basis",
 }
 
 def _target_gap_contract() -> capability_contract.TargetGapContract:
@@ -146,6 +147,11 @@ def _validate_request(
             ),
         )
     request["mode"] = "metric"
+    if "currency_basis" in request:
+        from .currency_basis import BASIS_CHOICES
+        basis = request["currency_basis"]
+        if not isinstance(basis, str) or basis not in BASIS_CHOICES:
+            raise QueryFailure("INVALID_INPUT", "currency_basis must be auto, rmb or original.", path=field_path("currency_basis"))
     try:
         validate_request_field_contract(request)
     except CapabilityContractError as exc:

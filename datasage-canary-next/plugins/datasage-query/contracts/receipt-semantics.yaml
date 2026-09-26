@@ -1,6 +1,14 @@
-version: datasage-mini-receipt-semantics/v11
+version: datasage-mini-receipt-semantics/v13
 domain: receipt
 contract_role: plugin_physical_execution
+
+currency_basis_pairs:
+  - {rmb: receipt_amount, original: receipt_amount_original}
+  - {rmb: actual_receipt_amount, original: actual_receipt_amount_original}
+  - {rmb: actual_refund_amount, original: actual_refund_amount_original}
+  - {rmb: refund_amount, original: refund_amount_original}
+  - {rmb: net_receipt_amount, original: net_receipt_amount_original}
+  - {rmb: delivery_receipt_comparison, original: delivery_receipt_comparison_original}
 
 tables:
   - vk_dwd.sale_bill_goods_detail_dwd
@@ -464,6 +472,7 @@ metrics:
             customer: {key: customer_id, outputs: [{column: customer_id, alias: customer_id}, {column: customer_name, alias: customer_name}], filter: customer_name}
             department: {key: customer_dept, outputs: [{column: customer_dept, alias: customer_dept}], filter: customer_dept}
             organization: {key: org_name, outputs: [{column: org_name, alias: org_name}], filter: org_name}
+            currency: {key: currency_no, outputs: [{column: currency_no, alias: currency_no}], filter: currency_no}
         - table: vk_dwd.delivery_return_detail_dwd
           measure: return_amount_rmb
           sign: -1
@@ -473,6 +482,7 @@ metrics:
             customer: {key: customer_id, outputs: [{column: customer_id, alias: customer_id}, {column: customer_name, alias: customer_name}], filter: customer_name}
             department: {key: customer_dept, outputs: [{column: customer_dept, alias: customer_dept}], filter: customer_dept}
             organization: {key: biz_org, outputs: [{column: biz_org, alias: org_name}], filter: biz_org}
+            currency: {key: currency_no, outputs: [{column: currency_no, alias: currency_no}], filter: currency_no}
     right:
       components:
         - table: vk_dwd.receive_bill_detail_dwd
@@ -484,6 +494,7 @@ metrics:
             customer: {key: customer_id, outputs: [{column: customer_id, alias: customer_id}, {column: customer_name, alias: customer_name}], filter: customer_name}
             department: {key: customer_dept, outputs: [{column: customer_dept, alias: customer_dept}], filter: customer_dept}
             organization: {key: org_name, outputs: [{column: org_name, alias: org_name}], filter: org_name}
+            currency: {key: currency_no, outputs: [{column: currency_no, alias: currency_no}], filter: currency_no}
         - table: vk_dwd.receive_return_bill_detail_dwd
           measure: detail_return_rmb
           sign: -1
@@ -493,7 +504,8 @@ metrics:
             customer: {key: customer_id, outputs: [{column: customer_id, alias: customer_id}, {column: customer_name, alias: customer_name}], filter: customer_name}
             department: {key: customer_dept, outputs: [{column: customer_dept, alias: customer_dept}], filter: customer_dept}
             organization: {key: org_name, outputs: [{column: org_name, alias: org_name}], filter: org_name}
-    allowed_dimensions: [customer, department, organization]
+            currency: {key: currency_no, outputs: [{column: currency_no, alias: currency_no}], filter: currency_no}
+    allowed_dimensions: [customer, department, organization, currency]
     dimension_mappings:
       customer:
         left_key: customer_id
@@ -524,4 +536,261 @@ metrics:
           - {column: org_name, alias: org_name}
         right_outputs:
           - {column: org_name, alias: org_name}
+      currency:
+        left_key: currency_no
+        right_key: currency_no
+        left_filter: currency_no
+        right_filter: currency_no
+        left_outputs:
+          - {column: currency_no, alias: currency_no}
+        right_outputs:
+          - {column: currency_no, alias: currency_no}
     answer_note: *answer_note_delivery_receipt_comparison
+  delivery_receipt_comparison_original:
+    disclosures:
+    - id: currency.original.no-cross-currency
+      mode: required_always
+      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+    - id: receipt.delivery-receipt.scope-asymmetry
+      mode: required_always
+      text: 净出库侧排除内部客户，净收款侧包含内部客户；两侧业务范围并不对称。
+    - id: receipt.delivery_receipt_comparison_original.legacy-note
+      mode: contract_only
+      text: 左侧为排除内部客户的当期流量净出库，右侧为包含内部客户的净收款；这是经确认的非对称业务范围，回答必须披露。净出库小于等于零时收款覆盖率为空，不解释为零；两侧净额允许为负。
+    label: 出库与收款对照（原币）
+    business_definition: 对照同期原币净出库与净收款的金额、两者差额及收款覆盖比例；两侧保留各自治理客户范围。
+    unit_policy: 净出库、净收款与差额为原币金额（按币种分别计量）；收款覆盖率为比例（可大于1，展示为百分比时可超过100%）
+    query_kind: paired_amounts
+    max_group_dimensions: 1
+    time_policy: last_3_completed_months
+    left:
+      components:
+      - table: vk_dwd.sale_bill_goods_detail_dwd
+        measure: delivery_amount
+        sign: 1
+        time_field: delivery_time
+        required_filters:
+          bill_status:
+            op: eq
+            value: 6
+          is_inner_cus:
+            op: eq
+            value: n
+        dimension_mappings:
+          customer:
+            key: customer_id
+            outputs:
+            - column: customer_id
+              alias: customer_id
+            - column: customer_name
+              alias: customer_name
+            filter: customer_name
+          department:
+            key: customer_dept
+            outputs:
+            - column: customer_dept
+              alias: customer_dept
+            filter: customer_dept
+          organization:
+            key: org_name
+            outputs:
+            - column: org_name
+              alias: org_name
+            filter: org_name
+          currency:
+            key: currency_no
+            outputs:
+            - column: currency_no
+              alias: currency_no
+            filter: currency_no
+      - table: vk_dwd.delivery_return_detail_dwd
+        measure: return_amount
+        sign: -1
+        time_field: statement_time
+        required_filters:
+          status:
+            op: eq
+            value: 4
+          complnt_type:
+            op: eq
+            value: 1
+          channel_type:
+            op: eq
+            value: 1
+          is_inner_cus:
+            op: eq
+            value: n
+        dimension_mappings:
+          customer:
+            key: customer_id
+            outputs:
+            - column: customer_id
+              alias: customer_id
+            - column: customer_name
+              alias: customer_name
+            filter: customer_name
+          department:
+            key: customer_dept
+            outputs:
+            - column: customer_dept
+              alias: customer_dept
+            filter: customer_dept
+          organization:
+            key: biz_org
+            outputs:
+            - column: biz_org
+              alias: org_name
+            filter: biz_org
+          currency:
+            key: currency_no
+            outputs:
+            - column: currency_no
+              alias: currency_no
+            filter: currency_no
+    right:
+      components:
+      - table: vk_dwd.receive_bill_detail_dwd
+        measure: detail_receive_amount
+        sign: 1
+        time_field: bill_time
+        required_filters:
+          bill_status:
+            op: ne
+            value: A
+        dimension_mappings:
+          customer:
+            key: customer_id
+            outputs:
+            - column: customer_id
+              alias: customer_id
+            - column: customer_name
+              alias: customer_name
+            filter: customer_name
+          department:
+            key: customer_dept
+            outputs:
+            - column: customer_dept
+              alias: customer_dept
+            filter: customer_dept
+          organization:
+            key: org_name
+            outputs:
+            - column: org_name
+              alias: org_name
+            filter: org_name
+          currency:
+            key: currency_no
+            outputs:
+            - column: currency_no
+              alias: currency_no
+            filter: currency_no
+      - table: vk_dwd.receive_return_bill_detail_dwd
+        measure: detail_return_amount
+        sign: -1
+        time_field: bill_time
+        required_filters:
+          bill_status:
+            op: ne
+            value: A
+        dimension_mappings:
+          customer:
+            key: customer_id
+            outputs:
+            - column: customer_id
+              alias: customer_id
+            - column: customer_name
+              alias: customer_name
+            filter: customer_name
+          department:
+            key: customer_dept
+            outputs:
+            - column: customer_dept
+              alias: customer_dept
+            filter: customer_dept
+          organization:
+            key: org_name
+            outputs:
+            - column: org_name
+              alias: org_name
+            filter: org_name
+          currency:
+            key: currency_no
+            outputs:
+            - column: currency_no
+              alias: currency_no
+            filter: currency_no
+    allowed_dimensions:
+    - customer
+    - department
+    - organization
+    - currency
+    dimension_mappings:
+      customer:
+        left_key: customer_id
+        right_key: customer_id
+        left_filter: customer_name
+        right_filter: customer_name
+        left_outputs:
+        - column: customer_id
+          alias: customer_id
+        - column: customer_name
+          alias: customer_name
+        right_outputs:
+        - column: customer_id
+          alias: customer_id
+        - column: customer_name
+          alias: customer_name
+      department:
+        left_key: customer_dept
+        right_key: customer_dept
+        left_filter: customer_dept
+        right_filter: customer_dept
+        left_outputs:
+        - column: customer_dept
+          alias: customer_dept
+        right_outputs:
+        - column: customer_dept
+          alias: customer_dept
+      organization:
+        left_key: org_name
+        right_key: org_name
+        left_filter: org_name
+        right_filter: org_name
+        left_outputs:
+        - column: org_name
+          alias: org_name
+        right_outputs:
+        - column: org_name
+          alias: org_name
+      currency:
+        left_key: currency_no
+        right_key: currency_no
+        left_filter: currency_no
+        right_filter: currency_no
+        left_outputs:
+        - column: currency_no
+          alias: currency_no
+        right_outputs:
+        - column: currency_no
+          alias: currency_no
+    answer_note: 左侧为排除内部客户的当期流量净出库，右侧为包含内部客户的净收款；这是经确认的非对称业务范围，回答必须披露。净出库小于等于零时收款覆盖率为空，不解释为零；两侧净额允许为负。
+    unit: 原币金额（按币种分别计量）
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+    result_fields:
+      metric_value:
+        meaning: 同期原币净出库与净收款差额
+      net_delivery_amount_original:
+        meaning: 同期净出库原币金额
+      net_receipt_amount_original:
+        meaning: 同期净收款原币金额
+      receipt_coverage:
+        meaning: 收款覆盖比例
+        unit: 比例
+    result_fact_units:
+      net_delivery_amount_original: 原币金额（按币种分别计量）
+      net_receipt_amount_original: 原币金额（按币种分别计量）
+      receipt_coverage: 比例

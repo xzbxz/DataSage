@@ -26,6 +26,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from .analytical_queries import AnalysisQueryError, build_analytical_metric_query, validate_frozen_pool_rows
 from .query_errors import QueryFailure
+from . import currency_basis
 from .query_sql import (
     _INTERNAL_MATCH_COUNT,
     _approved_column,
@@ -4712,11 +4713,14 @@ def _calculation_scope_contract(
         for key, value in request.items()
         if str(key)
         not in _SCOPE_PRESENTATION_KEYS
-        | {"time_range", "comparison", "metric_filters", "_entity_bindings"}
+        | {"time_range", "comparison", "metric_filters", "_entity_bindings", "currency_basis", "_currency_basis_plan"}
     }
+    calculation_definition = dict(metric_definition)
+    if "disclosures" in calculation_definition:
+        calculation_definition["disclosures"] = [d for d in (metric_definition.get("disclosures") or []) if d.get("id") != "currency.basis.selection"]
     basis = {
         "request": non_temporal_request,
-        "metric_contract": metric_definition,
+        "metric_contract": calculation_definition,
         "execution_contract": {
             key: scope.get(key)
             for key in (
@@ -4886,6 +4890,8 @@ def _calculation_operand(
         "metric_ref": claim.get("metric_ref"),
         "value": value,
         "unit": unit,
+        "currency": claim.get("currency"),
+        "currency_state": claim.get("currency_state"),
         "scope_fingerprint": scope_fingerprint,
         "projection_fingerprint": projection_fingerprint,
         "metric_basis_fingerprint": calculation_scope[
@@ -4923,6 +4929,10 @@ def _build_governed_calculations(
             right = _calculation_operand(
                 calculation["right_request_id"], result_by_id
             )
+            if (left.get("currency") != right.get("currency")
+                    or left.get("currency_state") == "unknown" or right.get("currency_state") == "unknown"
+                    or ("原币" in left["unit"] and not left.get("currency"))):
+                raise QueryFailure("CALCULATION_CURRENCY_MISMATCH", "计算两侧币种不兼容或未知；跨币种联合计算须将两侧改用 currency_basis=rmb 重新查询，保留各自有效独立观察。")
             same_period = left["period"] == right["period"]
             same_metric_basis = (
                 left["metric_ref"] == right["metric_ref"]
@@ -5110,6 +5120,7 @@ def _validate_request_plan_without_entities(
     except QueryFailure as exc:
         raise _at_stage(exc, "contract_load")
     try:
+        request = currency_basis.prepare_request(request, semantics)
         request = _validate_delivery_metric_scope(request, semantics)
         request = _validate_metric_contract(request, semantics)
         _validate_pre_entity_metric_plan(
@@ -5317,6 +5328,38 @@ def _run_one(
         datasets = prepared["datasets"]
         semantics = prepared["semantics"]
         resolved_entities = list(prepared.get("resolved_entities") or [])
+        basis_plan = request.get("_currency_basis_plan")
+        if isinstance(basis_plan, Mapping) and basis_plan.get("requires_probe"):
+            if execute_query is None:
+                # Discovery and the selected metric share one read-only snapshot.
+                with _ConsistentSnapshotExecutor(deadline_at=deadline_at) as snapshot:
+                    return _run_one(
+                        raw_request, deadline_at=deadline_at, audit_context=audit_context,
+                        prepared=prepared, preflight_failure=preflight_failure,
+                        preflight_db_call_count=preflight_db_call_count,
+                        entity_preflight_elapsed_ms=entity_preflight_elapsed_ms,
+                        started_at=started, execute_query=snapshot.execute,
+                        snapshot_group_marker=snapshot_group_marker or snapshot.marker,
+                        period_observed_on=period_observed_on,
+                        preflight_source_evidence_refs=preflight_source_evidence_refs,
+                    )
+            current_stage = "currency_scope"
+            probe_sql, probe_params = currency_basis.build_probe(
+                request, datasets, semantics, _build_metric_query,
+                observed_on=period_observed_on,
+            )
+            _check_call_deadline(deadline_at)
+            business_sql_attempted_count += 1
+            probe_rows, probe_truncated, probe_source = execute_query(
+                probe_sql, probe_params, 1, deadline_at=deadline_at,
+            )
+            business_sql_confirmed_count += 1
+            preflight_source_evidence_refs = (*preflight_source_evidence_refs, probe_source)
+            source_evidence_ref = _consistent_source_evidence_ref(preflight_source_evidence_refs)
+            request = currency_basis.resolve_probe(request, probe_rows, probe_truncated)
+            request = _validate_metric_contract(request, semantics)
+            request = _validate_metric_filter_value_contracts(request, semantics)
+        semantics = currency_basis.with_disclosure(request, semantics)
         current_stage = "query_planning"
         limit = _metric_query_limit(request)
         sql, params, scope = _build_metric_query(
@@ -5348,7 +5391,7 @@ def _run_one(
             )
         _check_call_deadline(deadline_at)
         current_stage = "business_sql"
-        business_sql_attempted_count = 1
+        business_sql_attempted_count += 1
         executor = execute_query or _execute_with_source
         handler = analytical_handlers.get_handler(semantics["metrics"][request["metric"]].get("query_kind"))
         if (scope.get("_validate_frozen_pool") is True or scope.get("_validate_monthly_pool") is True or scope.get("_validate_pattern_observation") is True or (handler is not None and handler.consistent_snapshot)) and execute_query is None:
@@ -5363,7 +5406,7 @@ def _run_one(
         source_evidence_ref = _consistent_source_evidence_ref(
             [*preflight_source_evidence_refs, business_source_evidence_ref]
         )
-        business_sql_confirmed_count = 1
+        business_sql_confirmed_count += 1
         proof_plan = scope.get("embedded_complete_partition_proof")
         if truncated and isinstance(proof_plan, Mapping):
             try:
@@ -5546,6 +5589,8 @@ def _run_one(
             "request_id": request["request_id"],
             "_period_additive_fields": _period_additive_fields(metric_definition, scope, datasets, semantics),
             "_ranking_plan": scope.get("ranking_plan"),
+            "_resolved_currency_context": _decomposition_context({"request": request, "semantics": semantics}) if request.get("_currency_basis_plan") else None,
+            "_resolved_currency_request": dict(request) if request.get("_currency_basis_plan") else None,
             "_calculation_scope": _calculation_scope_contract(
                 request,
                 scope,
@@ -6152,6 +6197,7 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
                     )
                 )
         _check_call_deadline(deadline_at)
+        prepared_contexts = [result.get("_resolved_currency_context") or context for context, result in zip(prepared_contexts, results)]
         _authorize_change_decompositions(prepared_contexts, results)
         _check_call_deadline(deadline_at)
         _tag_complete_decomposition_reconciliations(
@@ -6183,6 +6229,12 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
             target_gap_partitions,
             elapsed_ms=int((time.monotonic() - batch_started) * 1000),
         )
+        resolved_currency_requests = {
+            str(result["request_id"]): result["_resolved_currency_request"]
+            for result in results
+            if isinstance(result.get("_resolved_currency_request"), Mapping)
+        }
+        requests = [resolved_currency_requests.get(str(request.get("request_id")), request) for request in requests]
         _check_call_deadline(deadline_at)
         calculation_results = _build_governed_calculations(
             calculations,

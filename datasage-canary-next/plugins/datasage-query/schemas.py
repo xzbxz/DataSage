@@ -77,6 +77,11 @@ REQUEST = {
                 "Required registered metric code. Availability, qualifiers and supported operations are validated against the current metric contract. Delivery amount, quantity and count have a default net basis; registered gross metrics require a compatible delivery_scope. This field accepts no physical dataset or SQL formula."
             ),
         },
+        "currency_basis": {
+            "type": "string",
+            "enum": ["auto", "rmb", "original"],
+            "description": "Use auto for ordinary monetary questions with no explicit basis: the complete filtered scope, components and comparison periods select original currency when single-currency, or governed RMB when multiple currencies. Explicit rmb/original selects the registered counterpart. Unsupported source bases are rejected; RMB-only sources retain RMB with disclosure. Omitting this field preserves the exact named metric contract. Returned metric reference and units identify the actual calculation. Currency filters narrow population; they do not invent conversion rates.",
+        },
         "dimensions": {
             "type": "array",
             "maxItems": request_contract.MAX_GROUP_DIMENSIONS,

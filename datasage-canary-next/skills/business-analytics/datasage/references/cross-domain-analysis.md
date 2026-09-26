@@ -40,6 +40,16 @@ and profit department are not equivalent by name. Check ledger and attribution
 targets, delivery, or receipt. Check currency, unit, numerator/denominator,
 population, `status`, completeness, unknowns, and truncation.
 
+Resolve `currency_basis` before combining branches. For `auto`, inspect the
+complete controlled scope, including comparison periods and components: a single
+supported currency may use original evidence, while a multi-currency operation
+uses a governed RMB metric when registered. A named currency or explicit basis
+wins, and an explicitly RMB metric remains RMB. Ratios, shares, rankings, and
+other cross-domain or cross-period comparisons require the same resolved basis
+and currency scope on every operand. On mismatch, preserve valid independent
+evidence and return the local incompatibility with an RMB re-query suggestion;
+use the existing query path rather than adding a planner.
+
 If one branch fails, preserve valid independent evidence and state the local
 gap. Empty, undefined, incomplete, truncated, failed, and timeout states are
 not interchangeable. A cross-domain difference, ratio, or structural

@@ -45,6 +45,12 @@ Overdue evidence requires the applicable customer/organization/currency credit
 join and coverage; missing credit is not zero overdue. Aging and debt snapshots
 are independent evidence and need their coverage difference stated.
 
+RMB receivable metrics retain their RMB basis; an original request to an RMB-only
+metric is unsupported even when a currency filter is available. For a supported
+original-currency metric, `auto` may use original evidence only in a single
+currency scope; cross-currency work requires the governed RMB counterpart or
+remains separate by currency. Explicit basis and named currency take precedence.
+
 Settlement metrics cover completed and validated documents. Formal turnover
 needs its contract-defined continuous month coverage; do not silently shorten
 the requested window.

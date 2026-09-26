@@ -897,12 +897,17 @@ def _aggregate_components(
     time_bucket: str | None = None,
     bindings: Mapping[str, Any] | None = None,
     include_null_count: bool = False,
+    currency_column: str | None = None,
 ) -> tuple[str, list[Any], list[tuple[str, str]], list[tuple[str, str]], list[str]]:
     """Aggregate several signed facts at an identical governed grain.
 
     Each fact is grouped independently before UNION ALL.  This is the key
     protection against multiplying rows when net delivery or net receipt spans
     separate gross and reversal facts.
+
+    ``currency_column`` is reserved for original-currency paired facts.  A NULL
+    or blank currency then contributes to the group's missing count while its
+    amount is excluded from the reportable aggregate.
     """
 
     components = source.get("components")
@@ -956,7 +961,20 @@ def _aggregate_components(
             f"{_qualified(alias, time_field)} < %s",
         ]
         component_params += [start, end]
-        measure_sql = f"COALESCE(SUM({_qualified(alias, measure)}), 0)"
+        measure_reference = _qualified(alias, measure)
+        unknown_currency = None
+        if currency_column is not None:
+            approved_currency = _approved(currency_column, dataset)
+            currency_reference = _qualified(alias, approved_currency)
+            unknown_currency = (
+                f"({currency_reference} IS NULL OR TRIM({currency_reference}) = '')"
+            )
+            measure_sql = (
+                f"COALESCE(SUM(CASE WHEN {unknown_currency} THEN NULL "
+                f"ELSE {measure_reference} END), 0)"
+            )
+        else:
+            measure_sql = f"COALESCE(SUM({measure_reference}), 0)"
         if sign == -1:
             measure_sql = f"-({measure_sql})"
         key_expressions = [
@@ -980,8 +998,11 @@ def _aggregate_components(
             f"COUNT(*) AS {_quote_column('_component_count')}",
         ]
         if include_null_count:
+            null_condition = f"{measure_reference} IS NULL"
+            if unknown_currency is not None:
+                null_condition = f"{unknown_currency} OR {null_condition}"
             select.append(
-                f"SUM(CASE WHEN {_qualified(alias, measure)} IS NULL THEN 1 ELSE 0 END) "
+                f"SUM(CASE WHEN {null_condition} THEN 1 ELSE 0 END) "
                 f"AS {_quote_column('_component_null_count')}"
             )
         group = key_expressions
@@ -1235,6 +1256,35 @@ def _paired_amounts_query(
     for code in [*selected, *request_filters.keys()]:
         if code not in allowed or code not in mappings:
             raise AnalysisQueryError("UNSUPPORTED_DIMENSION", "出库收款对照不支持请求中的维度。")
+    currency_policy = metric.get("currency_policy")
+    original_currency = (
+        isinstance(currency_policy, Mapping)
+        and currency_policy.get("mode") == "original_currency"
+    )
+    currency_column = None
+    if original_currency:
+        currency_column = currency_policy.get("column")
+        if not isinstance(currency_column, str) or not currency_column:
+            raise AnalysisQueryError(
+                "CONTRACT_UNAVAILABLE",
+                "原币出库与收款对照缺少受治理币种字段。",
+            )
+    if original_currency:
+        if "currency" not in selected and "currency" not in request_filters:
+            raise AnalysisQueryError(
+                "CURRENCY_SCOPE_REQUIRED",
+                "原币出库与收款对照必须按币种分组或限定单一币种。",
+            )
+        if "currency" in request_filters and "currency" not in selected:
+            currency_values = request_filters["currency"]
+            currency_values = (
+                currency_values if isinstance(currency_values, list) else [currency_values]
+            )
+            if len(currency_values) != 1:
+                raise AnalysisQueryError(
+                    "CURRENCY_SCOPE_REQUIRED",
+                    "原币出库与收款对照未按币种分组时只能限定一个币种。",
+                )
     start, end, applied_time = _time_window(
         request, str(metric.get("time_policy") or ""), observed_on
     )
@@ -1276,6 +1326,7 @@ def _paired_amounts_query(
                 value_alias,
                 bindings=bindings,
                 include_null_count=True,
+                currency_column=currency_column,
             )
         table = source.get("table")
         dataset = _dataset(table, datasets_contract)
@@ -1348,11 +1399,14 @@ def _paired_amounts_query(
         f"CASE WHEN {missing_inputs} > 0 OR ({unmatched_side}) > 0 THEN NULL ELSE "
         f"COALESCE(l.left_amount, 0) - COALESCE(r.right_amount, 0) END"
     )
+    amount_suffix = "_original" if original_currency else "_rmb"
+    left_amount_field = f"net_delivery_amount{amount_suffix}"
+    right_amount_field = f"net_receipt_amount{amount_suffix}"
     select = [
         *output_dimensions,
         f"{metric_value} AS metric_value",
-        f"{left_value} AS net_delivery_amount_rmb",
-        f"{right_value} AS net_receipt_amount_rmb",
+        f"{left_value} AS {left_amount_field}",
+        f"{right_value} AS {right_amount_field}",
         f"CASE WHEN {missing_inputs} = 0 AND ({unmatched_side}) = 0 AND COALESCE(l.left_amount, 0) > 0 "
         f"THEN COALESCE(r.right_amount, 0) / l.left_amount ELSE NULL END AS receipt_coverage",
         f"{missing_inputs} AS missing_value_count",
@@ -1369,19 +1423,23 @@ def _paired_amounts_query(
         sql = ctes + from_sql.format(select=", ".join(select))
     else:
         sql = ctes + from_sql.format(select=", ".join(select))
-    sql += _order_clause(
-        request,
-        output_aliases,
-        allowed_value_fields={
-            "metric_value",
-            "net_delivery_amount_rmb",
-            "net_receipt_amount_rmb",
-            "receipt_coverage",
-        },
-    )
-    sql += " LIMIT %s"
+    if not request.get("_currency_scope_probe"):
+        sql += _order_clause(
+            request,
+            output_aliases,
+            allowed_value_fields={
+                "metric_value",
+                left_amount_field,
+                right_amount_field,
+                "receipt_coverage",
+            },
+        )
+        sql += " LIMIT %s"
     warnings = [str(metric.get("answer_note"))] if metric.get("answer_note") else []
-    return sql, [*left_params, *right_params, limit + 1], {
+    final_params = [*left_params, *right_params]
+    if not request.get("_currency_scope_probe"):
+        final_params.append(limit + 1)
+    return sql, final_params, {
         "metric": request.get("metric"),
         "dataset": None,
         "source_datasets": [*left_tables, *[table for table in right_tables if table not in left_tables]],

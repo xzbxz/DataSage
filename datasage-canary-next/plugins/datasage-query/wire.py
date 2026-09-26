@@ -28,6 +28,7 @@ _CATALOG_METRIC_FIELDS = (
     "unit",
     "unit_policy",
     "currency_policy",
+    "currency_basis",
     "required_attribution_mode",
     "allowed_attribution_modes",
     "available_inventory_scopes",

@@ -72,6 +72,24 @@ counts. Structural contribution requires a compatible reconciliation and does
 not establish causality; relative company performance cannot exclude market
 factors, and different changes alone do not establish temporal precedence.
 
+Currency basis follows the registered metric and catalog policy. For an ordinary
+amount question Hermes should send `currency_basis:auto`; over the complete
+controlled scope, including all comparison periods and components, auto keeps a
+single-currency supported metric in its original currency and uses a governed RMB
+metric for a multi-currency operation. A named currency or explicit
+`currency_basis` wins. An explicitly RMB metric keeps its RMB meaning even when
+one currency is filtered; an RMB-only metric rejects an original-currency
+request. If an original-only metric has no governed RMB counterpart, preserve
+valid per-currency evidence and report that a unified cross-currency result is
+unavailable. A precise metric call that omits `currency_basis` keeps that metric's
+registered basis.
+
+Ratios, shares, rankings, cross-period and cross-domain comparisons must carry the
+same resolved basis and currency scope on every operand. If they do not, keep
+valid independent branches, return the local incompatibility, and let Hermes use
+the existing query planning path to retry both sides on a compatible RMB basis;
+do not invent a conversion or add a planner.
+
 ## Presentation
 
 Before sending the answer, check each key number against its returned field and

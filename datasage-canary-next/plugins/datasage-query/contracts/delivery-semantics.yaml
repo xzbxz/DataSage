@@ -1,6 +1,23 @@
-version: datasage-mini-delivery-semantics/v22
+version: datasage-mini-delivery-semantics/v23
 domain: delivery
 contract_role: plugin_physical_execution
+
+currency_basis_pairs:
+  - {rmb: warehouse_gross_delivery_amount, original: warehouse_gross_delivery_amount_original}
+  - {rmb: warehouse_return_amount, original: warehouse_return_amount_original}
+  - {rmb: warehouse_delivery_amount, original: warehouse_delivery_amount_original}
+  - {rmb: gross_delivery_amount, original: gross_delivery_amount_original}
+  - {rmb: return_amount, original: return_amount_original}
+  - {rmb: delivery_amount, original: delivery_amount_original}
+  - {rmb: order_amount, original: order_amount_original}
+  - {rmb: return_amount_rate, original: return_amount_rate_original}
+
+currency_policy_templates:
+  original_currency: &original_currency_policy
+    mode: original_currency
+    column: currency_no
+    require_filter_or_group: true
+    never_sum_mixed_currency: true
 
 tables:
   - vk_ads.delivery_barcode_source_ads
@@ -1649,6 +1666,25 @@ metrics:
     allowed_dimensions: *net_delivery_derived_analysis
     dimension_overrides: *current_attribute_overrides
     answer_note: *answer_note_return_amount_rate
+  return_amount_rate_original:
+    delivery_scope_policy: *delivery_scope_contract_2
+    disclosures:
+      - id: currency.original.no-cross-currency
+        mode: required_always
+        text: "原币金额退货率必须在同一币种内计算；跨币种不得直接合并分子或分母。"
+      - id: delivery.return_amount_rate_original.denominator
+        mode: required_always
+        text: "原币金额退货率以同币种同期毛出库原币金额为分母；毛出库金额小于等于零时结果未定义。"
+    label: 当期原币金额退货率
+    business_definition: 所选期间同一币种退货原币金额相对于同期毛出库原币金额的比例；必须限定单一币种或按币种分组，基数不可用时结果未定义。
+    unit: 比例（可大于1；展示为百分比时可超过100%）
+    formula: return_amount_original / gross_delivery_amount_original
+    ratio: {numerator: return_amount_original, denominator: gross_delivery_amount_original}
+    time_policy: current_month
+    allowed_dimensions: *net_delivery_derived_analysis
+    dimension_overrides: *current_attribute_overrides
+    currency_policy: *original_currency_policy
+    answer_note: "原币金额退货率必须限定单一 currency_no 或按 currency_no 分组；毛出库金额小于等于零时返回空值。"
   return_quantity_rate:
     delivery_scope_policy: *delivery_scope_contract_2
     disclosures:

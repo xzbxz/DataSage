@@ -418,3 +418,8 @@ datasage-canary-next/docs/workflow-runtime-acceptance.md
 # Independent source audit 2026-09-26: owned test and record.
 !datasage-canary-next/tests/test_independent_contract_boundaries_20260926.py
 !datasage-canary-next/docs/independent-review-20260926.md
+
+!datasage-canary-next/plugins/datasage-query/currency_basis.py
+!datasage-canary-next/tests/test_currency_basis_policy.py
+!datasage-canary-next/tests/test_currency_paired_amounts.py
+!datasage-canary-next/tests/test_currency_output_consistency.py

@@ -52,6 +52,12 @@ governed gap is supported for the same period, scope, attribution ledger, and
 required evidence; a transparent display calculation on compatible returned
 values must not be presented as that governed gap.
 
+Target and actual amount contracts are RMB in the registered target paths.
+`currency_basis=auto` and explicit `rmb` retain that meaning; `original` is
+unsupported for these metrics and a currency filter does not reinterpret them.
+Keep target, actual, gap, and completion operands on the same resolved basis
+before deriving any comparison.
+
 For salesperson allocation, the returned evidence must also show the split
 ledger's availability and activation boundary. A catalog entry or a
 transaction-ledger result alone does not authorize an allocation answer.

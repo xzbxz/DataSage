@@ -142,6 +142,14 @@ cannot repair an earlier unsupported assertion.
 
 ## Response shape
 
+- Currency basis is part of returned scope. `auto` keeps original-currency
+  evidence only when the complete controlled scope is one supported currency;
+  a cross-currency operation needs a governed RMB metric or remains uncombined.
+  An explicitly RMB metric keeps RMB meaning even under a currency filter.
+- Ratios, shares, rankings, cross-period, and cross-domain claims require the
+  same resolved basis and currency scope for every operand. On mismatch, preserve
+  independent facts and report the local unsupported relation.
+
 - Represent returned scope accurately: metric meaning, time range, filters,
   dimensions, unit, currency, snapshot, and material fixed business scope.
 - Preserve typed states and do not relabel zero, empty, undefined, incomplete,
@@ -331,4 +339,3 @@ does not mean its instructions can run here.
 - When a request needs one of those, say so plainly, name what is missing, and
   offer the operator path (a local run) instead of describing a deliverable you
   cannot produce. Never report such a task as done.
-

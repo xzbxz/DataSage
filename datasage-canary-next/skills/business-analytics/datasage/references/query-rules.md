@@ -133,6 +133,22 @@ does not duplicate its formulas, thresholds, pool filters or return policies.
   currency grouping. Without a named currency, use that contract's governed
   currency dimension and keep separate currency totals. Do not add currency
   grouping to a governed RMB metric that does not publish that dimension.
+- For an ordinary amount question, send `currency_basis=auto`. Resolve the
+  complete controlled scope, including comparison periods and component
+  operands: one supported currency may use original-currency evidence; multiple
+  currencies use the governed RMB metric when the catalog registers one. A
+  precise metric request with no `currency_basis` retains that metric's
+  registered basis.
+- A named currency or explicit basis wins. A metric whose contract is RMB
+  remains RMB even when a currency filter is supplied; do not infer basis from
+  an ID suffix. An RMB-only metric rejects `original`. An original-only metric
+  without a governed RMB counterpart remains per-currency and cannot produce a
+  unified cross-currency result.
+- Ratios, shares, rankings, cross-period, and cross-domain comparisons require
+  one resolved basis and currency scope for every operand. On mismatch, keep
+  valid independent branches and return the local incompatibility with an RMB
+  re-query suggestion; Hermes may reissue the existing complete requests without
+  adding a planner.
 - Result display and conversion meanings are documented in
   [`datasage.answer-boundary/v1`](answer-boundary.md), which owns returned sign,
   unit, scale, currency, and ratio interpretation.

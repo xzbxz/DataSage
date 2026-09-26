@@ -1420,7 +1420,8 @@ def _build_comparison_metric_query(
     if dimensions:
         order_expression = "ABS(`delta_value`)" if field == "absolute_delta_value" else _quote_identifier(str(field))
         sql += f" ORDER BY {order_expression} {direction}"
-    sql += " LIMIT %s"
+    if not request.get("_currency_scope_probe"):
+        sql += " LIMIT %s"
     warnings = list(current_scope.get("warnings") or [])
     for warning in prior_scope.get("warnings") or []:
         if warning not in warnings:
@@ -1462,7 +1463,7 @@ def _build_comparison_metric_query(
             "version": "same-statement-window-partition-proof/v1",
             "requires_completeness_proof": requires_completeness_proof,
         }
-    return sql, [*current_params, *prior_params, limit + 1], scope
+    return sql, [*current_params, *prior_params, *([] if request.get("_currency_scope_probe") else [limit + 1])], scope
 
 def _metric_order_clause(request: Mapping[str, Any], dimension_outputs: Sequence[str]) -> str:
     if not dimension_outputs:
@@ -1598,8 +1599,9 @@ def _build_metric_query(
         if isinstance(note, str) and note not in scope["warnings"]:
             scope["warnings"].append(note)
         sql += _metric_order_clause(request, scope["dimension_outputs"])
-        sql += " LIMIT %s"
-        params.append(limit + 1)
+        if not request.get("_currency_scope_probe"):
+            sql += " LIMIT %s"
+            params.append(limit + 1)
         scope.update({
             "metric": metric_code,
             "source_datasets": [scope["dataset"]],
@@ -1624,8 +1626,9 @@ def _build_metric_query(
             observed_on=observed_on,
         )
     sql += _metric_order_clause(request, scope["dimension_outputs"])
-    sql += " LIMIT %s"
-    params.append(limit + 1)
+    if not request.get("_currency_scope_probe"):
+        sql += " LIMIT %s"
+        params.append(limit + 1)
     scope["inventory_scope"] = applied_inventory_scope
     return sql, params, scope
 

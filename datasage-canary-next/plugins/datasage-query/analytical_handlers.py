@@ -76,6 +76,13 @@ _HANDLERS = MappingProxyType({
     ),
 })
 
+_PAIRED_AMOUNT_PUBLIC_FIELDS = frozenset(
+    {
+        "net_delivery_amount_original",
+        "net_receipt_amount_original",
+    }
+)
+
 
 def get_handler(kind):
     return _HANDLERS.get(kind)
@@ -87,7 +94,10 @@ def handler_for_time(source):
 
 def public_fact_fields():
     """Union explicit permissions; SQL columns and unit metadata grant nothing."""
-    return frozenset().union(*(h.resolve('public_fields') for h in _HANDLERS.values() if h.public_fields))
+    return frozenset().union(
+        *(h.resolve('public_fields') for h in _HANDLERS.values() if h.public_fields),
+        _PAIRED_AMOUNT_PUBLIC_FIELDS,
+    )
 
 
 def validate_parameters(kind, request):

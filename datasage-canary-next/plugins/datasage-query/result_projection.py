@@ -1175,7 +1175,9 @@ def _model_wire_result(
     ):
         projected["status"] = "partial" if projected.get("claim_ledger") else "failed"
     if request is not None and projected.get("status") == "success":
-        numeric = evidence.build_numeric_evidence(projected, request, result.get("_period_additive_fields", []))
+        resolved_request = result.get("_resolved_currency_request")
+        numeric_request = resolved_request if isinstance(resolved_request, Mapping) else request
+        numeric = evidence.build_numeric_evidence(projected, numeric_request, result.get("_period_additive_fields", []))
         if numeric:
             projected["numeric_evidence"] = numeric
         ranking = evidence.build_ranking_evidence(projected, result.get("_ranking_plan"))

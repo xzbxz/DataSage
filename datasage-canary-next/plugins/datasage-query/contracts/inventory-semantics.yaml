@@ -1,4 +1,4 @@
-version: datasage-mini-inventory-semantics/v21
+version: datasage-mini-inventory-semantics/v22
 domain: inventory
 contract_role: plugin_physical_execution
 business_name: 库存事实、未动销与周转分析
@@ -47,6 +47,14 @@ currency_policy_templates:
     column: currency_no
     require_filter_or_group: true
     never_sum_mixed_currency: true
+
+currency_basis_pairs:
+  - rmb_metric: current_inventory_amount_rmb
+    original_metric: current_inventory_amount_original
+  - rmb_metric: month_end_inventory_cost_rmb
+    original_metric: month_end_inventory_cost_original
+  - rmb_metric: month_end_inventory_ddp_rmb
+    original_metric: month_end_inventory_ddp_original
 
 dimensions:
   customer:

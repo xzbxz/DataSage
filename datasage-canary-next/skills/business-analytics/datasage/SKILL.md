@@ -45,6 +45,27 @@ adaptively; this is not a mandatory call sequence.
 - Live catalog, schema, and tool results are authoritative for metrics, fields,
   capabilities, and returned evidence.
 
+## Currency basis
+
+- The public request choice is `currency_basis: auto | rmb | original`.
+  Ordinary amount questions use `auto`; an exact metric request that omits the
+  field keeps the registered metric basis.
+- For `auto`, use the live catalog's `ordinary_question_default` and optional
+  `counterpart` to select among registered metrics; they never rewrite an exact
+  metric's unit or monetary basis.
+- Auto resolves the complete controlled scope, including comparison periods and
+  component operands: one supported currency uses original-currency evidence;
+  multiple currencies use a governed RMB metric when one is registered. An
+  explicit currency selection or basis takes precedence.
+- A metric whose contract is RMB-only retains RMB meaning and rejects an
+  original request. An original-only metric without a governed RMB counterpart
+  keeps valid per-currency evidence and reports that a unified cross-currency
+  result is unavailable. Never infer an exchange rate from a label or ID.
+- Ratios, shares, rankings, cross-period and cross-domain operations require one
+  resolved basis and currency scope. On mismatch, preserve independent valid
+  branches and use the existing query path to retry on a compatible RMB basis;
+  this is a local query incompatibility, not a new planner.
+
 ## How to Run
 
 On restricted WeCom, references are never a query prerequisite. When the

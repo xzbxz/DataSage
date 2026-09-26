@@ -46,6 +46,13 @@ returned. Original currency must be filtered to one currency or grouped by
 `currency`, the governed public dimension. Use the published request key, not
 an underlying storage-column name.
 
+For ordinary receipt metrics, `auto` and explicit `rmb` retain the contract's
+RMB basis; a named currency narrows the RMB population. For an original-currency
+metric, a single supported currency may remain original; cross-currency work
+uses a governed RMB counterpart when registered, otherwise keeps per-currency
+evidence without a unified result. An explicit basis wins and no exchange rate
+is inferred.
+
 `delivery_receipt_comparison` has its own governed window and intentionally
 asymmetric population. For this paired metric, retain each fact component's
 returned time field and range (delivery, return-settlement, receipt, and

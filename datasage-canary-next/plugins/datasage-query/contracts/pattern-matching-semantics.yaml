@@ -1,4 +1,4 @@
-version: datasage-pattern-matching-semantics/v2
+version: datasage-pattern-matching-semantics/v3
 domain: pattern_matching
 contract_role: plugin_physical_execution
 business_name: 找版任务与关联出库证据
@@ -159,6 +159,8 @@ metrics:
     - task_created
     - execution_completed
     - linked_delivery
+    answer_contract:
+    - "金额仅按已核验实际出库交易币种以原币返回；当前没有受管人民币金额或汇率来源，跨币种统一比较或汇总不可用。"
     disclosures: *id003
     answer_note: *pattern_basis
   person_attributed_delivery_amount:
@@ -187,5 +189,7 @@ metrics:
     - task_created
     - execution_completed
     - linked_delivery
+    answer_contract:
+    - "金额仅按已核验实际出库交易币种以原币返回；当前没有受管人民币金额或汇率来源，跨币种统一比较或汇总不可用。"
     disclosures: *id003
     answer_note: *pattern_basis

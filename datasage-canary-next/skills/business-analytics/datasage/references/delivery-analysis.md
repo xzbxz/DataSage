@@ -37,12 +37,19 @@ department. Preserve both returned dimensions when they are available.
 | External-customer population | The metric contract defines internal/external scope and entity roles. A name does not establish these attributes. |
 | Return settlement | Return-settlement periods can differ from the underlying delivery period. |
 | Quantity unit | Keep quantities separated by their returned unit; a raw code does not establish a meaning or conversion. |
+| Currency basis | `auto` may retain original currency for a single supported currency; a cross-currency operation uses a governed RMB metric when registered, otherwise it keeps per-currency evidence. |
 
 Follow the live delivery contract's unit meanings, not a code's spelling or a
 phonetic guess. A registered unit can be queryable while its meaning remains
 unconfirmed: `tao` must stay `tao` (含义待确认), never “套” or another inferred
 unit. Current delivery quantity metrics require separate unit groups or a
 single-unit filter; do not sum or convert different units.
+
+For an ordinary amount question, Hermes sends `currency_basis=auto` and resolves
+the complete controlled scope, including comparison periods and components. A
+named currency or explicit basis takes precedence. A governed RMB metric keeps
+its RMB meaning; an original-only metric without a governed RMB counterpart
+stays separate by currency rather than being converted.
 
 `pending` and `current-master` describe returned states. A current-master fact
 may support current action without representing a completed historical period.

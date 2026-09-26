@@ -205,6 +205,16 @@ def _metric_aggregation_sql(
             for column in approved
         )
         return f"COALESCE(SUM(({additive}) * {_qualified_identifier(alias, multiplier)}), 0)"
+    if aggregation == "sum_many":
+        columns = metric.get("measure_columns")
+        if not isinstance(columns, list) or not columns:
+            raise QueryFailure("CONTRACT_UNAVAILABLE", "多字段求和指标定义无效。")
+        approved = [_approved_column(column, allowed, blocked) for column in columns]
+        additive = " + ".join(
+            f"COALESCE({_qualified_identifier(alias, column)}, 0)"
+            for column in approved
+        )
+        return f"COALESCE(SUM({additive}), 0)"
 
     measure = metric.get("measure")
     measure = _approved_column(measure, allowed, blocked)
@@ -242,7 +252,7 @@ def _metric_missing_input_sql(metric, dataset, datasets_contract, alias, *, join
     """Count incomplete source rows, never infer a rate or amount from NULL."""
     aggregation = metric.get("aggregation")
     columns = []
-    if aggregation in {"sum_product", "sum_product_many"}:
+    if aggregation in {"sum_product", "sum_product_many", "sum_many"}:
         columns.extend(metric.get("measure_columns") or [])
         if aggregation == "sum_product_many":
             columns.append(metric.get("multiplier"))
@@ -317,14 +327,24 @@ def _metric_unclassified_source_value_sql(
     existing NULL completeness guard and expose the unknown-row count/state.
     """
 
-    if metric.get("aggregation") != "sum":
+    if metric.get("aggregation") not in {"sum", "sum_many"}:
         return None
     allowed = {str(item) for item in dataset.get("allowed_columns") or []}
     blocked = _blocked_columns(datasets_contract, dataset)
-    expression = _qualified_identifier(
-        alias,
-        _approved_column(metric.get("measure"), allowed, blocked),
-    )
+    if metric.get("aggregation") == "sum_many":
+        columns = metric.get("measure_columns")
+        if not isinstance(columns, list) or not columns:
+            raise QueryFailure("CONTRACT_UNAVAILABLE", "多字段求和指标定义无效。")
+        approved = [_approved_column(column, allowed, blocked) for column in columns]
+        expression = " + ".join(
+            f"COALESCE({_qualified_identifier(alias, column)}, 0)"
+            for column in approved
+        )
+    else:
+        expression = _qualified_identifier(
+            alias,
+            _approved_column(metric.get("measure"), allowed, blocked),
+        )
     return expression if sign == 1 else f"-({expression})"
 
 

@@ -35,6 +35,12 @@ duplicate/conflict status, and `has_more`/coverage state. Original currency
 comes from the matched outbound detail; the request's desired currency is not
 a conversion instruction.
 
+For `currency_basis=auto`, linked amount views retain original transaction
+currency when the controlled scope is single-currency. Cross-currency
+aggregation or comparison requires a governed RMB counterpart; without one,
+return separate currency groups and no unified total. A named currency or
+explicit basis wins, and an amount is never converted from its label.
+
 Verified linkage requires more than stable identity and currency. The live
 validation also requires a non-missing sales-side amount equal to the linked
 amount, compatible salesperson and product, and execution completion before

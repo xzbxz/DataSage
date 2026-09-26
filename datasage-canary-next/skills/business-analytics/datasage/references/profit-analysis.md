@@ -43,6 +43,12 @@ The contract's expense semantics remain authoritative. An unallocated NULL is
 not zero. Without a close flag, describe the value as recorded through the
 observation, including the possibility of later updates.
 
+Profit report metrics whose contract unit is RMB are source-recorded RMB.
+`currency_basis=original` is unsupported for those metrics even when a currency
+dimension or filter is available; a currency filter narrows the RMB rows.
+`auto` and explicit `rmb` retain that meaning. Never infer an original-currency
+profit value or conversion from a report label.
+
 ## Boundaries
 
 - Customer-month, department-month, product-month, and order-lifetime values

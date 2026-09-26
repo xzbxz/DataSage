@@ -1,6 +1,35 @@
-version: datasage-mini-receivable-semantics/v9
+version: datasage-mini-receivable-semantics/v10
 domain: receivable
 contract_role: plugin_physical_execution
+
+currency_basis_pairs:
+  - {rmb: receivable_occurrence_amount, original: receivable_occurrence_amount_original}
+  - {rmb: open_receivable_amount, original: open_receivable_amount_original}
+  - {rmb: current_debt_amount, original: current_debt_amount_original}
+  - {rmb: aging_total_amount, original: aging_total_amount_original}
+  - {rmb: overdue_receivable_amount, original: overdue_receivable_amount_original}
+  - {rmb: excess_credit_amount, original: excess_credit_amount_original}
+  - {rmb: positive_debt_amount, original: positive_debt_amount_original}
+  - {rmb: debt_balance_trend, original: debt_balance_trend_original}
+  - {rmb: aging_0_30_amount, original: aging_0_30_amount_original}
+  - {rmb: aging_31_60_amount, original: aging_31_60_amount_original}
+  - {rmb: aging_61_90_amount, original: aging_61_90_amount_original}
+  - {rmb: aging_91_120_amount, original: aging_91_120_amount_original}
+  - {rmb: aging_121_150_amount, original: aging_121_150_amount_original}
+  - {rmb: aging_151_180_amount, original: aging_151_180_amount_original}
+  - {rmb: aging_181_240_amount, original: aging_181_240_amount_original}
+  - {rmb: aging_241_300_amount, original: aging_241_300_amount_original}
+  - {rmb: aging_301_360_amount, original: aging_301_360_amount_original}
+  - {rmb: aging_over_360_amount, original: aging_over_360_amount_original}
+  - {rmb: aging_over_30_amount, original: aging_over_30_amount_original}
+  - {rmb: aging_over_60_amount, original: aging_over_60_amount_original}
+  - {rmb: aging_over_90_amount, original: aging_over_90_amount_original}
+  - {rmb: aging_over_120_amount, original: aging_over_120_amount_original}
+  - {rmb: aging_over_150_amount, original: aging_over_150_amount_original}
+  - {rmb: aging_over_180_amount, original: aging_over_180_amount_original}
+  - {rmb: aging_over_240_amount, original: aging_over_240_amount_original}
+  - {rmb: aging_over_300_amount, original: aging_over_300_amount_original}
+  - {rmb: uncredited_positive_debt_amount, original: uncredited_positive_debt_amount_original}
 
 tables:
   - vk_dwd.sale_bill_goods_detail_dwd
@@ -1161,6 +1190,782 @@ metrics:
           - {column: org_name, alias: org_name}
         delivery_outputs: []
     answer_note: *answer_note_formal_receivable_turnover_days
+
+  positive_debt_amount_original:
+    disclosures:
+    - id: currency.original.no-cross-currency
+      mode: required_always
+      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+    - id: receivable.positive_debt_amount_original.legacy-note
+      mode: contract_only
+      text: “哪些客户欠我们”只看 debt_amount_rmb > 0，负数和零不进入名单及排名。
+    label: 正欠款金额（原币）
+    business_definition: 最新可用欠款快照中，仅对正数欠款客户统计的原币欠款金额；负数和零不纳入；按各币种分别计量，不跨币种合计。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dw.customer_debt_bymonth_dw
+    aggregation: sum
+    measure: debt_amount
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters:
+      debt_amount_rmb:
+        op: gt
+        value: 0
+    allowed_dimensions:
+    - customer
+    - snapshot_salesperson
+    - customer_department
+    - organization
+    - customer_region
+    - ccbs_customer
+    - ha_customer
+    - brand_customer
+    - ht_customer
+    - currency
+    - month
+    - current_customer_grade
+    - current_customer_resource
+    - current_customer_business_label
+    - current_customer_owner
+    answer_note: “哪些客户欠我们”只看 debt_amount_rmb > 0，负数和零不进入名单及排名；结果按币种分别展示，不跨币种汇总。
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+  debt_balance_trend_original:
+    disclosures:
+    - id: currency.original.no-cross-currency
+      mode: required_always
+      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+    - id: receivable.debt_balance_trend_original.legacy-note
+      mode: contract_only
+      text: 历史欠款趋势必须显式提供月份范围，并按 bill_date 月份解释。
+    label: 欠款余额趋势（原币）
+    business_definition: 用户明确月份范围内，各月欠款快照原币净余额的时间序列，保留正负值；按各币种分别计量，不跨币种合计。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dw.customer_debt_bymonth_dw
+    aggregation: sum
+    measure: debt_amount
+    time_field: bill_date
+    time_policy: required
+    time_granularity: month
+    required_time_bucket: month
+    required_filters: {}
+    allowed_dimensions:
+    - customer
+    - snapshot_salesperson
+    - customer_department
+    - organization
+    - customer_region
+    - ccbs_customer
+    - ha_customer
+    - brand_customer
+    - ht_customer
+    - currency
+    - month
+    - current_customer_grade
+    - current_customer_resource
+    - current_customer_business_label
+    - current_customer_owner
+    answer_note: 历史欠款趋势必须显式提供月份范围，并按 bill_date 月份解释；结果按币种分别展示，不跨币种汇总。
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+  aging_0_30_amount_original:
+    disclosures:
+    - id: currency.original.no-cross-currency
+      mode: required_always
+      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+    label: 0至30天账龄（原币）
+    business_definition: 最新账龄快照的0至30天应收原币金额；按各币种分别计量，不跨币种合计。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions:
+    - customer
+    - snapshot_salesperson
+    - customer_department
+    - organization
+    - customer_region
+    - ccbs_customer
+    - ha_customer
+    - currency
+    - month
+    - current_customer_grade
+    - current_customer_resource
+    - current_customer_business_label
+    - current_customer_owner
+    measure: 0_30_debt
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+  aging_31_60_amount_original:
+    disclosures:
+    - id: currency.original.no-cross-currency
+      mode: required_always
+      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+    label: 31至60天账龄（原币）
+    business_definition: 最新账龄快照的31至60天应收原币金额；按各币种分别计量，不跨币种合计。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions:
+    - customer
+    - snapshot_salesperson
+    - customer_department
+    - organization
+    - customer_region
+    - ccbs_customer
+    - ha_customer
+    - currency
+    - month
+    - current_customer_grade
+    - current_customer_resource
+    - current_customer_business_label
+    - current_customer_owner
+    measure: 31_60_debt
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+  aging_61_90_amount_original:
+    disclosures:
+    - id: currency.original.no-cross-currency
+      mode: required_always
+      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+    label: 61至90天账龄（原币）
+    business_definition: 最新账龄快照的61至90天应收原币金额；按各币种分别计量，不跨币种合计。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions:
+    - customer
+    - snapshot_salesperson
+    - customer_department
+    - organization
+    - customer_region
+    - ccbs_customer
+    - ha_customer
+    - currency
+    - month
+    - current_customer_grade
+    - current_customer_resource
+    - current_customer_business_label
+    - current_customer_owner
+    measure: 61_90_debt
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+  aging_91_120_amount_original:
+    disclosures:
+    - id: currency.original.no-cross-currency
+      mode: required_always
+      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+    label: 91至120天账龄（原币）
+    business_definition: 最新账龄快照的91至120天应收原币金额；按各币种分别计量，不跨币种合计。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions:
+    - customer
+    - snapshot_salesperson
+    - customer_department
+    - organization
+    - customer_region
+    - ccbs_customer
+    - ha_customer
+    - currency
+    - month
+    - current_customer_grade
+    - current_customer_resource
+    - current_customer_business_label
+    - current_customer_owner
+    measure: 91_120_debt
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+  aging_121_150_amount_original:
+    disclosures:
+    - id: currency.original.no-cross-currency
+      mode: required_always
+      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+    label: 121至150天账龄（原币）
+    business_definition: 最新账龄快照的121至150天应收原币金额；按各币种分别计量，不跨币种合计。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions:
+    - customer
+    - snapshot_salesperson
+    - customer_department
+    - organization
+    - customer_region
+    - ccbs_customer
+    - ha_customer
+    - currency
+    - month
+    - current_customer_grade
+    - current_customer_resource
+    - current_customer_business_label
+    - current_customer_owner
+    measure: 121_150_debt
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+  aging_151_180_amount_original:
+    disclosures:
+    - id: currency.original.no-cross-currency
+      mode: required_always
+      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+    label: 151至180天账龄（原币）
+    business_definition: 最新账龄快照的151至180天应收原币金额；按各币种分别计量，不跨币种合计。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions:
+    - customer
+    - snapshot_salesperson
+    - customer_department
+    - organization
+    - customer_region
+    - ccbs_customer
+    - ha_customer
+    - currency
+    - month
+    - current_customer_grade
+    - current_customer_resource
+    - current_customer_business_label
+    - current_customer_owner
+    measure: 151_180_debt
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+  aging_181_240_amount_original:
+    disclosures:
+    - id: currency.original.no-cross-currency
+      mode: required_always
+      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+    label: 181至240天账龄（原币）
+    business_definition: 最新账龄快照的181至240天应收原币金额；按各币种分别计量，不跨币种合计。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions:
+    - customer
+    - snapshot_salesperson
+    - customer_department
+    - organization
+    - customer_region
+    - ccbs_customer
+    - ha_customer
+    - currency
+    - month
+    - current_customer_grade
+    - current_customer_resource
+    - current_customer_business_label
+    - current_customer_owner
+    measure: 181_240_debt
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+  aging_241_300_amount_original:
+    disclosures:
+    - id: currency.original.no-cross-currency
+      mode: required_always
+      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+    label: 241至300天账龄（原币）
+    business_definition: 最新账龄快照的241至300天应收原币金额；按各币种分别计量，不跨币种合计。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions:
+    - customer
+    - snapshot_salesperson
+    - customer_department
+    - organization
+    - customer_region
+    - ccbs_customer
+    - ha_customer
+    - currency
+    - month
+    - current_customer_grade
+    - current_customer_resource
+    - current_customer_business_label
+    - current_customer_owner
+    measure: 241_300_debt
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+  aging_301_360_amount_original:
+    disclosures:
+    - id: currency.original.no-cross-currency
+      mode: required_always
+      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+    label: 301至360天账龄（原币）
+    business_definition: 最新账龄快照的301至360天应收原币金额；按各币种分别计量，不跨币种合计。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions:
+    - customer
+    - snapshot_salesperson
+    - customer_department
+    - organization
+    - customer_region
+    - ccbs_customer
+    - ha_customer
+    - currency
+    - month
+    - current_customer_grade
+    - current_customer_resource
+    - current_customer_business_label
+    - current_customer_owner
+    measure: 301_360_debt
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+  aging_over_360_amount_original:
+    disclosures:
+    - id: currency.original.no-cross-currency
+      mode: required_always
+      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+    label: 超过360天账龄（原币）
+    business_definition: 最新账龄快照中超过360天的应收原币金额；按各币种分别计量，不跨币种合计。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions:
+    - customer
+    - snapshot_salesperson
+    - customer_department
+    - organization
+    - customer_region
+    - ccbs_customer
+    - ha_customer
+    - currency
+    - month
+    - current_customer_grade
+    - current_customer_resource
+    - current_customer_business_label
+    - current_customer_owner
+    measure: 361_debt
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+  aging_over_30_amount_original:
+    disclosures:
+    - id: currency.original.no-cross-currency
+      mode: required_always
+      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+    label: 超过30天账龄（原币）
+    business_definition: 最新账龄快照中超过30天的分档金额合计；按各币种分别计量，不跨币种合计。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum_many
+    measure_columns:
+    - 31_60_debt
+    - 61_90_debt
+    - 91_120_debt
+    - 121_150_debt
+    - 151_180_debt
+    - 181_240_debt
+    - 241_300_debt
+    - 301_360_debt
+    - 361_debt
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions:
+    - customer
+    - snapshot_salesperson
+    - customer_department
+    - organization
+    - customer_region
+    - ccbs_customer
+    - ha_customer
+    - currency
+    - month
+    - current_customer_grade
+    - current_customer_resource
+    - current_customer_business_label
+    - current_customer_owner
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+  aging_over_60_amount_original:
+    disclosures:
+    - id: currency.original.no-cross-currency
+      mode: required_always
+      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+    label: 超过60天账龄（原币）
+    business_definition: 最新账龄快照中超过60天的分档金额合计；按各币种分别计量，不跨币种合计。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum_many
+    measure_columns:
+    - 61_90_debt
+    - 91_120_debt
+    - 121_150_debt
+    - 151_180_debt
+    - 181_240_debt
+    - 241_300_debt
+    - 301_360_debt
+    - 361_debt
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions:
+    - customer
+    - snapshot_salesperson
+    - customer_department
+    - organization
+    - customer_region
+    - ccbs_customer
+    - ha_customer
+    - currency
+    - month
+    - current_customer_grade
+    - current_customer_resource
+    - current_customer_business_label
+    - current_customer_owner
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+  aging_over_90_amount_original:
+    disclosures:
+    - id: currency.original.no-cross-currency
+      mode: required_always
+      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+    label: 超过90天账龄（原币）
+    business_definition: 最新账龄快照中超过90天的分档金额合计；按各币种分别计量，不跨币种合计。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum_many
+    measure_columns:
+    - 91_120_debt
+    - 121_150_debt
+    - 151_180_debt
+    - 181_240_debt
+    - 241_300_debt
+    - 301_360_debt
+    - 361_debt
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions:
+    - customer
+    - snapshot_salesperson
+    - customer_department
+    - organization
+    - customer_region
+    - ccbs_customer
+    - ha_customer
+    - currency
+    - month
+    - current_customer_grade
+    - current_customer_resource
+    - current_customer_business_label
+    - current_customer_owner
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+  aging_over_120_amount_original:
+    disclosures:
+    - id: currency.original.no-cross-currency
+      mode: required_always
+      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+    label: 超过120天账龄（原币）
+    business_definition: 最新账龄快照中超过120天的分档金额合计；按各币种分别计量，不跨币种合计。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum_many
+    measure_columns:
+    - 121_150_debt
+    - 151_180_debt
+    - 181_240_debt
+    - 241_300_debt
+    - 301_360_debt
+    - 361_debt
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions:
+    - customer
+    - snapshot_salesperson
+    - customer_department
+    - organization
+    - customer_region
+    - ccbs_customer
+    - ha_customer
+    - currency
+    - month
+    - current_customer_grade
+    - current_customer_resource
+    - current_customer_business_label
+    - current_customer_owner
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+  aging_over_150_amount_original:
+    disclosures:
+    - id: currency.original.no-cross-currency
+      mode: required_always
+      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+    label: 超过150天账龄（原币）
+    business_definition: 最新账龄快照中超过150天的分档金额合计；按各币种分别计量，不跨币种合计。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum_many
+    measure_columns:
+    - 151_180_debt
+    - 181_240_debt
+    - 241_300_debt
+    - 301_360_debt
+    - 361_debt
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions:
+    - customer
+    - snapshot_salesperson
+    - customer_department
+    - organization
+    - customer_region
+    - ccbs_customer
+    - ha_customer
+    - currency
+    - month
+    - current_customer_grade
+    - current_customer_resource
+    - current_customer_business_label
+    - current_customer_owner
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+  aging_over_180_amount_original:
+    disclosures:
+    - id: currency.original.no-cross-currency
+      mode: required_always
+      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+    label: 超过180天账龄（原币）
+    business_definition: 最新账龄快照中超过180天的分档金额合计；按各币种分别计量，不跨币种合计。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum_many
+    measure_columns:
+    - 181_240_debt
+    - 241_300_debt
+    - 301_360_debt
+    - 361_debt
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions:
+    - customer
+    - snapshot_salesperson
+    - customer_department
+    - organization
+    - customer_region
+    - ccbs_customer
+    - ha_customer
+    - currency
+    - month
+    - current_customer_grade
+    - current_customer_resource
+    - current_customer_business_label
+    - current_customer_owner
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+  aging_over_240_amount_original:
+    disclosures:
+    - id: currency.original.no-cross-currency
+      mode: required_always
+      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+    label: 超过240天账龄（原币）
+    business_definition: 最新账龄快照中超过240天的分档金额合计；按各币种分别计量，不跨币种合计。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum_many
+    measure_columns:
+    - 241_300_debt
+    - 301_360_debt
+    - 361_debt
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions:
+    - customer
+    - snapshot_salesperson
+    - customer_department
+    - organization
+    - customer_region
+    - ccbs_customer
+    - ha_customer
+    - currency
+    - month
+    - current_customer_grade
+    - current_customer_resource
+    - current_customer_business_label
+    - current_customer_owner
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+  aging_over_300_amount_original:
+    disclosures:
+    - id: currency.original.no-cross-currency
+      mode: required_always
+      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+    label: 超过300天账龄（原币）
+    business_definition: 最新账龄快照中超过300天的分档金额合计；按各币种分别计量，不跨币种合计。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dwd.customer_aging_dwd
+    aggregation: sum_many
+    measure_columns:
+    - 301_360_debt
+    - 361_debt
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters: {}
+    allowed_dimensions:
+    - customer
+    - snapshot_salesperson
+    - customer_department
+    - organization
+    - customer_region
+    - ccbs_customer
+    - ha_customer
+    - currency
+    - month
+    - current_customer_grade
+    - current_customer_resource
+    - current_customer_business_label
+    - current_customer_owner
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+  uncredited_positive_debt_amount_original:
+    disclosures:
+    - id: currency.original.no-cross-currency
+      mode: required_always
+      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+    - id: receivable.uncredited_positive_debt_amount_original.legacy-note
+      mode: contract_only
+      text: 本指标单列无授信记录的正欠款，不与超账期金额混算。
+    label: 无授信有欠款金额（原币）
+    business_definition: 最新欠款快照中存在正数欠款、但在相同客户组织与币种范围内没有授信记录的原币金额；按各币种分别计量，不跨币种合计。
+    unit: 原币金额（按币种分别计量）
+    table: vk_dw.customer_debt_bymonth_dw
+    aggregation: sum
+    measure: debt_amount
+    time_field: bill_date
+    time_policy: latest_snapshot
+    required_filters:
+      debt_amount_rmb:
+        op: gt
+        value: 0
+    metric_join:
+      dataset: vk_dwd.customer_credit_dwd
+      local_columns:
+      - customer_id
+      - org_name
+      - currency_no
+      remote_columns:
+      - customer_id
+      - org_name
+      - currency_no
+      cardinality: many_to_one
+      required_missing: id
+    allowed_dimensions:
+    - customer
+    - snapshot_salesperson
+    - customer_department
+    - organization
+    - customer_region
+    - ccbs_customer
+    - ha_customer
+    - brand_customer
+    - ht_customer
+    - currency
+    - month
+    - current_customer_grade
+    - current_customer_resource
+    - current_customer_business_label
+    - current_customer_owner
+    answer_note: 本指标单列无授信记录的正欠款，不与超账期金额混算；结果按币种分别展示，不跨币种汇总。
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
 
 related_metric_refs:
 - domain: receivable

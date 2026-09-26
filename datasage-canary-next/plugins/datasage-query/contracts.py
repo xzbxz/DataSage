@@ -14,10 +14,11 @@ from .capability_contract import (
     SNAPSHOT_MONTHS_BEFORE_COMPARISON,
     assert_capability_boundary,
 )
-from . import analytical_handlers, capability_contract, contract_store, public_fields
+from . import analytical_handlers, capability_contract, contract_store, public_fields, currency_basis
+from .query_errors import QueryFailure
 from .scorecard import performance_scorecard_manifest
 
-_MODEL_PROJECTION_VERSION = "datasage-model-semantic-projection/v5"
+_MODEL_PROJECTION_VERSION = "datasage-model-semantic-projection/v6"
 _CATALOG_VERSION = "datasage-metric-catalog/v1"
 _DATASETS_CONTRACT_PATH = "plugins/datasage-query/contracts/datasets.yaml"
 _MANUAL_CATALOG_KEYS = {
@@ -1049,7 +1050,12 @@ def _model_semantic_projection(
         answer_note = _safe_business_text(
             definition.get("answer_note"), physical_identifiers
         )
+        try:
+            basis_capability = currency_basis.capability(code, semantics)
+        except QueryFailure as exc:
+            raise ContractFailure(exc.code, exc.message) from exc
         optional_metric_fields = {
+            "currency_basis": basis_capability,
             "unit": _copy_guidance(definition.get("unit")),
             "unit_policy": _copy_guidance(definition.get("unit_policy")),
             "currency_policy": _currency_policy_projection(
@@ -1316,6 +1322,7 @@ def _catalog_summary(domain: str, planner: Mapping[str, Any]) -> dict[str, Any]:
                 "unit",
                 "unit_policy",
                 "currency_policy",
+                "currency_basis",
                 "required_attribution_mode",
                 "allowed_attribution_modes",
                 "allowed_dimensions",
@@ -1392,6 +1399,7 @@ def _catalog_expert_index(domain: str, planner: Mapping[str, Any]) -> dict[str, 
                 "unit",
                 "unit_policy",
                 "currency_policy",
+                "currency_basis",
                 "required_attribution_mode",
                 "allowed_attribution_modes",
                 "allowed_dimensions",

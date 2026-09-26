@@ -994,7 +994,9 @@ def physical_request_cost(request: Mapping[str, Any]) -> int:
         raise CapabilityContractError(
             "INVALID_INPUT", "A request cannot contain both complete operations."
         )
-    return 2 if complete_change or complete_target_gap else 1
+    cost = 2 if complete_change or complete_target_gap else 1
+    # Automatic basis selection reserves a scope probe plus the monetary SQL.
+    return cost * (2 if request.get("currency_basis") == "auto" else 1)
 
 
 _FORBIDDEN_CAPABILITY_KEYS = frozenset(

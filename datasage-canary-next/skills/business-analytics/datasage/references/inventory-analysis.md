@@ -41,6 +41,12 @@ Only the contract's unit policy applies: `m`, `y`, `kg`, and `Pcs` remain
 separate, with only the declared `M` spelling normalization. Do not convert
 or add unlike units. Original currency remains per-currency.
 
+Currency basis is metric-owned. For an ordinary amount question, `auto` may
+retain original currency for a single supported currency; cross-currency
+valuation or comparison requires the governed RMB metric when one is registered.
+Explicit RMB metrics remain RMB, while an original-only metric without an RMB
+counterpart remains per-currency.
+
 Registered slow-pool results retain source-row, price-state, classification,
 identity, unit, and known-subset gaps. IDK retains source-row,
 NULL/zero/negative-price, identity, unit, and known quantity/roll gaps; it has
