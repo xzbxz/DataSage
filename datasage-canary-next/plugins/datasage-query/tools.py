@@ -2999,6 +2999,13 @@ def _attach_formal_dso_calculation_attestations(
             currency_scope=currency_scope,
         )
         facts = claim.get("facts")
+        if request.get("metric") == "formal_receivable_turnover_days":
+            # RMB DSO publishes its attested gross-delivery alias only.
+            if isinstance(facts, dict):
+                facts.pop("delivery_amount_rmb", None)
+            fact_units = claim.get("fact_units")
+            if isinstance(fact_units, dict):
+                fact_units.pop("delivery_amount_rmb", None)
         if attestation is not None and isinstance(facts, dict):
             component_values = attestation.get("component_values")
             if attestation.get("status") == "verified" and isinstance(
