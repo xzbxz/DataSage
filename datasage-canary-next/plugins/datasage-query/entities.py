@@ -694,7 +694,9 @@ def _validate_args(
     if not isinstance(token, str) or not 1 <= len(token.strip()) <= 128:
         raise EntityFailure("INVALID_INPUT", "token 必须是 1 到 128 个字符的字符串。")
     domain = args.get("domain")
-    if domain is not None and domain not in _DOMAINS:
+    if domain is not None and (
+        not isinstance(domain, str) or domain not in _DOMAINS
+    ):
         raise EntityFailure("INVALID_INPUT", "domain 不受支持。")
     metric = args.get("metric")
     if metric is not None and (

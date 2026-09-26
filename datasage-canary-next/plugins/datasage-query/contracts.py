@@ -1666,7 +1666,7 @@ def datasage_catalog(args: dict[str, Any], **_kwargs: Any) -> str:
                     )
                 normalized.append((None, None, "performance_scorecard"))
                 continue
-            if domain not in DOMAIN_SOURCES:
+            if not isinstance(domain, str) or domain not in DOMAIN_SOURCES:
                 raise ContractFailure("INVALID_INPUT", "业务域不受支持。")
             if metric is not None and (
                 not isinstance(metric, str)
@@ -1674,7 +1674,10 @@ def datasage_catalog(args: dict[str, Any], **_kwargs: Any) -> str:
                 or len(metric) > 100
             ):
                 raise ContractFailure("INVALID_INPUT", "metric 格式无效。")
-            if view is not None and view not in {"expert_index", "full", "audit"}:
+            if view is not None and (
+                not isinstance(view, str)
+                or view not in {"expert_index", "full", "audit"}
+            ):
                 raise ContractFailure("INVALID_INPUT", "view 不受支持。")
             if metric is not None and view is not None:
                 raise ContractFailure(

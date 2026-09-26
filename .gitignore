@@ -414,3 +414,7 @@ datasage-canary-next/docs/workflow-runtime-acceptance.md
 !datasage-canary-next/tests/test_independent_review.py
 !datasage-canary-next/docs/independent-review-20260924.md
 !datasage-canary-next/docs/remediation-v6-apply-20260924.md
+
+# Independent source audit 2026-09-26: owned test and record.
+!datasage-canary-next/tests/test_independent_contract_boundaries_20260926.py
+!datasage-canary-next/docs/independent-review-20260926.md
