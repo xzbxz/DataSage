@@ -906,8 +906,10 @@ def _aggregate_components(
     """
 
     components = source.get("components")
-    if not isinstance(components, list) or not components:
-        raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "组合分析指标缺少数据组件。")
+    try:
+        capability_contract.validate_signed_components_shape(components)
+    except capability_contract.CapabilityContractError as exc:
+        raise AnalysisQueryError(exc.code, exc.message) from exc
 
     component_sql: list[str] = []
     params: list[Any] = []
@@ -915,18 +917,12 @@ def _aggregate_components(
     expected_outputs: list[tuple[str, str]] | None = None
     source_tables: list[str] = []
     for index, component in enumerate(components):
-        if not isinstance(component, dict):
-            raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "组合分析指标组件定义无效。")
         table = component.get("table")
         dataset = _dataset(table, datasets_contract)
         measure = _approved(component.get("measure"), dataset)
         time_field = _approved(component.get("time_field"), dataset)
         sign = component.get("sign", 1)
-        if sign not in {-1, 1}:
-            raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "组合分析指标符号只能是 1 或 -1。")
         mappings = component.get("dimension_mappings") or {}
-        if not isinstance(mappings, dict):
-            raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "组合分析指标维度映射无效。")
         keys, outputs = _component_mapping_parts(selected, mappings, dataset)
         if time_bucket == "month":
             keys = [(_PERIOD_KEY, "period"), *keys]
@@ -1488,6 +1484,10 @@ def _target_completion_query(
     observed_on: date | None = None,
 ) -> tuple[str, list[Any], dict[str, Any]]:
     query_observed_on = observed_on or _business_today()
+    try:
+        capability_contract.validate_metric_execution_contract(metric)
+    except capability_contract.CapabilityContractError as exc:
+        raise AnalysisQueryError(exc.code, exc.message) from exc
     selected = request.get("dimensions") or []
     request_filters = request.get("metric_filters") or {}
     bindings = _entity_bindings(request)
@@ -1518,11 +1518,6 @@ def _target_completion_query(
     target_measure = _approved(target.get("measure"), target_dataset)
     target_time = _approved(target.get("time_field"), target_dataset)
     target_time_value_format = target.get("time_value_format", "month")
-    if target.get("time_granularity") == "month" and target_time_value_format not in {
-        "month",
-        "date",
-    }:
-        raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "目标时间值格式无效。")
 
     if time_bucket == "month" and request.get("time_range") is None:
         current_month = query_observed_on.replace(day=1)

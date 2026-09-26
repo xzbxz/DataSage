@@ -357,13 +357,12 @@ def _validate_metric_contract(
     metric = metrics.get(metric_code) if isinstance(metrics, Mapping) else None
     if not isinstance(metric_code, str) or not isinstance(metric, Mapping):
         raise QueryFailure("UNSUPPORTED_METRIC", "该指标尚未进入受控指标定义。")
+    try:
+        capability_contract.validate_metric_execution_contract(metric)
+    except CapabilityContractError as exc:
+        raise QueryFailure(exc.code, exc.message) from exc
     _ensure_metric_available(metric)
     _ensure_metric_tree_available(metric_code, semantics)
-    if (
-        metric.get("query_kind") == "target_completion"
-        and metric.get("unit") != capability_contract.TARGET_COMPLETION_UNIT
-    ):
-        raise QueryFailure("CONTRACT_UNAVAILABLE", "目标完成率主值单位必须是比例。")
     _validate_detail_request_capabilities(request, metric, semantics)
     normalized = dict(request)
     required_time_bucket = metric.get("required_time_bucket")

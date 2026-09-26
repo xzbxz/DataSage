@@ -764,9 +764,13 @@ def _pending_capability_projection(
         "operation_summary": [],
         "supports_dimensions": False,
         "supports_change_decomposition": False,
-        "delivery_scope_policy": delivery_scope_policy(definition),
-        "scope_flags": _delivery_scope_flags(metric_code, definition, semantics),
     }
+    # Delivery scope facts are owned only by delivery metrics. Pending
+    # capabilities in other domains must remain discoverable without importing
+    # delivery-only policy into their public contract.
+    if domain == "delivery":
+        result["delivery_scope_policy"] = delivery_scope_policy(definition)
+        result["scope_flags"] = _delivery_scope_flags(metric_code, definition, semantics)
     activation_gate = availability.get("activation_gate")
     if isinstance(activation_gate, Mapping):
         state = activation_gate.get("state")
@@ -935,21 +939,23 @@ def _model_semantic_projection(
         definition = metrics[raw_code]
         if not isinstance(definition, Mapping):
             raise ContractFailure("CONTRACT_UNAVAILABLE", f"metric {code} is invalid")
-        # Unverified data paths are absent from model authorization. The query
-        # executor independently enforces the same availability contract. Keep
-        # a separate non-executable capability index for delivery so Hermes can
-        # distinguish a known pending quantity from an unknown metric.
+        try:
+            capability_contract.validate_metric_execution_contract(definition)
+        except CapabilityContractError as exc:
+            raise ContractFailure(exc.code, exc.message) from exc
+        # Unverified data paths are absent from model authorization. Keep a
+        # separate non-executable capability index for every domain so Hermes
+        # can distinguish a known pending capability from an unknown metric.
         if _is_unavailable(definition):
-            if domain == "delivery":
-                pending_capabilities.append(
-                    _pending_capability_projection(
-                        domain,
-                        code,
-                        definition,
-                        semantics,
-                        physical_identifiers,
-                    )
+            pending_capabilities.append(
+                _pending_capability_projection(
+                    domain,
+                    code,
+                    definition,
+                    semantics,
+                    physical_identifiers,
                 )
+            )
             continue
         allowed_dimensions, by_attribution = _metric_dimension_contract(
             definition, metrics

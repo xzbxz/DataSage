@@ -740,6 +740,170 @@ def validate_availability(definition: Mapping[str, Any]) -> str:
     return status
 
 
+def _shape_text(value: Any, *, message: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise CapabilityContractError("CONTRACT_UNAVAILABLE", message)
+    return value
+
+
+def _shape_output_fields(value: Any, *, message: str) -> None:
+    if not isinstance(value, list):
+        raise CapabilityContractError("CONTRACT_UNAVAILABLE", message)
+    for item in value:
+        if not isinstance(item, Mapping):
+            raise CapabilityContractError("CONTRACT_UNAVAILABLE", message)
+        _shape_text(item.get("column"), message=message)
+        alias = item.get("alias")
+        if alias is not None:
+            _shape_text(alias, message=message)
+
+
+def _validate_target_path_mapping(
+    value: Any,
+    *,
+    message: str,
+) -> None:
+    if not isinstance(value, Mapping):
+        raise CapabilityContractError("CONTRACT_UNAVAILABLE", message)
+    for key in ("target_key", "actual_key"):
+        _shape_text(value.get(key), message=message)
+    for key in ("target_filter", "actual_filter"):
+        if key in value:
+            _shape_text(value.get(key), message=message)
+    for key in ("target_outputs", "actual_outputs"):
+        if key in value:
+            _shape_output_fields(value.get(key), message=message)
+
+
+def _validate_target_component_mapping(
+    value: Any,
+    *,
+    message: str,
+) -> None:
+    if not isinstance(value, Mapping):
+        raise CapabilityContractError("CONTRACT_UNAVAILABLE", message)
+    _shape_text(value.get("key"), message=message)
+    if "filter" in value:
+        _shape_text(value.get("filter"), message=message)
+    if "outputs" in value:
+        _shape_output_fields(value.get("outputs"), message=message)
+
+
+def validate_signed_components_shape(value: Any) -> None:
+    """Validate the shared signed-component container without physical SQL checks."""
+
+    missing_message = "组合分析指标组件定义无效。"
+    if not isinstance(value, list) or not value:
+        raise CapabilityContractError(
+            "CONTRACT_UNAVAILABLE", "组合分析指标缺少数据组件。"
+        )
+    for component in value:
+        if not isinstance(component, Mapping):
+            raise CapabilityContractError("CONTRACT_UNAVAILABLE", missing_message)
+        for key in ("table", "measure", "time_field"):
+            _shape_text(component.get(key), message=missing_message)
+        if component.get("sign", 1) not in {-1, 1}:
+            raise CapabilityContractError(
+                "CONTRACT_UNAVAILABLE", "组合分析指标符号只能是 1 或 -1。"
+            )
+        mappings = component.get("dimension_mappings")
+        if mappings is not None and not isinstance(mappings, Mapping):
+            raise CapabilityContractError(
+                "CONTRACT_UNAVAILABLE", "组合分析指标维度映射无效。"
+            )
+
+
+def _execution_availability(definition: Mapping[str, Any]) -> str:
+    """Keep availability-shape failures in the shared validator's error type."""
+    try:
+        return validate_availability(definition)
+    except AvailabilityContractError as exc:
+        raise CapabilityContractError(exc.code, exc.message) from exc
+
+
+def _validate_target_completion_path(
+    path_code: Any,
+    path: Any,
+) -> None:
+    message = "目标完成指标取数路径结构合同无效。"
+    _shape_text(path_code, message=message)
+    if not isinstance(path, Mapping):
+        raise CapabilityContractError("CONTRACT_UNAVAILABLE", message)
+    # Validate the same availability shape used by execution. An unavailable
+    # path remains a known non-executable path; it is not silently rewritten.
+    if _execution_availability(path) != "available":
+        return
+
+    allowed = path.get("allowed_dimensions") or []
+    if (
+        not isinstance(allowed, list)
+        or any(not isinstance(item, str) or not item.strip() for item in allowed)
+        or len(set(allowed)) != len(allowed)
+    ):
+        raise CapabilityContractError("CONTRACT_UNAVAILABLE", message)
+    mappings = path.get("dimension_mappings") or {}
+    if not isinstance(mappings, Mapping):
+        raise CapabilityContractError("CONTRACT_UNAVAILABLE", message)
+    for dimension in allowed:
+        _validate_target_path_mapping(mappings.get(dimension), message=message)
+
+    target = path.get("target")
+    actual = path.get("actual")
+    if not isinstance(target, Mapping) or not isinstance(actual, Mapping):
+        raise CapabilityContractError("CONTRACT_UNAVAILABLE", message)
+    for key in ("table", "measure", "time_field"):
+        _shape_text(target.get(key), message=message)
+    if target.get("time_granularity") == "month" and target.get(
+        "time_value_format", "month"
+    ) not in {"month", "date"}:
+        raise CapabilityContractError("CONTRACT_UNAVAILABLE", message)
+
+    components = actual.get("components")
+    if components is not None:
+        validate_signed_components_shape(components)
+        for component in components:
+            component_mappings = component.get("dimension_mappings") or {}
+            if not isinstance(component_mappings, Mapping):
+                raise CapabilityContractError("CONTRACT_UNAVAILABLE", message)
+            for dimension in allowed:
+                _validate_target_component_mapping(
+                    component_mappings.get(dimension), message=message
+                )
+    else:
+        for key in ("table", "measure", "time_field"):
+            _shape_text(actual.get(key), message=message)
+
+
+def validate_metric_execution_contract(metric: Mapping[str, Any]) -> None:
+    """Validate low-dependency execution facts shared by catalog and executor.
+
+    This deliberately covers only the target-completion contract shape that the
+    catalog must publish consistently with the analytical builder. Physical table
+    and column allowlists, requested-dimension compatibility, and SQL compilation
+    remain owned by the execution builder.
+    """
+
+    if not isinstance(metric, Mapping):
+        raise CapabilityContractError(
+            "CONTRACT_UNAVAILABLE", "指标执行合同格式无效。"
+        )
+    if "availability" in metric:
+        _execution_availability(metric)
+    if metric.get("query_kind") != "target_completion":
+        return
+    if metric.get("unit") != TARGET_COMPLETION_UNIT:
+        raise CapabilityContractError(
+            "CONTRACT_UNAVAILABLE", "目标完成率主值单位必须是比例。"
+        )
+    paths = metric.get("paths")
+    if not isinstance(paths, Mapping) or not paths:
+        raise CapabilityContractError(
+            "CONTRACT_UNAVAILABLE", "目标完成指标缺少受控取数路径。"
+        )
+    for path_code, path in paths.items():
+        _validate_target_completion_path(path_code, path)
+
+
 def query_request_schema_conditions() -> list[dict]:
     """Return JSON Schema conditions generated from cross-domain field facts."""
 
