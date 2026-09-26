@@ -96,7 +96,7 @@ candidate, so those scenarios do not bound the unknown governed total.
 - **Candidate actions** (advice only): list the affected details or groups for the
   operations owner to reconcile; re-read after the window closes. Never present a
   link as proof of cause or credit.
-- **Stop when**: the time basis is not the verified one, identities conflict or
+- **Stop when** (only the unsupported claim or comparison): the time basis is not the verified one, identities conflict or
   are unknown, the result is truncated, or the requested judgement is causality
   or performance.
 

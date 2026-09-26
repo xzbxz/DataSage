@@ -72,15 +72,20 @@ observation, including the possibility of later updates.
   report grains (customer-month, department-month, product-month, order-lifetime)
   are separate ledgers: differences between them are observations unless a
   complete compatible bridge is returned.
-- **Materiality**: margin and expense verdicts need the owner's benchmark; missing
-  expenses are not zero, and coverage states decide whether a margin may be read
-  at all.
+- **Materiality**: evaluative margin and expense verdicts need the owner's
+  benchmark. Missing expenses are not zero. Availability of a recorded gross
+  margin depends on its own returned numerator, denominator and typed state;
+  an independently missing expense does not by itself erase that observation.
+  It does block unsupported claims of complete expenses or finalized net profit.
 - **Candidate actions** (advice only): list the customers or products whose cost
   or discount moved, with the covered/uncovered split. Pricing, write-offs or
   customer-treatment decisions belong to the business owner.
-- **Stop when**: grains or periods are mixed, expenses are missing (unfilled),
-  a currency cannot be isolated, or the result would be presented as closed net
-  profit.
+- **Stop when** (only the unsupported comparison or verdict): grains or periods
+  are incompatible, a required operand is missing, a currency cannot be isolated,
+  or the result would be presented as closed net profit. Keep independently
+  supported recorded revenue, gross profit and gross margin when their own
+  returned state permits it. Show missing expenses as missing; do not fill them
+  with zero, infer a complete cost total, or recompute the source gross profit.
 
 ## Review prompts
 

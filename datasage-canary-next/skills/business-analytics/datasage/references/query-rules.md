@@ -121,10 +121,18 @@ does not duplicate its formulas, thresholds, pool filters or return policies.
 
 ## Currency and units
 
-- Aggregate monetary metrics in RMB by default.
-- Original-currency amounts may be used only when explicitly requested. If a
-  currency is named, filter to it. If original currency is requested without a
-  named currency, group by the governed currency dimension.
+- The exact metric contract owns the monetary basis. Prefer its governed RMB
+  metric when that is available and fits the question; this default does not
+  convert an original-currency-only metric into RMB or authorize substitution.
+- For a metric available only in verified transaction currency (for example,
+  linked pattern-delivery amounts), preserve that basis even when the user did
+  not explicitly request original currency. Explain an unavailable requested
+  conversion rather than inventing an exchange rate or summing unlike units.
+- For original-currency metrics, or metrics whose contract requires a currency
+  scope, use a supported filter when a currency is named and retain any mandatory
+  currency grouping. Without a named currency, use that contract's governed
+  currency dimension and keep separate currency totals. Do not add currency
+  grouping to a governed RMB metric that does not publish that dimension.
 - Result display and conversion meanings are documented in
   [`datasage.answer-boundary/v1`](answer-boundary.md), which owns returned sign,
   unit, scale, currency, and ratio interpretation.
@@ -134,8 +142,12 @@ does not duplicate its formulas, thresholds, pool filters or return policies.
 - Send one complete typed request for every independent result and give it a
   unique `request_id`.
 - A filter narrows input rows; it does not create an output dimension.
-- Dimensions select the returned grouping grain within the metric contract;
-  an empty dimension list requests an overall aggregate.
+- Dimensions select the returned grouping grain within the metric contract.
+  An empty dimension list selects no additional caller-requested grouping; the
+  contract may still apply an intrinsic/default grain (such as currency for
+  linked pattern-delivery amounts). Read the effective returned dimensions;
+  do not assume one overall row or sum required groups merely because the
+  request's dimension list is empty.
 - A follow-up may reuse context understood by Hermes, but every new
   `datasage_query` call must carry a complete request. No plugin-private
   conversation state may be required.

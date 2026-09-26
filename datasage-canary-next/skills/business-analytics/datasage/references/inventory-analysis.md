@@ -83,9 +83,11 @@ and basis as returned evidence rather than creating a new business rule.
 - **Candidate actions** (advice only): list the products or warehouses to review
   with their values, ages and coverage gaps; disposal, write-down or purchasing
   changes need the operations owner's approval.
-- **Stop when**: meters/yards/kilograms/pieces would be summed, cost coverage is
+- **Stop when** (only the unsupported claim or comparison): meters/yards/kilograms/pieces would be summed, cost coverage is
   incomplete, the snapshot period is not the one being discussed, or the request
-  needs an ungoverned capability (physical age, loss, health).
+  needs an ungoverned capability (physical age, loss, health). Missing cost
+  blocks cost-dependent valuation or turnover claims, not independent quantity
+  or roll observations whose own unit, scope and returned coverage are valid.
 
 ## Review prompts
 

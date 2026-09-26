@@ -79,9 +79,12 @@ the requested window.
 - **Candidate actions** (advice only): list the customers to review with their
   balances and ages; for anything above the owner's threshold, route to the
   credit owner. DataSage does not set credit limits or approve releases.
-- **Stop when**: policy or credit days are missing, the snapshot's freshness is
+- **Stop when** (only the unsupported claim or comparison): policy or credit days are missing, the snapshot's freshness is
   unknown, `receivable_quantity` would be summed across units, or the request
   needs a capability that is not governed (cash, liquidity, customer loss).
+  Missing credit policy blocks policy-dependent overdue or risk verdicts, not
+  independently valid debt/aging observations; retain their own snapshot and
+  coverage. Never convert that policy gap to zero overdue or a no-risk claim.
 
 ## Review prompts
 

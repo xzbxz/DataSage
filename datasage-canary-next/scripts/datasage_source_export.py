@@ -74,6 +74,8 @@ _ROOT_FILES = (
     "docs/system-review-v5-20260924.md",
     "docs/independent-review-20260924.md",
     "tests/test_independent_review.py",
+    "tests/test_independent_contract_boundaries_20260926.py",
+    "docs/independent-review-20260926.md",
     "docs/remediation-v4-apply-20260924.md",
     "docs/remediation-v5-apply-20260924.md",
     "docs/remediation-v6-apply-20260924.md",

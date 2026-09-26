@@ -129,7 +129,7 @@ customer treatment or target commitments.
 - **Candidate actions** (advice only): name the customer, product or warehouse
   cuts worth a review and the check that would settle each hypothesis. Resource
   allocation stays with the accountable owner.
-- **Stop when**: period, scope, ledger, unit or currency are incompatible, the
+- **Stop when** (only the unsupported claim or comparison): period, scope, ledger, unit or currency are incompatible, the
   state is pending/truncated/incomplete, or the request needs a causal, health or
   blame statement the evidence cannot carry.
 

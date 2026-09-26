@@ -43,7 +43,8 @@ mode only where the selected contract exposes one, such as target allocation.
 For net receipt, rely on the returned composite metric state and component
 coverage; do not promise separate component states unless they are actually
 returned. Original currency must be filtered to one currency or grouped by
-`currency_no`.
+`currency`, the governed public dimension. Use the published request key, not
+an underlying storage-column name.
 
 `delivery_receipt_comparison` has its own governed window and intentionally
 asymmetric population. For this paired metric, retain each fact component's
@@ -91,7 +92,7 @@ result.
 - **Candidate actions** (advice only): ask the customer owner to check settlement
   timing, and re-read after the return-settlement period closes. Anything touching
   credit or customer treatment needs the human approver.
-- **Stop when**: the comparison's population or period is incompatible, the state
+- **Stop when** (only the unsupported claim or comparison): the comparison's population or period is incompatible, the state
   is pending/incomplete/truncated, currencies cannot be isolated, or the requested
   capability (cash, collection quality) is not governed.
 
