@@ -49,12 +49,12 @@ currency_policy_templates:
     never_sum_mixed_currency: true
 
 currency_basis_pairs:
-  - rmb_metric: current_inventory_amount_rmb
-    original_metric: current_inventory_amount_original
-  - rmb_metric: month_end_inventory_cost_rmb
-    original_metric: month_end_inventory_cost_original
-  - rmb_metric: month_end_inventory_ddp_rmb
-    original_metric: month_end_inventory_ddp_original
+  - rmb: current_inventory_amount_rmb
+    original: current_inventory_amount_original
+  - rmb: month_end_inventory_cost_rmb
+    original: month_end_inventory_cost_original
+  - rmb: month_end_inventory_ddp_rmb
+    original: month_end_inventory_ddp_original
 
 dimensions:
   customer:

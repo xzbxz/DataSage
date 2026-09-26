@@ -133,6 +133,24 @@ def build_probe(request, datasets, semantics, builder, *, observed_on=None):
     )
 
 
+def validate_pair_bindings(request, semantics):
+    """Do not carry an entity identity across different counterpart contracts."""
+    from . import capability_contract
+    bindings = request.get("_entity_bindings") or {}
+    if not bindings:
+        return
+    refs = request["_currency_basis_plan"]["counterparts"]
+    if set(refs) != {"rmb", "original"}:
+        return
+    try:
+        left = capability_contract.effective_dimension_definitions(semantics, refs["rmb"])
+        right = capability_contract.effective_dimension_definitions(semantics, refs["original"])
+    except capability_contract.CapabilityContractError as exc:
+        raise QueryFailure(exc.code, exc.message) from exc
+    if any(left.get(code) != right.get(code) for code in bindings):
+        raise QueryFailure("CURRENCY_COUNTERPART_SCOPE_MISMATCH", "币种对应指标的实体范围定义不同，不能复用绑定；请明确选择精确指标重新查询。")
+
+
 def resolve_probe(request, rows, truncated):
     if truncated or len(rows) != 1 or not isinstance(rows[0], Mapping):
         raise QueryFailure("CURRENCY_SCOPE_UNVERIFIED", "币种范围证据不完整。")

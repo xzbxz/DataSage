@@ -983,7 +983,7 @@ def validate_request_field_contract(request: Mapping[str, Any]) -> None:
             raise CapabilityContractError("INVALID_INPUT", "Unsupported inventory_scope.")
 
 
-def physical_request_cost(request: Mapping[str, Any]) -> int:
+def physical_request_cost(request: Mapping[str, Any], *, currency_probe: bool | None = None) -> int:
     """Return the physical-slot cost of one public request branch."""
 
     if not isinstance(request, Mapping):
@@ -996,7 +996,8 @@ def physical_request_cost(request: Mapping[str, Any]) -> int:
         )
     cost = 2 if complete_change or complete_target_gap else 1
     # Automatic basis selection reserves a scope probe plus the monetary SQL.
-    return cost * (2 if request.get("currency_basis") == "auto" else 1)
+    needs_probe = request.get("currency_basis") == "auto" and currency_probe is not False
+    return cost * (2 if needs_probe else 1)
 
 
 _FORBIDDEN_CAPABILITY_KEYS = frozenset(

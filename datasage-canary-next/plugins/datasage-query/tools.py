@@ -1070,7 +1070,12 @@ def _allocate_public_request_branches(
             # the same validation per public branch first so one malformed
             # operation cannot escape into the batch-level exception handler.
             _validate_request(raw_request)
-            cost = physical_request_cost(raw_request)
+            needs_currency_probe = False
+            if raw_request.get("currency_basis") == "auto":
+                _, budget_semantics = _contracts(raw_request["domain"])
+                basis_info = currency_basis.capability(raw_request["metric"], budget_semantics)
+                needs_currency_probe = bool(basis_info and set(basis_info["counterparts"]) == {"rmb", "original"})
+            cost = physical_request_cost(raw_request, currency_probe=needs_currency_probe)
         except CapabilityContractError as exc:
             local_failures[request_id] = QueryFailure(
                 exc.code,
@@ -5307,6 +5312,12 @@ def _run_one(
     business_metric_ref, failure_metric_label = _failure_metric_identity(
         raw_request, prepared
     )
+    if (isinstance(prepared, Mapping)
+            and isinstance(prepared.get("request"), Mapping)
+            and (prepared["request"].get("_currency_basis_plan") or {}).get("requires_probe")):
+        business_metric_ref, failure_metric_label = _failure_metric_identity(
+            raw_request, {"request": raw_request, "semantics": prepared.get("semantics")},
+        )
     try:
         source_evidence_ref = _consistent_source_evidence_ref(
             preflight_source_evidence_refs
@@ -5330,6 +5341,7 @@ def _run_one(
         resolved_entities = list(prepared.get("resolved_entities") or [])
         basis_plan = request.get("_currency_basis_plan")
         if isinstance(basis_plan, Mapping) and basis_plan.get("requires_probe"):
+            currency_basis.validate_pair_bindings(request, semantics)
             if execute_query is None:
                 # Discovery and the selected metric share one read-only snapshot.
                 with _ConsistentSnapshotExecutor(deadline_at=deadline_at) as snapshot:
@@ -5357,6 +5369,7 @@ def _run_one(
             preflight_source_evidence_refs = (*preflight_source_evidence_refs, probe_source)
             source_evidence_ref = _consistent_source_evidence_ref(preflight_source_evidence_refs)
             request = currency_basis.resolve_probe(request, probe_rows, probe_truncated)
+            business_metric_ref, failure_metric_label = _failure_metric_identity(request, {"request": request, "semantics": semantics})
             request = _validate_metric_contract(request, semantics)
             request = _validate_metric_filter_value_contracts(request, semantics)
         semantics = currency_basis.with_disclosure(request, semantics)
