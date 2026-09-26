@@ -663,6 +663,7 @@ def _settlement_query(
     )
     outer_dimensions = [_quote_column(output) for _, output in selected_columns]
     quality_columns = (
+        "COUNT(*) AS per_bill_count, "
         "SUM(settlement_days < 0) AS excluded_negative_bill_count, "
         "SUM(has_open_balance = 1) AS excluded_open_balance_bill_count, "
         "SUM(CASE WHEN (missing_bill_time_flag = 1 OR missing_balance_flag = 1) AND has_open_balance = 0 "
@@ -705,10 +706,9 @@ def _settlement_query(
         group_parts.append(band)
     missing_dates = f"COALESCE(q.{_quote_column('missing_eligibility_count')}, 0)"
     known_values = "COUNT(e.document_id)"
-    matched_rows = (
-        f"({known_values} + COALESCE(q.{_quote_column('excluded_negative_bill_count')}, 0) + "
-        f"COALESCE(q.{_quote_column('excluded_open_balance_bill_count')}, 0) + {missing_dates})"
-    )
+    # Exclusion reasons may overlap. This is the per-bill population for the
+    # selected business group, repeated (not additive) across distribution bands.
+    matched_rows = f"COALESCE(q.{_quote_column('per_bill_count')}, 0)"
     select_parts.extend([
         f"CASE WHEN {missing_dates} > 0 OR {known_values} = 0 THEN NULL ELSE {value_sql} END AS {_quote_column('metric_value')}",
         f"CASE WHEN {known_values} > 0 THEN {value_sql} ELSE NULL END AS {_quote_column('known_subset_value')}",
@@ -735,6 +735,7 @@ def _settlement_query(
     if group_parts:
         sql += " GROUP BY " + ", ".join([
             *group_parts,
+            "q.per_bill_count",
             "q.excluded_negative_bill_count",
             "q.excluded_open_balance_bill_count",
             "q.missing_eligibility_count",
