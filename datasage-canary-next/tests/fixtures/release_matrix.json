@@ -414,7 +414,7 @@
   "capabilities": {
     "domain.delivery": {
       "surface": "domain.delivery",
-      "sample": 36,
+      "sample": 37,
       "pass": 0,
       "sample_source": "tests/fixtures/metric_readiness_register.json",
       "reproduction_path": "tests/test_metric_readiness_register.py",
@@ -427,7 +427,7 @@
     },
     "domain.receipt": {
       "surface": "domain.receipt",
-      "sample": 13,
+      "sample": 14,
       "pass": 0,
       "sample_source": "tests/fixtures/metric_readiness_register.json",
       "reproduction_path": "tests/test_metric_readiness_register.py",
@@ -440,7 +440,7 @@
     },
     "domain.receivable": {
       "surface": "domain.receivable",
-      "sample": 51,
+      "sample": 72,
       "pass": 0,
       "sample_source": "tests/fixtures/metric_readiness_register.json",
       "reproduction_path": "tests/test_metric_readiness_register.py",
@@ -611,7 +611,7 @@
   "capability_counts": {
     "surfaces": 15,
     "domains": 7,
-    "metrics_total": 215,
+    "metrics_total": 238,
     "metrics_verified": 0,
     "cases_total": 24,
     "cases_reviewed": 0

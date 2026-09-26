@@ -60,14 +60,14 @@
           "lines": 117
         },
         "SKILL.md": {
-          "characters": 7284,
-          "bytes": 7286,
-          "lines": 136
+          "characters": 5971,
+          "bytes": 5973,
+          "lines": 117
         }
       },
       "file_count": 12,
-      "total_bytes": 95933,
-      "total_characters": 95875
+      "total_bytes": 94620,
+      "total_characters": 94562
     },
     "tool_surface": {
       "provided_tool_names": [
