@@ -4,7 +4,7 @@
   "surface": {
     "plugin_modules": {
       "files": 80,
-      "lines": 39193,
+      "lines": 39198,
       "names": [
         "__init__.py",
         "acceptance_delivery.py",
@@ -129,8 +129,8 @@
       "note": "measured from the reviewed commit"
     },
     "tests": {
-      "files": 151,
-      "lines": 44093,
+      "files": 152,
+      "lines": 44316,
       "names": [
         "test_acceptance_delivery.py",
         "test_analysis_evidence.py",
@@ -171,6 +171,7 @@
         "test_idk_delivery.py",
         "test_idk_entry.py",
         "test_idk_observation.py",
+        "test_independent_contract_boundaries_20260926.py",
         "test_independent_review.py",
         "test_installed_workflow.py",
         "test_integration_boundaries.py",
@@ -324,7 +325,7 @@
     },
     "scripts": {
       "files": 16,
-      "lines": 1105,
+      "lines": 1107,
       "names": [
         "datasage_legacy_fabric.py",
         "datasage_legacy_idk.py",
@@ -347,11 +348,12 @@
       "note": "measured from the reviewed commit"
     },
     "docs": {
-      "files": 31,
-      "lines": 2552,
+      "files": 32,
+      "lines": 2623,
       "names": [
         "audit-fixes-20260924.md",
         "independent-review-20260924.md",
+        "independent-review-20260926.md",
         "legacy-checklist-state-20260923.md",
         "maintenance.md",
         "remediation-b-batch-20260923.md",
@@ -387,7 +389,7 @@
     },
     "skill_files_datasage": {
       "files": 12,
-      "lines": 1578,
+      "lines": 1601,
       "names": [
         "SKILL.md",
         "answer-boundary.md",
@@ -431,7 +433,7 @@
     },
     "history": {
       "window_commits": 40,
-      "code_files_per_commit_median": 7,
+      "code_files_per_commit_median": 8,
       "code_commits": 40,
       "doc_files_per_commit_median": 4,
       "doc_commits": 40,

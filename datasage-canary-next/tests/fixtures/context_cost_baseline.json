@@ -4,11 +4,6 @@
   "measured": {
     "skill_context": {
       "files": {
-        "SKILL.md": {
-          "characters": 5986,
-          "bytes": 5988,
-          "lines": 115
-        },
         "references/answer-boundary.md": {
           "characters": 19935,
           "bytes": 19947,
@@ -20,8 +15,8 @@
           "lines": 100
         },
         "references/delivery-analysis.md": {
-          "characters": 8656,
-          "bytes": 8688,
+          "characters": 8699,
+          "bytes": 8731,
           "lines": 159
         },
         "references/entity-guidance.md": {
@@ -30,44 +25,49 @@
           "lines": 49
         },
         "references/inventory-analysis.md": {
-          "characters": 5580,
-          "bytes": 5580,
-          "lines": 106
+          "characters": 5793,
+          "bytes": 5793,
+          "lines": 108
         },
         "references/pattern-matching-analysis.md": {
-          "characters": 6100,
-          "bytes": 6100,
+          "characters": 6143,
+          "bytes": 6143,
           "lines": 114
         },
         "references/profit-analysis.md": {
-          "characters": 5053,
-          "bytes": 5053,
-          "lines": 96
+          "characters": 5571,
+          "bytes": 5571,
+          "lines": 101
         },
         "references/query-rules.md": {
-          "characters": 10570,
-          "bytes": 10578,
-          "lines": 192
+          "characters": 11521,
+          "bytes": 11529,
+          "lines": 204
         },
         "references/receipt-analysis.md": {
-          "characters": 6015,
-          "bytes": 6015,
-          "lines": 112
+          "characters": 6156,
+          "bytes": 6156,
+          "lines": 113
         },
         "references/receivable-analysis.md": {
-          "characters": 5236,
-          "bytes": 5236,
-          "lines": 101
+          "characters": 5512,
+          "bytes": 5512,
+          "lines": 104
         },
         "references/target-analysis.md": {
           "characters": 5784,
           "bytes": 5784,
           "lines": 111
+        },
+        "SKILL.md": {
+          "characters": 5986,
+          "bytes": 5988,
+          "lines": 115
         }
       },
       "file_count": 12,
-      "total_bytes": 87375,
-      "total_characters": 87317
+      "total_bytes": 89560,
+      "total_characters": 89502
     },
     "tool_surface": {
       "provided_tool_names": [
