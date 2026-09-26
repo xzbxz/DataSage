@@ -171,7 +171,6 @@ class CurrencyBasisPolicyTests(unittest.TestCase):
         )
         for domain, code in (
             ("profit", "customer_month_gross_profit"),
-            ("target", "delivery_target_completion"),
         ):
             info = BASIS.capability(code, self._semantics(domain))
             self.assertIn("auto", info["supported"])
@@ -183,6 +182,18 @@ class CurrencyBasisPolicyTests(unittest.TestCase):
                     self._semantics(domain),
                 )
             self.assertEqual("CURRENCY_BASIS_UNAVAILABLE", caught.exception.code)
+        target_info = BASIS.capability(
+            "delivery_target_completion",
+            self._semantics("target"),
+        )
+        self.assertIn("original", target_info["supported"])
+        self.assertEqual(
+            {
+                "rmb": "delivery_target_completion",
+                "original": "delivery_target_completion_original",
+            },
+            target_info["counterparts"],
+        )
 
     def test_explicit_rmb_uses_actual_metric_sql_and_row_conversion(self):
         self._receipts([(100, 1, "CNY"), (10, 7, "USD")])

@@ -107,6 +107,7 @@ metrics:
     time_granularity: month
     required_filters: {is_inner_cus: {op: eq, value: n}}
     allowed_dimensions: [customer, department, organization, currency]
+    max_group_dimensions: 3
     required_attribution_mode: transaction_detail
   receipt_target_amount:
     disclosures:
@@ -125,6 +126,7 @@ metrics:
     time_value_format: date
     required_filters: {}
     allowed_dimensions: [customer, department, organization, currency]
+    max_group_dimensions: 3
     required_attribution_mode: transaction_detail
   allocated_net_delivery_amount:
     disclosures:

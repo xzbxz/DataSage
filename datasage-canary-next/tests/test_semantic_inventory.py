@@ -48,8 +48,8 @@ class SemanticSingleSourceTests(unittest.TestCase):
                         pair_count += 1
                         self.assertIs(disclosure["text"], answer_note)
 
-        self.assertEqual(154, pair_count)  # Existing 149 plus baseline-product net-outbound reuses disclosure anchor.
-        self.assertEqual(65, len(anchor_names))
+        self.assertEqual(167, pair_count)
+        self.assertEqual(69, len(anchor_names))
         self.assertEqual(anchor_names, alias_names)
 
     def test_machine_contracts_exclude_unconsumed_root_defaults(self):
@@ -85,7 +85,7 @@ class SemanticSingleSourceTests(unittest.TestCase):
             (CONTRACT_ROOT / "target-semantics.yaml").read_text(encoding="utf-8")
         )
         metrics = target["metrics"]
-        expected_dimensions = ["salesperson", "department", "organization", "customer"]
+        expected_dimensions = ["salesperson", "department", "organization", "customer", "currency"]
         expected_sources = {
             "allocated_net_delivery_amount": "delivery_target_completion",
             "allocated_net_receipt_amount": "receipt_target_completion",
@@ -122,7 +122,7 @@ class SemanticSingleSourceTests(unittest.TestCase):
             (CONTRACT_ROOT / "target-semantics.yaml").read_text(encoding="utf-8")
         )
         metrics = target["metrics"]
-        expected_dimensions = ["customer", "department", "organization", "salesperson"]
+        expected_dimensions = ["currency", "customer", "department", "organization", "salesperson"]
         for metric_code, source_code in (
             ("allocated_net_delivery_amount", "delivery_target_completion"),
             ("allocated_net_receipt_amount", "receipt_target_completion"),

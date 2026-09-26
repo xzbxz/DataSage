@@ -300,6 +300,8 @@ class AnalyticalQueryRemediationTests(unittest.TestCase):
                 "vk_dwd.receive_target_split_dwd",
                 "vk_dwd.receive_bill_split_dwd",
                 "vk_dwd.receive_return_bill_split_dwd",
+                "vk_dwd.receive_bill_detail_dwd",
+                "vk_dwd.receive_return_bill_detail_dwd",
             ],
         }
         for metric_code, source_datasets in expected_sources.items():
@@ -329,7 +331,6 @@ class AnalyticalQueryRemediationTests(unittest.TestCase):
                 self.assertIn("`sales_id`", sql)
                 self.assertIn("`sales_name`", sql)
                 self.assertNotIn("`vk_dwd`.`sale_bill_goods_detail_dwd`", sql)
-                self.assertNotIn("`vk_dwd`.`receive_bill_detail_dwd`", sql)
 
     def test_salesperson_customer_completion_uses_id_bound_customer_and_split_sources(self) -> None:
         datasets, semantics = contracts.execution_contracts("target")
@@ -357,6 +358,8 @@ class AnalyticalQueryRemediationTests(unittest.TestCase):
                 "vk_dwd.receive_target_split_dwd",
                 "vk_dwd.receive_bill_split_dwd",
                 "vk_dwd.receive_return_bill_split_dwd",
+                "vk_dwd.receive_bill_detail_dwd",
+                "vk_dwd.receive_return_bill_detail_dwd",
             ],
         }
         for metric_code, source_datasets in expected_sources.items():
@@ -391,7 +394,6 @@ class AnalyticalQueryRemediationTests(unittest.TestCase):
                 self.assertNotIn("display-name-is-not-used", params)
                 self.assertNotIn("`vk_dwd`.`sale_bill_goods_detail_dwd`", sql)
                 self.assertNotIn("`vk_dwd`.`delivery_target_detail_dwd`", sql)
-                self.assertNotIn("`vk_dwd`.`receive_bill_detail_dwd`", sql)
                 self.assertNotIn("`vk_dwd`.`receive_target_dwd`", sql)
 
     def test_salesperson_customer_completion_keeps_zero_missing_future_state_guards(self) -> None:

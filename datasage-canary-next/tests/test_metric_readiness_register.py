@@ -18,7 +18,7 @@ import metric_readiness
 
 PROFILE_ROOT = Path(__file__).resolve().parents[1]
 REGISTER_PATH = PROFILE_ROOT / metric_readiness.REGISTER_PATH
-EXPECTED_TOTAL = 238  # 215 preserved IDs + 23 original-currency variants
+EXPECTED_TOTAL = 251  # Current registered metric IDs, including approved original-currency variants
 VALID_EVIDENCE = {
     "kind": "independent_sql",
     "reference": "reviewed reconciliation query, ticket 4711",

@@ -1391,7 +1391,7 @@ class BusinessContractTests(unittest.TestCase):
             )
         )["results"][0]
         self.assertEqual(
-            "datasage-mini-inventory-semantics/v22",
+            "datasage-mini-inventory-semantics/v23",
             detail["source_versions"]["semantics"],
         )
         self.assertEqual(
@@ -1441,7 +1441,7 @@ class BusinessContractTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual("datasage-mini-receivable-semantics/v10", receivable["version"])
+        self.assertEqual("datasage-mini-receivable-semantics/v11", receivable["version"])
         for code in ("positive_debt_amount", "overdue_receivable_amount"):
             self.assertNotIn("change_decomposition", receivable["metrics"][code])
 
@@ -3277,7 +3277,7 @@ class BusinessContractTests(unittest.TestCase):
             ).read_text(encoding="utf-8")
         )
         self.assertEqual(
-            "datasage-mini-receivable-semantics/v10",
+            "datasage-mini-receivable-semantics/v11",
             receivable_contract["version"],
         )
         formal_dso_declarations = receivable_contract["metrics"][
@@ -4500,7 +4500,7 @@ class BusinessContractTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual("datasage-mini-receivable-semantics/v10", semantics["version"])
+        self.assertEqual("datasage-mini-receivable-semantics/v11", semantics["version"])
         current_snapshot_evidence_metrics = {
             metric_code
             for metric_code, definition in semantics["metrics"].items()
@@ -5088,7 +5088,7 @@ class BusinessContractTests(unittest.TestCase):
                 projected["metric"]["allowed_attribution_modes"],
             )
             self.assertEqual(
-                ["customer", "department", "organization", "salesperson"],
+                ["currency", "customer", "department", "organization", "salesperson"],
                 projected["metric"]["dimensions_by_attribution_mode"][
                     "salesperson_allocation"
                 ],
