@@ -432,7 +432,7 @@ class DeliveryL3SemanticContractTests(unittest.TestCase):
             scopes["return"]["required_filters"],
         )
         original_codes = [code for code in self.metrics if code.endswith("_original")]
-        self.assertEqual(7, len(original_codes))
+        self.assertEqual(8, len(original_codes))  # Includes the approved original return amount rate.
         for code in original_codes:
             policy = self.metrics[code]["currency_policy"]
             self.assertEqual("original_currency", policy["mode"])

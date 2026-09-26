@@ -556,7 +556,7 @@ metrics:
       text: 净出库侧排除内部客户，净收款侧包含内部客户；两侧业务范围并不对称。
     - id: receipt.delivery_receipt_comparison_original.legacy-note
       mode: contract_only
-      text: 左侧为排除内部客户的当期流量净出库，右侧为包含内部客户的净收款；这是经确认的非对称业务范围，回答必须披露。净出库小于等于零时收款覆盖率为空，不解释为零；两侧净额允许为负。
+      text: *answer_note_delivery_receipt_comparison
     label: 出库与收款对照（原币）
     business_definition: 对照同期原币净出库与净收款的金额、两者差额及收款覆盖比例；两侧保留各自治理客户范围。
     unit_policy: 净出库、净收款与差额为原币金额（按币种分别计量）；收款覆盖率为比例（可大于1，展示为百分比时可超过100%）
@@ -773,7 +773,7 @@ metrics:
         right_outputs:
         - column: currency_no
           alias: currency_no
-    answer_note: 左侧为排除内部客户的当期流量净出库，右侧为包含内部客户的净收款；这是经确认的非对称业务范围，回答必须披露。净出库小于等于零时收款覆盖率为空，不解释为零；两侧净额允许为负。
+    answer_note: *answer_note_delivery_receipt_comparison
     unit: 原币金额（按币种分别计量）
     currency_policy:
       mode: original_currency

@@ -48,7 +48,7 @@ class SemanticSingleSourceTests(unittest.TestCase):
                         pair_count += 1
                         self.assertIs(disclosure["text"], answer_note)
 
-        self.assertEqual(153, pair_count)  # Existing 149 plus baseline-product net-outbound reuses disclosure anchor.
+        self.assertEqual(154, pair_count)  # Existing 149 plus baseline-product net-outbound reuses disclosure anchor.
         self.assertEqual(65, len(anchor_names))
         self.assertEqual(anchor_names, alias_names)
 

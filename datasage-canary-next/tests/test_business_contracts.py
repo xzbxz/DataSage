@@ -1391,7 +1391,7 @@ class BusinessContractTests(unittest.TestCase):
             )
         )["results"][0]
         self.assertEqual(
-            "datasage-mini-inventory-semantics/v21",
+            "datasage-mini-inventory-semantics/v22",
             detail["source_versions"]["semantics"],
         )
         self.assertEqual(
@@ -1441,7 +1441,7 @@ class BusinessContractTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual("datasage-mini-receivable-semantics/v9", receivable["version"])
+        self.assertEqual("datasage-mini-receivable-semantics/v10", receivable["version"])
         for code in ("positive_debt_amount", "overdue_receivable_amount"):
             self.assertNotIn("change_decomposition", receivable["metrics"][code])
 
@@ -2594,7 +2594,7 @@ class BusinessContractTests(unittest.TestCase):
                 / "receipt-semantics.yaml"
             ).read_text(encoding="utf-8")
         )
-        self.assertEqual("datasage-mini-receipt-semantics/v11", receipt_contract["version"])
+        self.assertEqual("datasage-mini-receipt-semantics/v13", receipt_contract["version"])
         self.assertNotIn("answer_contract", receipt_contract)
         receipt_disclosures = {
             item["id"]: item
@@ -3277,7 +3277,7 @@ class BusinessContractTests(unittest.TestCase):
             ).read_text(encoding="utf-8")
         )
         self.assertEqual(
-            "datasage-mini-receivable-semantics/v9",
+            "datasage-mini-receivable-semantics/v10",
             receivable_contract["version"],
         )
         formal_dso_declarations = receivable_contract["metrics"][
@@ -4500,7 +4500,7 @@ class BusinessContractTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual("datasage-mini-receivable-semantics/v9", semantics["version"])
+        self.assertEqual("datasage-mini-receivable-semantics/v10", semantics["version"])
         current_snapshot_evidence_metrics = {
             metric_code
             for metric_code, definition in semantics["metrics"].items()
