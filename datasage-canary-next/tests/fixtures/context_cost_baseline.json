@@ -25,14 +25,14 @@
           "lines": 49
         },
         "references/inventory-analysis.md": {
-          "characters": 6136,
-          "bytes": 6136,
-          "lines": 114
+          "characters": 6427,
+          "bytes": 6427,
+          "lines": 118
         },
         "references/pattern-matching-analysis.md": {
-          "characters": 6509,
-          "bytes": 6509,
-          "lines": 120
+          "characters": 6742,
+          "bytes": 6742,
+          "lines": 123
         },
         "references/profit-analysis.md": {
           "characters": 5928,
@@ -50,14 +50,14 @@
           "lines": 120
         },
         "references/receivable-analysis.md": {
-          "characters": 5909,
-          "bytes": 5909,
-          "lines": 110
+          "characters": 6214,
+          "bytes": 6214,
+          "lines": 114
         },
         "references/target-analysis.md": {
-          "characters": 6124,
-          "bytes": 6124,
-          "lines": 117
+          "characters": 6907,
+          "bytes": 6907,
+          "lines": 128
         },
         "SKILL.md": {
           "characters": 5971,
@@ -66,8 +66,8 @@
         }
       },
       "file_count": 12,
-      "total_bytes": 94620,
-      "total_characters": 94562
+      "total_bytes": 96232,
+      "total_characters": 96174
     },
     "tool_surface": {
       "provided_tool_names": [

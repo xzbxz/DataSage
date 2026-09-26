@@ -644,6 +644,20 @@
     },
     {
       "domain": "inventory",
+      "metric": "inventory_turnover_days_original",
+      "label": "库存周转天数（原币成本与原币DDP口径）",
+      "unit": "自然日",
+      "time_policy": "latest_available_accounting_months",
+      "declared_availability": "available",
+      "declared_by_contract": false,
+      "owner": null,
+      "activation_gate": null,
+      "remaining_checks": [],
+      "verified": false,
+      "independent_evidence": []
+    },
+    {
+      "domain": "inventory",
       "metric": "month_end_inventory_cost_original",
       "label": "月末库存原币核算成本",
       "unit": "原币金额（按币种分别计量）",
@@ -994,6 +1008,20 @@
     },
     {
       "domain": "inventory",
+      "metric": "turnover_net_delivery_original",
+      "label": "周转表净出库原币金额",
+      "unit": "原币金额（按币种 分别计量）",
+      "time_policy": "latest_snapshot",
+      "declared_availability": "available",
+      "declared_by_contract": false,
+      "owner": null,
+      "activation_gate": null,
+      "remaining_checks": [],
+      "verified": false,
+      "independent_evidence": []
+    },
+    {
+      "domain": "inventory",
       "metric": "turnover_net_delivery_rmb",
       "label": "周转表净出库人民币金额",
       "unit": "人民币元",
@@ -1022,9 +1050,37 @@
     },
     {
       "domain": "pattern_matching",
+      "metric": "linked_delivery_amount_rmb",
+      "label": "找版·已关联出库明细去重人民币金额",
+      "unit": "人民币元",
+      "time_policy": "current_snapshot",
+      "declared_availability": "available",
+      "declared_by_contract": false,
+      "owner": null,
+      "activation_gate": null,
+      "remaining_checks": [],
+      "verified": false,
+      "independent_evidence": []
+    },
+    {
+      "domain": "pattern_matching",
       "metric": "person_attributed_delivery_amount",
       "label": "找版·按任务执行人产品归因记录金额",
       "unit": "已核验交易原币（分别计量）",
+      "time_policy": "current_snapshot",
+      "declared_availability": "available",
+      "declared_by_contract": false,
+      "owner": null,
+      "activation_gate": null,
+      "remaining_checks": [],
+      "verified": false,
+      "independent_evidence": []
+    },
+    {
+      "domain": "pattern_matching",
+      "metric": "person_attributed_delivery_amount_rmb",
+      "label": "找版·按任务执行人产品归因记录人民币金额",
+      "unit": "人民币元",
       "time_policy": "current_snapshot",
       "declared_availability": "available",
       "declared_by_contract": false,
@@ -2940,6 +2996,20 @@
     },
     {
       "domain": "receivable",
+      "metric": "formal_receivable_turnover_days_original",
+      "label": "正式应收周转天数（原币）",
+      "unit": "自然日",
+      "time_policy": "last_12_completed_months",
+      "declared_availability": "available",
+      "declared_by_contract": false,
+      "owner": null,
+      "activation_gate": null,
+      "remaining_checks": [],
+      "verified": false,
+      "independent_evidence": []
+    },
+    {
+      "domain": "receivable",
       "metric": "maximum_settlement_days",
       "label": "最大实际结算天数",
       "unit": "自然日",
@@ -3250,9 +3320,41 @@
     },
     {
       "domain": "target",
+      "metric": "allocated_net_delivery_amount_original",
+      "label": "业务员分摊口径净出库金额（原币）",
+      "unit": "原币金额（按交易币种分别计量）",
+      "time_policy": "current_month",
+      "declared_availability": "available",
+      "declared_by_contract": true,
+      "owner": "datasage.data_governance.target_allocation",
+      "activation_gate": "ready_for_live_replay",
+      "remaining_checks": [
+        "trusted_live_replay"
+      ],
+      "verified": false,
+      "independent_evidence": []
+    },
+    {
+      "domain": "target",
       "metric": "allocated_net_receipt_amount",
       "label": "业务员分摊口径净收款登记额",
       "unit": "人民币元",
+      "time_policy": "current_month",
+      "declared_availability": "available",
+      "declared_by_contract": true,
+      "owner": "datasage.data_governance.target_allocation",
+      "activation_gate": "ready_for_live_replay",
+      "remaining_checks": [
+        "trusted_live_replay"
+      ],
+      "verified": false,
+      "independent_evidence": []
+    },
+    {
+      "domain": "target",
+      "metric": "allocated_net_receipt_amount_original",
+      "label": "业务员分摊口径净收款登记额（原币）",
+      "unit": "原币金额（按交易币种分别计量）",
       "time_policy": "current_month",
       "declared_availability": "available",
       "declared_by_contract": true,
@@ -3282,6 +3384,22 @@
     },
     {
       "domain": "target",
+      "metric": "delivery_allocated_target_amount_original",
+      "label": "业务员分摊口径出库目标金额（原币）",
+      "unit": "原币金额（按交易币种分别计量）",
+      "time_policy": "current_month",
+      "declared_availability": "available",
+      "declared_by_contract": true,
+      "owner": "datasage.data_governance.target_allocation",
+      "activation_gate": "ready_for_live_replay",
+      "remaining_checks": [
+        "trusted_live_replay"
+      ],
+      "verified": false,
+      "independent_evidence": []
+    },
+    {
+      "domain": "target",
       "metric": "delivery_target_amount",
       "label": "交易事实账口径出库目标金额",
       "unit": "人民币元",
@@ -3296,8 +3414,36 @@
     },
     {
       "domain": "target",
+      "metric": "delivery_target_amount_original",
+      "label": "交易事实账口径出库目标金额（原币）",
+      "unit": "原币金额（按交易币种分别计量）",
+      "time_policy": "current_month",
+      "declared_availability": "available",
+      "declared_by_contract": false,
+      "owner": null,
+      "activation_gate": null,
+      "remaining_checks": [],
+      "verified": false,
+      "independent_evidence": []
+    },
+    {
+      "domain": "target",
       "metric": "delivery_target_completion",
       "label": "出库目标完成情况",
+      "unit": "比例",
+      "time_policy": "current_month",
+      "declared_availability": "available",
+      "declared_by_contract": false,
+      "owner": null,
+      "activation_gate": null,
+      "remaining_checks": [],
+      "verified": false,
+      "independent_evidence": []
+    },
+    {
+      "domain": "target",
+      "metric": "delivery_target_completion_original",
+      "label": "出库目标完成情况（原币）",
       "unit": "比例",
       "time_policy": "current_month",
       "declared_availability": "available",
@@ -3326,9 +3472,39 @@
     },
     {
       "domain": "target",
+      "metric": "receipt_allocated_target_amount_original",
+      "label": "业务员分摊口径收款目标金额（原币）",
+      "unit": "原币金额（按交易币种分别计量）",
+      "time_policy": "current_month",
+      "declared_availability": "available",
+      "declared_by_contract": true,
+      "owner": "datasage.data_governance.target_allocation",
+      "activation_gate": "ready_for_live_replay",
+      "remaining_checks": [
+        "trusted_live_replay"
+      ],
+      "verified": false,
+      "independent_evidence": []
+    },
+    {
+      "domain": "target",
       "metric": "receipt_target_amount",
       "label": "交易事实账口径收款目标金额",
       "unit": "人民币元",
+      "time_policy": "current_month",
+      "declared_availability": "available",
+      "declared_by_contract": false,
+      "owner": null,
+      "activation_gate": null,
+      "remaining_checks": [],
+      "verified": false,
+      "independent_evidence": []
+    },
+    {
+      "domain": "target",
+      "metric": "receipt_target_amount_original",
+      "label": "交易事实账口径收款目标金额（原币）",
+      "unit": "原币金额（按交易币种分别计量）",
       "time_policy": "current_month",
       "declared_availability": "available",
       "declared_by_contract": false,
@@ -3351,14 +3527,28 @@
       "remaining_checks": [],
       "verified": false,
       "independent_evidence": []
+    },
+    {
+      "domain": "target",
+      "metric": "receipt_target_completion_original",
+      "label": "收款目标完成情况（原币）",
+      "unit": "比例",
+      "time_policy": "current_month",
+      "declared_availability": "available",
+      "declared_by_contract": false,
+      "owner": null,
+      "activation_gate": null,
+      "remaining_checks": [],
+      "verified": false,
+      "independent_evidence": []
     }
   ],
   "summary": {
-    "total": 238,
-    "declared_available": 237,
-    "declared_by_contract": 5,
+    "total": 251,
+    "declared_available": 250,
+    "declared_by_contract": 9,
     "pending_or_blocked": 1,
     "verified": 0,
-    "unverified": 238
+    "unverified": 251
   }
 }

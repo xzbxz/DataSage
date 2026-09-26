@@ -4,7 +4,7 @@
   "surface": {
     "plugin_modules": {
       "files": 81,
-      "lines": 39594,
+      "lines": 40454,
       "names": [
         "__init__.py",
         "acceptance_delivery.py",
@@ -93,7 +93,7 @@
     },
     "contract_yaml": {
       "files": 12,
-      "lines": 10002,
+      "lines": 11380,
       "names": [
         "datasets.yaml",
         "delivery-semantics.yaml",
@@ -130,8 +130,8 @@
       "note": "measured from the reviewed commit"
     },
     "tests": {
-      "files": 156,
-      "lines": 45753,
+      "files": 159,
+      "lines": 47270,
       "names": [
         "test_acceptance_delivery.py",
         "test_analysis_evidence.py",
@@ -146,6 +146,7 @@
         "test_compact_payloads.py",
         "test_context_cost_baseline.py",
         "test_currency_basis_policy.py",
+        "test_currency_db_verified_contracts.py",
         "test_currency_metric_pairs.py",
         "test_currency_output_consistency.py",
         "test_currency_paired_amounts.py",
@@ -161,6 +162,7 @@
         "test_delivery_l3_semantics.py",
         "test_delivery_review.py",
         "test_domain_diagnostic_paths.py",
+        "test_dso_original_currency.py",
         "test_execution_budget_isolation.py",
         "test_expert_architecture.py",
         "test_expert_authority_inventory.py",
@@ -283,6 +285,7 @@
         "test_source_export.py",
         "test_structural_acceptance.py",
         "test_target_catalog_schema.py",
+        "test_target_currency_scope.py",
         "test_target_golden_cases.py",
         "test_target_runtime_customer_breakdown.py",
         "test_v015_refactor_acceptance.py",
@@ -311,7 +314,7 @@
     },
     "fixtures": {
       "files": 11,
-      "lines": 6420,
+      "lines": 6610,
       "names": [
         "business_acceptance_cases.json",
         "business_replay_contract.json",
@@ -330,7 +333,7 @@
     },
     "scripts": {
       "files": 16,
-      "lines": 1112,
+      "lines": 1116,
       "names": [
         "datasage_legacy_fabric.py",
         "datasage_legacy_idk.py",
@@ -353,10 +356,11 @@
       "note": "measured from the reviewed commit"
     },
     "docs": {
-      "files": 32,
-      "lines": 2623,
+      "files": 33,
+      "lines": 2677,
       "names": [
         "audit-fixes-20260924.md",
+        "currency-source-verification-20260926.md",
         "independent-review-20260924.md",
         "independent-review-20260926.md",
         "legacy-checklist-state-20260923.md",
@@ -394,7 +398,7 @@
     },
     "skill_files_datasage": {
       "files": 12,
-      "lines": 1680,
+      "lines": 1702,
       "names": [
         "SKILL.md",
         "answer-boundary.md",
@@ -440,7 +444,7 @@
       "window_commits": 40,
       "code_files_per_commit_median": 7,
       "code_commits": 40,
-      "doc_files_per_commit_median": 4,
+      "doc_files_per_commit_median": 5,
       "doc_commits": 40,
       "test_files_per_commit_median": 5,
       "test_commits": 40,

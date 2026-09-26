@@ -440,7 +440,7 @@
     },
     "domain.receivable": {
       "surface": "domain.receivable",
-      "sample": 72,
+      "sample": 73,
       "pass": 0,
       "sample_source": "tests/fixtures/metric_readiness_register.json",
       "reproduction_path": "tests/test_metric_readiness_register.py",
@@ -453,7 +453,7 @@
     },
     "domain.target": {
       "surface": "domain.target",
-      "sample": 8,
+      "sample": 16,
       "pass": 0,
       "sample_source": "tests/fixtures/metric_readiness_register.json",
       "reproduction_path": "tests/test_metric_readiness_register.py",
@@ -466,7 +466,7 @@
     },
     "domain.inventory": {
       "surface": "domain.inventory",
-      "sample": 34,
+      "sample": 36,
       "pass": 0,
       "sample_source": "tests/fixtures/metric_readiness_register.json",
       "reproduction_path": "tests/test_metric_readiness_register.py",
@@ -479,7 +479,7 @@
     },
     "domain.pattern_matching": {
       "surface": "domain.pattern_matching",
-      "sample": 3,
+      "sample": 5,
       "pass": 0,
       "sample_source": "tests/fixtures/metric_readiness_register.json",
       "reproduction_path": "tests/test_metric_readiness_register.py",
@@ -611,7 +611,7 @@
   "capability_counts": {
     "surfaces": 15,
     "domains": 7,
-    "metrics_total": 238,
+    "metrics_total": 251,
     "metrics_verified": 0,
     "cases_total": 24,
     "cases_reviewed": 0
