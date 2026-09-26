@@ -227,7 +227,7 @@ class CurrencyMetricPairTests(unittest.TestCase):
         expected = "人民币" if basis == "rmb" else "原币"
         payload = self._public_payloads[id(result)]
         context = next(c for c in payload["metric_contexts"] if c["business_metric_ref"] == result["business_metric_ref"])
-        self.assertIn(expected, context["business_metric_unit"], result)
+        self.assertIn(expected, context["unit"], result)
         selection = next(
             (
                 item
@@ -296,7 +296,7 @@ class CurrencyMetricPairTests(unittest.TestCase):
                     "O", "EUR", 7, sum(buckets), "n", "n", "n", *buckets,
                 )
             )
-        harness.insert("vk_dwd.customer_aging_dwd", ",".join(columns), rows)
+        harness.insert("vk_dwd.customer_aging_dwd", ",".join(chr(34) + column + chr(34) for column in columns), rows)
 
     def test_receivable_original_pairs_auto_explicit_filtered_and_cross_currency(self):
         for original_metric, rmb_metric in (

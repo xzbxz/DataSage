@@ -163,7 +163,7 @@ class OriginalCurrencyPairedAmountTests(unittest.TestCase):
             self.assertIsNone(facts["net_delivery_amount_original"])
             self.assertIsNone(facts["net_receipt_amount_original"])
             self.assertIsNone(facts["receipt_coverage"])
-            self.assertEqual("missing", facts["metric_data_state"])
+            self.assertEqual("missing", row["states"]["metric_data_state"])
         self.assertIn("TRIM", self.h.sql_trace[-1]["sqlite_sql"])
 
     def test_single_currency_filter_allows_scalar_original_comparison(self) -> None:
@@ -185,7 +185,6 @@ class OriginalCurrencyPairedAmountTests(unittest.TestCase):
         self.assertEqual("原币金额（按币种分别计量）", result["rows"][0]["unit"])
         self.assertEqual(
             {
-                "metric_value": "原币金额（按币种分别计量）",
                 "net_delivery_amount_original": "原币金额（按币种分别计量）",
                 "net_receipt_amount_original": "原币金额（按币种分别计量）",
                 "receipt_coverage": "比例",
@@ -235,7 +234,7 @@ class OriginalCurrencyPairedAmountTests(unittest.TestCase):
         self.assertIn("net_receipt_amount_original", facts)
         self.assertNotIn("net_delivery_amount_rmb", facts)
         self.assertNotIn("net_receipt_amount_rmb", facts)
-        self.assertEqual("complete", facts.get("metric_data_state"))
+        self.assertEqual("complete", result["rows"][0]["states"]["metric_data_state"])
         self.assertFalse(result.get("truncated"))
 
 

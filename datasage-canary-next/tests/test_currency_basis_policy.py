@@ -26,6 +26,7 @@ class CurrencyBasisPolicyTests(unittest.TestCase):
         self._ensure_column("vk_dwd", "receive_bill_detail_dwd", "currency_no")
         self._ensure_column("vk_dwd", "receive_bill_detail_dwd", "detail_receive_amount")
         self._ensure_column("vk_dwd", "receive_return_bill_detail_dwd", "currency_no")
+        self._ensure_column("vk_dwd", "receive_return_bill_detail_dwd", "exchange_rate")
         self._ensure_column("vk_dwd", "receive_return_bill_detail_dwd", "detail_deal_amount")
         self._ensure_column("vk_dwd", "receive_return_bill_detail_dwd", "detail_return_amount")
         self._ensure_column("vk_dw", "inventory_barcode_detail_dw", "ddp_amount")
@@ -378,6 +379,33 @@ class CurrencyBasisPolicyTests(unittest.TestCase):
         self.assertTrue(all("sqlite_sql" in trace for trace in self.h.sql_trace))
         self.assertTrue(all("database_rows" in trace for trace in self.h.sql_trace))
         self.assertTrue(self.h.calls)
+
+    def test_failure_after_selection_identifies_the_original_metric(self):
+        self._receipts([(10, 7, "USD")])
+        execute = self.h.execute
+        def fail_selected(sql, params, limit, *, deadline_at=None):
+            if "currency_count" in sql:
+                return execute(sql, params, limit, deadline_at=deadline_at)
+            raise QUERY_ERRORS.QueryFailure("QUERY_FAILED", "Synthetic selected-query failure")
+        with patch.object(self.h, "execute", side_effect=fail_selected):
+            payload = self.h.query(self._request("actual_receipt_amount"))
+        result = payload["results"][0]
+        self.assertEqual("failed", result["status"])
+        self.assertEqual("QUERY_FAILED", result["error"]["code"])
+        self.assertEqual(self._fixed_metric_ref("receipt", "actual_receipt_amount_original"), result["business_metric_ref"])
+        self.assertEqual(1, len(self.h.sql_trace))
+
+    def test_pending_metric_keeps_its_gate_with_currency_selection(self):
+        payload = self.h.query(public.metric("receivable_quantity", "receivable", currency_basis="auto"))
+        self.assertEqual("SEMANTIC_UNIT_RECONCILIATION_REQUIRED", payload["results"][0]["error"]["code"])
+        self.assertFalse(self.h.sql_trace)
+
+    def test_invalid_basis_types_never_reach_sql(self):
+        for value in (None, [], {}, True, "USD"):
+            with self.subTest(value=value):
+                payload = self.h.query(self._request("actual_receipt_amount", basis=value))
+                self.assertEqual("INVALID_INPUT", payload["results"][0]["error"]["code"])
+        self.assertFalse(self.h.sql_trace)
 
 
 if __name__ == "__main__":

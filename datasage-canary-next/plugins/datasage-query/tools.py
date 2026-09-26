@@ -4937,7 +4937,7 @@ def _build_governed_calculations(
             if (left.get("currency") != right.get("currency")
                     or left.get("currency_state") == "unknown" or right.get("currency_state") == "unknown"
                     or ("原币" in left["unit"] and not left.get("currency"))):
-                raise QueryFailure("CALCULATION_CURRENCY_MISMATCH", "计算两侧币种不兼容或未知；跨币种联合计算须将两侧改用 currency_basis=rmb 重新查询，保留各自有效独立观察。")
+                raise QueryFailure("CALCULATION_CURRENCY_MISMATCH", "计算两侧币种不兼容或未知；跨币种联合计算须将两侧改用人民币口径（currency_basis=rmb）重新查询，保留各自有效独立观察。")
             same_period = left["period"] == right["period"]
             same_metric_basis = (
                 left["metric_ref"] == right["metric_ref"]
