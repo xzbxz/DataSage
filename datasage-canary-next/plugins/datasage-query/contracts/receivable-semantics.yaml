@@ -1195,7 +1195,7 @@ metrics:
     disclosures:
     - id: currency.original.no-cross-currency
       mode: required_always
-      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+      text: 原币结果必须限定单一币种或按币种分组；不同币种不得直接合计。
     - id: receivable.positive_debt_amount_original.legacy-note
       mode: contract_only
       text: “哪些客户欠我们”只看 debt_amount_rmb > 0，负数和零不进入名单及排名。
@@ -1237,7 +1237,7 @@ metrics:
     disclosures:
     - id: currency.original.no-cross-currency
       mode: required_always
-      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+      text: 原币结果必须限定单一币种或按币种分组；不同币种不得直接合计。
     - id: receivable.debt_balance_trend_original.legacy-note
       mode: contract_only
       text: 历史欠款趋势必须显式提供月份范围，并按 bill_date 月份解释。
@@ -1278,7 +1278,7 @@ metrics:
     disclosures:
     - id: currency.original.no-cross-currency
       mode: required_always
-      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+      text: 原币结果必须限定单一币种或按币种分组；不同币种不得直接合计。
     label: 0至30天账龄（原币）
     business_definition: 最新账龄快照的0至30天应收原币金额；按各币种分别计量，不跨币种合计。
     unit: 原币金额（按币种分别计量）
@@ -1311,7 +1311,7 @@ metrics:
     disclosures:
     - id: currency.original.no-cross-currency
       mode: required_always
-      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+      text: 原币结果必须限定单一币种或按币种分组；不同币种不得直接合计。
     label: 31至60天账龄（原币）
     business_definition: 最新账龄快照的31至60天应收原币金额；按各币种分别计量，不跨币种合计。
     unit: 原币金额（按币种分别计量）
@@ -1344,7 +1344,7 @@ metrics:
     disclosures:
     - id: currency.original.no-cross-currency
       mode: required_always
-      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+      text: 原币结果必须限定单一币种或按币种分组；不同币种不得直接合计。
     label: 61至90天账龄（原币）
     business_definition: 最新账龄快照的61至90天应收原币金额；按各币种分别计量，不跨币种合计。
     unit: 原币金额（按币种分别计量）
@@ -1377,7 +1377,7 @@ metrics:
     disclosures:
     - id: currency.original.no-cross-currency
       mode: required_always
-      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+      text: 原币结果必须限定单一币种或按币种分组；不同币种不得直接合计。
     label: 91至120天账龄（原币）
     business_definition: 最新账龄快照的91至120天应收原币金额；按各币种分别计量，不跨币种合计。
     unit: 原币金额（按币种分别计量）
@@ -1410,7 +1410,7 @@ metrics:
     disclosures:
     - id: currency.original.no-cross-currency
       mode: required_always
-      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+      text: 原币结果必须限定单一币种或按币种分组；不同币种不得直接合计。
     label: 121至150天账龄（原币）
     business_definition: 最新账龄快照的121至150天应收原币金额；按各币种分别计量，不跨币种合计。
     unit: 原币金额（按币种分别计量）
@@ -1443,7 +1443,7 @@ metrics:
     disclosures:
     - id: currency.original.no-cross-currency
       mode: required_always
-      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+      text: 原币结果必须限定单一币种或按币种分组；不同币种不得直接合计。
     label: 151至180天账龄（原币）
     business_definition: 最新账龄快照的151至180天应收原币金额；按各币种分别计量，不跨币种合计。
     unit: 原币金额（按币种分别计量）
@@ -1476,7 +1476,7 @@ metrics:
     disclosures:
     - id: currency.original.no-cross-currency
       mode: required_always
-      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+      text: 原币结果必须限定单一币种或按币种分组；不同币种不得直接合计。
     label: 181至240天账龄（原币）
     business_definition: 最新账龄快照的181至240天应收原币金额；按各币种分别计量，不跨币种合计。
     unit: 原币金额（按币种分别计量）
@@ -1509,7 +1509,7 @@ metrics:
     disclosures:
     - id: currency.original.no-cross-currency
       mode: required_always
-      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+      text: 原币结果必须限定单一币种或按币种分组；不同币种不得直接合计。
     label: 241至300天账龄（原币）
     business_definition: 最新账龄快照的241至300天应收原币金额；按各币种分别计量，不跨币种合计。
     unit: 原币金额（按币种分别计量）
@@ -1542,7 +1542,7 @@ metrics:
     disclosures:
     - id: currency.original.no-cross-currency
       mode: required_always
-      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+      text: 原币结果必须限定单一币种或按币种分组；不同币种不得直接合计。
     label: 301至360天账龄（原币）
     business_definition: 最新账龄快照的301至360天应收原币金额；按各币种分别计量，不跨币种合计。
     unit: 原币金额（按币种分别计量）
@@ -1575,7 +1575,7 @@ metrics:
     disclosures:
     - id: currency.original.no-cross-currency
       mode: required_always
-      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+      text: 原币结果必须限定单一币种或按币种分组；不同币种不得直接合计。
     label: 超过360天账龄（原币）
     business_definition: 最新账龄快照中超过360天的应收原币金额；按各币种分别计量，不跨币种合计。
     unit: 原币金额（按币种分别计量）
@@ -1608,7 +1608,7 @@ metrics:
     disclosures:
     - id: currency.original.no-cross-currency
       mode: required_always
-      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+      text: 原币结果必须限定单一币种或按币种分组；不同币种不得直接合计。
     label: 超过30天账龄（原币）
     business_definition: 最新账龄快照中超过30天的分档金额合计；按各币种分别计量，不跨币种合计。
     unit: 原币金额（按币种分别计量）
@@ -1650,7 +1650,7 @@ metrics:
     disclosures:
     - id: currency.original.no-cross-currency
       mode: required_always
-      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+      text: 原币结果必须限定单一币种或按币种分组；不同币种不得直接合计。
     label: 超过60天账龄（原币）
     business_definition: 最新账龄快照中超过60天的分档金额合计；按各币种分别计量，不跨币种合计。
     unit: 原币金额（按币种分别计量）
@@ -1691,7 +1691,7 @@ metrics:
     disclosures:
     - id: currency.original.no-cross-currency
       mode: required_always
-      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+      text: 原币结果必须限定单一币种或按币种分组；不同币种不得直接合计。
     label: 超过90天账龄（原币）
     business_definition: 最新账龄快照中超过90天的分档金额合计；按各币种分别计量，不跨币种合计。
     unit: 原币金额（按币种分别计量）
@@ -1731,7 +1731,7 @@ metrics:
     disclosures:
     - id: currency.original.no-cross-currency
       mode: required_always
-      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+      text: 原币结果必须限定单一币种或按币种分组；不同币种不得直接合计。
     label: 超过120天账龄（原币）
     business_definition: 最新账龄快照中超过120天的分档金额合计；按各币种分别计量，不跨币种合计。
     unit: 原币金额（按币种分别计量）
@@ -1770,7 +1770,7 @@ metrics:
     disclosures:
     - id: currency.original.no-cross-currency
       mode: required_always
-      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+      text: 原币结果必须限定单一币种或按币种分组；不同币种不得直接合计。
     label: 超过150天账龄（原币）
     business_definition: 最新账龄快照中超过150天的分档金额合计；按各币种分别计量，不跨币种合计。
     unit: 原币金额（按币种分别计量）
@@ -1808,7 +1808,7 @@ metrics:
     disclosures:
     - id: currency.original.no-cross-currency
       mode: required_always
-      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+      text: 原币结果必须限定单一币种或按币种分组；不同币种不得直接合计。
     label: 超过180天账龄（原币）
     business_definition: 最新账龄快照中超过180天的分档金额合计；按各币种分别计量，不跨币种合计。
     unit: 原币金额（按币种分别计量）
@@ -1845,7 +1845,7 @@ metrics:
     disclosures:
     - id: currency.original.no-cross-currency
       mode: required_always
-      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+      text: 原币结果必须限定单一币种或按币种分组；不同币种不得直接合计。
     label: 超过240天账龄（原币）
     business_definition: 最新账龄快照中超过240天的分档金额合计；按各币种分别计量，不跨币种合计。
     unit: 原币金额（按币种分别计量）
@@ -1881,7 +1881,7 @@ metrics:
     disclosures:
     - id: currency.original.no-cross-currency
       mode: required_always
-      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+      text: 原币结果必须限定单一币种或按币种分组；不同币种不得直接合计。
     label: 超过300天账龄（原币）
     business_definition: 最新账龄快照中超过300天的分档金额合计；按各币种分别计量，不跨币种合计。
     unit: 原币金额（按币种分别计量）
@@ -1916,7 +1916,7 @@ metrics:
     disclosures:
     - id: currency.original.no-cross-currency
       mode: required_always
-      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+      text: 原币结果必须限定单一币种或按币种分组；不同币种不得直接合计。
     - id: receivable.uncredited_positive_debt_amount_original.legacy-note
       mode: contract_only
       text: 本指标单列无授信记录的正欠款，不与超账期金额混算。

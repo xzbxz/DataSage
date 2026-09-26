@@ -1,4 +1,4 @@
-"""Metric readiness register for the 215 governed metrics (R16).
+"""Metric readiness register for the currently governed metrics (R16).
 
 The contracts say a metric is *available* unless it declares otherwise
 (``capability_contract.validate_availability`` returns ``available`` when there is

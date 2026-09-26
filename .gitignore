@@ -423,3 +423,5 @@ datasage-canary-next/docs/workflow-runtime-acceptance.md
 !datasage-canary-next/tests/test_currency_basis_policy.py
 !datasage-canary-next/tests/test_currency_paired_amounts.py
 !datasage-canary-next/tests/test_currency_output_consistency.py
+
+!datasage-canary-next/tests/test_currency_metric_pairs.py

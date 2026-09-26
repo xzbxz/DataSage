@@ -117,8 +117,8 @@ class DeliveryL3CatalogTests(unittest.TestCase):
         expert = _catalog(
             {"domain": "delivery", "view": "expert_index"}
         )["results"][0]
-        self.assertEqual(36, summary["metric_count"])
-        self.assertEqual(36, expert["metric_count"])
+        self.assertEqual(37, summary["metric_count"])
+        self.assertEqual(37, expert["metric_count"])
         self.assertEqual(
             self.available,
             {item["code"] for item in summary["metrics"]},

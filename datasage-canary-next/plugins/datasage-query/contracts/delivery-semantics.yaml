@@ -1684,7 +1684,7 @@ metrics:
     allowed_dimensions: *net_delivery_derived_analysis
     dimension_overrides: *current_attribute_overrides
     currency_policy: *original_currency_policy
-    answer_note: "原币金额退货率必须限定单一 currency_no 或按 currency_no 分组；毛出库金额小于等于零时返回空值。"
+    answer_note: "原币金额退货率必须限定单一币种或按币种分组；毛出库金额小于等于零时返回空值。"
   return_quantity_rate:
     delivery_scope_policy: *delivery_scope_contract_2
     disclosures:

@@ -154,7 +154,7 @@ class CurrencyOutputConsistencyTests(unittest.TestCase):
             "facts": {"metric_value": "700"},
         }]
         rendered = local_report.render_text(_report(rows, unit="人民币元"))
-        self.assertIn("Currency=CNY", rendered)
+        self.assertIn("currency=CNY", rendered)
         self.assertIn("700 人民币元", rendered)
         self.assertNotIn("USD", rendered)
 

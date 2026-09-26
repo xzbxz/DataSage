@@ -76,6 +76,7 @@ _ROOT_FILES = (
     "tests/test_independent_review.py",
     "tests/test_independent_contract_boundaries_20260926.py",
     "tests/test_currency_basis_policy.py",
+    "tests/test_currency_metric_pairs.py",
     "tests/test_currency_paired_amounts.py",
     "tests/test_currency_output_consistency.py",
     "docs/independent-review-20260926.md",

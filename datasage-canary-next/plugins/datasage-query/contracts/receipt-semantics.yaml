@@ -550,7 +550,7 @@ metrics:
     disclosures:
     - id: currency.original.no-cross-currency
       mode: required_always
-      text: 原币结果仅在币种明确筛选或按 currency_no 分组时计算；不同币种不得直接合计。
+      text: 原币结果必须限定单一币种或按币种分组；不同币种不得直接合计。
     - id: receipt.delivery-receipt.scope-asymmetry
       mode: required_always
       text: 净出库侧排除内部客户，净收款侧包含内部客户；两侧业务范围并不对称。

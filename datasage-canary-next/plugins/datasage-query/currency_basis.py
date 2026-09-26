@@ -87,6 +87,11 @@ def prepare_request(request: Mapping[str, Any], semantics: Mapping[str, Any]) ->
     requested = result["currency_basis"]
     if not isinstance(requested, str) or requested not in BASIS_CHOICES:
         raise QueryFailure("INVALID_INPUT", "currency_basis 只接受 auto、rmb 或 original。")
+    definition = semantics.get("metrics", {}).get(result.get("metric"), {})
+    availability = definition.get("availability") if isinstance(definition, Mapping) else None
+    if isinstance(availability, Mapping) and availability.get("status") in {"pending_validation", "blocked"}:
+        # The existing availability gate owns its more specific failure.
+        return result
     info = capability(str(result.get("metric")), semantics)
     if info is None:
         raise QueryFailure("CURRENCY_BASIS_UNAVAILABLE", "该指标不接受金额币种选择。")
@@ -123,7 +128,9 @@ def build_probe(request, datasets, semantics, builder, *, observed_on=None):
     sql, params, scope = builder(probe, datasets, semantics, 1, observed_on=observed_on)
     if "currency_no" not in scope.get("dimension_outputs", []):
         raise QueryFailure("CONTRACT_UNAVAILABLE", "原币范围查询未提供受治理币种分组。")
-    currency = "NULLIF(TRIM(q.`currency_no`), '')"
+    # Blank detection is not normalization: source_exact currency identifiers
+    # must be passed back to the selected query without trimming or guessing.
+    currency = "CASE WHEN NULLIF(TRIM(q.`currency_no`), '') IS NULL THEN NULL ELSE q.`currency_no` END"
     return (
         "SELECT COUNT(DISTINCT " + currency + ") AS currency_count, "
         "MIN(" + currency + ") AS single_currency, "
@@ -172,7 +179,8 @@ def resolve_probe(request, rows, truncated):
     selected = "original" if n <= 1 else "rmb"
     if n == 1:
         value = row.get("single_currency")
-        if not isinstance(value, str) or not value.strip() or len(value) > 80:
+        if (isinstance(value, bool) or not isinstance(value, (str, int))
+                or not str(value).strip() or len(str(value)) > 80):
             raise QueryFailure("CURRENCY_SCOPE_UNVERIFIED", "单币种标识无效。")
         # Restrict all components/periods to the proved currency, retaining
         # required grouping and every prior governed population filter.

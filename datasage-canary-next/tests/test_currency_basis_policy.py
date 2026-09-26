@@ -26,6 +26,7 @@ class CurrencyBasisPolicyTests(unittest.TestCase):
         self._ensure_column("vk_dwd", "receive_bill_detail_dwd", "currency_no")
         self._ensure_column("vk_dwd", "receive_bill_detail_dwd", "detail_receive_amount")
         self._ensure_column("vk_dwd", "receive_return_bill_detail_dwd", "currency_no")
+        self._ensure_column("vk_dwd", "receive_return_bill_detail_dwd", "detail_deal_amount")
         self._ensure_column("vk_dwd", "receive_return_bill_detail_dwd", "detail_return_amount")
         self._ensure_column("vk_dw", "inventory_barcode_detail_dw", "ddp_amount")
         self._ensure_column("vk_dw", "inventory_barcode_detail_dw", "currency_no")
@@ -90,33 +91,55 @@ class CurrencyBasisPolicyTests(unittest.TestCase):
         payload = self.h.query(request)
         return self.h.result(payload, request["request_id"])
 
+    def _payload_result(self, request):
+        payload = self.h.query(request)
+        return payload, self.h.result(payload, request["request_id"])
+
     def _fixed_metric_ref(self, domain, metric_code):
         return "metric_" + sha256(
             f"{domain}\0{metric_code}".encode("utf-8")
         ).hexdigest()[:16]
 
-    def _assert_public_basis(self, result, basis, metric_code):
+    def _assert_public_basis(self, payload, result, basis, metric_code):
         expected_unit = "人民币" if basis == "rmb" else "原币"
+        contexts = payload.get("metric_contexts") or []
+        context = next(
+            item for item in contexts
+            if item.get("business_metric_ref") == result["business_metric_ref"]
+        )
         self.assertEqual(
             self._fixed_metric_ref("receipt", metric_code),
             result["business_metric_ref"],
             result,
         )
-        self.assertIn(expected_unit, result["business_metric_unit"], result)
-        ledger = result.get("disclosure_ledger") or []
+        self.assertIn(expected_unit, context["unit"], payload)
+        self.assertIn("business_metric_ref", context)
+        disclosures = payload.get("disclosures") or []
         selection = next(
-            (item for item in ledger if item.get("disclosure_id") == "currency.basis.selection"),
+            (
+                item for item in disclosures
+                if item.get("disclosure_id") == "currency.basis.selection"
+                and result["request_id"] in (item.get("request_ids") or [])
+            ),
             None,
         )
-        self.assertIsNotNone(selection, result)
-        self.assertTrue(selection["applies"], result)
-        self.assertTrue(selection.get("text"), result)
+        self.assertIsNotNone(selection, payload)
+        self.assertIn("currency.basis.selection", result.get("disclosure_refs", []))
+        self.assertTrue(selection.get("text"), payload)
         if basis == "original":
             self.assertTrue(
-                result.get("business_metric_currency_policy")
-                or "原币" in selection["text"],
-                result,
+                context.get("currency_policy") or "原币" in selection["text"],
+                payload,
             )
+
+    def _assert_receipt_evidence(self, payload, request_id):
+        bundle = payload.get("evidence_bundle") or {}
+        self.assertEqual(1, (bundle.get("coverage") or {}).get("request_count"))
+        item = next(
+            item for item in bundle.get("items", [])
+            if item.get("request_id") == request_id
+        )
+        self.assertEqual("success", item.get("status"))
 
     def test_exact_metric_without_currency_basis_is_unchanged(self):
         request = public.metric(
@@ -161,25 +184,27 @@ class CurrencyBasisPolicyTests(unittest.TestCase):
 
     def test_explicit_rmb_uses_actual_metric_sql_and_row_conversion(self):
         self._receipts([(100, 1, "CNY"), (10, 7, "USD")])
-        result = self._result(
+        payload, result = self._payload_result(
             self._request("actual_receipt_amount", basis="rmb")
         )
         self.assertEqual(170, public.facts(result)[0]["metric_value"])
-        self._assert_public_basis(result, "rmb", "actual_receipt_amount")
+        self._assert_public_basis(payload, result, "rmb", "actual_receipt_amount")
+        self._assert_receipt_evidence(payload, "r")
         sql = "\n".join(trace["sql"] for trace in self.h.sql_trace)
         self.assertIn("exchange_rate", sql)
         self.assertGreaterEqual(len(self.h.sql_trace), 1)
 
     def test_auto_single_currency_probes_then_filters_original(self):
         self._receipts([(10, 7, "USD"), (20, 7, "USD")])
-        result = self._result(self._request("actual_receipt_amount"))
+        payload, result = self._payload_result(self._request("actual_receipt_amount"))
         self.assertEqual(30, public.facts(result)[0]["metric_value"])
-        self._assert_public_basis(result, "original", "actual_receipt_amount_original")
+        self._assert_public_basis(payload, result, "original", "actual_receipt_amount_original")
+        self._assert_receipt_evidence(payload, "r")
         self.assertEqual(
             {"mode": "filtered", "value": "USD"},
             result["currency_scope"],
         )
-        explicit = self._result(
+        explicit_payload, explicit = self._payload_result(
             self._request(
                 "actual_receipt_amount",
                 basis="original",
@@ -192,27 +217,36 @@ class CurrencyBasisPolicyTests(unittest.TestCase):
             "business_metric_unit",
             "currency_scope",
         ):
-            self.assertEqual(result[field], explicit[field], field)
-        auto_text = next(
-            item["text"] for item in result["disclosure_ledger"]
-            if item["disclosure_id"] == "currency.basis.selection"
-        )
-        explicit_text = next(
-            item["text"] for item in explicit["disclosure_ledger"]
-            if item["disclosure_id"] == "currency.basis.selection"
-        )
+            if field == "business_metric_unit":
+                auto_value = next(item["unit"] for item in payload["metric_contexts"] if item["business_metric_ref"] == result["business_metric_ref"])
+                explicit_value = next(item["unit"] for item in explicit_payload["metric_contexts"] if item["business_metric_ref"] == explicit["business_metric_ref"])
+            else:
+                auto_value, explicit_value = result[field], explicit[field]
+            self.assertEqual(auto_value, explicit_value, field)
+        auto_text = next(item["text"] for item in payload["disclosures"] if item["disclosure_id"] == "currency.basis.selection" and "r" in item.get("request_ids", []))
+        explicit_text = next(item["text"] for item in explicit_payload["disclosures"] if item["disclosure_id"] == "currency.basis.selection" and "explicit" in item.get("request_ids", []))
         self.assertIn("一种币种", auto_text)
         self.assertIn("明确选择", explicit_text)
         sql = "\n".join(trace["sql"] for trace in self.h.sql_trace)
         self.assertIn("currency_count", sql)
         self.assertGreaterEqual(len(self.h.sql_trace), 2)
 
+    def test_auto_single_currency_preserves_raw_whitespace_for_final_filter(self):
+        self._receipts([(10, 7, " USD ")])
+        payload, result = self._payload_result(self._request("actual_receipt_amount"))
+        self.assertEqual(10, public.facts(result)[0]["metric_value"])
+        self._assert_public_basis(payload, result, "original", "actual_receipt_amount_original")
+        self.assertEqual("USD", result["currency_scope"]["value"].strip())
+        self.assertTrue(
+            any(" USD " in [str(value) for value in trace["params"]] for trace in self.h.sql_trace)
+        )
+
     def test_auto_cross_currency_probes_then_uses_rmb(self):
         self._receipts([(10, 7, "USD"), (20, 8, "EUR")])
-        result = self._result(self._request("actual_receipt_amount"))
+        payload, result = self._payload_result(self._request("actual_receipt_amount"))
         self.assertEqual(230, public.facts(result)[0]["metric_value"])
-        self._assert_public_basis(result, "rmb", "actual_receipt_amount")
-        self.assertIn("人民币", result["business_metric_unit"])
+        self._assert_public_basis(payload, result, "rmb", "actual_receipt_amount")
+        self.assertIn("人民币", next(item["unit"] for item in payload["metric_contexts"] if item["business_metric_ref"] == result["business_metric_ref"]))
         self.assertTrue(
             any("currency_count" in trace["sql"] for trace in self.h.sql_trace)
         )
@@ -230,8 +264,8 @@ class CurrencyBasisPolicyTests(unittest.TestCase):
             month="2026-08",
             comparison={"kind": "previous_period"},
         )
-        result = self._result(request)
-        self._assert_public_basis(result, "rmb", "actual_receipt_amount")
+        payload, result = self._payload_result(request)
+        self._assert_public_basis(payload, result, "rmb", "actual_receipt_amount")
         self.assertEqual(70, public.facts(result)[0]["metric_value"])
         self.assertEqual(160, public.facts(result)[0]["comparison_value"])
         self.assertTrue(any("currency_count" in t["sql"] for t in self.h.sql_trace))
@@ -240,7 +274,7 @@ class CurrencyBasisPolicyTests(unittest.TestCase):
         self._receipts([(10, 7, None)])
         payload = self.h.query(self._request("actual_receipt_amount"))
         self.assertEqual("failed", payload["status"], payload)
-        self.assertEqual("CURRENCY_SCOPE_UNKNOWN", payload["error"]["code"])
+        self.assertEqual("CURRENCY_SCOPE_UNKNOWN", payload["results"][0]["error"]["code"])
         text = json.dumps(payload, ensure_ascii=False)
         self.assertIn("币种", text)
         self.assertIn("人民币", text)
@@ -248,12 +282,10 @@ class CurrencyBasisPolicyTests(unittest.TestCase):
 
     def test_explicit_original_groups_and_filter_restores_one_currency(self):
         self._receipts([(10, 7, "USD"), (20, 8, "EUR")])
-        grouped = self._result(
+        grouped_payload, grouped = self._payload_result(
             self._request("actual_receipt_amount", basis="original")
         )
-        self._assert_public_basis(
-            grouped, "original", "actual_receipt_amount_original"
-        )
+        self._assert_public_basis(grouped_payload, grouped, "original", "actual_receipt_amount_original")
         values = {
             row["dimensions"][0]["value"]: row["facts"]["metric_value"]
             for row in grouped["rows"]
@@ -261,7 +293,7 @@ class CurrencyBasisPolicyTests(unittest.TestCase):
         self.assertEqual({"USD": 10, "EUR": 20}, values)
         self.assertNotEqual(30, public.facts(grouped)[0]["metric_value"])
 
-        filtered = self._result(
+        filtered_payload, filtered = self._payload_result(
             self._request(
                 "actual_receipt_amount",
                 basis="original",
@@ -278,7 +310,7 @@ class CurrencyBasisPolicyTests(unittest.TestCase):
     def test_negative_refund_stays_signed_in_original_net(self):
         self._receipts([(100, 1, "USD")])
         self._refunds([(30, 1, "USD"), (-5, 1, "USD")])
-        result = self._result(
+        payload, result = self._payload_result(
             self._request(
                 "net_receipt_amount",
                 basis="original",
@@ -286,14 +318,14 @@ class CurrencyBasisPolicyTests(unittest.TestCase):
             )
         )
         self.assertEqual(75, public.facts(result)[0]["metric_value"])
-        self._assert_public_basis(result, "original", "net_receipt_amount_original")
+        self._assert_public_basis(payload, result, "original", "net_receipt_amount_original")
         self.assertTrue(self.h.sql_trace)
 
     def test_empty_currency_is_not_treated_as_a_known_currency(self):
         self._receipts([(10, 7, "")])
         payload = self.h.query(self._request("actual_receipt_amount"))
         self.assertEqual("failed", payload["status"], payload)
-        self.assertEqual("CURRENCY_SCOPE_UNKNOWN", payload["error"]["code"])
+        self.assertEqual("CURRENCY_SCOPE_UNKNOWN", payload["results"][0]["error"]["code"])
         self.assertIn("币种", json.dumps(payload, ensure_ascii=False))
 
     def test_empty_actual_source_remains_empty_after_auto_probe(self):
@@ -333,10 +365,7 @@ class CurrencyBasisPolicyTests(unittest.TestCase):
         )
         calculation = payload["calculations"][0]
         self.assertEqual("failed", calculation["status"], payload)
-        self.assertIn(
-            calculation["error"]["code"],
-            {"CALCULATION_SCOPE_MISMATCH", "CURRENCY_BASIS_MISMATCH"},
-        )
+        self.assertEqual("CALCULATION_CURRENCY_MISMATCH", calculation["error"]["code"])
         hint = json.dumps(calculation, ensure_ascii=False)
         self.assertRegex(hint, "人民币|RMB")
         self.assertRegex(hint, "重查|重新查询|re-query")
@@ -344,7 +373,7 @@ class CurrencyBasisPolicyTests(unittest.TestCase):
     def test_snapshot_probe_and_final_query_use_the_same_offline_seam(self):
         self._receipts([(10, 7, "USD")])
         result = self._result(self._request("actual_receipt_amount"))
-        self.assertEqual(70, public.facts(result)[0]["metric_value"])
+        self.assertEqual(10, public.facts(result)[0]["metric_value"])
         self.assertGreaterEqual(len(self.h.sql_trace), 2)
         self.assertTrue(all("sqlite_sql" in trace for trace in self.h.sql_trace))
         self.assertTrue(all("database_rows" in trace for trace in self.h.sql_trace))
