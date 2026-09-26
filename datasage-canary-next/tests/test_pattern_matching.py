@@ -19,15 +19,15 @@ class PatternTests(unittest.TestCase):
         self.conn.executescript('''
           CREATE TABLE vk_dwd.pattern_matching_dwd(task_id INTEGER,task_no TEXT,task_type TEXT,customer_id INTEGER,customer_name TEXT,sales_id INTEGER,sales_name TEXT,task_region TEXT,task_status INTEGER,task_create_time TEXT,task_modified_time TEXT,execute_id INTEGER,executor_id INTEGER,executor_erp_id INTEGER,executor_name TEXT,execute_status INTEGER,execute_modified_time TEXT,complete_time TEXT,is_find TEXT,is_suitable TEXT,is_receive TEXT,final_goods_no TEXT,sale_bill_no TEXT,sale_goods_detail_id INTEGER,delivery_amount REAL,currency_no TEXT);
           DROP TABLE vk_dwd.sale_bill_goods_detail_dwd;
-          CREATE TABLE vk_dwd.sale_bill_goods_detail_dwd(goods_detail_id INTEGER,sale_bill_id INTEGER,goods_no TEXT,sales_id INTEGER,delivery_time TEXT,bill_status INTEGER,delivery_amount REAL,currency_no TEXT);
+          CREATE TABLE vk_dwd.sale_bill_goods_detail_dwd(goods_detail_id INTEGER,sale_bill_id INTEGER,goods_no TEXT,sales_id INTEGER,delivery_time TEXT,bill_status INTEGER,delivery_amount REAL,delivery_amount_rmb REAL,currency_no TEXT);
           CREATE TABLE vk_dwd.employee_dwd(person_id INTEGER,person_no TEXT,person_name TEXT,alias TEXT);
           INSERT INTO vk_dwd.employee_dwd VALUES(100,'E100','Sales',NULL),(201,'E201','Executor A',NULL),(202,'E202','Executor B',NULL);
         ''')
     def row(self,task=1,execute=11,person=1,product='P',detail=None,amount=None,currency='VND',found='y',suitable=None,received=None,status=3,execute_status=3,created='2026-08-01T10:00:00',completed='2026-08-02T10:00:00',task_no=None):
         values=(task,task_no or f'T{task}','picture',1,'Customer',100,'Sales','GZH',status,created,created,execute,person,None if person is None else 200+person,f'Executor {person}',execute_status,completed,completed,found,suitable,received,product,None if detail is None else f'B{detail}',detail,amount,currency)
         self.insert('vk_dwd.pattern_matching_dwd','task_id,task_no,task_type,customer_id,customer_name,sales_id,sales_name,task_region,task_status,task_create_time,task_modified_time,execute_id,executor_id,executor_erp_id,executor_name,execute_status,execute_modified_time,complete_time,is_find,is_suitable,is_receive,final_goods_no,sale_bill_no,sale_goods_detail_id,delivery_amount,currency_no',[values])
-    def sale(self,detail,amount=100,currency='VND',bill=1,product='P',when='2026-09-01T10:00:00'):
-        self.insert('vk_dwd.sale_bill_goods_detail_dwd','goods_detail_id,sale_bill_id,goods_no,sales_id,delivery_time,bill_status,delivery_amount,currency_no',[(detail,bill,product,100,when,6,amount,currency)])
+    def sale(self,detail,amount=100,currency='VND',bill=1,product='P',when='2026-09-01T10:00:00',amount_rmb=None):
+        self.insert('vk_dwd.sale_bill_goods_detail_dwd','goods_detail_id,sale_bill_id,goods_no,sales_id,delivery_time,bill_status,delivery_amount,delivery_amount_rmb,currency_no',[(detail,bill,product,100,when,6,amount,amount if amount_rmb is None else amount_rmb,currency)])
     def run_pattern(self,code='task_recorded_summary',**kw):return self.query(metric(code,'pattern_matching',month=None,**kw))
     def value(self,code='task_recorded_summary',**kw):return facts(self.result(self.run_pattern(code,**kw)))[0]
     def test_task_execution_person_and_detail_grains_and_owner_attribution(self):

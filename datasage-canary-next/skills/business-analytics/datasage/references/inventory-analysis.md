@@ -46,6 +46,10 @@ retain original currency for a single supported currency; cross-currency
 valuation or comparison requires the governed RMB metric when one is registered.
 Explicit RMB metrics remain RMB, while an original-only metric without an RMB
 counterpart remains per-currency.
+Book cost and DDP use their paired ledger `currency_no`; purchase prices retain
+their own purchase currency. Turnover keeps the global RMB cost accounting
+readiness rule even when its amounts are original currency. Unknown currency
+or missing amounts do not become zero or a complete total.
 
 Registered slow-pool results retain source-row, price-state, classification,
 identity, unit, and known-subset gaps. IDK retains source-row,

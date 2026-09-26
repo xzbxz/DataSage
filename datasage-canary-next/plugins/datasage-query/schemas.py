@@ -97,6 +97,19 @@ REQUEST = {
         "metric_filters": {
             "type": "object",
             "maxProperties": request_contract.MAX_METRIC_FILTERS,
+            "properties": {
+                "currency": {
+                    "oneOf": [
+                        request_contract.CURRENCY_TOKEN.schema(),
+                        {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": request_contract.MAX_FILTER_VALUES,
+                            "items": request_contract.CURRENCY_TOKEN.schema(),
+                        },
+                    ],
+                },
+            },
             "additionalProperties": {
                 "oneOf": [
                     *SCALAR["oneOf"],

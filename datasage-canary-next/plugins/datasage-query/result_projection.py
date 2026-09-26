@@ -21,6 +21,9 @@ from .query_errors import QueryFailure
 _FORMAL_DSO_ATTESTATION_VERSION = (
     "formal-receivable-turnover-calculation-attestation/v2"
 )
+_FORMAL_DSO_ORIGINAL_ATTESTATION_VERSION = (
+    "formal-receivable-turnover-original-calculation-attestation/v1"
+)
 
 _FORMAL_DSO_COVERAGE_DISCLOSURE = (
     "receivable.formal-receivable-turnover.coverage"
@@ -34,7 +37,20 @@ _FORMAL_DSO_FORMULA_DISCLOSURE = (
     "receivable.formal-receivable-turnover.formula"
 )
 
+_FORMAL_DSO_ORIGINAL_SCOPE_DISCLOSURE = (
+    "receivable.formal-receivable-turnover-original.scope"
+)
+
+_FORMAL_DSO_ORIGINAL_EXTERNAL_SCOPE_DISCLOSURE = (
+    "receivable.formal-receivable-turnover-original.external-customer.scope"
+)
+
+_FORMAL_DSO_ORIGINAL_FORMULA_DISCLOSURE = (
+    "receivable.formal-receivable-turnover-original.formula"
+)
+
 _FORMAL_DSO_GROSS_DELIVERY_FACT = "same_period_gross_delivery_rmb"
+_FORMAL_DSO_ORIGINAL_GROSS_DELIVERY_FACT = "delivery_amount_original"
 
 _FORMAL_DSO_ATTESTED_FACTS = (
     "metric_value",
@@ -44,6 +60,22 @@ _FORMAL_DSO_ATTESTED_FACTS = (
     "snapshot_month_count",
     "effective_month_count",
 )
+_FORMAL_DSO_ORIGINAL_ATTESTED_FACTS = (
+    "metric_value",
+    "average_net_debt_original",
+    _FORMAL_DSO_ORIGINAL_GROSS_DELIVERY_FACT,
+    "period_natural_days",
+    "snapshot_month_count",
+    "effective_month_count",
+)
+_FORMAL_DSO_ORIGINAL_COMPONENT_UNITS = {
+    "metric_value": "自然日",
+    "average_net_debt_original": "原币金额（按币种分别计量）",
+    _FORMAL_DSO_ORIGINAL_GROSS_DELIVERY_FACT: "原币金额（按币种分别计量）",
+    "period_natural_days": "自然日",
+    "snapshot_month_count": "月末快照数",
+    "effective_month_count": "有效出库月份数",
+}
 
 _MODEL_WIRE_RESULT_FIELDS = (
     "request_id",
@@ -275,6 +307,9 @@ def _fail_closed_formal_dso_model_wire(projected: dict[str, Any]) -> None:
         _FORMAL_DSO_COVERAGE_DISCLOSURE,
         _FORMAL_DSO_EXTERNAL_SCOPE_DISCLOSURE,
         _FORMAL_DSO_FORMULA_DISCLOSURE,
+        _FORMAL_DSO_ORIGINAL_SCOPE_DISCLOSURE,
+        _FORMAL_DSO_ORIGINAL_EXTERNAL_SCOPE_DISCLOSURE,
+        _FORMAL_DSO_ORIGINAL_FORMULA_DISCLOSURE,
     }
     has_formal_disclosure = isinstance(ledger, list) and any(
         isinstance(item, Mapping)
@@ -350,7 +385,11 @@ def _fail_closed_formal_dso_model_wire(projected: dict[str, Any]) -> None:
             for item in ledger
             if isinstance(item, Mapping)
             and item.get("disclosure_id") in sealed_disclosure_ids
-            and item.get("disclosure_id") != _FORMAL_DSO_FORMULA_DISCLOSURE
+            and item.get("disclosure_id")
+            not in {
+                _FORMAL_DSO_FORMULA_DISCLOSURE,
+                _FORMAL_DSO_ORIGINAL_FORMULA_DISCLOSURE,
+            }
         ]
         _reseal_model_disclosure_ledger(projected)
 
@@ -617,10 +656,21 @@ def _formal_dso_attestation_state(
 ) -> str:
     """Return verified/undefined only for a complete sealed v2 statement."""
 
+    original_basis = isinstance(attestation, Mapping) and attestation.get("currency_basis") == "original"
+    expected_version = (
+        _FORMAL_DSO_ORIGINAL_ATTESTATION_VERSION
+        if original_basis
+        else _FORMAL_DSO_ATTESTATION_VERSION
+    )
+    expected_facts = (
+        _FORMAL_DSO_ORIGINAL_ATTESTED_FACTS
+        if original_basis
+        else _FORMAL_DSO_ATTESTED_FACTS
+    )
+
     if (
         not isinstance(attestation, Mapping)
-        or attestation.get("contract_version")
-        != _FORMAL_DSO_ATTESTATION_VERSION
+        or attestation.get("contract_version") != expected_version
         or attestation.get("attestation_seal")
         != _formal_dso_attestation_seal(attestation)
         or not evidence.claim_is_valid_for_result(claim, result)
@@ -637,6 +687,14 @@ def _formal_dso_attestation_state(
         or attestation.get("projection_fingerprint")
         != claim.get("projection_fingerprint")
         or claim.get("period") != result.get("applied_time_range")
+        or (
+            isinstance(result.get("currency_scope"), Mapping)
+            and not original_basis
+        )
+        or (
+            original_basis
+            and attestation.get("currency_scope") != result.get("currency_scope")
+        )
     ):
         return "invalid"
 
@@ -666,6 +724,19 @@ def _formal_dso_attestation_state(
     ):
         return "invalid"
     if status == "verified":
+        if original_basis:
+            expected_units = _FORMAL_DSO_ORIGINAL_COMPONENT_UNITS
+            component_units = attestation.get("component_units")
+            fact_units = claim.get("fact_units")
+            if (
+                component_units != expected_units
+                or not isinstance(fact_units, Mapping)
+                or any(
+                    fact_units.get(name) != unit
+                    for name, unit in expected_units.items()
+                )
+            ):
+                return "invalid"
         required_disclosures = {
             _FORMAL_DSO_COVERAGE_DISCLOSURE,
             _FORMAL_DSO_EXTERNAL_SCOPE_DISCLOSURE,
@@ -679,8 +750,19 @@ def _formal_dso_attestation_state(
                 component_values,
                 facts=facts,
                 applied_time_range=result.get("applied_time_range"),
+                attested_facts=expected_facts,
             )
-            and required_disclosures.issubset(sealed_disclosure_ids)
+            and (
+                (
+                    {
+                        _FORMAL_DSO_ORIGINAL_SCOPE_DISCLOSURE,
+                        _FORMAL_DSO_ORIGINAL_EXTERNAL_SCOPE_DISCLOSURE,
+                        _FORMAL_DSO_ORIGINAL_FORMULA_DISCLOSURE,
+                    }
+                    if original_basis
+                    else required_disclosures
+                ).issubset(sealed_disclosure_ids)
+            )
         ):
             return "verified"
         return "invalid"
@@ -702,31 +784,41 @@ def _formal_dso_attested_components_are_valid(
     *,
     facts: Any,
     applied_time_range: Any,
+    attested_facts: Sequence[str] = _FORMAL_DSO_ATTESTED_FACTS,
 ) -> bool:
     """Verify exact claim copies and formal-DSO component business ranges."""
 
     if (
         not isinstance(component_values, Mapping)
-        or set(component_values) != set(_FORMAL_DSO_ATTESTED_FACTS)
+        or set(component_values) != set(attested_facts)
         or not isinstance(facts, Mapping)
         or any(
             fact_name not in facts
             or facts[fact_name] != component_values[fact_name]
-            for fact_name in _FORMAL_DSO_ATTESTED_FACTS
+            for fact_name in attested_facts
         )
         or not _finite_decimal_present(component_values.get("metric_value"))
-        or not _finite_decimal_present(
-            component_values.get("average_net_debt_rmb")
+        or not any(
+            _finite_decimal_present(component_values.get(field))
+            for field in ("average_net_debt_rmb", "average_net_debt_original")
         )
     ):
         return False
 
-    gross_delivery = _finite_decimal(
-        component_values.get(_FORMAL_DSO_GROSS_DELIVERY_FACT)
+    gross_field = (
+        _FORMAL_DSO_ORIGINAL_GROSS_DELIVERY_FACT
+        if "average_net_debt_original" in attested_facts
+        else _FORMAL_DSO_GROSS_DELIVERY_FACT
     )
+    average_field = (
+        "average_net_debt_original"
+        if "average_net_debt_original" in attested_facts
+        else "average_net_debt_rmb"
+    )
+    gross_delivery = _finite_decimal(component_values.get(gross_field))
     metric_value = _finite_decimal(component_values.get("metric_value"))
     average_net_debt = _finite_decimal(
-        component_values.get("average_net_debt_rmb")
+        component_values.get(average_field)
     )
     effective_month_count = _finite_decimal(
         component_values.get("effective_month_count")

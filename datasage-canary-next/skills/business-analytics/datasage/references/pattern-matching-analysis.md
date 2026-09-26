@@ -40,6 +40,9 @@ currency when the controlled scope is single-currency. Cross-currency
 aggregation or comparison requires a governed RMB counterpart; without one,
 return separate currency groups and no unified total. A named currency or
 explicit basis wins, and an amount is never converted from its label.
+The registered RMB variants read `delivery_amount_rmb` from the same verified
+sale detail. They retain the original link, timing, attribution, and coverage
+checks; the presence of an RMB value does not repair an invalid association.
 
 Verified linkage requires more than stable identity and currency. The live
 validation also requires a non-missing sales-side amount equal to the linked

@@ -1,4 +1,4 @@
-version: datasage-mini-target-semantics/v16
+version: datasage-mini-target-semantics/v17
 domain: target
 contract_role: plugin_physical_execution
 target_gap_decomposition_contract: contracts/target-gap-decomposition.yaml
@@ -20,6 +20,20 @@ dimensions:
   department: {label: 客户部门, columns: [customer_dept], filter_column: customer_dept, value_contract: {kind: source_exact, model_rule: 仅使用用户明确提供或受控结果返回的精确原值；不得猜测、翻译、归一化或扩展。}}
   organization: {label: 业务组织, columns: [org_name], filter_column: org_name, value_contract: {kind: source_exact, model_rule: 仅使用用户明确提供或受控结果返回的精确原值；不得猜测、翻译、归一化或扩展。}}
   customer: {label: 客户, columns: [customer_id, customer_name], filter_column: customer_name, identity_filter: {entity_type: customer, value_field: canonical_id, column: customer_id}, value_contract: {kind: entity_exact, model_rule: 保留用户明确提供的精确实体 token；由工具做稳定客户身份绑定，名称仅作展示，不得猜测。}}
+  currency:
+    label: 币种
+    columns: [currency_no]
+    filter_column: currency_no
+    value_contract: {kind: source_exact, model_rule: 交易原币统一使用源记录的交易币种，不使用其他币种字段。}
+currency_basis_pairs:
+  - {rmb: delivery_allocated_target_amount, original: delivery_allocated_target_amount_original}
+  - {rmb: receipt_allocated_target_amount, original: receipt_allocated_target_amount_original}
+  - {rmb: delivery_target_amount, original: delivery_target_amount_original}
+  - {rmb: receipt_target_amount, original: receipt_target_amount_original}
+  - {rmb: allocated_net_delivery_amount, original: allocated_net_delivery_amount_original}
+  - {rmb: allocated_net_receipt_amount, original: allocated_net_receipt_amount_original}
+  - {rmb: delivery_target_completion, original: delivery_target_completion_original}
+  - {rmb: receipt_target_completion, original: receipt_target_completion_original}
 metrics:
   delivery_allocated_target_amount:
     disclosures:
@@ -56,7 +70,7 @@ metrics:
     time_policy: current_month
     time_granularity: month
     required_filters: {is_inner_cus: {op: eq, value: n}}
-    allowed_dimensions: [salesperson, department, organization, customer]
+    allowed_dimensions: [salesperson, department, organization, customer, currency]
     required_attribution_mode: salesperson_allocation
   receipt_allocated_target_amount:
     disclosures:
@@ -75,7 +89,7 @@ metrics:
     time_granularity: month
     time_value_format: date
     required_filters: {}
-    allowed_dimensions: [salesperson, department, organization, customer]
+    allowed_dimensions: [salesperson, department, organization, customer, currency]
     required_attribution_mode: salesperson_allocation
   delivery_target_amount:
     disclosures:
@@ -92,7 +106,7 @@ metrics:
     time_policy: current_month
     time_granularity: month
     required_filters: {is_inner_cus: {op: eq, value: n}}
-    allowed_dimensions: [customer, department, organization]
+    allowed_dimensions: [customer, department, organization, currency]
     required_attribution_mode: transaction_detail
   receipt_target_amount:
     disclosures:
@@ -110,7 +124,7 @@ metrics:
     time_granularity: month
     time_value_format: date
     required_filters: {}
-    allowed_dimensions: [customer, department, organization]
+    allowed_dimensions: [customer, department, organization, currency]
     required_attribution_mode: transaction_detail
   allocated_net_delivery_amount:
     disclosures:
@@ -135,10 +149,13 @@ metrics:
     disclosures:
       - id: target.allocated_net_receipt_amount.legacy-note
         mode: contract_only
-        text: &answer_note_allocated_net_receipt_amount "分摊净收款登记额为收款拆分登记额减退款拆分登记额，包含内部客户；该登记额不代表实结或到账。"
+        text: &answer_note_allocated_net_receipt_amount "分摊净收款登记额为收款拆分登记额减退款拆分登记额；在账本覆盖范围内可包含内部客户；该登记额不代表实结或到账。"
+      - id: target.allocated_net_receipt_amount.scope
+        mode: required_always
+        text: "分摊收款登记额保留拆分账登记值；若所选范围存在未被拆分账覆盖的内部源行，登记额仍为账本观察但不代表覆盖完整客户范围，不回退明细或静默排除内部客户。按业务员展示或筛选时，覆盖计数属于相应的非业务员范围，不能据此归因给该业务员或跨业务员累加。"
     availability: *allocation_split_ledger_available
     label: 业务员分摊口径净收款登记额
-    business_definition: 所选期间按业务员分摊归属统计的净收款登记额；收款目标与登记额均包含内部客户，不代表实结或到账。
+    business_definition: 所选期间按业务员分摊归属统计的净收款登记额；收款目标与登记额以拆分账覆盖范围为准，可包含内部客户，不代表实结或到账。
     unit: 人民币元
     query_kind: allocated_amount
     max_group_dimensions: 2
@@ -147,6 +164,13 @@ metrics:
     time_policy: current_month
     required_attribution_mode: salesperson_allocation
     answer_note: *answer_note_allocated_net_receipt_amount
+    result_fact_units:
+      metric_value: 人民币元
+
+      source_scope_base_row_count: 行数
+      source_scope_internal_row_count: 行数
+      source_scope_unrepresented_internal_count: 行数
+      source_scope_unknown_internal_count: 行数
   delivery_target_completion:
     disclosures:
       - id: target.delivery-completion.period-scope
@@ -167,7 +191,7 @@ metrics:
     paths:
       salesperson_allocation:
         availability: *allocation_split_ledger_available
-        allowed_dimensions: [salesperson, department, organization, customer]
+        allowed_dimensions: [salesperson, department, organization, customer, currency]
         ledger: salesperson_allocation
         target: {table: vk_dwd.delivery_target_split_dwd, measure: detail_target_rmb, time_field: year_month, time_granularity: month, required_filters: {is_inner_cus: {op: eq, value: n}}}
         actual:
@@ -182,6 +206,7 @@ metrics:
                 customer: {key: customer_id, outputs: [{column: customer_name, alias: customer_name}], filter: customer_name}
                 department: {key: customer_dept, outputs: [{column: customer_dept, alias: customer_dept}], filter: customer_dept}
                 organization: {key: org_name, outputs: [{column: org_name, alias: org_name}], filter: org_name}
+                currency: {key: currency_no, outputs: [{column: currency_no, alias: currency_no}], filter: currency_no}
             - table: vk_dwd.delivery_return_detail_dwd
               measure: return_amount_rmb
               sign: -1
@@ -192,13 +217,15 @@ metrics:
                 customer: {key: customer_id, outputs: [{column: customer_name, alias: customer_name}], filter: customer_name}
                 department: {key: customer_dept, outputs: [{column: customer_dept, alias: customer_dept}], filter: customer_dept}
                 organization: {key: biz_org, outputs: [{column: biz_org, alias: org_name}], filter: biz_org}
+                currency: {key: currency_no, outputs: [{column: currency_no, alias: currency_no}], filter: currency_no}
         dimension_mappings:
           salesperson: {target_key: sales_id, target_outputs: [{column: sales_name, alias: sales_name}], target_filter: sales_name, actual_key: sales_id, actual_outputs: [{column: sales_name, alias: sales_name}], actual_filter: sales_name}
           customer: {target_key: customer_id, target_outputs: [{column: customer_name, alias: customer_name}], target_filter: customer_name, actual_key: customer_id, actual_outputs: [{column: customer_name, alias: customer_name}], actual_filter: customer_name}
           department: {target_key: customer_dept, target_outputs: [{column: customer_dept, alias: customer_dept}], target_filter: customer_dept, actual_key: customer_dept, actual_outputs: [{column: customer_dept, alias: customer_dept}], actual_filter: customer_dept}
           organization: {target_key: org_name, target_outputs: [{column: org_name, alias: org_name}], target_filter: org_name, actual_key: org_name, actual_outputs: [{column: org_name, alias: org_name}], actual_filter: org_name}
+          currency: {target_key: currency_no, target_outputs: [{column: currency_no, alias: currency_no}], target_filter: currency_no, actual_key: currency_no, actual_outputs: [{column: currency_no, alias: currency_no}], actual_filter: currency_no}
       transaction_detail:
-        allowed_dimensions: [customer, department, organization]
+        allowed_dimensions: [customer, department, organization, currency]
         ledger: transaction_detail
         target: {table: vk_dwd.delivery_target_detail_dwd, measure: detail_target_rmb, time_field: year_month, time_granularity: month, required_filters: {is_inner_cus: {op: eq, value: n}}}
         actual:
@@ -212,6 +239,7 @@ metrics:
                 customer: {key: customer_id, outputs: [{column: customer_name, alias: customer_name}], filter: customer_name}
                 department: {key: customer_dept, outputs: [{column: customer_dept, alias: customer_dept}], filter: customer_dept}
                 organization: {key: org_name, outputs: [{column: org_name, alias: org_name}], filter: org_name}
+                currency: {key: currency_no, outputs: [{column: currency_no, alias: currency_no}], filter: currency_no}
             - table: vk_dwd.delivery_return_detail_dwd
               measure: return_amount_rmb
               sign: -1
@@ -221,20 +249,25 @@ metrics:
                 customer: {key: customer_id, outputs: [{column: customer_name, alias: customer_name}], filter: customer_name}
                 department: {key: customer_dept, outputs: [{column: customer_dept, alias: customer_dept}], filter: customer_dept}
                 organization: {key: biz_org, outputs: [{column: biz_org, alias: org_name}], filter: biz_org}
+                currency: {key: currency_no, outputs: [{column: currency_no, alias: currency_no}], filter: currency_no}
         dimension_mappings:
           customer: {target_key: customer_id, target_outputs: [{column: customer_name, alias: customer_name}], target_filter: customer_name, actual_key: customer_id, actual_outputs: [{column: customer_name, alias: customer_name}], actual_filter: customer_name}
           department: {target_key: customer_dept, target_outputs: [{column: customer_dept, alias: customer_dept}], target_filter: customer_dept, actual_key: customer_dept, actual_outputs: [{column: customer_dept, alias: customer_dept}], actual_filter: customer_dept}
           organization: {target_key: org_name, target_outputs: [{column: org_name, alias: org_name}], target_filter: org_name, actual_key: org_name, actual_outputs: [{column: org_name, alias: org_name}], actual_filter: org_name}
+          currency: {target_key: currency_no, target_outputs: [{column: currency_no, alias: currency_no}], target_filter: currency_no, actual_key: currency_no, actual_outputs: [{column: currency_no, alias: currency_no}], actual_filter: currency_no}
   receipt_target_completion:
     disclosures:
+      - id: target.receipt-completion.split-coverage
+        mode: required_always
+        text: "使用业务员分摊口径时，只展示分摊账登记值；内部客户明细没有对应分摊记录或无法核实业务员范围时，完成率和缺口未定义，不用交易明细补账，也不静默排除内部客户。按业务员展示或筛选时，覆盖计数属于相应的非业务员范围，不能据此归因给该业务员或跨业务员累加。"
       - id: target.receipt-completion.period-scope
         mode: required_always
-        text: "目标和净收款登记额均包含内部客户；目标按所选期间使用完整月目标，未结束月份登记额按查询时点累计。"
+        text: "收款目标口径包含内部客户，分摊登记额须另核覆盖范围；目标按所选期间使用完整月目标，未结束月份登记额按查询时点累计。"
       - id: target.receipt_target_completion.legacy-note
         mode: contract_only
-        text: &answer_note_receipt_target_completion "实际值为净收款登记额，即收款登记额减退款登记额。salesperson_allocation 使用收款拆分登记额减退款拆分登记额；transaction_detail 使用收款明细登记额减退款明细登记额。该登记额不代表实结或到账。目标和登记额均包含内部客户，部门统一按 customer_dept；目标按所选期间使用完整月目标，未结束月份登记额按查询时点累计；目标为零、无目标、目标不完整和未来期间均由结构化状态区分。"
+        text: &answer_note_receipt_target_completion "实际值为净收款登记额，即收款登记额减退款登记额。salesperson_allocation 使用收款拆分登记额减退款拆分登记额；transaction_detail 使用收款明细登记额减退款明细登记额。该登记额不代表实结或到账。目标口径包含内部客户；业务员分摊实际须检查内部客户覆盖，部门统一按客户部门；目标按所选期间使用完整月目标，未结束月份登记额按查询时点累计；目标为零、无目标、目标不完整和未来期间均由结构化状态区分。"
     label: 收款目标完成情况
-    business_definition: 对照所选期间同一归属口径下的收款目标与净收款登记额，返回目标、登记额、缺口、完成率及目标和期间状态；目标与登记额均包含内部客户，登记额不代表实结或到账。
+    business_definition: 对照所选期间同一归属口径下的收款目标与净收款登记额，返回目标、登记额、缺口、完成率及目标和期间状态；目标包含内部客户，分摊登记额的可比范围以覆盖证据为准，登记额不代表实结或到账。
     unit_policy: 目标、净收款登记额与缺口为人民币元；完成率为比例（可为负，可超过1，不做截断）
     unit: 比例
     query_kind: target_completion
@@ -242,11 +275,47 @@ metrics:
     time_policy: current_month
     allowed_attribution_modes: [transaction_detail, salesperson_allocation]
     answer_note: *answer_note_receipt_target_completion
+    result_fact_units:
+      metric_value: 比例
+      completion_rate: 比例
+      target_amount_rmb: 人民币元
+      actual_amount_rmb: 人民币元
+      gap_amount_rmb: 人民币元
+
+      source_scope_base_row_count: 行数
+      source_scope_internal_row_count: 行数
+      source_scope_unrepresented_internal_count: 行数
+      source_scope_unknown_internal_count: 行数
     paths:
       salesperson_allocation:
         availability: *allocation_split_ledger_available
-        allowed_dimensions: [salesperson, department, organization, customer]
+        allowed_dimensions: [salesperson, department, organization, customer, currency]
         ledger: salesperson_allocation
+        scope_coverage:
+          mode: split_ledger_internal_coverage
+          preserve_split_ledger: true
+          fallback_to_transaction_detail: false
+          incomplete_state: source_range_incomplete
+          limit_completion_and_gap: true
+          currency_column: currency_no
+          base_components:
+            - table: vk_dwd.receive_bill_detail_dwd
+              split_table: vk_dwd.receive_bill_split_dwd
+              base_key: detail_id
+              split_key: detail_id
+              time_field: bill_time
+              internal_field: is_inner_cus
+              required_filters: {bill_status: {op: ne, value: A}}
+              dimension_mappings: {customer: customer_id, department: customer_dept, organization: org_name, currency: currency_no}
+            - table: vk_dwd.receive_return_bill_detail_dwd
+              split_table: vk_dwd.receive_return_bill_split_dwd
+              base_key: detail_id
+              split_key: detail_id
+              time_field: bill_time
+              internal_field: is_inner_cus
+              required_filters: {bill_status: {op: ne, value: A}}
+              dimension_mappings: {customer: customer_id, department: customer_dept, organization: org_name, currency: currency_no}
+          disclosure: 分摊收款登记账保留现有分摊口径；内部源行未被拆分账覆盖时完成率和缺口不可比。
         target: {table: vk_dwd.receive_target_split_dwd, measure: plan_receive_rmb, time_field: plan_receive_time, time_granularity: month, time_value_format: date, required_filters: {}}
         actual:
           components:
@@ -260,6 +329,7 @@ metrics:
                 customer: {key: customer_id, outputs: [{column: customer_name, alias: customer_name}], filter: customer_name}
                 department: {key: customer_dept, outputs: [{column: customer_dept, alias: customer_dept}], filter: customer_dept}
                 organization: {key: org_name, outputs: [{column: org_name, alias: org_name}], filter: org_name}
+                currency: {key: currency_no, outputs: [{column: currency_no, alias: currency_no}], filter: currency_no}
             - table: vk_dwd.receive_return_bill_split_dwd
               measure: detail_return_rmb
               sign: -1
@@ -270,13 +340,15 @@ metrics:
                 customer: {key: customer_id, outputs: [{column: customer_name, alias: customer_name}], filter: customer_name}
                 department: {key: customer_dept, outputs: [{column: customer_dept, alias: customer_dept}], filter: customer_dept}
                 organization: {key: org_name, outputs: [{column: org_name, alias: org_name}], filter: org_name}
+                currency: {key: currency_no, outputs: [{column: currency_no, alias: currency_no}], filter: currency_no}
         dimension_mappings:
           salesperson: {target_key: sales_id, target_outputs: [{column: sales_name, alias: sales_name}], target_filter: sales_name, actual_key: sales_id, actual_outputs: [{column: sales_name, alias: sales_name}], actual_filter: sales_name}
           customer: {target_key: customer_id, target_outputs: [{column: customer_name, alias: customer_name}], target_filter: customer_name, actual_key: customer_id, actual_outputs: [{column: customer_name, alias: customer_name}], actual_filter: customer_name}
           department: {target_key: customer_dept, target_outputs: [{column: customer_dept, alias: customer_dept}], target_filter: customer_dept, actual_key: customer_dept, actual_outputs: [{column: customer_dept, alias: customer_dept}], actual_filter: customer_dept}
           organization: {target_key: org_name, target_outputs: [{column: org_name, alias: org_name}], target_filter: org_name, actual_key: org_name, actual_outputs: [{column: org_name, alias: org_name}], actual_filter: org_name}
+          currency: {target_key: currency_no, target_outputs: [{column: currency_no, alias: currency_no}], target_filter: currency_no, actual_key: currency_no, actual_outputs: [{column: currency_no, alias: currency_no}], actual_filter: currency_no}
       transaction_detail:
-        allowed_dimensions: [customer, department, organization]
+        allowed_dimensions: [customer, department, organization, currency]
         ledger: transaction_detail
         target: {table: vk_dwd.receive_target_dwd, measure: plan_receive_rmb, time_field: plan_receive_time, time_granularity: month, time_value_format: date, required_filters: {}}
         actual:
@@ -290,6 +362,7 @@ metrics:
                 customer: {key: customer_id, outputs: [{column: customer_name, alias: customer_name}], filter: customer_name}
                 department: {key: customer_dept, outputs: [{column: customer_dept, alias: customer_dept}], filter: customer_dept}
                 organization: {key: org_name, outputs: [{column: org_name, alias: org_name}], filter: org_name}
+                currency: {key: currency_no, outputs: [{column: currency_no, alias: currency_no}], filter: currency_no}
             - table: vk_dwd.receive_return_bill_detail_dwd
               measure: detail_return_rmb
               sign: -1
@@ -299,10 +372,1082 @@ metrics:
                 customer: {key: customer_id, outputs: [{column: customer_name, alias: customer_name}], filter: customer_name}
                 department: {key: customer_dept, outputs: [{column: customer_dept, alias: customer_dept}], filter: customer_dept}
                 organization: {key: org_name, outputs: [{column: org_name, alias: org_name}], filter: org_name}
+                currency: {key: currency_no, outputs: [{column: currency_no, alias: currency_no}], filter: currency_no}
         dimension_mappings:
           customer: {target_key: customer_id, target_outputs: [{column: customer_name, alias: customer_name}], target_filter: customer_name, actual_key: customer_id, actual_outputs: [{column: customer_name, alias: customer_name}], actual_filter: customer_name}
           department: {target_key: customer_dept, target_outputs: [{column: customer_dept, alias: customer_dept}], target_filter: customer_dept, actual_key: customer_dept, actual_outputs: [{column: customer_dept, alias: customer_dept}], actual_filter: customer_dept}
           organization: {target_key: org_name, target_outputs: [{column: org_name, alias: org_name}], target_filter: org_name, actual_key: org_name, actual_outputs: [{column: org_name, alias: org_name}], actual_filter: org_name}
+          currency: {target_key: currency_no, target_outputs: [{column: currency_no, alias: currency_no}], target_filter: currency_no, actual_key: currency_no, actual_outputs: [{column: currency_no, alias: currency_no}], actual_filter: currency_no}
+  delivery_allocated_target_amount_original:
+    disclosures:
+    - id: target.delivery_allocated_target_amount_original.legacy-note
+      mode: contract_only
+      text: &answer_note_target_original_currency "原币金额按交易币种分组或限定单一币种，不同币种不得直接相加。"
+    - id: target.delivery-allocated-target.scope
+      mode: required_always
+      text: 业务员分摊出库目标排除内部客户；目标按所选期间的完整自然月目标解释。
+    - id: currency.original.no-cross
+      mode: required_always
+      text: 原币金额必须按交易币种分组或限定单一币种，不同币种不得直接相加。
+    availability:
+      status: available
+      owner: datasage.data_governance.target_allocation
+      activation_gate:
+        state: ready_for_live_replay
+        data_gate: passed
+        evidence:
+          owner_directive: user_confirmed_2026-09-04_split_tables_are_authoritative
+          split_ledger_integrity_receipt_sha256: 63b88be49c5a29fa476a90887a03b190ae2aaa680fbd088861f38db050e12f17
+          live_data_path_validation_receipt_sha256: 929278d938ddc63eaafddd7621affce556ea1681f2d48664f60f07cd6f5a73e5
+          semantic_inventory_regression: passed_2026-09-04
+        remaining_candidate_checks:
+        - trusted_live_replay
+        activation_authority: owner_and_release_review
+      review:
+        cadence: every_release_candidate
+        triggers:
+        - allocation_source_change
+        - attribution_contract_change
+      lifecycle:
+        state: canary_candidate
+        activation_effect: available_for_canary_validation
+        retirement_rule: retire_if_owner_or_validation_plan_removed
+    label: 业务员分摊口径出库目标金额（原币）
+    business_definition: 所选期间按业务员目标分摊归属统计的出库目标金额；用于业务员目标、协作或分摊场景。 原币金额按交易币种
+      分别计量；不得跨币种相加。
+    unit: 原币金额（按交易币种分别计量）
+    table: vk_dwd.delivery_target_split_dwd
+    aggregation: sum
+    measure: detail_target_amount
+    time_field: year_month
+    time_policy: current_month
+    time_granularity: month
+    required_filters:
+      is_inner_cus:
+        op: eq
+        value: n
+    allowed_dimensions:
+    - salesperson
+    - department
+    - organization
+    - customer
+    - currency
+    required_attribution_mode: salesperson_allocation
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+    result_fact_units:
+      metric_value: 原币金额（按交易币种分别计量）
+    answer_note: *answer_note_target_original_currency
+  receipt_allocated_target_amount_original:
+    disclosures:
+    - id: target.receipt_allocated_target_amount_original.legacy-note
+      mode: contract_only
+      text: *answer_note_target_original_currency
+    - id: target.receipt-allocated-target.scope
+      mode: required_always
+      text: 业务员分摊收款目标包含内部客户；目标按所选期间的完整自然月目标解释。
+    - id: currency.original.no-cross
+      mode: required_always
+      text: 原币金额必须按交易币种分组或限定单一币种，不同币种不得直接相加。
+    availability:
+      status: available
+      owner: datasage.data_governance.target_allocation
+      activation_gate:
+        state: ready_for_live_replay
+        data_gate: passed
+        evidence:
+          owner_directive: user_confirmed_2026-09-04_split_tables_are_authoritative
+          split_ledger_integrity_receipt_sha256: 63b88be49c5a29fa476a90887a03b190ae2aaa680fbd088861f38db050e12f17
+          live_data_path_validation_receipt_sha256: 929278d938ddc63eaafddd7621affce556ea1681f2d48664f60f07cd6f5a73e5
+          semantic_inventory_regression: passed_2026-09-04
+        remaining_candidate_checks:
+        - trusted_live_replay
+        activation_authority: owner_and_release_review
+      review:
+        cadence: every_release_candidate
+        triggers:
+        - allocation_source_change
+        - attribution_contract_change
+      lifecycle:
+        state: canary_candidate
+        activation_effect: available_for_canary_validation
+        retirement_rule: retire_if_owner_or_validation_plan_removed
+    label: 业务员分摊口径收款目标金额（原币）
+    business_definition: 所选期间按业务员目标分摊归属统计的收款目标金额；用于业务员目标、协作或分摊场景。 原币金额按交易币种
+      分别计量；不得跨币种相加。
+    unit: 原币金额（按交易币种分别计量）
+    table: vk_dwd.receive_target_split_dwd
+    aggregation: sum
+    measure: plan_receive_amount
+    time_field: plan_receive_time
+    time_policy: current_month
+    time_granularity: month
+    time_value_format: date
+    required_filters: {}
+    allowed_dimensions:
+    - salesperson
+    - department
+    - organization
+    - customer
+    - currency
+    required_attribution_mode: salesperson_allocation
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+    result_fact_units:
+      metric_value: 原币金额（按交易币种分别计量）
+    answer_note: *answer_note_target_original_currency
+  delivery_target_amount_original:
+    disclosures:
+    - id: target.delivery_target_amount_original.legacy-note
+      mode: contract_only
+      text: *answer_note_target_original_currency
+    - id: target.delivery-target.scope
+      mode: required_always
+      text: 出库目标按交易事实账口径统计，排除内部客户；目标金额按所选期间的完整自然月目标解释。
+    - id: currency.original.no-cross
+      mode: required_always
+      text: 原币金额必须按交易币种分组或限定单一币种，不同币种不得直接相加。
+    label: 交易事实账口径出库目标金额（原币）
+    business_definition: 所选期间按普通交易归属统计的出库目标金额，适用于总体、客户、部门和组织目标。 原币金额按交易币种
+      分别计量；不得跨币种相加。
+    unit: 原币金额（按交易币种分别计量）
+    table: vk_dwd.delivery_target_detail_dwd
+    aggregation: sum
+    measure: detail_target_amount
+    time_field: year_month
+    time_policy: current_month
+    time_granularity: month
+    required_filters:
+      is_inner_cus:
+        op: eq
+        value: n
+    allowed_dimensions:
+    - customer
+    - department
+    - organization
+    - currency
+    required_attribution_mode: transaction_detail
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+    result_fact_units:
+      metric_value: 原币金额（按交易币种分别计量）
+    answer_note: *answer_note_target_original_currency
+  receipt_target_amount_original:
+    disclosures:
+    - id: target.receipt_target_amount_original.legacy-note
+      mode: contract_only
+      text: *answer_note_target_original_currency
+    - id: target.receipt-target.scope
+      mode: required_always
+      text: 收款目标按交易事实账口径统计，包含内部客户；目标金额按所选期间的完整自然月目标解释。
+    - id: currency.original.no-cross
+      mode: required_always
+      text: 原币金额必须按交易币种分组或限定单一币种，不同币种不得直接相加。
+    label: 交易事实账口径收款目标金额（原币）
+    business_definition: 所选期间按普通交易归属统计的收款目标金额，适用于总体、客户、部门和组织目标。 原币金额按交易币种
+      分别计量；不得跨币种相加。
+    unit: 原币金额（按交易币种分别计量）
+    table: vk_dwd.receive_target_dwd
+    aggregation: sum
+    measure: plan_receive_amount
+    time_field: plan_receive_time
+    time_policy: current_month
+    time_granularity: month
+    time_value_format: date
+    required_filters: {}
+    allowed_dimensions:
+    - customer
+    - department
+    - organization
+    - currency
+    required_attribution_mode: transaction_detail
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+    result_fact_units:
+      metric_value: 原币金额（按交易币种分别计量）
+    answer_note: *answer_note_target_original_currency
+  allocated_net_delivery_amount_original:
+    disclosures:
+    - id: target.allocated_net_delivery_amount_original.legacy-note
+      mode: contract_only
+      text: *answer_note_target_original_currency
+    - id: target.allocated_net_delivery_amount.attribution
+      mode: required_always
+      text: 退货按退货事实记载的业务员直接归属扣减，本查询不按出库协作比例再次分摊退货金额。
+    - id: target.allocated_net_delivery_amount.legacy-note
+      mode: contract_only
+      text: 分摊净出库为拆分毛出库减退货事实金额；退货按退货事实业务员100%归属，排除内部客户。
+    - id: currency.original.no-cross
+      mode: required_always
+      text: 原币金额必须按交易币种分组或限定单一币种，不同币种不得直接相加。
+    availability:
+      status: available
+      owner: datasage.data_governance.target_allocation
+      activation_gate:
+        state: ready_for_live_replay
+        data_gate: passed
+        evidence:
+          owner_directive: user_confirmed_2026-09-04_split_tables_are_authoritative
+          split_ledger_integrity_receipt_sha256: 63b88be49c5a29fa476a90887a03b190ae2aaa680fbd088861f38db050e12f17
+          live_data_path_validation_receipt_sha256: 929278d938ddc63eaafddd7621affce556ea1681f2d48664f60f07cd6f5a73e5
+          semantic_inventory_regression: passed_2026-09-04
+        remaining_candidate_checks:
+        - trusted_live_replay
+        activation_authority: owner_and_release_review
+      review:
+        cadence: every_release_candidate
+        triggers:
+        - allocation_source_change
+        - attribution_contract_change
+      lifecycle:
+        state: canary_candidate
+        activation_effect: available_for_canary_validation
+        retirement_rule: retire_if_owner_or_validation_plan_removed
+    label: 业务员分摊口径净出库金额（原币）
+    business_definition: 所选期间按业务员分摊归属统计的净出库实际金额；出库目标与实际均排除内部客户。 原币金额按交易币种
+      分别计量；不得跨币种相加。
+    unit: 原币金额（按交易币种分别计量）
+    query_kind: allocated_amount
+    max_group_dimensions: 2
+    source_completion_metric: delivery_target_completion_original
+    source_path: salesperson_allocation
+    time_policy: current_month
+    required_attribution_mode: salesperson_allocation
+    answer_note: *answer_note_target_original_currency
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+    result_fact_units:
+      metric_value: 原币金额（按交易币种分别计量）
+  allocated_net_receipt_amount_original:
+    disclosures:
+    - id: target.allocated_net_receipt_amount_original.legacy-note
+      mode: contract_only
+      text: *answer_note_target_original_currency
+    - id: target.allocated_net_receipt_amount.legacy-note
+      mode: contract_only
+      text: 分摊净收款登记额为收款拆分登记额减退款拆分登记额；在账本覆盖范围内可包含内部客户；该登记额不代表实结或到账。
+    - id: target.allocated_net_receipt_amount.scope
+      mode: required_always
+      text: 分摊收款登记额保留拆分账登记值；若所选范围存在未被拆分账覆盖的内部源行，登记额仍为账本观察但不代表覆盖完整客户范围，不回退明细或静默排除内部客户。按业务员展示或筛选时，覆盖计数属于相应的非业务员范围，不能据此归因给该业务员或跨业务员累加。
+    - id: currency.original.no-cross
+      mode: required_always
+      text: 原币金额必须按交易币种分组或限定单一币种，不同币种不得直接相加。
+    availability:
+      status: available
+      owner: datasage.data_governance.target_allocation
+      activation_gate:
+        state: ready_for_live_replay
+        data_gate: passed
+        evidence:
+          owner_directive: user_confirmed_2026-09-04_split_tables_are_authoritative
+          split_ledger_integrity_receipt_sha256: 63b88be49c5a29fa476a90887a03b190ae2aaa680fbd088861f38db050e12f17
+          live_data_path_validation_receipt_sha256: 929278d938ddc63eaafddd7621affce556ea1681f2d48664f60f07cd6f5a73e5
+          semantic_inventory_regression: passed_2026-09-04
+        remaining_candidate_checks:
+        - trusted_live_replay
+        activation_authority: owner_and_release_review
+      review:
+        cadence: every_release_candidate
+        triggers:
+        - allocation_source_change
+        - attribution_contract_change
+      lifecycle:
+        state: canary_candidate
+        activation_effect: available_for_canary_validation
+        retirement_rule: retire_if_owner_or_validation_plan_removed
+    label: 业务员分摊口径净收款登记额（原币）
+    business_definition: 所选期间按业务员分摊归属统计的净收款登记额；收款目标与登记额以拆分账覆盖范围为准，可包含内部客户，不代表实结或到账。 原币金额按交易币种
+      分别计量；不得跨币种相加。
+    unit: 原币金额（按交易币种分别计量）
+    query_kind: allocated_amount
+    max_group_dimensions: 2
+    source_completion_metric: receipt_target_completion_original
+    source_path: salesperson_allocation
+    time_policy: current_month
+    required_attribution_mode: salesperson_allocation
+    answer_note: *answer_note_target_original_currency
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+    result_fact_units:
+      metric_value: 原币金额（按交易币种分别计量）
+
+      source_scope_base_row_count: 行数
+      source_scope_internal_row_count: 行数
+      source_scope_unrepresented_internal_count: 行数
+      source_scope_unknown_internal_count: 行数
+  delivery_target_completion_original:
+    disclosures:
+    - id: target.delivery_target_completion_original.legacy-note
+      mode: contract_only
+      text: *answer_note_target_original_currency
+    - id: target.delivery-completion.period-scope
+      mode: required_always
+      text: 目标和实际均排除内部客户；目标按所选期间使用完整月目标，未结束月份实际按查询时点累计。
+    - id: target.delivery_target_completion.legacy-note
+      mode: contract_only
+      text: 实际值为净出库。salesperson_allocation 使用拆分毛出库并按受治理退货事实的业务员直接扣减；退货事实的业务组织字段仅在与逻辑业务组织等价时映射，禁止静默归一化；transaction_detail
+        使用非拆分出库与退货事实。目标和实际均排除内部客户；目标按所选期间使用完整月目标，未结束月份实际按查询时点累计；目标为零、无目标、目标不完整和未来期间均由结构化状态区分。
+    - id: currency.original.no-cross
+      mode: required_always
+      text: 原币金额必须按交易币种分组或限定单一币种，不同币种不得直接相加。
+    label: 出库目标完成情况（原币）
+    business_definition: 对照所选期间同一归属口径下的出库目标与净出库实际，返回目标、实际、缺口、完成率及目标和期间状态；目标与实际均排除内部客户。
+      原币金额按交易币种分别计量；不得跨币种相加。
+    unit_policy: 目标、实际与缺口为原币金额（按交易币种分别计量）；完成率为比例（可为负，可超过1，不做截断）。
+    unit: 比例
+    query_kind: target_completion
+    max_group_dimensions: 2
+    time_policy: current_month
+    allowed_attribution_modes:
+    - transaction_detail
+    - salesperson_allocation
+    answer_note: *answer_note_target_original_currency
+    paths:
+      salesperson_allocation:
+        availability:
+          status: available
+          owner: datasage.data_governance.target_allocation
+          activation_gate:
+            state: ready_for_live_replay
+            data_gate: passed
+            evidence:
+              owner_directive: user_confirmed_2026-09-04_split_tables_are_authoritative
+              split_ledger_integrity_receipt_sha256: 63b88be49c5a29fa476a90887a03b190ae2aaa680fbd088861f38db050e12f17
+              live_data_path_validation_receipt_sha256: 929278d938ddc63eaafddd7621affce556ea1681f2d48664f60f07cd6f5a73e5
+              semantic_inventory_regression: passed_2026-09-04
+            remaining_candidate_checks:
+            - trusted_live_replay
+            activation_authority: owner_and_release_review
+          review:
+            cadence: every_release_candidate
+            triggers:
+            - allocation_source_change
+            - attribution_contract_change
+          lifecycle:
+            state: canary_candidate
+            activation_effect: available_for_canary_validation
+            retirement_rule: retire_if_owner_or_validation_plan_removed
+        allowed_dimensions:
+        - salesperson
+        - department
+        - organization
+        - customer
+        - currency
+        ledger: salesperson_allocation
+        target:
+          table: vk_dwd.delivery_target_split_dwd
+          measure: detail_target_amount
+          time_field: year_month
+          time_granularity: month
+          required_filters:
+            is_inner_cus:
+              op: eq
+              value: n
+        actual:
+          components:
+          - table: vk_dwd.sale_bill_split_dwd
+            measure: delivery_amount
+            sign: 1
+            time_field: delivery_time
+            required_filters:
+              bill_status:
+                op: eq
+                value: 6
+              is_inner_cus:
+                op: eq
+                value: n
+            dimension_mappings:
+              salesperson:
+                key: sales_id
+                outputs:
+                - column: sales_name
+                  alias: sales_name
+                filter: sales_name
+              customer:
+                key: customer_id
+                outputs:
+                - column: customer_name
+                  alias: customer_name
+                filter: customer_name
+              department:
+                key: customer_dept
+                outputs:
+                - column: customer_dept
+                  alias: customer_dept
+                filter: customer_dept
+              organization:
+                key: org_name
+                outputs:
+                - column: org_name
+                  alias: org_name
+                filter: org_name
+              currency:
+                key: currency_no
+                outputs:
+                - column: currency_no
+                  alias: currency_no
+                filter: currency_no
+          - table: vk_dwd.delivery_return_detail_dwd
+            measure: return_amount
+            sign: -1
+            time_field: statement_time
+            required_filters:
+              status:
+                op: eq
+                value: 4
+              complnt_type:
+                op: eq
+                value: 1
+              channel_type:
+                op: eq
+                value: 1
+              is_inner_cus:
+                op: eq
+                value: n
+            dimension_mappings:
+              salesperson:
+                key: sales_id
+                outputs:
+                - column: sales_name
+                  alias: sales_name
+                filter: sales_name
+              customer:
+                key: customer_id
+                outputs:
+                - column: customer_name
+                  alias: customer_name
+                filter: customer_name
+              department:
+                key: customer_dept
+                outputs:
+                - column: customer_dept
+                  alias: customer_dept
+                filter: customer_dept
+              organization:
+                key: biz_org
+                outputs:
+                - column: biz_org
+                  alias: org_name
+                filter: biz_org
+              currency:
+                key: currency_no
+                outputs:
+                - column: currency_no
+                  alias: currency_no
+                filter: currency_no
+        dimension_mappings:
+          salesperson:
+            target_key: sales_id
+            target_outputs:
+            - column: sales_name
+              alias: sales_name
+            target_filter: sales_name
+            actual_key: sales_id
+            actual_outputs:
+            - column: sales_name
+              alias: sales_name
+            actual_filter: sales_name
+          customer:
+            target_key: customer_id
+            target_outputs:
+            - column: customer_name
+              alias: customer_name
+            target_filter: customer_name
+            actual_key: customer_id
+            actual_outputs:
+            - column: customer_name
+              alias: customer_name
+            actual_filter: customer_name
+          department:
+            target_key: customer_dept
+            target_outputs:
+            - column: customer_dept
+              alias: customer_dept
+            target_filter: customer_dept
+            actual_key: customer_dept
+            actual_outputs:
+            - column: customer_dept
+              alias: customer_dept
+            actual_filter: customer_dept
+          organization:
+            target_key: org_name
+            target_outputs:
+            - column: org_name
+              alias: org_name
+            target_filter: org_name
+            actual_key: org_name
+            actual_outputs:
+            - column: org_name
+              alias: org_name
+            actual_filter: org_name
+          currency:
+            target_key: currency_no
+            target_outputs:
+            - column: currency_no
+              alias: currency_no
+            target_filter: currency_no
+            actual_key: currency_no
+            actual_outputs:
+            - column: currency_no
+              alias: currency_no
+            actual_filter: currency_no
+      transaction_detail:
+        allowed_dimensions:
+        - customer
+        - department
+        - organization
+        - currency
+        ledger: transaction_detail
+        target:
+          table: vk_dwd.delivery_target_detail_dwd
+          measure: detail_target_amount
+          time_field: year_month
+          time_granularity: month
+          required_filters:
+            is_inner_cus:
+              op: eq
+              value: n
+        actual:
+          components:
+          - table: vk_dwd.sale_bill_goods_detail_dwd
+            measure: delivery_amount
+            sign: 1
+            time_field: delivery_time
+            required_filters:
+              bill_status:
+                op: eq
+                value: 6
+              is_inner_cus:
+                op: eq
+                value: n
+            dimension_mappings:
+              customer:
+                key: customer_id
+                outputs:
+                - column: customer_name
+                  alias: customer_name
+                filter: customer_name
+              department:
+                key: customer_dept
+                outputs:
+                - column: customer_dept
+                  alias: customer_dept
+                filter: customer_dept
+              organization:
+                key: org_name
+                outputs:
+                - column: org_name
+                  alias: org_name
+                filter: org_name
+              currency:
+                key: currency_no
+                outputs:
+                - column: currency_no
+                  alias: currency_no
+                filter: currency_no
+          - table: vk_dwd.delivery_return_detail_dwd
+            measure: return_amount
+            sign: -1
+            time_field: statement_time
+            required_filters:
+              status:
+                op: eq
+                value: 4
+              complnt_type:
+                op: eq
+                value: 1
+              channel_type:
+                op: eq
+                value: 1
+              is_inner_cus:
+                op: eq
+                value: n
+            dimension_mappings:
+              customer:
+                key: customer_id
+                outputs:
+                - column: customer_name
+                  alias: customer_name
+                filter: customer_name
+              department:
+                key: customer_dept
+                outputs:
+                - column: customer_dept
+                  alias: customer_dept
+                filter: customer_dept
+              organization:
+                key: biz_org
+                outputs:
+                - column: biz_org
+                  alias: org_name
+                filter: biz_org
+              currency:
+                key: currency_no
+                outputs:
+                - column: currency_no
+                  alias: currency_no
+                filter: currency_no
+        dimension_mappings:
+          customer:
+            target_key: customer_id
+            target_outputs:
+            - column: customer_name
+              alias: customer_name
+            target_filter: customer_name
+            actual_key: customer_id
+            actual_outputs:
+            - column: customer_name
+              alias: customer_name
+            actual_filter: customer_name
+          department:
+            target_key: customer_dept
+            target_outputs:
+            - column: customer_dept
+              alias: customer_dept
+            target_filter: customer_dept
+            actual_key: customer_dept
+            actual_outputs:
+            - column: customer_dept
+              alias: customer_dept
+            actual_filter: customer_dept
+          organization:
+            target_key: org_name
+            target_outputs:
+            - column: org_name
+              alias: org_name
+            target_filter: org_name
+            actual_key: org_name
+            actual_outputs:
+            - column: org_name
+              alias: org_name
+            actual_filter: org_name
+          currency:
+            target_key: currency_no
+            target_outputs:
+            - column: currency_no
+              alias: currency_no
+            target_filter: currency_no
+            actual_key: currency_no
+            actual_outputs:
+            - column: currency_no
+              alias: currency_no
+            actual_filter: currency_no
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+    result_fact_units:
+      metric_value: 比例
+      completion_rate: 比例
+      target_amount_original: 原币金额（按交易币种分别计量）
+      actual_amount_original: 原币金额（按交易币种分别计量）
+      gap_amount_original: 原币金额（按交易币种分别计量）
+  receipt_target_completion_original:
+    disclosures:
+    - id: target.receipt_target_completion_original.legacy-note
+      mode: contract_only
+      text: *answer_note_target_original_currency
+    - id: target.receipt-completion.split-coverage
+      mode: required_always
+      text: "使用业务员分摊口径时，只展示分摊账登记值；内部客户明细没有对应分摊记录或无法核实业务员范围时，完成率和缺口未定义，不用交易明细补账，也不静默排除内部客户。按业务员展示或筛选时，覆盖计数属于相应的非业务员范围，不能据此归因给该业务员或跨业务员累加。"
+    - id: target.receipt-completion.period-scope
+      mode: required_always
+      text: 收款目标口径包含内部客户，分摊登记额须另核覆盖范围；目标按所选期间使用完整月目标，未结束月份登记额按查询时点累计。
+    - id: target.receipt_target_completion.legacy-note
+      mode: contract_only
+      text: 实际值为净收款登记额，即收款登记额减退款登记额。salesperson_allocation 使用收款拆分登记额减退款拆分登记额；transaction_detail
+        使用收款明细登记额减退款明细登记额。该登记额不代表实结或到账。目标口径包含内部客户；业务员分摊实际须检查内部客户覆盖，部门统一按客户部门；目标按所选期间使用完整月目标，未结束月份登记额按查询时点累计；目标为零、无目标、目标不完整和未来期间均由结构化状态区分。
+    - id: currency.original.no-cross
+      mode: required_always
+      text: 原币金额必须按交易币种分组或限定单一币种，不同币种不得直接相加。
+    label: 收款目标完成情况（原币）
+    business_definition: 对照所选期间同一归属口径下的收款目标与净收款登记额，返回目标、登记额、缺口、完成率及目标和期间状态；目标包含内部客户，分摊登记额的可比范围以覆盖证据为准，登记额不代表实结或到账。
+      原币金额按交易币种分别计量；不得跨币种相加。
+    unit_policy: 目标、实际与缺口为原币金额（按交易币种分别计量）；完成率为比例（可为负，可超过1，不做截断）。
+    unit: 比例
+    query_kind: target_completion
+    max_group_dimensions: 2
+    time_policy: current_month
+    allowed_attribution_modes:
+    - transaction_detail
+    - salesperson_allocation
+    answer_note: *answer_note_target_original_currency
+    paths:
+      salesperson_allocation:
+        availability:
+          status: available
+          owner: datasage.data_governance.target_allocation
+          activation_gate:
+            state: ready_for_live_replay
+            data_gate: passed
+            evidence:
+              owner_directive: user_confirmed_2026-09-04_split_tables_are_authoritative
+              split_ledger_integrity_receipt_sha256: 63b88be49c5a29fa476a90887a03b190ae2aaa680fbd088861f38db050e12f17
+              live_data_path_validation_receipt_sha256: 929278d938ddc63eaafddd7621affce556ea1681f2d48664f60f07cd6f5a73e5
+              semantic_inventory_regression: passed_2026-09-04
+            remaining_candidate_checks:
+            - trusted_live_replay
+            activation_authority: owner_and_release_review
+          review:
+            cadence: every_release_candidate
+            triggers:
+            - allocation_source_change
+            - attribution_contract_change
+          lifecycle:
+            state: canary_candidate
+            activation_effect: available_for_canary_validation
+            retirement_rule: retire_if_owner_or_validation_plan_removed
+        allowed_dimensions:
+        - salesperson
+        - department
+        - organization
+        - customer
+        - currency
+        ledger: salesperson_allocation
+        target:
+          table: vk_dwd.receive_target_split_dwd
+          measure: plan_receive_amount
+          time_field: plan_receive_time
+          time_granularity: month
+          time_value_format: date
+          required_filters: {}
+        actual:
+          components:
+          - table: vk_dwd.receive_bill_split_dwd
+            measure: detail_receive_amount
+            sign: 1
+            time_field: bill_time
+            required_filters:
+              bill_status:
+                op: ne
+                value: A
+            dimension_mappings:
+              salesperson:
+                key: sales_id
+                outputs:
+                - column: sales_name
+                  alias: sales_name
+                filter: sales_name
+              customer:
+                key: customer_id
+                outputs:
+                - column: customer_name
+                  alias: customer_name
+                filter: customer_name
+              department:
+                key: customer_dept
+                outputs:
+                - column: customer_dept
+                  alias: customer_dept
+                filter: customer_dept
+              organization:
+                key: org_name
+                outputs:
+                - column: org_name
+                  alias: org_name
+                filter: org_name
+              currency:
+                key: currency_no
+                outputs:
+                - column: currency_no
+                  alias: currency_no
+                filter: currency_no
+          - table: vk_dwd.receive_return_bill_split_dwd
+            measure: detail_return_amount
+            sign: -1
+            time_field: bill_time
+            required_filters:
+              bill_status:
+                op: ne
+                value: A
+            dimension_mappings:
+              salesperson:
+                key: sales_id
+                outputs:
+                - column: sales_name
+                  alias: sales_name
+                filter: sales_name
+              customer:
+                key: customer_id
+                outputs:
+                - column: customer_name
+                  alias: customer_name
+                filter: customer_name
+              department:
+                key: customer_dept
+                outputs:
+                - column: customer_dept
+                  alias: customer_dept
+                filter: customer_dept
+              organization:
+                key: org_name
+                outputs:
+                - column: org_name
+                  alias: org_name
+                filter: org_name
+              currency:
+                key: currency_no
+                outputs:
+                - column: currency_no
+                  alias: currency_no
+                filter: currency_no
+        dimension_mappings:
+          salesperson:
+            target_key: sales_id
+            target_outputs:
+            - column: sales_name
+              alias: sales_name
+            target_filter: sales_name
+            actual_key: sales_id
+            actual_outputs:
+            - column: sales_name
+              alias: sales_name
+            actual_filter: sales_name
+          customer:
+            target_key: customer_id
+            target_outputs:
+            - column: customer_name
+              alias: customer_name
+            target_filter: customer_name
+            actual_key: customer_id
+            actual_outputs:
+            - column: customer_name
+              alias: customer_name
+            actual_filter: customer_name
+          department:
+            target_key: customer_dept
+            target_outputs:
+            - column: customer_dept
+              alias: customer_dept
+            target_filter: customer_dept
+            actual_key: customer_dept
+            actual_outputs:
+            - column: customer_dept
+              alias: customer_dept
+            actual_filter: customer_dept
+          organization:
+            target_key: org_name
+            target_outputs:
+            - column: org_name
+              alias: org_name
+            target_filter: org_name
+            actual_key: org_name
+            actual_outputs:
+            - column: org_name
+              alias: org_name
+            actual_filter: org_name
+          currency:
+            target_key: currency_no
+            target_outputs:
+            - column: currency_no
+              alias: currency_no
+            target_filter: currency_no
+            actual_key: currency_no
+            actual_outputs:
+            - column: currency_no
+              alias: currency_no
+            actual_filter: currency_no
+        scope_coverage:
+          mode: split_ledger_internal_coverage
+          preserve_split_ledger: true
+          fallback_to_transaction_detail: false
+          incomplete_state: source_range_incomplete
+          limit_completion_and_gap: true
+          currency_column: currency_no
+          base_components:
+          - table: vk_dwd.receive_bill_detail_dwd
+            split_table: vk_dwd.receive_bill_split_dwd
+            base_key: detail_id
+            split_key: detail_id
+            time_field: bill_time
+            internal_field: is_inner_cus
+            required_filters:
+              bill_status:
+                op: ne
+                value: A
+            dimension_mappings:
+              customer: customer_id
+              department: customer_dept
+              organization: org_name
+              currency: currency_no
+          - table: vk_dwd.receive_return_bill_detail_dwd
+            split_table: vk_dwd.receive_return_bill_split_dwd
+            base_key: detail_id
+            split_key: detail_id
+            time_field: bill_time
+            internal_field: is_inner_cus
+            required_filters:
+              bill_status:
+                op: ne
+                value: A
+            dimension_mappings:
+              customer: customer_id
+              department: customer_dept
+              organization: org_name
+              currency: currency_no
+          disclosure: 分摊收款登记账保留现有分摊口径；若本次范围存在未被拆分账覆盖的内部源行，保留目标/已登记实际观察，但完成率和缺口置为不可比，不回退交易明细或静默排除内部客户。
+      transaction_detail:
+        allowed_dimensions:
+        - customer
+        - department
+        - organization
+        - currency
+        ledger: transaction_detail
+        target:
+          table: vk_dwd.receive_target_dwd
+          measure: plan_receive_amount
+          time_field: plan_receive_time
+          time_granularity: month
+          time_value_format: date
+          required_filters: {}
+        actual:
+          components:
+          - table: vk_dwd.receive_bill_detail_dwd
+            measure: detail_receive_amount
+            sign: 1
+            time_field: bill_time
+            required_filters:
+              bill_status:
+                op: ne
+                value: A
+            dimension_mappings:
+              customer:
+                key: customer_id
+                outputs:
+                - column: customer_name
+                  alias: customer_name
+                filter: customer_name
+              department:
+                key: customer_dept
+                outputs:
+                - column: customer_dept
+                  alias: customer_dept
+                filter: customer_dept
+              organization:
+                key: org_name
+                outputs:
+                - column: org_name
+                  alias: org_name
+                filter: org_name
+              currency:
+                key: currency_no
+                outputs:
+                - column: currency_no
+                  alias: currency_no
+                filter: currency_no
+          - table: vk_dwd.receive_return_bill_detail_dwd
+            measure: detail_return_amount
+            sign: -1
+            time_field: bill_time
+            required_filters:
+              bill_status:
+                op: ne
+                value: A
+            dimension_mappings:
+              customer:
+                key: customer_id
+                outputs:
+                - column: customer_name
+                  alias: customer_name
+                filter: customer_name
+              department:
+                key: customer_dept
+                outputs:
+                - column: customer_dept
+                  alias: customer_dept
+                filter: customer_dept
+              organization:
+                key: org_name
+                outputs:
+                - column: org_name
+                  alias: org_name
+                filter: org_name
+              currency:
+                key: currency_no
+                outputs:
+                - column: currency_no
+                  alias: currency_no
+                filter: currency_no
+        dimension_mappings:
+          customer:
+            target_key: customer_id
+            target_outputs:
+            - column: customer_name
+              alias: customer_name
+            target_filter: customer_name
+            actual_key: customer_id
+            actual_outputs:
+            - column: customer_name
+              alias: customer_name
+            actual_filter: customer_name
+          department:
+            target_key: customer_dept
+            target_outputs:
+            - column: customer_dept
+              alias: customer_dept
+            target_filter: customer_dept
+            actual_key: customer_dept
+            actual_outputs:
+            - column: customer_dept
+              alias: customer_dept
+            actual_filter: customer_dept
+          organization:
+            target_key: org_name
+            target_outputs:
+            - column: org_name
+              alias: org_name
+            target_filter: org_name
+            actual_key: org_name
+            actual_outputs:
+            - column: org_name
+              alias: org_name
+            actual_filter: org_name
+          currency:
+            target_key: currency_no
+            target_outputs:
+            - column: currency_no
+              alias: currency_no
+            target_filter: currency_no
+            actual_key: currency_no
+            actual_outputs:
+            - column: currency_no
+              alias: currency_no
+            actual_filter: currency_no
+    currency_policy:
+      mode: original_currency
+      column: currency_no
+      require_filter_or_group: true
+      never_sum_mixed_currency: true
+    result_fact_units:
+      metric_value: 比例
+      completion_rate: 比例
+      target_amount_original: 原币金额（按交易币种分别计量）
+      actual_amount_original: 原币金额（按交易币种分别计量）
+      gap_amount_original: 原币金额（按交易币种分别计量）
+
+      source_scope_base_row_count: 行数
+      source_scope_internal_row_count: 行数
+      source_scope_unrepresented_internal_count: 行数
+      source_scope_unknown_internal_count: 行数
 formula:
   completion_rate: actual_amount / target_amount
   gap: target_amount - actual_amount

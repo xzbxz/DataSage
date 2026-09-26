@@ -104,4 +104,56 @@ class InventoryTurnoverTests(unittest.TestCase):
         self.assertEqual(0,f['unready_accounting_month_count'])
         self.assertEqual(61,f['cost_turnover_days'])
 
+    def seed_original(self):
+        self.seed(self.base())
+        columns={row[1] for row in self.h.conn.execute('PRAGMA vk_dw.table_info(goods_turnover_basic_data_dw)')}
+        for name,kind in [('currency_no','TEXT'),('cost_amount','REAL'),('ddp_amount','REAL'),('pur_delivery_amount','REAL')]:
+            if name not in columns:
+                self.h.conn.execute(f'ALTER TABLE vk_dw.goods_turnover_basic_data_dw ADD COLUMN {name} {kind}')
+        self.h.conn.execute("UPDATE vk_dw.goods_turnover_basic_data_dw SET currency_no=CASE WHEN dept_name='A' THEN 'VND' ELSE 'THB' END,cost_amount=cost_amount_rmb*10,ddp_amount=ddp_amount_rmb*10,pur_delivery_amount=pur_delivery_rmb*5")
+
+    def original_query(self,**kw):
+        return self.h.query(public.metric('inventory_turnover_days_original','inventory',month=None,
+            time_range={'start':'2026-06-01','end':'2026-08-01'},**kw))
+
+    def test_original_uses_original_operands_not_rmb_turnover_value(self):
+        self.seed_original()
+        facts=self.facts(self.original_query(metric_filters={'department':'A','currency':'VND'}))
+        # Three snapshots of 1000; June/July flows are 250 each, over 61 days.
+        self.assertEqual(1000,facts['avg_inventory_cost_original'])
+        self.assertEqual(500,facts['net_delivery_original'])
+        self.assertEqual(122,facts['cost_turnover_days'])
+        self.assertEqual(244,facts['ddp_turnover_days'])
+        self.assertNotIn('avg_inventory_cost_rmb',facts)
+
+    def test_original_keeps_global_rmb_accounting_readiness(self):
+        self.seed_original()
+        self.h.conn.execute("UPDATE vk_dw.goods_turnover_basic_data_dw SET cost_amount_rmb=0 WHERE bill_date='2026-07'")
+        facts=self.facts(self.original_query(metric_filters={'department':'A','currency':'VND'}))
+        self.assertIsNone(facts['cost_turnover_days'])
+        self.assertIsNone(facts['ddp_turnover_days'])
+        self.assertEqual(1,facts['unready_accounting_month_count'])
+        # A different currency's nonzero RMB cost establishes global readiness.
+        self.h.conn.execute("UPDATE vk_dw.goods_turnover_basic_data_dw SET cost_amount_rmb=10 WHERE bill_date='2026-07' AND dept_name='OTHER'")
+        facts=self.facts(self.original_query(metric_filters={'department':'A','currency':'VND'}))
+        self.assertEqual(0,facts['unready_accounting_month_count'])
+        self.assertEqual(122,facts['cost_turnover_days'])
+
+    def test_original_unknown_currency_keeps_source_rows_without_amount_or_ratio(self):
+        self.seed_original()
+        self.h.conn.execute("UPDATE vk_dw.goods_turnover_basic_data_dw SET currency_no=NULL WHERE dept_name='A'")
+        facts=self.facts(self.original_query(metric_filters={'department':'A'},dimensions=['currency']))
+        self.assertEqual(3,facts['currency_missing_value_count'])
+        for field in ('metric_value','cost_turnover_days','ddp_turnover_days','avg_inventory_cost_original','avg_inventory_ddp_original','net_delivery_original'):
+            self.assertIsNone(facts[field],field)
+
+    def test_auto_probe_includes_currency_present_only_in_opening_snapshot(self):
+        self.seed_original()
+        self.h.conn.execute("DELETE FROM vk_dw.goods_turnover_basic_data_dw WHERE dept_name='OTHER' AND bill_date<>'2026-05'")
+        facts=self.facts(self.query(currency_basis='auto'))
+        # Opening has 110 RMB, middle/closing 100: weighted average 102.5.
+        self.assertEqual(102.5,facts['avg_inventory_cost_rmb'])
+        self.assertAlmostEqual(62.525,facts['cost_turnover_days'])
+        self.assertNotIn('avg_inventory_cost_original',facts)
+
 if __name__=='__main__':unittest.main()

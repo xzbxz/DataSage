@@ -112,12 +112,19 @@ from .query_execution import (
 from .result_projection import (
     _FORMAL_DSO_ATTESTATION_GUARDS,
     _FORMAL_DSO_ATTESTATION_VERSION,
+    _FORMAL_DSO_ORIGINAL_ATTESTATION_VERSION,
     _FORMAL_DSO_ATTESTED_FACTS,
+    _FORMAL_DSO_ORIGINAL_ATTESTED_FACTS,
+    _FORMAL_DSO_ORIGINAL_COMPONENT_UNITS,
     _FORMAL_DSO_AUTHORIZED_COMPONENTS,
     _FORMAL_DSO_COVERAGE_DISCLOSURE,
     _FORMAL_DSO_EXTERNAL_SCOPE_DISCLOSURE,
+    _FORMAL_DSO_ORIGINAL_SCOPE_DISCLOSURE,
+    _FORMAL_DSO_ORIGINAL_EXTERNAL_SCOPE_DISCLOSURE,
     _FORMAL_DSO_FORMULA_DISCLOSURE,
+    _FORMAL_DSO_ORIGINAL_FORMULA_DISCLOSURE,
     _FORMAL_DSO_GROSS_DELIVERY_FACT,
+    _FORMAL_DSO_ORIGINAL_GROSS_DELIVERY_FACT,
     _FORMAL_DSO_PROJECTION_UNDEFINED_REASONS,
     _MODEL_DISCLOSURE_PROJECTION_VERSION,
     _MODEL_WIRE_CALCULATION_ERROR_FIELDS,
@@ -1322,7 +1329,8 @@ def _metric_query_limit(request: Mapping[str, Any]) -> int:
 
 def _period_additive_fields(metric, scope, datasets, semantics):
     if metric.get("query_kind") == "target_completion":
-        return ["target_amount_rmb", "actual_amount_rmb", "gap_amount_rmb"]
+        return [field for field in capability_contract.target_completion_fact_units(metric)
+                if field not in {"metric_value", "completion_rate"}]
     if metric.get("time_policy") in {"current_snapshot", "latest_snapshot", "latest_non_null_snapshot"}:
         return []
     sum_kinds = {"sum", "sum_positive", "sum_product", "sum_product_many"}
@@ -1417,6 +1425,9 @@ def _evidence_rows_and_state(
             ):
                 return public_rows, "undefined"
             return [], "empty"
+    if any(row.get("source_scope_state") in {"source_range_incomplete", "source_scope_unverifiable"}
+           for row in rows):
+        return public_rows, "incomplete"
     metric_states = [row.get("metric_data_state") for row in rows if "metric_data_state" in row]
     if metric_states:
         if any(state == "incomplete" for state in metric_states):
@@ -1667,6 +1678,7 @@ _PUBLIC_STATE_FIELDS = {
     "comparison_metric_data_state",
     "target_data_state",
     "actual_data_state",
+    "source_scope_state",
     "period_state",
     "cost_turnover_state",
     "ddp_turnover_state",
@@ -2240,9 +2252,17 @@ def _comparison_is_complete(
 def _target_status_is_coherent(
     facts: Mapping[str, Any], states: Mapping[str, str]
 ) -> bool:
-    target = _finite_decimal(facts.get("target_amount_rmb"))
-    actual = _finite_decimal(facts.get("actual_amount_rmb"))
-    gap = _finite_decimal(facts.get("gap_amount_rmb"))
+    if states.get("source_scope_state") in {"source_range_incomplete", "source_scope_unverifiable"}:
+        return False
+    original_fields = {"target_amount_original", "actual_amount_original", "gap_amount_original"}
+    rmb_fields = {"target_amount_rmb", "actual_amount_rmb", "gap_amount_rmb"}
+    original = bool(original_fields.intersection(facts))
+    if original and rmb_fields.intersection(facts):
+        return False
+    suffix = "original" if original else "rmb"
+    target = _finite_decimal(facts.get(f"target_amount_{suffix}"))
+    actual = _finite_decimal(facts.get(f"actual_amount_{suffix}"))
+    gap = _finite_decimal(facts.get(f"gap_amount_{suffix}"))
     completion = _finite_decimal(facts.get("completion_rate"))
     metric_value = _finite_decimal(facts.get("metric_value"))
     target_state = str(states.get("target_data_state") or "").casefold()
@@ -2472,7 +2492,7 @@ def _claim_ledger(
         ):
             relations.append("period_comparison")
         if (
-            ("completion_rate" in facts or "target_amount_rmb" in facts)
+            ("completion_rate" in facts or "target_amount_rmb" in facts or "target_amount_original" in facts)
             and _target_status_is_coherent(facts, states)
         ):
             relations.append("target_status")
@@ -2777,14 +2797,32 @@ def _formal_dso_calculation_attestation(
     projection_fingerprint: str,
     disclosure_ledger: Sequence[Mapping[str, Any]],
     disclosure_ledger_seal: str,
+    currency_scope: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Seal canonical public component values and guards for formal DSO."""
 
+    original_basis = request.get("metric") == "formal_receivable_turnover_days_original"
     if (
         request.get("domain") != "receivable"
-        or request.get("metric") != "formal_receivable_turnover_days"
+        or request.get("metric")
+        not in {"formal_receivable_turnover_days", "formal_receivable_turnover_days_original"}
     ):
         return None
+    attestation_version = (
+        _FORMAL_DSO_ORIGINAL_ATTESTATION_VERSION
+        if original_basis else _FORMAL_DSO_ATTESTATION_VERSION
+    )
+    average_field = "average_net_debt_original" if original_basis else "average_net_debt_rmb"
+    denominator_field = (
+        _FORMAL_DSO_ORIGINAL_GROSS_DELIVERY_FACT
+        if original_basis
+        else "delivery_amount_rmb"
+    )
+    gross_field = (
+        _FORMAL_DSO_ORIGINAL_GROSS_DELIVERY_FACT
+        if original_basis
+        else _FORMAL_DSO_GROSS_DELIVERY_FACT
+    )
     expected_months, expected_period_days = _formal_dso_window_requirements(
         applied_time_range
     )
@@ -2795,13 +2833,28 @@ def _formal_dso_calculation_attestation(
         and expected_period_days is not None
         and period_days == expected_period_days
     )
-    denominator = row.get("delivery_amount_rmb")
+    denominator = row.get(denominator_field)
     denominator_decimal = _finite_decimal(denominator)
     denominator_present = denominator_decimal is not None
     denominator_positive = (
         denominator_decimal is not None and denominator_decimal > 0
     )
     effective_month_count = _finite_decimal(row.get("effective_month_count"))
+    coverage_disclosure = (
+        _FORMAL_DSO_ORIGINAL_SCOPE_DISCLOSURE
+        if original_basis
+        else _FORMAL_DSO_COVERAGE_DISCLOSURE
+    )
+    formula_disclosure = (
+        _FORMAL_DSO_ORIGINAL_FORMULA_DISCLOSURE
+        if original_basis
+        else _FORMAL_DSO_FORMULA_DISCLOSURE
+    )
+    external_scope_disclosure = (
+        _FORMAL_DSO_ORIGINAL_EXTERNAL_SCOPE_DISCLOSURE
+        if original_basis
+        else _FORMAL_DSO_EXTERNAL_SCOPE_DISCLOSURE
+    )
     sealed_disclosures = _sealed_disclosure_ids(
         disclosure_ledger,
         disclosure_ledger_seal,
@@ -2813,7 +2866,7 @@ def _formal_dso_calculation_attestation(
     guards = {
         "metric_value_present": _finite_decimal_present(row.get("metric_value")),
         "average_net_debt_present": _finite_decimal_present(
-            row.get("average_net_debt_rmb")
+            row.get(average_field)
         ),
         "gross_delivery_denominator_present": denominator_present,
         "gross_delivery_denominator_positive": denominator_positive,
@@ -2831,12 +2884,12 @@ def _formal_dso_calculation_attestation(
             and effective_month_count == effective_month_count.to_integral_value()
             and 1 <= effective_month_count <= expected_months
         ),
-        "coverage_disclosure_sealed": _FORMAL_DSO_COVERAGE_DISCLOSURE
+        "coverage_disclosure_sealed": coverage_disclosure
         in sealed_disclosures,
-        "formula_disclosure_sealed": _FORMAL_DSO_FORMULA_DISCLOSURE
+        "formula_disclosure_sealed": formula_disclosure
         in sealed_disclosures,
         "both_external_customer_scopes_disclosed": (
-            _FORMAL_DSO_EXTERNAL_SCOPE_DISCLOSURE in sealed_disclosures
+            external_scope_disclosure in sealed_disclosures
         ),
     }
     reason_codes = [
@@ -2845,10 +2898,8 @@ def _formal_dso_calculation_attestation(
     component_values = (
         {
             "metric_value": _json_value(row.get("metric_value")),
-            "average_net_debt_rmb": _json_value(
-                row.get("average_net_debt_rmb")
-            ),
-            _FORMAL_DSO_GROSS_DELIVERY_FACT: _json_value(denominator),
+            average_field: _json_value(row.get(average_field)),
+            gross_field: _json_value(denominator),
             "period_natural_days": _json_value(period_days),
             "snapshot_month_count": _json_value(
                 row.get("snapshot_month_count")
@@ -2861,7 +2912,7 @@ def _formal_dso_calculation_attestation(
         else {}
     )
     attestation: dict[str, Any] = {
-        "contract_version": _FORMAL_DSO_ATTESTATION_VERSION,
+        "contract_version": attestation_version,
         "status": "verified" if not reason_codes else "undefined",
         "guards": guards,
         "authorized_components": (
@@ -2884,6 +2935,23 @@ def _formal_dso_calculation_attestation(
         "scope_fingerprint": scope_fingerprint,
         "projection_fingerprint": projection_fingerprint,
     }
+    if original_basis:
+        attestation.update(
+            {
+                "currency_basis": "original",
+                "currency_scope": (
+                    copy.deepcopy(currency_scope)
+                    if isinstance(currency_scope, Mapping)
+                    else {
+                        "dimensions": list(request.get("dimensions") or []),
+                        "filters": copy.deepcopy(request.get("metric_filters") or {}),
+                    }
+                ),
+                "component_units": copy.deepcopy(
+                    _FORMAL_DSO_ORIGINAL_COMPONENT_UNITS
+                ),
+            }
+        )
     canonical = json.dumps(
         attestation,
         ensure_ascii=False,
@@ -2908,10 +2976,12 @@ def _attach_formal_dso_calculation_attestations(
     projection_fingerprint: str,
     disclosure_ledger: Sequence[Mapping[str, Any]],
     disclosure_ledger_seal: str,
+    currency_scope: Mapping[str, Any] | None = None,
 ) -> None:
     if (
         request.get("domain") != "receivable"
-        or request.get("metric") != "formal_receivable_turnover_days"
+        or request.get("metric")
+        not in {"formal_receivable_turnover_days", "formal_receivable_turnover_days_original"}
     ):
         return
     for row, claim in zip(rows, claims):
@@ -2926,6 +2996,7 @@ def _attach_formal_dso_calculation_attestations(
             projection_fingerprint=projection_fingerprint,
             disclosure_ledger=disclosure_ledger,
             disclosure_ledger_seal=disclosure_ledger_seal,
+            currency_scope=currency_scope,
         )
         facts = claim.get("facts")
         if attestation is not None and isinstance(facts, dict):
@@ -2934,7 +3005,12 @@ def _attach_formal_dso_calculation_attestations(
                 component_values,
                 Mapping,
             ):
-                for fact_name in _FORMAL_DSO_ATTESTED_FACTS:
+                fact_names = (
+                    _FORMAL_DSO_ORIGINAL_ATTESTED_FACTS
+                    if request.get("metric") == "formal_receivable_turnover_days_original"
+                    else _FORMAL_DSO_ATTESTED_FACTS
+                )
+                for fact_name in fact_names:
                     facts[fact_name] = copy.deepcopy(component_values[fact_name])
             facts["calculation_attestation"] = attestation
 
@@ -5519,7 +5595,7 @@ def _run_one(
             )
         currency_scope = _public_currency_scope(request, metric_definition)
         result_fact_units = metric_definition.get("result_fact_units") or (
-            capability_contract.TARGET_COMPLETION_FACT_UNITS
+            capability_contract.target_completion_fact_units(metric_definition)
             if metric_definition.get("query_kind") == "target_completion"
             else None
         )
@@ -5597,6 +5673,7 @@ def _run_one(
             projection_fingerprint=projection_fingerprint,
             disclosure_ledger=disclosure_ledger,
             disclosure_ledger_seal=disclosure_ledger_seal,
+            currency_scope=currency_scope,
         )
         result = {
             "request_id": request["request_id"],

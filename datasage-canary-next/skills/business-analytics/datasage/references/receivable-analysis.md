@@ -50,10 +50,14 @@ metric is unsupported even when a currency filter is available. For a supported
 original-currency metric, `auto` may use original evidence only in a single
 currency scope; cross-currency work requires the governed RMB counterpart or
 remains separate by currency. Explicit basis and named currency take precedence.
+Original means transaction `currency_no`, not base-accounting `s_currency_no`.
 
 Settlement metrics cover completed and validated documents. Formal turnover
 needs its contract-defined continuous month coverage; do not silently shorten
 the requested window.
+Formal DSO uses average month-end net debt divided by same-period gross
+delivery, multiplied by natural days, in one compatible currency basis.
+Keep all N+1 snapshots and the gross denominator; do not substitute net delivery.
 
 ## Boundaries
 

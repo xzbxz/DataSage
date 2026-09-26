@@ -511,6 +511,26 @@ TARGET_COMPLETION_FACT_UNITS = {
     "gap_amount_rmb": "人民币元",
 }
 
+TARGET_COMPLETION_ORIGINAL_FACT_UNITS = {
+    "metric_value": TARGET_COMPLETION_UNIT,
+    "completion_rate": TARGET_COMPLETION_UNIT,
+    "target_amount_original": "原币金额（按币种分别计量）",
+    "actual_amount_original": "原币金额（按币种分别计量）",
+    "gap_amount_original": "原币金额（按币种分别计量）",
+}
+
+
+def target_completion_fact_units(metric: Mapping[str, Any]) -> dict[str, str]:
+    """Return target completion fact units without hard-coding a currency basis.
+
+    The metric contract remains authoritative; original variants must declare
+    currency_policy.mode=original_currency and currency-specific result fields.
+    """
+    policy = metric.get("currency_policy") if isinstance(metric, Mapping) else None
+    if isinstance(policy, Mapping) and policy.get("mode") == "original_currency":
+        return dict(TARGET_COMPLETION_ORIGINAL_FACT_UNITS)
+    return dict(TARGET_COMPLETION_FACT_UNITS)
+
 
 def effective_dimension_definitions(
     semantics: Mapping[str, Any], metric: Mapping[str, Any] | str | None = None,

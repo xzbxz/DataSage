@@ -404,6 +404,24 @@ class CurrencyMetricPairTests(unittest.TestCase):
             self.assertIn("2026-07", str(cross))
             self.assertIn("2026-08", str(cross))
 
+    def test_unknown_currency_subtotal_does_not_fill_missing_signed_buckets(self):
+        harness = self._new_harness()
+        self._receivable_schema(harness)
+        self._seed_aging(harness)
+        harness.conn.execute('UPDATE vk_dwd.customer_aging_dwd SET currency_no=NULL, "61_90_debt"=NULL')
+        request = self._request("receivable", "aging_over_30_amount_original", "original", month=None)
+        result = self._result(harness, request)
+        facts = result["rows"][0]["facts"]
+        self.assertIsNone(facts["metric_value"])
+        self.assertEqual("undefined", result["data_state"])
+        for field in ("unclassified_source_amount", "unclassified_source_amount_min", "unclassified_source_amount_max"):
+            self.assertIsNone(facts.get(field), field)
+        # A fully present signed row may retain its raw, non-comparable value.
+        harness.conn.execute('UPDATE vk_dwd.customer_aging_dwd SET "61_90_debt"=-3')
+        facts = self._result(harness, request)["rows"][0]["facts"]
+        self.assertIsNone(facts["metric_value"])
+        self.assertEqual(48, facts["unclassified_source_amount"])
+
     def test_aging_original_variants_hand_calculated_and_fx7(self):
         harness = self._new_harness()
         self._receivable_schema(harness)

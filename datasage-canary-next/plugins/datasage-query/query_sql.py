@@ -336,8 +336,10 @@ def _metric_unclassified_source_value_sql(
         if not isinstance(columns, list) or not columns:
             raise QueryFailure("CONTRACT_UNAVAILABLE", "多字段求和指标定义无效。")
         approved = [_approved_column(column, allowed, blocked) for column in columns]
+        # This is source-value evidence, not a known-subset total. A missing
+        # bucket must not become zero or fabricate a bound for signed buckets.
         expression = " + ".join(
-            f"COALESCE({_qualified_identifier(alias, column)}, 0)"
+            _qualified_identifier(alias, column)
             for column in approved
         )
     else:

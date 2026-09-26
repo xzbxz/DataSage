@@ -39,7 +39,7 @@ class TargetCatalogSchemaTests(unittest.TestCase):
         payload = _catalog({"domain": "target"})
         self.assertEqual("success", payload["status"])
         result = payload["results"][0]
-        self.assertEqual(8, result["metric_count"])
+        self.assertEqual(16, result["metric_count"])  # Eight fixed RMB metrics plus their original counterparts.
 
         semantics = yaml.safe_load(
             (CONTRACT_ROOT / "target-semantics.yaml").read_text(encoding="utf-8")

@@ -429,6 +429,20 @@ class CurrencyBasisPolicyTests(unittest.TestCase):
                 self.assertEqual("INVALID_INPUT", payload["results"][0]["error"]["code"])
         self.assertFalse(self.h.sql_trace)
 
+    def test_non_text_currency_filters_never_reach_text_currency_comparisons(self):
+        for basis in (None, "auto", "original", "rmb"):
+            for value in (0, 0.0, False, True, "", " ", "X" * 81, ["USD", 0]):
+                with self.subTest(basis=basis, value=value):
+                    request = public.metric(
+                        "actual_receipt_amount_original", "receipt",
+                        metric_filters={"currency": value},
+                    )
+                    if basis is not None:
+                        request["currency_basis"] = basis
+                    payload = self.h.query(request)
+                    self.assertEqual("INVALID_INPUT", payload["results"][0]["error"]["code"])
+        self.assertFalse(self.h.sql_trace)
+
 
 if __name__ == "__main__":
     unittest.main()

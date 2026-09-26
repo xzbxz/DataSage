@@ -49,7 +49,7 @@ class CatalogConsistencyTests(unittest.TestCase):
         index = self._catalog({"domain": "receivable", "view": "expert_index"})
         self.assertEqual("success", index["status"])
         result = index["results"][0]
-        self.assertEqual(71, result["metric_count"])  # 50 prior active + 21 approved original variants
+        self.assertEqual(72, result["metric_count"])  # 71 prior active + original formal DSO
         pending = [
             item
             for item in result.get("pending_capabilities", [])

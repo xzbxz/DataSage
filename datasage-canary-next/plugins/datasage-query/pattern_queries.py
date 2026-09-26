@@ -8,6 +8,7 @@ def build_pattern_query(request, metric, datasets_contract, semantics, limit, *,
     view = metric.get('pattern_view')
     if view not in {'summary','linked_amount','person_attributed_amount'}:
         raise AnalysisQueryError('CONTRACT_UNAVAILABLE','找版查询视图未登记。')
+    rmb_metric = metric.get('measure') == 'delivery_amount_rmb'
     if any(request.get(k) is not None for k in ('comparison','baseline_week','movement_state','order_by','attribution_mode')):
         raise AnalysisQueryError('INVALID_PLAN','找版仅提供当前观察和明确时间口径的队列观察，按稳定键排序。')
     basis=request.get('pattern_time_basis','current_observation')
@@ -19,15 +20,17 @@ def build_pattern_query(request, metric, datasets_contract, semantics, limit, *,
     ds=_dataset(table,datasets_contract);sd=_dataset(linked_table,datasets_contract)
     fields=['task_id','task_no','task_type','customer_id','customer_name','sales_id','sales_name','task_region','task_status','task_create_time','task_modified_time','execute_id','executor_id','executor_erp_id','executor_name','execute_status','execute_modified_time','complete_time','is_find','is_suitable','is_receive','final_goods_no','sale_bill_no','sale_goods_detail_id','delivery_amount','currency_no']
     for field in fields:_approved(field,ds)
-    for field in ['goods_detail_id','sale_bill_id','goods_no','sales_id','delivery_time','bill_status','delivery_amount','currency_no']:_approved(field,sd)
+    for field in ['goods_detail_id','sale_bill_id','goods_no','sales_id','delivery_time','bill_status','delivery_amount','delivery_amount_rmb','currency_no']:_approved(field,sd)
     qt,qs=_quote_table(table),_quote_table(linked_table)
     # IDs own grain; names are labels only and never a deduplication key.
     dimension_keys={'task':'task_id','customer':'customer_id','salesperson':'sales_id','executor':'executor_id','candidate_product':'candidate_product_label','task_region':'task_region','task_type':'task_type','task_status':'task_status_label','execute_status':'execute_status_label','currency':'currency_no'}
     labels={'task':('task_number','task_no'),'customer':('customer_name','customer_name'),'salesperson':('sales_name','sales_name'),'executor':('executor_name','executor_name')}
-    chosen=request.get('dimensions') or (['currency'] if view!='summary' else [])
+    chosen=request.get('dimensions')
+    if not chosen:
+        chosen=[] if view=='summary' or rmb_metric else ['currency']
     if not set(chosen)<=set(metric.get('allowed_dimensions',[])):
         raise AnalysisQueryError('UNSUPPORTED_DIMENSION','找版分组维度不支持。')
-    if view!='summary' and 'currency' not in chosen:
+    if view!='summary' and not rmb_metric and 'currency' not in chosen:
         raise AnalysisQueryError('CURRENCY_SCOPE_REQUIRED','关联金额必须按已核验交易币种分组。')
     filters=request.get('metric_filters') or {}
     if not isinstance(filters,dict) or not set(filters)<=set(metric.get('allowed_dimensions',[])):
@@ -63,17 +66,17 @@ def build_pattern_query(request, metric, datasets_contract, semantics, limit, *,
       "task_quality AS (SELECT task_id,COUNT(*) AS n,COUNT(task_no) AS numbered,COUNT(DISTINCT task_no) AS numbers,COUNT(DISTINCT task_create_time) AS task_time_variants,COUNT(DISTINCT task_status) AS task_status_variants FROM p GROUP BY task_id)",
       "execute_quality AS (SELECT execute_id,COUNT(DISTINCT task_id) AS task_ids,COUNT(DISTINCT executor_id) AS executor_ids,COUNT(DISTINCT execute_status) AS execute_status_variants FROM p GROUP BY execute_id)",
       "detail_quality AS (SELECT sale_goods_detail_id,COUNT(*) AS n,COUNT(delivery_amount) AS amounts,COUNT(DISTINCT delivery_amount) AS amount_variants,COUNT(DISTINCT currency_no) AS requirement_currency_variants FROM p WHERE sale_goods_detail_id IS NOT NULL GROUP BY sale_goods_detail_id)",
-      f"sales_details AS (SELECT s.goods_detail_id,COUNT(*) AS n,MAX(s.sale_bill_id) AS sale_bill_id,MAX(s.goods_no) AS goods_no,MAX(s.sales_id) AS sales_id,MAX(s.delivery_time) AS delivery_time,MAX(s.bill_status) AS bill_status,MAX(s.delivery_amount) AS delivery_amount,MAX(s.currency_no) AS currency_no FROM {qs} s WHERE EXISTS(SELECT 1 FROM p WHERE p.sale_goods_detail_id=s.goods_detail_id) GROUP BY s.goods_detail_id)"]
+      f"sales_details AS (SELECT s.goods_detail_id,COUNT(*) AS n,MAX(s.sale_bill_id) AS sale_bill_id,MAX(s.goods_no) AS goods_no,MAX(s.sales_id) AS sales_id,MAX(s.delivery_time) AS delivery_time,MAX(s.bill_status) AS bill_status,MAX(s.delivery_amount) AS delivery_amount,MAX(s.delivery_amount_rmb) AS delivery_amount_rmb,COUNT(DISTINCT s.delivery_amount_rmb) AS rmb_amount_variants,MAX(s.currency_no) AS currency_no FROM {qs} s WHERE EXISTS(SELECT 1 FROM p WHERE p.sale_goods_detail_id=s.goods_detail_id) GROUP BY s.goods_detail_id)"]
     task_ok="p.task_id IS NOT NULL AND t.n=t.numbered AND t.numbers=1 AND tn.task_ids=1"
     exec_ok=f"({task_ok}) AND p.execute_id IS NOT NULL AND e.task_ids=1 AND e.executor_ids<=1"
     product_ok="NULLIF(TRIM(p.final_goods_no),'') IS NOT NULL AND p.final_goods_no NOT LIKE '%%,%%'"
     source_ok="s.n=1 AND s.sale_bill_id IS NOT NULL AND s.bill_status=6 AND s.delivery_amount IS NOT NULL AND s.currency_no REGEXP '^[A-Z]{3}$'"
     link_ok=f"({source_ok}) AND d.n=d.amounts AND d.amount_variants=1 AND p.delivery_amount=s.delivery_amount AND p.sales_id=s.sales_id AND ({product_ok}) AND p.final_goods_no=s.goods_no AND p.complete_time IS NOT NULL AND p.complete_time<s.delivery_time"
-    ctes.append(f"raw AS (SELECT p.*,CASE WHEN {task_ok} THEN 1 ELSE 0 END AS task_key_ok,CASE WHEN {exec_ok} THEN 1 ELSE 0 END AS execute_key_ok,CASE WHEN {product_ok} THEN 1 ELSE 0 END AS product_key_ok,t.task_time_variants,t.task_status_variants,e.execute_status_variants,CASE WHEN {link_ok} THEN 1 ELSE 0 END AS link_ok,CASE WHEN p.sale_goods_detail_id IS NOT NULL OR NULLIF(p.sale_bill_no,'') IS NOT NULL OR p.delivery_amount IS NOT NULL THEN 1 ELSE 0 END AS link_recorded,CASE WHEN s.n=1 THEN s.currency_no ELSE NULL END AS transaction_currency,CASE WHEN s.n=1 THEN s.delivery_time ELSE NULL END AS linked_delivery_time,CASE WHEN s.n=1 THEN s.delivery_amount ELSE NULL END AS linked_amount,CASE WHEN s.n=1 THEN s.sale_bill_id ELSE NULL END AS linked_bill_id,d.requirement_currency_variants FROM p LEFT JOIN task_quality t ON p.task_id=t.task_id LEFT JOIN task_numbers tn ON p.task_no=tn.task_no LEFT JOIN execute_quality e ON p.execute_id=e.execute_id LEFT JOIN detail_quality d ON p.sale_goods_detail_id=d.sale_goods_detail_id LEFT JOIN sales_details s ON p.sale_goods_detail_id=s.goods_detail_id)")
+    ctes.append(f"raw AS (SELECT p.*,CASE WHEN {task_ok} THEN 1 ELSE 0 END AS task_key_ok,CASE WHEN {exec_ok} THEN 1 ELSE 0 END AS execute_key_ok,CASE WHEN {product_ok} THEN 1 ELSE 0 END AS product_key_ok,t.task_time_variants,t.task_status_variants,e.execute_status_variants,CASE WHEN {link_ok} THEN 1 ELSE 0 END AS link_ok,CASE WHEN {link_ok} AND s.delivery_amount_rmb IS NOT NULL AND s.rmb_amount_variants=1 THEN 1 ELSE 0 END AS rmb_ready,CASE WHEN p.sale_goods_detail_id IS NOT NULL OR NULLIF(p.sale_bill_no,'') IS NOT NULL OR p.delivery_amount IS NOT NULL THEN 1 ELSE 0 END AS link_recorded,CASE WHEN s.n=1 THEN s.currency_no ELSE NULL END AS transaction_currency,CASE WHEN s.n=1 THEN s.delivery_time ELSE NULL END AS linked_delivery_time,CASE WHEN s.n=1 THEN s.delivery_amount ELSE NULL END AS linked_amount,CASE WHEN s.n=1 THEN s.delivery_amount_rmb ELSE NULL END AS linked_amount_rmb,CASE WHEN s.n=1 THEN s.sale_bill_id ELSE NULL END AS linked_bill_id,d.requirement_currency_variants FROM p LEFT JOIN task_quality t ON p.task_id=t.task_id LEFT JOIN task_numbers tn ON p.task_no=tn.task_no LEFT JOIN execute_quality e ON p.execute_id=e.execute_id LEFT JOIN detail_quality d ON p.sale_goods_detail_id=d.sale_goods_detail_id LEFT JOIN sales_details s ON p.sale_goods_detail_id=s.goods_detail_id)")
     ctes.append("prepared AS (SELECT raw.*,final_goods_no AS candidate_product_label,CASE task_status WHEN 1 THEN '待审核' WHEN 2 THEN '进行中' WHEN 3 THEN '完结' WHEN 4 THEN '待执行' WHEN 5 THEN '待回复' ELSE CASE WHEN task_status IS NULL THEN '未填' ELSE CONCAT('未定义(',task_status,')') END END AS task_status_label,CASE execute_status WHEN 1 THEN '进行中' WHEN 3 THEN '已完成' ELSE CASE WHEN execute_status IS NULL THEN '未填' ELSE CONCAT('未定义(',execute_status,')') END END AS execute_status_label FROM raw)")
     # Rename requirement currency before filtering; only the linked transaction supplies amount currency.
     columns=[f for f in fields if f!='currency_no']
-    extras=['task_key_ok','execute_key_ok','product_key_ok','task_time_variants','task_status_variants','execute_status_variants','link_ok','link_recorded','linked_delivery_time','linked_amount','linked_bill_id','requirement_currency_variants','candidate_product_label','task_status_label','execute_status_label']
+    extras=['task_key_ok','execute_key_ok','product_key_ok','task_time_variants','task_status_variants','execute_status_variants','link_ok','rmb_ready','link_recorded','linked_delivery_time','linked_amount','linked_amount_rmb','linked_bill_id','requirement_currency_variants','candidate_product_label','task_status_label','execute_status_label']
     # A task without a recorded/suspected link is outside an amount population,
     # not a linked fact with missing transaction time or currency. Keep suspected
     # links (including missing detail IDs) so genuine coverage gaps still propagate.
@@ -85,6 +88,28 @@ def build_pattern_query(request, metric, datasets_contract, semantics, limit, *,
     ctes.append(f"scoped AS (SELECT r.*,CASE WHEN {scope_unknown} THEN 1 ELSE 0 END AS scope_unknown{period} FROM r{where})")
     ctes.append("observation AS (SELECT MAX(task_modified_time) AS pattern_task_modified_max,MAX(execute_modified_time) AS pattern_execute_modified_max FROM p)")
     ctes.append("coverage AS (SELECT COUNT(*) AS pattern_scope_rows,COALESCE(SUM(scope_unknown),0) AS pattern_scope_unknown_rows FROM scoped)")
+    if request.get('_currency_scope_probe'):
+        # The automatic basis probe is an aggregate over the complete scoped
+        # population. It deliberately has no outer LIMIT or pagination
+        # parameter; the generic currency resolver wraps it in a one-row count.
+        probe_currency = "CASE WHEN NULLIF(TRIM(currency_no),'') IS NULL OR currency_no NOT REGEXP '^[A-Z]{3}$' THEN NULL ELSE currency_no END"
+        ctes.append("scope_probe AS (SELECT " + probe_currency + " AS currency_no,COUNT(*) AS __matched_row_count FROM scoped GROUP BY " + probe_currency + ")")
+        probe_sql = (
+            'WITH ' + ',\n'.join(ctes)
+            + ' SELECT scope_probe.*,clock.*,observation.*,coverage.* FROM clock CROSS JOIN observation CROSS JOIN coverage CROSS JOIN scope_probe'
+        )
+        return probe_sql, params, {
+            'metric': request.get('metric'), 'dataset': None,
+            'source_datasets': [table, linked_table],
+            'dimension_outputs': ['currency_no'],
+            'filters': filters,
+            'time_range': {'source': 'pattern_current_observation', 'basis': basis,
+                           'window_start': window.get('start'), 'window_end': window.get('end')},
+            '_validate_pattern_observation': True,
+            'effective_dimensions': ['currency'],
+            'identity_outputs': {},
+            'warnings': ['币种范围探针覆盖完整受控范围；缺失币种、关联和人民币缺口沿用现有 scope/link 状态。'],
+        }
     groupcols=','.join(grouping)
     labelsql=[]
     for key in chosen:
@@ -153,14 +178,16 @@ def build_pattern_query(request, metric, datasets_contract, semantics, limit, *,
         person = view=='person_attributed_amount'
         identity=['task_id','executor_id','final_goods_no'] if person else []
         dedup=list(dict.fromkeys([*grouping,*identity,'sale_goods_detail_id']))
-        bad='link_ok=0 OR scope_unknown=1'+(' OR task_key_ok=0 OR executor_id IS NULL OR product_key_ok=0' if person else '')
+        bad='link_ok=0 OR scope_unknown=1'+(' OR task_key_ok=0 OR executor_id IS NULL OR product_key_ok=0' if person else '')+(' OR rmb_ready=0' if rmb_metric else '')
+        amount_field='linked_amount_rmb' if rmb_metric else 'linked_amount'
+        include_currency_totals='currency' in chosen
         # One amount per stable detail or owner-confirmed person attribution key, never SUM(DISTINCT amount).
         amount_identity_projection = (
             ",COUNT(DISTINCT executor_erp_id) AS executor_filter_identity_count,"
             "MAX(executor_erp_id) AS executor_filter_identity"
             if 'executor' in chosen else ''
         )
-        ctes.append('amount_keys AS (SELECT '+','.join(dedup)+f",COUNT(*) AS attribution_source_rows,SUM(CASE WHEN {bad} THEN 1 ELSE 0 END) AS bad_rows,MAX(linked_amount) AS linked_amount"+amount_identity_projection+" FROM scoped WHERE link_recorded=1 GROUP BY "+','.join(dedup)+')')
+        ctes.append('amount_keys AS (SELECT '+','.join(dedup)+f",COUNT(*) AS attribution_source_rows,SUM(CASE WHEN {bad} THEN 1 ELSE 0 END) AS bad_rows,MAX({amount_field}) AS linked_amount"+amount_identity_projection+" FROM scoped WHERE link_recorded=1 GROUP BY "+','.join(dedup)+')')
         # Labels derive from the scoped identity, not from arbitrarily selected duplicate amounts.
         amount_projection=groupcols+',' if groupcols else ''
         identity_projection = (
@@ -170,11 +197,12 @@ def build_pattern_query(request, metric, datasets_contract, semantics, limit, *,
             if 'executor' in chosen else ''
         )
         ctes.append('grouped AS (SELECT '+amount_projection+identity_projection+'COUNT(*) AS amount_key_count,SUM(attribution_source_rows) AS result_source_rows,SUM(CASE WHEN bad_rows=0 THEN linked_amount ELSE 0 END) AS known_amount,SUM(CASE WHEN bad_rows=0 THEN 1 ELSE 0 END) AS known_amount_keys,SUM(bad_rows) AS unresolved_amount_rows FROM amount_keys'+groupby+')')
-        ctes.append('currency_keys AS (SELECT '+','.join(['currency_no',*identity,'sale_goods_detail_id'])+f",SUM(CASE WHEN {bad} THEN 1 ELSE 0 END) AS bad_rows,MAX(linked_amount) AS linked_amount FROM scoped WHERE link_recorded=1 GROUP BY "+','.join(['currency_no',*identity,'sale_goods_detail_id'])+')')
-        ctes.append('currency_totals AS (SELECT currency_no,SUM(CASE WHEN bad_rows=0 THEN linked_amount ELSE 0 END) AS currency_known_amount,COUNT(*) AS currency_amount_keys,SUM(bad_rows) AS currency_unresolved_rows FROM currency_keys GROUP BY currency_no)')
+        if include_currency_totals:
+            ctes.append('currency_keys AS (SELECT '+','.join(['currency_no',*identity,'sale_goods_detail_id'])+f",SUM(CASE WHEN {bad} THEN 1 ELSE 0 END) AS bad_rows,MAX({amount_field}) AS linked_amount FROM scoped WHERE link_recorded=1 GROUP BY "+','.join(['currency_no',*identity,'sale_goods_detail_id'])+')')
+            ctes.append('currency_totals AS (SELECT currency_no,SUM(CASE WHEN bad_rows=0 THEN linked_amount ELSE 0 END) AS currency_known_amount,COUNT(*) AS currency_amount_keys,SUM(bad_rows) AS currency_unresolved_rows FROM currency_keys GROUP BY currency_no)')
         value='CASE WHEN g.unresolved_amount_rows=0 AND pattern_scope_unknown_rows=0 THEN g.known_amount ELSE NULL END'
         known_value='g.known_amount';missing='COALESCE(g.unresolved_amount_rows,0)+pattern_scope_unknown_rows'
-        extra=',ct.currency_known_amount,ct.currency_amount_keys,ct.currency_unresolved_rows'
+        extra=',ct.currency_known_amount,ct.currency_amount_keys,ct.currency_unresolved_rows' if include_currency_totals else ''
     ctes.append('population AS (SELECT COUNT(*) AS pattern_display_groups FROM grouped)')
     label_join=''
     # Amount grouping label enrichment is separate and one row per group.
@@ -182,7 +210,7 @@ def build_pattern_query(request, metric, datasets_contract, semantics, limit, *,
         ctes.append('group_labels AS (SELECT '+groupcols+','+','.join(labelsql)+' FROM scoped'+groupby+')')
         label_join=' LEFT JOIN group_labels gl ON '+' AND '.join('g.'+k+' <=> gl.'+k for k in grouping)
         extra+=','+','.join('gl.'+labels[k][0] for k in chosen if k in labels)
-    amount_join=' LEFT JOIN currency_totals ct ON g.currency_no <=> ct.currency_no' if view!='summary' else ''
+    amount_join=' LEFT JOIN currency_totals ct ON g.currency_no <=> ct.currency_no' if view!='summary' and 'currency' in chosen else ''
     order=' ORDER BY '+','.join('g.'+k for k in grouping) if grouping else ''
     sql='WITH '+',\n'.join(ctes)+f' SELECT g.*,clock.*,observation.*,coverage.*,population.*{extra},{value} AS metric_value,{known_value} AS known_subset_value,{missing} AS missing_value_count,COALESCE(g.result_source_rows,0) AS known_value_count,COALESCE(g.result_source_rows,0) AS __matched_row_count FROM clock CROSS JOIN observation CROSS JOIN coverage CROSS JOIN population LEFT JOIN grouped g ON TRUE'+amount_join+label_join+order+' LIMIT %s'
     params.append(limit+1)

@@ -1,4 +1,4 @@
-version: datasage-mini-inventory-semantics/v22
+version: datasage-mini-inventory-semantics/v23
 domain: inventory
 contract_role: plugin_physical_execution
 business_name: 库存事实、未动销与周转分析
@@ -12,6 +12,7 @@ dimension_sets:
   current: &current_dimensions [warehouse, warehouse_department, warehouse_organization, warehouse_region, warehouse_type, warehouse_category, warehouse_missing, warehouse_defective, warehouse_ccbs, product, color, batch, unit, currency, ready_goods, ready_type, product_category, product_region, product_print, product_ht, product_made_to_order, product_supplier]
   month_end: &month_end_dimensions [warehouse, warehouse_department, warehouse_organization, warehouse_region, warehouse_type, accounting_organization, product, color, batch, unit, currency, ready_goods, ready_type, product_category, product_region, product_print, product_ht, product_made_to_order, product_supplier]
   turnover: &turnover_dimensions [department, organization, product, ready_goods, ready_type, ccbs_customer]
+  turnover_currency: &turnover_currency_dimensions [department, organization, product, ready_goods, ready_type, ccbs_customer, currency]
 
 current_inventory_scope_filters: &current_inventory_scopes
   total: {status: {op: in, value: [1, 2, 3]}}
@@ -55,6 +56,10 @@ currency_basis_pairs:
     original: month_end_inventory_cost_original
   - rmb: month_end_inventory_ddp_rmb
     original: month_end_inventory_ddp_original
+  - rmb: turnover_net_delivery_rmb
+    original: turnover_net_delivery_original
+  - rmb: inventory_turnover_days
+    original: inventory_turnover_days_original
 
 dimensions:
   customer:
@@ -589,8 +594,32 @@ metrics:
     time_policy: latest_snapshot
     time_granularity: month
     required_filters: {}
-    allowed_dimensions: *turnover_dimensions
+    allowed_dimensions: *turnover_currency_dimensions
     answer_note: *answer_note_turnover_net_delivery_rmb
+  turnover_net_delivery_original:
+    disclosures:
+      - id: inventory.turnover-net-delivery-original.currency-scope
+        mode: required_always
+        text: "该指标采用周转表口径的净出库原币金额；必须限定单一账本币种 或按币种分组，不同币种不得直接合计。"
+      - id: inventory.turnover_net_delivery_original.legacy-note
+        mode: contract_only
+        text: &answer_note_turnover_net_delivery_original "周转表净出库原币金额用作库存周转天数分母；通用净出库仍以出库域明细事实为准。"
+    label: 周转表净出库原币金额
+    business_definition: 周转核算期间内，与周转库存范围一致的净出库原币金额；按币种 分别计量。
+    unit: 原币金额（按币种 分别计量）
+    table: vk_dw.goods_turnover_basic_data_dw
+    aggregation: sum
+    measure: pur_delivery_amount
+    time_field: bill_date
+    time_policy: latest_snapshot
+    time_granularity: month
+    required_filters: {}
+    allowed_dimensions: *turnover_currency_dimensions
+    currency_policy: *original_currency_policy
+    result_fact_units:
+      metric_value: 原币金额（按币种 分别计量）
+      currency_missing_rows: 币种缺失源记录数
+    answer_note: *answer_note_turnover_net_delivery_original
   inventory_turnover_days:
     disclosures:
       - id: inventory.turnover-days.calculation-and-coverage
@@ -613,8 +642,45 @@ metrics:
     ddp_measure: ddp_amount_rmb
     net_delivery_measure: pur_delivery_rmb
     required_filters: {}
-    allowed_dimensions: *turnover_dimensions
+    allowed_dimensions: *turnover_currency_dimensions
     answer_note: *answer_note_inventory_turnover_days
+  inventory_turnover_days_original:
+    disclosures:
+      - id: inventory.turnover-days-original.calculation-and-coverage
+        mode: required_always
+        text: "库存周转原币口径按所选完整期间以期初期末半权平均库存除以同期周转表净出库，再乘自然日数；成本与DDP分别判断完整性。真实零参与，缺失月份和NULL不补零；净出库为零时无法相除，其他正负值保留。全表成本人民币列仍决定月份是否已核算，币种筛选不得改变核算就绪状态。"
+      - id: inventory.turnover-days-original.currency-scope
+        mode: required_always
+        text: "原币成本、原币DDP和原币净出库按币种 分别计量；不同币种不得直接合计，空币种保持未知状态。"
+      - id: inventory.inventory_turnover_days_original.legacy-note
+        mode: contract_only
+        text: &answer_note_inventory_turnover_days_original "成本与DDP原币周转共同依赖全表人民币成本的月份核算就绪，随后分别检查组成完整性；缺失不是零，零分母未定义。"
+    label: 库存周转天数（原币成本与原币DDP口径）
+    business_definition: 完整核算期间内按币种 分别计算的库存周转速度，同时返回原币成本与原币DDP指导口径；关键证据不可用时未定义。
+    unit_policy: 原币成本周转天数与原币DDP周转天数均为自然日
+    unit: 自然日
+    query_kind: inventory_turnover_days
+    max_group_dimensions: 2
+    table: vk_dw.goods_turnover_basic_data_dw
+    time_field: bill_date
+    time_policy: latest_available_accounting_months
+    default_complete_months: 12
+    accounting_readiness_measure: cost_amount_rmb
+    cost_measure: cost_amount
+    ddp_measure: ddp_amount
+    net_delivery_measure: pur_delivery_amount
+    currency_policy: *original_currency_policy
+    result_fact_units:
+      metric_value: 自然日
+      cost_turnover_days: 自然日
+      ddp_turnover_days: 自然日
+      avg_inventory_cost_original: 原币金额（按币种 分别计量）
+      avg_inventory_ddp_original: 原币金额（按币种 分别计量）
+      net_delivery_original: 原币金额（按币种 分别计量）
+      currency_missing_value_count: 币种缺失源记录数
+    required_filters: {}
+    allowed_dimensions: *turnover_currency_dimensions
+    answer_note: *answer_note_inventory_turnover_days_original
   registered_slow_pool_quantity:
     label: 当前登记滞销池·库存数量（按库存单位）
     business_definition: 仅统计当前源记录及明确筛选范围；库存数量（按库存单位）

@@ -263,6 +263,16 @@ def _validate_request(
                     path=field_path(f"metric_filters.{filter_name}"),
                     hint="Use one scalar or a non-empty bounded scalar array.",
                 )
+            if filter_name == "currency" and any(
+                not request_contract.valid_string(value, request_contract.CURRENCY_TOKEN)
+                for value in values
+            ):
+                raise QueryFailure(
+                    "INVALID_INPUT",
+                    "币种筛选必须是非空币种文本，不能使用数字或布尔值。",
+                    path=field_path("metric_filters.currency"),
+                    hint="Use an exact source currency string or a bounded list of currency strings.",
+                )
     decomposition_of = request.get("decomposition_of_request_id")
     if decomposition_of is not None and not request_contract.valid_string(
         decomposition_of, request_contract.REQUEST_ID

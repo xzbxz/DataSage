@@ -11,6 +11,7 @@ from copy import deepcopy
 from typing import Any
 
 from .query_errors import QueryFailure
+from . import request_contract
 
 BASIS_CHOICES = ("auto", "rmb", "original")
 
@@ -179,8 +180,7 @@ def resolve_probe(request, rows, truncated):
     selected = "original" if n <= 1 else "rmb"
     if n == 1:
         value = row.get("single_currency")
-        if (isinstance(value, bool) or not isinstance(value, (str, int))
-                or not str(value).strip() or len(str(value)) > 80):
+        if not request_contract.valid_string(value, request_contract.CURRENCY_TOKEN):
             raise QueryFailure("CURRENCY_SCOPE_UNVERIFIED", "单币种标识无效。")
         # Restrict all components/periods to the proved currency, retaining
         # required grouping and every prior governed population filter.

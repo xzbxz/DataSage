@@ -52,15 +52,26 @@ governed gap is supported for the same period, scope, attribution ledger, and
 required evidence; a transparent display calculation on compatible returned
 values must not be presented as that governed gap.
 
-Target and actual amount contracts are RMB in the registered target paths.
-`currency_basis=auto` and explicit `rmb` retain that meaning; `original` is
-unsupported for these metrics and a currency filter does not reinterpret them.
-Keep target, actual, gap, and completion operands on the same resolved basis
-before deriving any comparison.
+Use the catalog's registered RMB/original counterparts. `currency_basis=auto`
+examines the complete target and actual scope, including all components and
+periods: single-currency scope may use transaction original amounts; mixed
+currencies use the governed RMB counterpart. Keep target, actual, gap, and
+completion operands on the same resolved basis. A currency filter limits
+the population; it does not perform conversion.
 
 For salesperson allocation, the returned evidence must also show the split
 ledger's availability and activation boundary. A catalog entry or a
 transaction-ledger result alone does not authorize an allocation answer.
+Receipt allocation retains the authoritative split ledger. Where internal
+customer actuals are not covered, disclose incomplete scope and honor the
+returned completion/gap restrictions. Do not fill the gap from transaction
+details, silently exclude internal targets, or reconstruct a blocked ratio
+from visible ledger amounts.
+For salesperson views, diagnostic coverage counts concern the corresponding
+scope without salesperson attribution; do not assign or sum them by salesperson.
+Complete target-gap decomposition remains registered for the RMB transaction
+ledger metrics. Use explicit RMB for that operation; an original-currency
+observation does not authorize an unregistered decomposition.
 
 ## Boundaries
 

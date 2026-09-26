@@ -1,10 +1,15 @@
-version: datasage-pattern-matching-semantics/v3
+version: datasage-pattern-matching-semantics/v4
 domain: pattern_matching
 contract_role: plugin_physical_execution
 business_name: 找版任务与关联出库证据
 tables:
 - vk_dwd.pattern_matching_dwd
 - vk_dwd.sale_bill_goods_detail_dwd
+currency_basis_pairs:
+- rmb: linked_delivery_amount_rmb
+  original: linked_delivery_amount
+- rmb: person_attributed_delivery_amount_rmb
+  original: person_attributed_delivery_amount
 dimensions:
   task:
     label: 找版任务编号
@@ -128,7 +133,7 @@ metrics:
       text: 默认当前全范围观察；指定期间须明确任务创建、执行完成或已关联出库实际发生口径。创建月队列看到的是本次读取时的已关联状态，可能后续补录、观察时长不同，不是历史当时快照或当月销售流水。读取时刻和业务修改最大时间分别返回，业务修改不证明ETL刷新，当前ETL频率未确认。
     - id: pattern.amount
       mode: required_always
-      text: 金额分支仅以已记录或疑似关联为适用总体；确实无关联的任务仍保留在任务统计，不计为金额时间/币种缺失。坏关联继续保留未知。已关联出库金额按稳定出库明细身份去重，不按金额值或单号去重；原币来自唯一匹配且校验通过的真实出库明细，不用需求币种或自行汇率换算。金额、身份、币种或关联条件冲突时保留已知部分与缺口。同一明细在不同任务或执行人组内可重复出现，分组合计不等于全范围明细去重总额；币种总体在截断前保留，不能重复累加。
+      text: 金额分支仅以已记录或疑似关联为适用总体；确实无关联的任务仍保留在任务统计，不计为金额时间/币种缺失。坏关联继续保留未知。已关联出库金额按稳定出库明细身份去重，不按金额值或单号去重；原币来自唯一匹配且校验通过的真实出库明细，人民币变体只取同一明细已批准的人民币源值，不用需求币种或自行汇率换算。金额、身份、币种或关联条件冲突时保留已知部分与缺口。同一明细在不同任务或执行人组内可重复出现，分组合计不等于全范围明细去重总额；币种总体在截断前保留，不能重复累加。
     - id: pattern.attribution
       mode: required_always
       text: 归因记录金额按用户确认的任务、执行人、单一最终产品及出库明细去重；同人多次执行不重复算同一明细，跨任务或不同执行人仍可重复归因。它是关联记录归因合计，不是业绩功劳、增量收入或找版导致出库的证明。仅返回部分行不能视为全部结果。
@@ -160,7 +165,38 @@ metrics:
     - execution_completed
     - linked_delivery
     answer_contract:
-    - "金额仅按已核验实际出库交易币种以原币返回；当前没有受管人民币金额或汇率来源，跨币种统一比较或汇总不可用。"
+    - "金额仅按已核验实际出库交易币种以原币返回；跨币种统一比较或汇总应选择已批准人民币 counterpart；原币不自行换汇。"
+    disclosures: *id003
+    answer_note: *pattern_basis
+  linked_delivery_amount_rmb:
+    label: 找版·已关联出库明细去重人民币金额
+    business_definition: 按已关联出库明细稳定身份去重的真实出库人民币金额；只取唯一匹配且原币关联校验通过的同一销售明细已批准人民币源值，不由原币或汇率自行计算。
+    unit: 人民币元
+    measure: delivery_amount_rmb
+    query_kind: pattern_matching
+    pattern_view: linked_amount
+    table: vk_dwd.pattern_matching_dwd
+    linked_table: vk_dwd.sale_bill_goods_detail_dwd
+    time_policy: current_snapshot
+    max_group_dimensions: 4
+    allowed_dimensions:
+    - task
+    - customer
+    - salesperson
+    - executor
+    - candidate_product
+    - task_region
+    - task_type
+    - task_status
+    - execute_status
+    - currency
+    allowed_time_bases:
+    - current_observation
+    - task_created
+    - execution_completed
+    - linked_delivery
+    answer_contract:
+    - "金额仅取已核验真实出库明细的已批准人民币源值；原币关联、销售/产品、完成先于出库时间、稳定明细去重和缺口状态与原币 metric 相同，不自行换算。"
     disclosures: *id003
     answer_note: *pattern_basis
   person_attributed_delivery_amount:
@@ -190,6 +226,37 @@ metrics:
     - execution_completed
     - linked_delivery
     answer_contract:
-    - "金额仅按已核验实际出库交易币种以原币返回；当前没有受管人民币金额或汇率来源，跨币种统一比较或汇总不可用。"
+    - "金额仅按已核验实际出库交易币种以原币返回；跨币种统一比较或汇总应选择已批准人民币 counterpart；原币不自行换汇。"
+    disclosures: *id003
+    answer_note: *pattern_basis
+  person_attributed_delivery_amount_rmb:
+    label: 找版·按任务执行人产品归因记录人民币金额
+    business_definition: 按任务、执行人、单一最终产品和出库明细去重的关联记录人民币金额；同一人重复执行不重复算同一明细，直接取同一销售明细已批准人民币源值。
+    unit: 人民币元
+    measure: delivery_amount_rmb
+    query_kind: pattern_matching
+    pattern_view: person_attributed_amount
+    table: vk_dwd.pattern_matching_dwd
+    linked_table: vk_dwd.sale_bill_goods_detail_dwd
+    time_policy: current_snapshot
+    max_group_dimensions: 4
+    allowed_dimensions:
+    - task
+    - customer
+    - salesperson
+    - executor
+    - candidate_product
+    - task_region
+    - task_type
+    - task_status
+    - execute_status
+    - currency
+    allowed_time_bases:
+    - current_observation
+    - task_created
+    - execution_completed
+    - linked_delivery
+    answer_contract:
+    - "金额仅取已核验真实出库明细的已批准人民币源值；任务、执行人、单一最终产品和明细 identity 去重、原币关联校验、时间边界与缺口状态与原币 metric 相同，不自行换算。"
     disclosures: *id003
     answer_note: *pattern_basis

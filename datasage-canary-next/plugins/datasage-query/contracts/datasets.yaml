@@ -1,4 +1,4 @@
-version: datasage-mini-datasets/v21
+version: datasage-mini-datasets/v22
 
 defaults:
   blocked_columns:
@@ -262,8 +262,8 @@ datasets:
   vk_dw.customer_debt_bymonth_dw:
     domains: [receivable]
     kind: monthly_snapshot
-    grain: one_month_customer_debt_snapshot
-    primary_key: [bill_date, customer_id]
+    grain: one_month_customer_currency_debt_snapshot
+    primary_key: [bill_date, customer_id, currency_no]
     updated_at: null
     allowed_columns: [bill_date, customer_id, customer_no, customer_name, customer_dept, customer_region, sales_id, sales_name, org_name, currency_no, receivable_amount, receive_amount, return_amount, reverse_amount, cumulative_receivable_amount, cumulative_receive_amount, cumulative_return_amount, cumulative_reverse_amount, debt_amount, debt_amount_rmb, exchange_rate, is_inner_cus, is_brand_cus, is_ha_cus, is_ht_cus, is_ccbs_cus]
     required_filters:
@@ -321,7 +321,7 @@ datasets:
     grain: delivery_target_detail_by_sales
     primary_key: [detail_id, sales_id]
     updated_at: null
-    allowed_columns: [detail_id, year_month, sales_id, sales_name, customer_id, customer_name, customer_dept, org_name, detail_target_rmb, detail_target_amount, is_inner_cus]
+    allowed_columns: [detail_id, year_month, sales_id, sales_name, customer_id, customer_name, customer_dept, org_name, currency_no, detail_target_rmb, detail_target_amount, is_inner_cus]
     required_filters:
       - {column: is_inner_cus, op: eq, value: n}
     joins: []
@@ -336,7 +336,7 @@ datasets:
     grain: delivery_actual_product_detail_by_sales
     primary_key: [goods_detail_id, sales_id]
     updated_at: null
-    allowed_columns: [goods_detail_id, delivery_time, sales_id, sales_name, customer_id, customer_name, customer_dept, org_name, delivery_amount_rmb, delivery_amount, bill_status, is_inner_cus]
+    allowed_columns: [goods_detail_id, delivery_time, sales_id, sales_name, customer_id, customer_name, customer_dept, org_name, currency_no, delivery_amount_rmb, delivery_amount, bill_status, is_inner_cus]
     required_filters:
       - {column: bill_status, op: eq, value: 6}
       - {column: is_inner_cus, op: eq, value: n}
@@ -353,7 +353,7 @@ datasets:
     grain: receipt_target_by_sales
     primary_key: [target_id, sales_id]
     updated_at: null
-    allowed_columns: [target_id, plan_receive_time, sales_id, sales_name, customer_id, customer_name, customer_dept, org_name, plan_receive_rmb, plan_receive_amount, is_inner_cus]
+    allowed_columns: [target_id, plan_receive_time, sales_id, sales_name, customer_id, customer_name, customer_dept, org_name, currency_no, plan_receive_rmb, plan_receive_amount, is_inner_cus]
     required_filters: []
     joins: []
     warnings:
@@ -367,7 +367,7 @@ datasets:
     grain: receipt_actual_detail_by_sales
     primary_key: [sales_id, detail_id]
     updated_at: null
-    allowed_columns: [sales_id, sales_name, detail_id, bill_time, customer_id, customer_name, customer_dept, org_name, detail_receive_rmb, detail_receive_amount, bill_status, is_inner_cus]
+    allowed_columns: [sales_id, sales_name, detail_id, bill_time, customer_id, customer_name, customer_dept, org_name, currency_no, detail_receive_rmb, detail_receive_amount, bill_status, is_inner_cus]
     required_filters:
       - {column: bill_status, op: ne, value: A}
     joins: []
@@ -399,7 +399,7 @@ datasets:
     grain: delivery_target_detail
     primary_key: [detail_id]
     updated_at: null
-    allowed_columns: [detail_id, year_month, customer_id, customer_no, customer_name, customer_dept, org_name, detail_target_rmb, detail_target_amount, is_inner_cus]
+    allowed_columns: [detail_id, year_month, customer_id, customer_no, customer_name, customer_dept, org_name, currency_no, detail_target_rmb, detail_target_amount, is_inner_cus]
     required_filters:
       - {column: is_inner_cus, op: eq, value: n}
     joins: []
@@ -411,7 +411,7 @@ datasets:
     grain: receipt_target_detail
     primary_key: [target_id]
     updated_at: null
-    allowed_columns: [target_id, plan_receive_time, customer_id, customer_no, customer_name, customer_dept, org_name, plan_receive_rmb, plan_receive_amount, is_inner_cus]
+    allowed_columns: [target_id, plan_receive_time, customer_id, customer_no, customer_name, customer_dept, org_name, currency_no, plan_receive_rmb, plan_receive_amount, is_inner_cus]
     required_filters: []
     joins: []
     warnings: [Use for organization, department, or customer targets; not salesperson targets; receipt targets include internal customers.]

@@ -341,6 +341,32 @@ def _inventory_turnover_query(
         or not isinstance(requested_filters, dict)
     ):
         raise AnalysisQueryError("INVALID_PLAN", "库存周转最多支持两个分组维度。")
+    currency_policy = metric.get("currency_policy")
+    original_currency = (
+        isinstance(currency_policy, Mapping)
+        and currency_policy.get("mode") == "original_currency"
+    )
+    if original_currency and not (
+        "currency" in requested_dimensions or "currency" in requested_filters
+    ):
+        raise AnalysisQueryError(
+            "CURRENCY_SCOPE_REQUIRED",
+            "原币库存周转必须按币种分组或限定单一币种。",
+        )
+    if (
+        original_currency
+        and "currency" not in requested_dimensions
+        and "currency" in requested_filters
+    ):
+        currency_values = requested_filters["currency"]
+        currency_values = (
+            currency_values if isinstance(currency_values, list) else [currency_values]
+        )
+        if len(currency_values) != 1:
+            raise AnalysisQueryError(
+                "CURRENCY_SCOPE_REQUIRED",
+                "原币库存周转未按币种分组时只能限定一个币种。",
+            )
     allowed_dimensions = set(metric.get("allowed_dimensions") or [])
     dimension_codes: list[str] = []
     for code in [*requested_dimensions, *requested_filters.keys()]:
@@ -397,6 +423,10 @@ def _inventory_turnover_query(
     default_months = metric.get("default_complete_months", 12)
     if not isinstance(default_months, int) or not 1 <= default_months <= 120:
         raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "库存周转默认月份定义无效。")
+    accounting_readiness_measure = _approved(
+        metric.get("accounting_readiness_measure") or "cost_amount_rmb",
+        dataset,
+    )
     cost_measure = _approved(metric.get("cost_measure"), dataset)
     ddp_measure = _approved(metric.get("ddp_measure"), dataset)
     net_measure = _approved(metric.get("net_delivery_measure"), dataset)
@@ -404,7 +434,7 @@ def _inventory_turnover_query(
     bounds_sql, bounds_params, applied_time = _inventory_turnover_period(
         request,
         default_months,
-        valid_measure=cost_measure,
+        valid_measure=accounting_readiness_measure,
         observed_on=observed_on,
     )
     quoted_table = _quote_table(table)
@@ -435,6 +465,37 @@ def _inventory_turnover_query(
     final_dimensions = ", ".join(_quote_column(name) for name in output_names)
     final_prefix = (final_dimensions + ", ") if final_dimensions else ""
 
+    amount_suffix = "original" if original_currency else "rmb"
+    inventory_cost_alias = f"inventory_cost_{amount_suffix}"
+    inventory_ddp_alias = f"inventory_ddp_{amount_suffix}"
+    net_delivery_alias = f"net_delivery_{amount_suffix}"
+    avg_inventory_cost_alias = f"avg_inventory_cost_{amount_suffix}"
+    avg_inventory_ddp_alias = f"avg_inventory_ddp_{amount_suffix}"
+    currency_missing_select = ""
+    currency_missing_summary = ""
+    currency_missing_output = ""
+    currency_unknown_guard = ""
+    currency_unknown_state = ""
+    metric_data_state_sql = "CASE WHEN `cost_turnover_days` IS NULL THEN 'missing' ELSE 'complete' END"
+    if original_currency:
+        currency_column = _approved("currency_no", dataset)
+        currency_missing_select = (
+            f", SUM(CASE WHEN NULLIF(TRIM(s.{_quote_column(currency_column)}), '') "
+            "IS NULL THEN 1 ELSE 0 END) AS `currency_missing_rows`"
+        )
+        currency_missing_summary = ", SUM(m.`currency_missing_rows`) AS `currency_missing_value_count`"
+        currency_missing_output = (
+            ", `currency_missing_value_count`, "
+            "CASE WHEN `currency_missing_value_count` > 0 "
+            "THEN 'currency_unknown_source' ELSE NULL END AS `unclassified_amount_state`"
+        )
+        currency_unknown_guard = " OR `currency_missing_value_count` > 0"
+        currency_unknown_state = "WHEN `currency_missing_value_count` > 0 THEN 'currency_unknown_source'"
+        metric_data_state_sql = (
+            "CASE WHEN `currency_missing_value_count` > 0 THEN 'incomplete' "
+            "WHEN `cost_turnover_days` IS NULL THEN 'missing' ELSE 'complete' END"
+        )
+
     day_format = "%%Y-%%m-%%d"
     sql = f"""WITH RECURSIVE {bounds_sql},
 expected_months AS (
@@ -448,18 +509,18 @@ accounted_months AS (
   SELECT DISTINCT s.{_quote_column(period_measure)} AS `snapshot_month`
   FROM {quoted_table} AS s CROSS JOIN bounds AS b
   WHERE s.{_quote_column(period_measure)} BETWEEN b.`opening_month` AND b.`operating_end_month`
-    AND s.{_quote_column(cost_measure)} IS NOT NULL
-    AND s.{_quote_column(cost_measure)} <> 0
+    AND s.{_quote_column(accounting_readiness_measure)} IS NOT NULL
+    AND s.{_quote_column(accounting_readiness_measure)} <> 0
 ),
 monthly_data AS (
   SELECT {dimension_prefix}s.{_quote_column(period_measure)} AS `snapshot_month`,
-         SUM(s.{_quote_column(cost_measure)}) AS `inventory_cost_rmb`,
-         SUM(s.{_quote_column(ddp_measure)}) AS `inventory_ddp_rmb`,
-         SUM(s.{_quote_column(net_measure)}) AS `net_delivery_rmb`,
+         SUM(s.{_quote_column(cost_measure)}) AS `{inventory_cost_alias}`,
+         SUM(s.{_quote_column(ddp_measure)}) AS `{inventory_ddp_alias}`,
+         SUM(s.{_quote_column(net_measure)}) AS `{net_delivery_alias}`,
          SUM(CASE WHEN s.{_quote_column(cost_measure)} IS NULL THEN 1 ELSE 0 END) AS `cost_nulls`,
          SUM(CASE WHEN s.{_quote_column(ddp_measure)} IS NULL THEN 1 ELSE 0 END) AS `ddp_nulls`,
          SUM(CASE WHEN s.{_quote_column(net_measure)} IS NULL THEN 1 ELSE 0 END) AS `net_nulls`,
-         COUNT(*) AS `source_rows`
+         COUNT(*) AS `source_rows`{currency_missing_select}
   FROM {quoted_table} AS s CROSS JOIN bounds AS b
   WHERE s.{_quote_column(period_measure)} BETWEEN b.`opening_month` AND b.`operating_end_month`{where_sql}
   GROUP BY s.{_quote_column(period_measure)}{monthly_group}
@@ -476,11 +537,12 @@ entity_bounds AS (
 ),
 matrix AS (
   SELECT {matrix_dimension_prefix}eb.`effective_start_month`, eb.`effective_opening_month`, eb.`operating_end_month`,
-         em.`snapshot_month`, md.`inventory_cost_rmb`, md.`inventory_ddp_rmb`, md.`net_delivery_rmb`,
+         em.`snapshot_month`, md.`{inventory_cost_alias}`, md.`{inventory_ddp_alias}`, md.`{net_delivery_alias}`,
          COALESCE(md.`source_rows`, 0) AS `source_rows`,
          COALESCE(md.`cost_nulls`, 0) AS `cost_nulls`,
          COALESCE(md.`ddp_nulls`, 0) AS `ddp_nulls`,
          COALESCE(md.`net_nulls`, 0) AS `net_nulls`,
+         {"COALESCE(md.`currency_missing_rows`, 0) AS `currency_missing_rows`," if original_currency else ""}
          CASE WHEN md.`source_rows` IS NULL THEN 0 ELSE 1 END AS `entity_snapshot_present`,
          CASE WHEN am.`snapshot_month` IS NULL THEN 0 ELSE 1 END AS `accounting_ready`
   FROM entity_bounds AS eb
@@ -508,56 +570,58 @@ summary_raw AS (
          SUM(CASE WHEN m.`snapshot_month` >= m.`effective_start_month` THEN m.`net_nulls` ELSE 0 END) AS `net_delivery_missing_value_count`,
          SUM(CASE WHEN m.`snapshot_month` >= m.`effective_start_month` AND m.`entity_snapshot_present` = 0 THEN 1 ELSE 0 END) AS `missing_flow_months`,
          SUM(CASE WHEN m.`snapshot_month` IN (m.`effective_opening_month`, m.`operating_end_month`)
-             THEN m.`inventory_cost_rmb` / 2 ELSE m.`inventory_cost_rmb` END) AS `weighted_cost`,
+             THEN m.`{inventory_cost_alias}` / 2 ELSE m.`{inventory_cost_alias}` END) AS `weighted_cost`,
          SUM(CASE WHEN m.`snapshot_month` IN (m.`effective_opening_month`, m.`operating_end_month`)
-             THEN m.`inventory_ddp_rmb` / 2 ELSE m.`inventory_ddp_rmb` END) AS `weighted_ddp`,
-         SUM(CASE WHEN m.`snapshot_month` >= m.`effective_start_month` THEN m.`net_delivery_rmb` ELSE 0 END) AS `recorded_net_delivery`
+             THEN m.`{inventory_ddp_alias}` / 2 ELSE m.`{inventory_ddp_alias}` END) AS `weighted_ddp`,
+         SUM(CASE WHEN m.`snapshot_month` >= m.`effective_start_month` THEN m.`{net_delivery_alias}` ELSE 0 END) AS `recorded_net_delivery`{currency_missing_summary}
   FROM matrix AS m{summary_group}
 ),
 summary AS (
   SELECT *,
-         CASE WHEN `unready_accounting_month_count` > 0 OR `actual_snapshot_count` < `expected_snapshot_count` OR `cost_missing_value_count` > 0
-              THEN NULL ELSE `weighted_cost` / `effective_operating_months` END AS `avg_inventory_cost_rmb`,
-         CASE WHEN `unready_accounting_month_count` > 0 OR `actual_snapshot_count` < `expected_snapshot_count` OR `ddp_missing_value_count` > 0
-              THEN NULL ELSE `weighted_ddp` / `effective_operating_months` END AS `avg_inventory_ddp_rmb`,
-         CASE WHEN `missing_flow_months` > 0 OR `net_delivery_missing_value_count` > 0
-              THEN NULL ELSE `recorded_net_delivery` END AS `net_delivery_rmb`
+         CASE WHEN `unready_accounting_month_count` > 0 OR `actual_snapshot_count` < `expected_snapshot_count` OR `cost_missing_value_count` > 0{currency_unknown_guard}
+              THEN NULL ELSE `weighted_cost` / `effective_operating_months` END AS `{avg_inventory_cost_alias}`,
+         CASE WHEN `unready_accounting_month_count` > 0 OR `actual_snapshot_count` < `expected_snapshot_count` OR `ddp_missing_value_count` > 0{currency_unknown_guard}
+              THEN NULL ELSE `weighted_ddp` / `effective_operating_months` END AS `{avg_inventory_ddp_alias}`,
+         CASE WHEN `missing_flow_months` > 0 OR `net_delivery_missing_value_count` > 0{currency_unknown_guard}
+              THEN NULL ELSE `recorded_net_delivery` END AS `{net_delivery_alias}`
   FROM summary_raw
 ),
 turnover_values AS (
   SELECT *,
-    CASE WHEN `net_delivery_rmb` IS NULL OR `net_delivery_rmb` = 0 OR `avg_inventory_cost_rmb` IS NULL
-      THEN NULL ELSE `avg_inventory_cost_rmb` * `period_natural_days` / `net_delivery_rmb` END AS `cost_turnover_days`,
-    CASE WHEN `net_delivery_rmb` IS NULL OR `net_delivery_rmb` = 0 OR `avg_inventory_ddp_rmb` IS NULL
-      THEN NULL ELSE `avg_inventory_ddp_rmb` * `period_natural_days` / `net_delivery_rmb` END AS `ddp_turnover_days`
+    CASE WHEN `{net_delivery_alias}` IS NULL OR `{net_delivery_alias}` = 0 OR `{avg_inventory_cost_alias}` IS NULL
+      THEN NULL ELSE `{avg_inventory_cost_alias}` * `period_natural_days` / `{net_delivery_alias}` END AS `cost_turnover_days`,
+    CASE WHEN `{net_delivery_alias}` IS NULL OR `{net_delivery_alias}` = 0 OR `{avg_inventory_ddp_alias}` IS NULL
+      THEN NULL ELSE `{avg_inventory_ddp_alias}` * `period_natural_days` / `{net_delivery_alias}` END AS `ddp_turnover_days`
   FROM summary
 )
 SELECT {final_prefix}`cost_turnover_days` AS `metric_value`, `cost_turnover_days`, `ddp_turnover_days`,
-       `avg_inventory_cost_rmb`, `avg_inventory_ddp_rmb`, `net_delivery_rmb`, `period_natural_days`,
+       `{avg_inventory_cost_alias}`, `{avg_inventory_ddp_alias}`, `{net_delivery_alias}`, `period_natural_days`,
        `effective_operating_months`, `expected_snapshot_count`, `actual_snapshot_count`,
        `unready_accounting_month_count`, `unready_accounting_months`,
        `cost_missing_value_count`, `ddp_missing_value_count`, `net_delivery_missing_value_count`,
        `entity_source_hit_count`, `effective_opening_month`, `effective_start_month`, `operating_end_month`,
-       CASE WHEN `unready_accounting_month_count` > 0 THEN 'inventory_cost_accounting_not_ready'
+       CASE {currency_unknown_state}
+            WHEN `unready_accounting_month_count` > 0 THEN 'inventory_cost_accounting_not_ready'
             WHEN `actual_snapshot_count` < `expected_snapshot_count` THEN 'missing_entity_snapshot'
             WHEN `cost_missing_value_count` > 0 THEN 'missing_cost_value'
-            WHEN `net_delivery_rmb` IS NULL THEN 'missing_net_delivery_value'
-            WHEN `net_delivery_rmb` = 0 THEN 'zero_net_delivery'
+            WHEN `{net_delivery_alias}` IS NULL THEN 'missing_net_delivery_value'
+            WHEN `{net_delivery_alias}` = 0 THEN 'zero_net_delivery'
             ELSE 'available' END AS `cost_turnover_state`,
-       CASE WHEN `unready_accounting_month_count` > 0 THEN 'inventory_cost_accounting_not_ready'
+       CASE {currency_unknown_state}
+            WHEN `unready_accounting_month_count` > 0 THEN 'inventory_cost_accounting_not_ready'
             WHEN `actual_snapshot_count` < `expected_snapshot_count` THEN 'missing_entity_snapshot'
             WHEN `ddp_missing_value_count` > 0 THEN 'missing_ddp_value'
-            WHEN `net_delivery_rmb` IS NULL THEN 'missing_net_delivery_value'
-            WHEN `net_delivery_rmb` = 0 THEN 'zero_net_delivery'
+            WHEN `{net_delivery_alias}` IS NULL THEN 'missing_net_delivery_value'
+            WHEN `{net_delivery_alias}` = 0 THEN 'zero_net_delivery'
             ELSE 'available' END AS `ddp_turnover_state`,
-       CASE WHEN `cost_turnover_days` IS NULL THEN 'missing' ELSE 'complete' END AS `metric_data_state`,
-       `entity_source_hit_count` AS `__matched_row_count`
+       {metric_data_state_sql} AS `metric_data_state`,
+       `entity_source_hit_count` AS `__matched_row_count`{currency_missing_output}
 FROM turnover_values"""
 
     order_by = request.get("order_by")
     value_fields = {
-        "metric_value", "cost_turnover_days", "ddp_turnover_days", "avg_inventory_cost_rmb",
-        "avg_inventory_ddp_rmb", "net_delivery_rmb", "period_natural_days",
+        "metric_value", "cost_turnover_days", "ddp_turnover_days", avg_inventory_cost_alias,
+        avg_inventory_ddp_alias, net_delivery_alias, "period_natural_days",
     }
     if not output_names:
         if order_by is not None:
@@ -571,9 +635,13 @@ FROM turnover_values"""
             direction = str(order_by.get("direction") or "").upper()
             if field not in {*value_fields, *output_names} or direction not in {"ASC", "DESC"}:
                 raise AnalysisQueryError("INVALID_PLAN", "库存周转排序字段或方向不受支持。")
-        sql += f" ORDER BY ({_quote_column(field)} IS NULL) ASC, {_quote_column(field)} {direction}"
-    sql += " LIMIT %s"
-    params = [*bounds_params, *params, limit + 1]
+        if not request.get("_currency_scope_probe"):
+            sql += f" ORDER BY ({_quote_column(field)} IS NULL) ASC, {_quote_column(field)} {direction}"
+    if not request.get("_currency_scope_probe"):
+        sql += " LIMIT %s"
+    params = [*bounds_params, *params]
+    if not request.get("_currency_scope_probe"):
+        params.append(limit + 1)
     warnings = [str(metric.get("answer_note"))] if metric.get("answer_note") else []
     return sql, params, {
         "metric": request.get("metric"),
@@ -1037,6 +1105,188 @@ def _aggregate_components(
     return sql, params, expected_keys, expected_outputs, source_tables
 
 
+def _receipt_scope_coverage(
+    path: Mapping[str, Any],
+    request: Mapping[str, Any],
+    selected: list[str],
+    request_filters: Mapping[str, Any],
+    bindings: Mapping[str, Any],
+    start: str,
+    end: str,
+    datasets_contract: Mapping[str, Any],
+    dimension_mappings: Mapping[str, Any],
+    time_bucket: str | None,
+) -> tuple[str, list[Any], list[str]] | None:
+    """Build a diagnostic-only detail-to-split coverage relation.
+
+    The relation answers whether internal base rows have any split counterpart
+    for the same detail key.  It never contributes an amount and it never
+    derives a salesperson from the base ``final_sales_id``: when a requested
+    salesperson scope is involved, an unrepresented internal row is marked
+    unverifiable for the affected non-salesperson scope.
+    """
+
+    scope = path.get("scope_coverage")
+    if not isinstance(scope, Mapping) or scope.get("mode") != "split_ledger_internal_coverage":
+        return None
+    components = scope.get("base_components")
+    if not isinstance(components, list) or not components:
+        raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "收款分摊范围缺少 detail-to-split 覆盖定义。")
+
+    # Preserve the final key positions.  A salesperson key is deliberately
+    # omitted from the coverage grouping because a missing split row cannot be
+    # assigned to a salesperson from the transaction-detail base.
+    key_specs: list[tuple[str, str]] = []
+    if time_bucket == "month":
+        key_specs.append((_PERIOD_KEY, "period"))
+    for index, code in enumerate(selected):
+        if code == "salesperson":
+            continue
+        mapping = dimension_mappings.get(code)
+        if not isinstance(mapping, Mapping):
+            raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "收款分摊范围缺少维度映射。")
+        key = mapping.get("actual_key")
+        if not isinstance(key, str) or not key:
+            raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "收款分摊范围缺少受治理维度键。")
+        key_specs.append((key, f"key_{index + 1}"))
+
+    component_sql: list[str] = []
+    params: list[Any] = []
+    for index, component in enumerate(components):
+        if not isinstance(component, Mapping):
+            raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "收款分摊范围组件定义无效。")
+        base_table = component.get("table")
+        split_table = component.get("split_table")
+        base_dataset = _dataset(base_table, datasets_contract)
+        split_dataset = _dataset(split_table, datasets_contract)
+        base_key = _approved(component.get("base_key"), base_dataset)
+        split_key = _approved(component.get("split_key"), split_dataset)
+        time_field = _approved(component.get("time_field"), base_dataset)
+        split_time_field = _approved(component.get("time_field"), split_dataset)
+        internal_field = _approved(component.get("internal_field"), base_dataset)
+        base_currency = _approved(scope.get("currency_column"), base_dataset)
+        split_currency = _approved(scope.get("currency_column"), split_dataset)
+        base_alias = f"b{index + 1}"
+        split_alias = f"s{index + 1}"
+        component_params: list[Any] = []
+        split_params: list[Any] = []
+        split_where = _fixed_filters(
+            split_alias,
+            component.get("required_filters") or {},
+            split_dataset,
+            split_params,
+        )
+        split_where.extend([
+            f"{_qualified(split_alias, split_time_field)} >= %s",
+            f"{_qualified(split_alias, split_time_field)} < %s",
+        ])
+        split_params.extend([start, end])
+        where = _fixed_filters(
+            base_alias,
+            component.get("required_filters") or {},
+            base_dataset,
+            component_params,
+        )
+        where.extend([
+            f"{_qualified(base_alias, time_field)} >= %s",
+            f"{_qualified(base_alias, time_field)} < %s",
+        ])
+        component_params.extend([start, end])
+
+        # Apply governed customer/department/organization/currency filters to
+        # the base.  Salesperson filters are intentionally omitted: the base
+        # salesperson field is not an allocation identity.
+        for code, value in request_filters.items():
+            if code == "salesperson":
+                continue
+            mapping = dimension_mappings.get(code)
+            if not isinstance(mapping, Mapping):
+                raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "收款分摊范围缺少过滤映射。")
+            binding, bound_value = _bound_value(bindings, code, value)
+            column = mapping.get("actual_key") if binding is not None else mapping.get("actual_filter")
+            if binding is not None:
+                column = _bound_mapping_column(binding, column)
+            column = _approved(column, base_dataset)
+            where.append(_value_filter(base_alias, column, bound_value, component_params))
+
+        key_expressions = []
+        for column, output in key_specs:
+            if column == _PERIOD_KEY:
+                expression = f"DATE_FORMAT({_qualified(base_alias, time_field)}, '{_MYSQL_MONTH_FORMAT}')"
+            else:
+                expression = _qualified(base_alias, _approved(column, base_dataset))
+            key_expressions.append(expression)
+
+        internal_reference = _qualified(base_alias, internal_field)
+        internal_state = f"LOWER(NULLIF(TRIM({internal_reference}), ''))"
+        unknown_internal = f"({internal_state} IS NULL OR {internal_state} NOT IN ('y', 'n'))"
+        internal_row = f"{internal_state} = 'y'"
+        missing_split = f"({internal_row} AND {_qualified(split_alias, split_key)} IS NULL)"
+        select_parts = [
+            *[
+                f"{expression} AS {_quote_column(output)}"
+                for expression, (_, output) in zip(key_expressions, key_specs)
+            ],
+            "COUNT(*) AS `__scope_base_row_count`",
+            f"SUM(CASE WHEN {internal_row} THEN 1 ELSE 0 END) AS `__scope_internal_row_count`",
+            f"SUM(CASE WHEN {missing_split} THEN 1 ELSE 0 END) AS `__scope_unrepresented_internal_count`",
+            f"SUM(CASE WHEN {unknown_internal} THEN 1 ELSE 0 END) AS `__scope_unknown_internal_count`",
+        ]
+        split_relation = (
+            f"(SELECT DISTINCT {_qualified(split_alias, split_key)}, {_qualified(split_alias, split_currency)} "
+            f"FROM {_quote_table(split_table)} AS {_quote_column(split_alias)}"
+            + (" WHERE " + " AND ".join(split_where) if split_where else "")
+            + f") AS {_quote_column(split_alias)}"
+        )
+        component_sql.append(
+            f"SELECT {', '.join(select_parts)} FROM {_quote_table(base_table)} AS {_quote_column(base_alias)} "
+            f"LEFT JOIN {split_relation} ON "
+            f"{_qualified(split_alias, split_key)} = {_qualified(base_alias, base_key)}"
+            f" AND {_qualified(split_alias, split_currency)} <=> {_qualified(base_alias, base_currency)}"
+            + (" WHERE " + " AND ".join(where) if where else "")
+            + (" GROUP BY " + ", ".join(key_expressions) if key_expressions else "")
+        )
+        params.extend(split_params)
+        params.extend(component_params)
+
+    union_sql = " UNION ALL ".join(component_sql)
+    key_aliases = [output for _, output in key_specs]
+    select_parts = [
+        *[_quote_column(alias) for alias in key_aliases],
+        "COALESCE(SUM(`__scope_base_row_count`), 0) AS `source_scope_base_row_count`",
+        "COALESCE(SUM(`__scope_internal_row_count`), 0) AS `source_scope_internal_row_count`",
+        "COALESCE(SUM(`__scope_unrepresented_internal_count`), 0) AS `source_scope_unrepresented_internal_count`",
+        "COALESCE(SUM(`__scope_unknown_internal_count`), 0) AS `source_scope_unknown_internal_count`",
+    ]
+    scope_state = (
+        "source_scope_unverifiable"
+        if "salesperson" in selected or "salesperson" in request_filters
+        else "source_range_incomplete"
+    )
+    select_parts.append(
+        f"CASE WHEN COALESCE(SUM(`__scope_unrepresented_internal_count`), 0) > 0 "
+        f"OR COALESCE(SUM(`__scope_unknown_internal_count`), 0) > 0 "
+        f"THEN '{scope_state}' ELSE 'complete' END AS `source_scope_state`"
+    )
+    sql = f"SELECT {', '.join(select_parts)} FROM ({union_sql}) AS `scope_rows`"
+    if key_aliases:
+        sql += " GROUP BY " + ", ".join(_quote_column(alias) for alias in key_aliases)
+    return sql, params, key_aliases
+
+def _scope_source_tables(path: Mapping[str, Any]) -> list[str]:
+    scope = path.get("scope_coverage")
+    components = scope.get("base_components") if isinstance(scope, Mapping) else None
+    tables: list[str] = []
+    for component in components or []:
+        if not isinstance(component, Mapping):
+            continue
+        for key in ("table", "split_table"):
+            table = component.get(key)
+            if isinstance(table, str) and table not in tables:
+                tables.append(table)
+    return tables
+
+
 def _formal_dso_query(
     request: Mapping[str, Any], metric: Mapping[str, Any], datasets_contract: Mapping[str, Any], limit: int,
     *,
@@ -1048,8 +1298,39 @@ def _formal_dso_query(
     debt_measure = _approved(metric.get("debt_measure"), debt_dataset)
     delivery_time = _approved(metric.get("delivery_time_field"), delivery_dataset)
     delivery_measure = _approved(metric.get("delivery_measure"), delivery_dataset)
+    currency_policy = metric.get("currency_policy") or {}
+    original_currency = (
+        isinstance(currency_policy, Mapping)
+        and currency_policy.get("mode") == "original_currency"
+    )
+    scope_probe = bool(request.get("_currency_scope_probe"))
+    amount_suffix = "_original" if original_currency else "_rmb"
+    if original_currency and not (
+        "currency" in (request.get("dimensions") or [])
+        or "currency" in (request.get("metric_filters") or {})
+        or request.get("_currency_scope_probe")
+    ):
+        raise AnalysisQueryError(
+            "CURRENCY_SCOPE_REQUIRED",
+            "原币正式周转天数必须按币种分组或限定单一币种。",
+        )
     selected = request.get("dimensions") or []
     request_filters = request.get("metric_filters") or {}
+    currency_filter = (
+        request_filters.get("currency")
+        if isinstance(request_filters, dict)
+        else None
+    )
+    if (
+        original_currency
+        and "currency" not in selected
+        and isinstance(currency_filter, list)
+        and len(currency_filter) != 1
+    ):
+        raise AnalysisQueryError(
+            "CURRENCY_SCOPE_REQUIRED",
+            "原币正式周转天数的多币种筛选必须按币种分组。",
+        )
     bindings = _entity_bindings(request)
     mappings = metric.get("dimension_mappings") or {}
     if (
@@ -1080,6 +1361,18 @@ def _formal_dso_query(
 
     debt_keys, debt_outputs = _mapping_parts(selected, mappings, "debt", debt_dataset)
     delivery_keys, _ = _mapping_parts(selected, mappings, "delivery", delivery_dataset)
+    currency_debt_key_alias = None
+    if original_currency and ("currency" in selected or scope_probe):
+        currency_mapping = mappings.get("currency") or {}
+        currency_debt_column = (
+            currency_mapping.get("debt_key")
+            if isinstance(currency_mapping, Mapping)
+            else None
+        )
+        currency_debt_key_alias = next(
+            (alias for column, alias in debt_keys if column == currency_debt_column),
+            None,
+        )
     debt_params: list[Any] = []
     debt_where = _fixed_filters("d", metric.get("debt_required_filters") or {}, debt_dataset, debt_params)
     debt_where += _mapping_filters(
@@ -1102,6 +1395,30 @@ def _formal_dso_query(
     )
     delivery_where += [f"{_qualified('s', delivery_time)} >= %s", f"{_qualified('s', delivery_time)} < %s"]
     delivery_params += [start, end]
+    if (
+        original_currency
+        and "currency" in request_filters
+        and "currency" not in selected
+        and not scope_probe
+    ):
+        currency_mapping = mappings.get("currency") or {}
+        currency_debt_column = (
+            currency_mapping.get("debt_key")
+            if isinstance(currency_mapping, Mapping)
+            else None
+        )
+        currency_delivery_column = (
+            currency_mapping.get("delivery_key")
+            if isinstance(currency_mapping, Mapping)
+            else None
+        )
+        if isinstance(currency_debt_column, str) and isinstance(currency_delivery_column, str):
+            debt_where.append(
+                f"NULLIF(TRIM({_qualified('d', currency_debt_column)}), '') IS NOT NULL"
+            )
+            delivery_where.append(
+                f"NULLIF(TRIM({_qualified('s', currency_delivery_column)}), '') IS NOT NULL"
+            )
 
     debt_key_select = [f"{_qualified('d', column)} AS {_quote_column(alias)}" for column, alias in debt_keys]
     debt_output_select = [f"MAX({_qualified('d', column)}) AS {_quote_column(alias)}" for column, alias in debt_outputs]
@@ -1110,7 +1427,7 @@ def _formal_dso_query(
         *debt_key_select,
         *debt_output_select,
         f"{_qualified('d', debt_time)} AS bill_month",
-        f"SUM({_qualified('d', debt_measure)}) AS partial_monthly_debt_rmb",
+        f"SUM({_qualified('d', debt_measure)}) AS partial_monthly_debt{amount_suffix}",
         "COUNT(*) AS debt_source_row_count",
         f"SUM(CASE WHEN {_qualified('d', debt_measure)} IS NULL THEN 1 ELSE 0 END) "
         f"AS debt_null_count",
@@ -1126,12 +1443,21 @@ def _formal_dso_query(
         *avg_key_select,
         *avg_output_select,
         f"CASE WHEN COUNT(DISTINCT bill_month) = {expected_snapshots} "
-        f"THEN SUM(CASE WHEN bill_month IN (%s, %s) THEN partial_monthly_debt_rmb / 2 ELSE partial_monthly_debt_rmb END) / {period_months} "
-        "ELSE NULL END AS partial_average_net_debt_rmb",
+        f"THEN SUM(CASE WHEN bill_month IN (%s, %s) THEN partial_monthly_debt{amount_suffix} / 2 ELSE partial_monthly_debt{amount_suffix} END) / {period_months} "
+        f"ELSE NULL END AS partial_average_net_debt{amount_suffix}",
         "COUNT(DISTINCT bill_month) AS snapshot_month_count",
         "SUM(debt_null_count) AS debt_null_count",
         "SUM(debt_source_row_count) AS debt_source_row_count",
     ]
+    if original_currency:
+        if currency_debt_key_alias:
+            quoted_currency_key = _quote_column(currency_debt_key_alias)
+            debt_avg_select.append(
+                f"SUM(CASE WHEN {quoted_currency_key} IS NULL OR TRIM({quoted_currency_key}) = '' "
+                f"THEN debt_source_row_count ELSE 0 END) AS currency_missing_count"
+            )
+        else:
+            debt_avg_select.append("0 AS currency_missing_count")
     debt_avg = (
         f"SELECT {', '.join(debt_avg_select)} "
         "FROM debt_monthly"
@@ -1146,7 +1472,7 @@ def _formal_dso_query(
     delivery_monthly_select = [
         *delivery_key_select,
         f"DATE_FORMAT({_qualified('s', delivery_time)}, '{_MYSQL_MONTH_FORMAT}') AS delivery_month",
-        f"SUM({_qualified('s', delivery_measure)}) AS partial_monthly_delivery_rmb",
+        f"SUM({_qualified('s', delivery_measure)}) AS partial_monthly_delivery{amount_suffix}",
         "COUNT(*) AS delivery_source_row_count",
         f"SUM(CASE WHEN {_qualified('s', delivery_measure)} IS NULL THEN 1 ELSE 0 END) "
         f"AS delivery_null_count",
@@ -1157,25 +1483,63 @@ def _formal_dso_query(
     )
     delivery_agg_keys = [f"{_quote_column(alias)}" for _, alias in delivery_keys]
     delivery_agg = (
-        f"SELECT {', '.join([*delivery_agg_keys, 'SUM(partial_monthly_delivery_rmb) AS partial_delivery_amount_rmb', 'SUM(partial_monthly_delivery_rmb > 0) AS effective_month_count', 'SUM(delivery_null_count) AS delivery_null_count', 'SUM(delivery_source_row_count) AS delivery_source_row_count'])} FROM delivery_monthly"
+        f"SELECT {', '.join([*delivery_agg_keys, f'SUM(partial_monthly_delivery{amount_suffix}) AS partial_delivery_amount{amount_suffix}', f'SUM(partial_monthly_delivery{amount_suffix} > 0) AS effective_month_count', 'SUM(delivery_null_count) AS delivery_null_count', 'SUM(delivery_source_row_count) AS delivery_source_row_count'])} FROM delivery_monthly"
         + (" GROUP BY " + ", ".join(delivery_agg_keys) if delivery_agg_keys else "")
     )
     join = " AND ".join(
         f"a.{_quote_column(debt_alias)} <=> v.{_quote_column(delivery_alias)}"
         for (_, debt_alias), (_, delivery_alias) in zip(debt_keys, delivery_keys)
     ) or "1 = 1"
-    output_dimensions = [f"a.{_quote_column(alias)}" for _, alias in debt_outputs]
-    missing_inputs = (
-        "COALESCE(a.debt_null_count, 0) + COALESCE(v.delivery_null_count, 0)"
-    )
+    # A grouped original-currency result must never treat two missing/blank
+    # currency identifiers as a valid same-currency join.  Keep the raw token
+    # for source_exact matching; TRIM is used only to recognize blank values.
+    if (
+        original_currency
+        and ("currency" in selected or "currency" in request_filters)
+        and not scope_probe
+    ):
+        currency_mapping = mappings.get("currency") or {}
+        currency_debt_column = (
+            currency_mapping.get("debt_key")
+            if isinstance(currency_mapping, Mapping)
+            else None
+        )
+        currency_delivery_column = (
+            currency_mapping.get("delivery_key")
+            if isinstance(currency_mapping, Mapping)
+            else None
+        )
+        currency_debt_alias = next(
+            (alias for column, alias in debt_keys if column == currency_debt_column),
+            None,
+        )
+        currency_delivery_alias = next(
+            (alias for column, alias in delivery_keys if column == currency_delivery_column),
+            None,
+        )
+        if currency_debt_alias and currency_delivery_alias:
+            join = (
+                f"({join}) AND "
+                f"NULLIF(TRIM(a.{_quote_column(currency_debt_alias)}), '') IS NOT NULL "
+                f"AND NULLIF(TRIM(v.{_quote_column(currency_delivery_alias)}), '') IS NOT NULL"
+            )
+    if scope_probe:
+        output_dimensions = [f"k.{_quote_column(alias)}" for _, alias in debt_outputs]
+    else:
+        output_dimensions = [f"a.{_quote_column(alias)}" for _, alias in debt_outputs]
+    missing_inputs = "COALESCE(a.debt_null_count, 0) + COALESCE(v.delivery_null_count, 0)"
+    currency_missing_inputs = "0"
+    if original_currency:
+        currency_missing_inputs = "COALESCE(a.currency_missing_count, 0)"
+        missing_inputs = f"({missing_inputs}) + {currency_missing_inputs}"
     source_rows = (
         "COALESCE(a.debt_source_row_count, 0) + COALESCE(v.delivery_source_row_count, 0)"
     )
     known_inputs = f"({source_rows} - ({missing_inputs}))"
-    partial_average = "a.partial_average_net_debt_rmb"
-    partial_delivery = "COALESCE(v.partial_delivery_amount_rmb, 0)"
+    partial_average = f"a.partial_average_net_debt{amount_suffix}"
+    partial_delivery = f"COALESCE(v.partial_delivery_amount{amount_suffix}, 0)"
     full_average = (
-        f"CASE WHEN COALESCE(a.debt_null_count, 0) > 0 THEN NULL "
+        f"CASE WHEN COALESCE(a.debt_null_count, 0) > 0 OR ({currency_missing_inputs}) > 0 THEN NULL "
         f"ELSE {partial_average} END"
     )
     full_delivery = (
@@ -1190,8 +1554,8 @@ def _formal_dso_query(
     select = [
         *output_dimensions,
         f"{full_metric} AS metric_value",
-        f"{full_average} AS average_net_debt_rmb",
-        f"{full_delivery} AS delivery_amount_rmb",
+        f"{full_average} AS average_net_debt{amount_suffix}",
+        f"{full_delivery} AS delivery_amount{amount_suffix}",
         f"{period_days} AS period_natural_days",
         "a.snapshot_month_count",
         "COALESCE(v.effective_month_count, 0) AS effective_month_count",
@@ -1209,21 +1573,63 @@ def _formal_dso_query(
     sql = (
         f"WITH debt_monthly AS ({debt_monthly}), debt_avg AS ({debt_avg}), "
         f"delivery_monthly AS ({delivery_monthly}), delivery_agg AS ({delivery_agg}) "
-        f"SELECT {', '.join(select)} FROM debt_avg AS a LEFT JOIN delivery_agg AS v ON {join}"
     )
-    sql += _order_clause(
-        request,
-        output_aliases,
-        allowed_value_fields={
-            "metric_value",
-            "average_net_debt_rmb",
-            "delivery_amount_rmb",
-            "snapshot_month_count",
-            "effective_month_count",
-        },
-    )
-    sql += " LIMIT %s"
-    params = [*debt_params, opening_month, ending_month, *delivery_params, limit + 1]
+    if scope_probe:
+        probe_key_sources = [alias for _, alias in debt_keys]
+        probe_delivery_key_sources = [alias for _, alias in delivery_keys]
+        probe_key_outputs = [alias for _, alias in debt_outputs]
+        if (
+            len(probe_key_sources) != len(probe_key_outputs)
+            or len(probe_delivery_key_sources) != len(probe_key_outputs)
+        ):
+            raise AnalysisQueryError(
+                "CONTRACT_UNAVAILABLE",
+                "原币范围查询的币种键输出定义不一致。",
+            )
+        probe_debt_key_select = ", ".join(
+            f"{_quote_column(source)} AS {_quote_column(output)}"
+            for source, output in zip(probe_key_sources, probe_key_outputs)
+        )
+        probe_delivery_key_select = ", ".join(
+            f"{_quote_column(source)} AS {_quote_column(output)}"
+            for source, output in zip(
+                probe_delivery_key_sources, probe_key_outputs
+            )
+        )
+        probe_debt_join = " AND ".join(
+            f"k.{_quote_column(output)} <=> a.{_quote_column(source)}"
+            for source, output in zip(probe_key_sources, probe_key_outputs)
+        ) or "1 = 1"
+        probe_delivery_join = " AND ".join(
+            f"k.{_quote_column(output)} <=> v.{_quote_column(source)}"
+            for source, output in zip(
+                probe_delivery_key_sources, probe_key_outputs
+            )
+        ) or "1 = 1"
+        sql += (
+            f", currency_scope_keys AS ("
+            f"SELECT {probe_debt_key_select} FROM debt_avg "
+            f"UNION SELECT {probe_delivery_key_select} FROM delivery_agg) "
+            f"SELECT {', '.join(select)} FROM currency_scope_keys AS k "
+            f"LEFT JOIN debt_avg AS a ON {probe_debt_join} "
+            f"LEFT JOIN delivery_agg AS v ON {probe_delivery_join}"
+        )
+        params = [*debt_params, opening_month, ending_month, *delivery_params]
+    else:
+        sql += f"SELECT {', '.join(select)} FROM debt_avg AS a LEFT JOIN delivery_agg AS v ON {join}"
+        sql += _order_clause(
+            request,
+            output_aliases,
+            allowed_value_fields={
+                "metric_value",
+                f"average_net_debt{amount_suffix}",
+                f"delivery_amount{amount_suffix}",
+                "snapshot_month_count",
+                "effective_month_count",
+            },
+        )
+        sql += " LIMIT %s"
+        params = [*debt_params, opening_month, ending_month, *delivery_params, limit + 1]
     warnings = [str(metric.get("answer_note"))] if metric.get("answer_note") else []
     return sql, params, {
         "metric": request.get("metric"),
@@ -1469,6 +1875,23 @@ def _allocated_amount_query(
     ):
         raise AnalysisQueryError("INVALID_PLAN", "分摊净额一次最多按两个业务维度展开。")
     time_bucket = request.get("time_bucket")
+    currency_policy = metric.get("currency_policy")
+    original_currency = (
+        isinstance(currency_policy, Mapping)
+        and currency_policy.get("mode") == "original_currency"
+    )
+    currency_column = None
+    if original_currency:
+        currency_column = currency_policy.get("column")
+        if not isinstance(currency_column, str) or not currency_column:
+            raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "原币分摊指标缺少受治理币种字段。")
+        if "currency" not in selected and "currency" not in request_filters:
+            raise AnalysisQueryError("CURRENCY_SCOPE_REQUIRED", "原币分摊指标必须按币种分组或限定单一币种。")
+        if "currency" in request_filters and "currency" not in selected:
+            values = request_filters["currency"]
+            values = values if isinstance(values, list) else [values]
+            if len(values) != 1:
+                raise AnalysisQueryError("CURRENCY_SCOPE_REQUIRED", "原币分摊指标未按币种分组时只能限定一个币种。")
 
     source_code = metric.get("source_completion_metric")
     source_path = metric.get("source_path")
@@ -1502,33 +1925,77 @@ def _allocated_amount_query(
         time_bucket,
         bindings,
         include_null_count=True,
+        currency_column=currency_column,
     )
-    missing = "COALESCE(__actual_null_count, 0)"
-    known = f"__matched_row_count - ({missing})"
-    projection = [*[_quote_column(alias) for _, alias in [*_keys, *outputs]],
-        f"CASE WHEN {missing} > 0 THEN NULL ELSE metric_value END AS metric_value",
-        "__matched_row_count",
+    scope_result = _receipt_scope_coverage(
+        path,
+        request,
+        selected,
+        request_filters,
+        bindings,
+        start,
+        end,
+        datasets_contract,
+        path.get("dimension_mappings") or {},
+        time_bucket,
+    )
+    scope_tables = _scope_source_tables(path) if scope_result is not None else []
+    missing = "COALESCE(allocated.__actual_null_count, 0)"
+    known = f"allocated.__matched_row_count - ({missing})"
+    projection = [*[
+            f"allocated.{_quote_column(alias)}" for _, alias in [*_keys, *outputs]
+        ],
+        f"CASE WHEN {missing} > 0 THEN NULL ELSE allocated.metric_value END AS metric_value",
+        "allocated.__matched_row_count",
         f"{missing} AS missing_value_count", f"{known} AS known_value_count",
-        f"CASE WHEN __matched_row_count > 0 THEN 1.0 * ({known}) / __matched_row_count ELSE NULL END AS value_coverage_rate",
-        f"CASE WHEN __matched_row_count = 0 THEN 'missing' WHEN {missing} = 0 THEN 'complete' WHEN {known} = 0 THEN 'missing' ELSE 'incomplete' END AS metric_data_state",
+        f"CASE WHEN allocated.__matched_row_count > 0 THEN 1.0 * ({known}) / allocated.__matched_row_count ELSE NULL END AS value_coverage_rate",
+        f"CASE WHEN allocated.__matched_row_count = 0 THEN 'missing' WHEN {missing} = 0 THEN 'complete' WHEN {known} = 0 THEN 'missing' ELSE 'incomplete' END AS metric_data_state",
     ]
     # Keys and display outputs can share an alias; expose each only once.
     projection = list(dict.fromkeys(projection))
-    sql = f"SELECT {', '.join(projection)} FROM ({sql}) AS allocated"
+    final_params = list(params)
+    if scope_result is not None:
+        scope_sql, scope_params, scope_keys = scope_result
+        projection.extend([
+            "COALESCE(scope_coverage.source_scope_state, 'complete') AS source_scope_state",
+            "COALESCE(scope_coverage.source_scope_base_row_count, 0) AS source_scope_base_row_count",
+            "COALESCE(scope_coverage.source_scope_internal_row_count, 0) AS source_scope_internal_row_count",
+            "COALESCE(scope_coverage.source_scope_unrepresented_internal_count, 0) AS source_scope_unrepresented_internal_count",
+            "COALESCE(scope_coverage.source_scope_unknown_internal_count, 0) AS source_scope_unknown_internal_count",
+        ])
+        if scope_keys:
+            join = " AND ".join(
+                f"scope_coverage.{_quote_column(alias)} <=> allocated.{_quote_column(alias)}"
+                for alias in scope_keys
+            )
+            coverage_join = f" LEFT JOIN scope_coverage ON {join}"
+        else:
+            coverage_join = " CROSS JOIN scope_coverage"
+        sql = (
+            f"WITH scope_coverage AS ({scope_sql}) "
+            f"SELECT {', '.join(projection)} FROM ({sql}) AS allocated{coverage_join}"
+        )
+        # The scope CTE appears before the allocated subquery in SQL text.
+        final_params = [*scope_params, *params]
+    else:
+        sql = f"SELECT {', '.join(projection)} FROM ({sql}) AS allocated"
     output_aliases = (["period"] if time_bucket == "month" else []) + [alias for _, alias in outputs]
-    sql += _order_clause(
-        request,
-        output_aliases,
-        allowed_value_fields={"metric_value"},
-        default_field="period" if time_bucket == "month" else "metric_value",
-        default_direction="ASC" if time_bucket == "month" else "DESC",
-    )
-    sql += " LIMIT %s"
+    if not request.get("_currency_scope_probe"):
+        sql += _order_clause(
+            request,
+            output_aliases,
+            allowed_value_fields={"metric_value"},
+            default_field="period" if time_bucket == "month" else "metric_value",
+            default_direction="ASC" if time_bucket == "month" else "DESC",
+        )
+        sql += " LIMIT %s"
+        final_params.append(limit + 1)
     warnings = [str(metric.get("answer_note"))] if metric.get("answer_note") else []
-    return sql, [*params, limit + 1], {
+    return sql, final_params, {
         "metric": request.get("metric"),
         "dataset": None,
-        "source_datasets": source_tables,
+        "source_datasets": [*source_tables, *[t for t in scope_tables if t not in source_tables]],
+        "scope_source_datasets": scope_tables,
         "time_range": applied_time,
         "filters": request_filters,
         "warnings": warnings,
@@ -1556,6 +2023,16 @@ def _target_completion_query(
     ):
         raise AnalysisQueryError("INVALID_PLAN", "目标完成分析一次最多按两个业务维度展开。")
     time_bucket = request.get("time_bucket")
+    currency_policy = metric.get("currency_policy")
+    original_currency = (
+        isinstance(currency_policy, Mapping)
+        and currency_policy.get("mode") == "original_currency"
+    )
+    currency_column = None
+    if original_currency:
+        currency_column = currency_policy.get("column")
+        if not isinstance(currency_column, str) or not currency_column:
+            raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "原币目标完成指标缺少受治理币种字段。")
 
     requested_codes = [*selected, *request_filters.keys()]
     path_code = request.get("attribution_mode")
@@ -1569,6 +2046,18 @@ def _target_completion_query(
     for code in requested_codes:
         if code not in allowed or code not in mappings:
             raise AnalysisQueryError("UNSUPPORTED_DIMENSION", "目标完成指标不支持请求中的维度。")
+    if original_currency:
+        if "currency" not in selected and "currency" not in request_filters:
+            raise AnalysisQueryError("CURRENCY_SCOPE_REQUIRED", "原币目标完成指标必须按币种分组或限定单一币种。")
+        if "currency" in request_filters and "currency" not in selected:
+            values = request_filters["currency"]
+            values = values if isinstance(values, list) else [values]
+            if len(values) != 1:
+                raise AnalysisQueryError("CURRENCY_SCOPE_REQUIRED", "原币目标完成指标未按币种分组时只能限定一个币种。")
+
+    amount_suffix = "original" if original_currency else "rmb"
+    target_amount_field = f"target_amount_{amount_suffix}"
+    actual_amount_field = f"actual_amount_{amount_suffix}"
 
     target, actual = path.get("target") or {}, path.get("actual") or {}
     target_table = target.get("table")
@@ -1647,6 +2136,7 @@ def _target_completion_query(
         monthly_source: bool = False,
         target_measure_with_null_state: bool = False,
         actual_measure_with_null_state: bool = False,
+        currency_column: str | None = None,
     ) -> str:
         period_expression = (
             _qualified(alias, time_field)
@@ -1657,23 +2147,35 @@ def _target_completion_query(
             period_expression if column == _PERIOD_KEY else _qualified(alias, column)
             for column, _ in keys
         ]
+        measure_reference = _qualified(alias, measure)
+        unknown_currency = None
+        if currency_column is not None:
+            approved_currency = _approved(currency_column, _dataset(table, datasets_contract))
+            currency_reference = _qualified(alias, approved_currency)
+            unknown_currency = f"({currency_reference} IS NULL OR TRIM({currency_reference}) = '')"
+            value_sql = f"COALESCE(SUM(CASE WHEN {unknown_currency} THEN NULL ELSE {measure_reference} END), 0)"
+        else:
+            value_sql = f"COALESCE(SUM({measure_reference}), 0)"
+        null_condition = f"{measure_reference} IS NULL"
+        if unknown_currency is not None:
+            null_condition = f"{unknown_currency} OR {null_condition}"
         select = [
             *[
                 f"{expression} AS {_quote_column(output)}"
                 for expression, (_, output) in zip(key_expressions, keys)
             ],
             *[f"MAX({_qualified(alias, column)}) AS {_quote_column(output)}" for column, output in outputs],
-            f"SUM({_qualified(alias, measure)}) AS {_quote_column(value_alias)}",
+            f"{value_sql} AS {_quote_column(value_alias)}",
             f"COUNT(*) AS {_quote_column('__matched_row_count')}",
         ]
         if target_measure_with_null_state:
             select.append(
-                f"SUM(CASE WHEN {_qualified(alias, measure)} IS NULL THEN 1 ELSE 0 END) "
+                f"SUM(CASE WHEN {null_condition} THEN 1 ELSE 0 END) "
                 f"AS {_quote_column('__target_null_count')}"
             )
         if actual_measure_with_null_state:
             select.append(
-                f"SUM(CASE WHEN {_qualified(alias, measure)} IS NULL THEN 1 ELSE 0 END) "
+                f"SUM(CASE WHEN {null_condition} THEN 1 ELSE 0 END) "
                 f"AS {_quote_column('__actual_null_count')}"
             )
         group = key_expressions
@@ -1689,8 +2191,9 @@ def _target_completion_query(
         target_keys,
         target_outputs,
         target_where,
-        "target_amount_rmb",
+        target_amount_field,
         time_field=target_time,
+        currency_column=currency_column,
         monthly_source=(
             target.get("time_granularity") == "month"
             and target_time_value_format == "month"
@@ -1705,10 +2208,11 @@ def _target_completion_query(
             actual_start,
             actual_end,
             datasets_contract,
-            "actual_amount_rmb",
+            actual_amount_field,
             time_bucket,
             bindings,
             include_null_count=True,
+            currency_column=currency_column,
         )
     else:
         actual_table = actual.get("table")
@@ -1743,9 +2247,10 @@ def _target_completion_query(
             actual_keys,
             actual_outputs,
             actual_where,
-            "actual_amount_rmb",
+            actual_amount_field,
             time_field=actual_time,
             actual_measure_with_null_state=True,
+            currency_column=currency_column,
         )
         actual_tables = [str(actual_table)]
     if [alias for _, alias in target_keys] != [alias for _, alias in actual_keys] or [
@@ -1753,12 +2258,50 @@ def _target_completion_query(
     ] != [alias for _, alias in actual_outputs]:
         raise AnalysisQueryError("CONTRACT_UNAVAILABLE", "目标与实际的对齐粒度不一致。")
 
+    scope_result = _receipt_scope_coverage(
+        path,
+        request,
+        selected,
+        request_filters,
+        bindings,
+        actual_start,
+        actual_end,
+        datasets_contract,
+        mappings,
+        time_bucket,
+    )
+    scope_tables = _scope_source_tables(path) if scope_result is not None else []
+    scope_keys: list[str] = []
+    scope_params: list[Any] = []
+    if scope_result is not None:
+        scope_sql, scope_params, scope_keys = scope_result
+
     if target_keys:
         target_key_aliases = [alias for _, alias in target_keys]
-        keys_sql = " UNION ".join([
+        key_sources = [
             "SELECT " + ", ".join(_quote_column(alias) for alias in target_key_aliases) + " FROM target_agg",
             "SELECT " + ", ".join(_quote_column(alias) for _, alias in actual_keys) + " FROM actual_agg",
-        ])
+        ]
+        if scope_result is not None:
+            # Keep base-only coverage groups visible.  A salesperson key that
+            # has no split counterpart is deliberately represented as NULL;
+            # using the transaction-detail final_sales_id would fabricate an
+            # allocation identity.  The row remains an explicit unknown scope
+            # with source_scope_state and coverage counts.
+            scope_aliases = set(scope_keys)
+            scope_key_select = ", ".join(
+                (
+                    _quote_column(alias)
+                    if alias in scope_aliases
+                    else f"NULL AS {_quote_column(alias)}"
+                )
+                for alias in target_key_aliases
+            )
+            key_sources.append(
+                f"SELECT {scope_key_select} FROM scope_coverage "
+                "WHERE source_scope_state IN ('source_range_incomplete', 'source_scope_unverifiable')"
+            )
+        keys_sql = " UNION ".join(key_sources)
         target_join = " AND ".join(
             f"k.{_quote_column(alias)} <=> t.{_quote_column(alias)}" for alias in target_key_aliases
         )
@@ -1769,29 +2312,68 @@ def _target_completion_query(
         output_aliases = (["period"] if time_bucket == "month" else []) + [
             alias for _, alias in target_outputs
         ]
-        output_dimensions = [
-            *([f"k.{_quote_column('period')} AS {_quote_column('period')}"] if time_bucket == "month" else []),
-            *[
-                f"COALESCE(t.{_quote_column(target_alias)}, a.{_quote_column(actual_alias)}) AS {_quote_column(target_alias)}"
-                for (_, target_alias), (_, actual_alias) in zip(target_outputs, actual_outputs)
-            ],
-        ]
+        output_dimensions = [f"k.{_quote_column('period')} AS {_quote_column('period')}"] if time_bucket == "month" else []
+        key_by_column = dict(target_keys)
+        for (column, target_alias), (_, actual_alias) in zip(target_outputs, actual_outputs):
+            values = [f"t.{_quote_column(target_alias)}", f"a.{_quote_column(actual_alias)}"]
+            key_alias = key_by_column.get(column)
+            if scope_result is not None and key_alias in scope_keys:
+                # Preserve a known diagnostic currency/department key. Never
+                # invent a name or salesperson identity from transaction data.
+                values.append(f"k.{_quote_column(key_alias)}")
+            output_dimensions.append(f"COALESCE({', '.join(values)}) AS {_quote_column(target_alias)}")
+        coverage_join = ""
+        if scope_result is not None:
+            if scope_keys:
+                scope_join = " AND ".join(
+                    f"scope_coverage.{_quote_column(alias)} <=> k.{_quote_column(alias)}"
+                    for alias in scope_keys
+                )
+                coverage_join = f" LEFT JOIN scope_coverage ON {scope_join}"
+            else:
+                coverage_join = " CROSS JOIN scope_coverage"
         from_sql = (
             f"keys_all AS ({keys_sql}) SELECT {{select}} FROM keys_all AS k "
             f"LEFT JOIN target_agg AS t ON {target_join} LEFT JOIN actual_agg AS a ON {actual_join}"
+            f"{coverage_join}"
         )
-        ctes = f"WITH target_agg AS ({target_sql}), actual_agg AS ({actual_sql}), "
+        ctes = f"WITH target_agg AS ({target_sql}), actual_agg AS ({actual_sql})"
+        if scope_result is not None:
+            ctes += f", scope_coverage AS ({scope_sql})"
+        ctes += ", "
     else:
         output_aliases, output_dimensions = [], []
-        from_sql = "SELECT {select} FROM target_agg AS t CROSS JOIN actual_agg AS a"
-        ctes = f"WITH target_agg AS ({target_sql}), actual_agg AS ({actual_sql}) "
+        if scope_result is not None:
+            # scope_coverage is an aggregate without grouping here, so it
+            # supplies one driver row even when target and split actuals are
+            # both empty.  This preserves a full-range coverage-only signal.
+            from_sql = (
+                "SELECT {select} FROM scope_coverage "
+                "LEFT JOIN target_agg AS t ON TRUE LEFT JOIN actual_agg AS a ON TRUE"
+            )
+        else:
+            from_sql = "SELECT {select} FROM target_agg AS t CROSS JOIN actual_agg AS a"
+        ctes = f"WITH target_agg AS ({target_sql}), actual_agg AS ({actual_sql})"
+        if scope_result is not None:
+            ctes += f", scope_coverage AS ({scope_sql})"
+        ctes += " "
 
-    target_value = "COALESCE(t.target_amount_rmb, 0)"
-    actual_value = "COALESCE(a.actual_amount_rmb, 0)"
+    target_value = f"COALESCE(t.{target_amount_field}, 0)"
+    actual_value = f"COALESCE(a.{actual_amount_field}, 0)"
     target_rows = "COALESCE(t.__matched_row_count, 0)"
     actual_rows = "COALESCE(a.__matched_row_count, 0)"
     target_nulls = "COALESCE(t.__target_null_count, 0)"
     actual_nulls = "COALESCE(a.__actual_null_count, 0)"
+    scope_state = (
+        "COALESCE(scope_coverage.source_scope_state, 'complete')"
+        if scope_result is not None
+        else "'complete'"
+    )
+    scope_incomplete = (
+        f"{scope_state} IN ('source_range_incomplete', 'source_scope_unverifiable')"
+        if scope_result is not None
+        else "FALSE"
+    )
     if time_bucket == "month":
         current_period = query_observed_on.strftime("%Y-%m")
         period_state = (
@@ -1837,70 +2419,89 @@ def _target_completion_query(
     completion = (
         f"CASE WHEN {period_state} IN ('not_started', 'includes_future') "
         f"OR {target_rows} = 0 OR {actual_rows} = 0 OR {target_nulls} > 0 OR {actual_nulls} > 0 "
+        f"OR {scope_incomplete} "
         f"OR {target_value} = 0 THEN NULL "
         f"ELSE {actual_value} / {target_value} END"
     )
     gap = (
         f"CASE WHEN {period_state} IN ('not_started', 'includes_future') "
         f"OR {target_rows} = 0 OR {actual_rows} = 0 OR {target_nulls} > 0 OR {actual_nulls} > 0 "
+        f"OR {scope_incomplete} "
         f"THEN NULL ELSE {target_value} - {actual_value} END"
     )
     select = [
         *output_dimensions,
         f"{completion} AS metric_value",
         f"{completion} AS completion_rate",
-        f"{target_output} AS target_amount_rmb",
-        f"{actual_output} AS actual_amount_rmb",
-        f"{gap} AS gap_amount_rmb",
+        f"{target_output} AS {target_amount_field}",
+        f"{actual_output} AS {actual_amount_field}",
+        f"{gap} AS gap_amount_{amount_suffix}",
         f"{target_state} AS target_data_state",
         f"{target_nulls} AS target_missing_count",
         f"{actual_state} AS actual_data_state",
         f"{period_state} AS period_state",
         "COALESCE(t.__matched_row_count, 0) + COALESCE(a.__matched_row_count, 0) AS `__matched_row_count`",
     ]
+    if scope_result is not None:
+        select.extend([
+            f"{scope_state} AS source_scope_state",
+            "COALESCE(scope_coverage.source_scope_base_row_count, 0) AS source_scope_base_row_count",
+            "COALESCE(scope_coverage.source_scope_internal_row_count, 0) AS source_scope_internal_row_count",
+            "COALESCE(scope_coverage.source_scope_unrepresented_internal_count, 0) AS source_scope_unrepresented_internal_count",
+            "COALESCE(scope_coverage.source_scope_unknown_internal_count, 0) AS source_scope_unknown_internal_count",
+        ])
     sql = ctes + from_sql.format(select=", ".join(select))
     value_fields = {
         "metric_value",
         "completion_rate",
-        "target_amount_rmb",
-        "actual_amount_rmb",
-        "gap_amount_rmb",
+        target_amount_field,
+        actual_amount_field,
+        f"gap_amount_{amount_suffix}",
     }
-    order_by = request.get("order_by")
     ranking_plan = None
-    if not output_aliases:
-        if order_by is not None:
-            raise AnalysisQueryError("INVALID_PLAN", "无分组目标完成指标不接受 order_by。")
-    elif order_by is None and time_bucket == "month":
-        sql += " ORDER BY `period` ASC"
-    else:
-        field = "completion_rate"
-        direction = "DESC"
-        if order_by is not None:
-            if not isinstance(order_by, dict):
-                raise AnalysisQueryError("INVALID_PLAN", "目标完成排序定义无效。")
-            field = str(order_by.get("field") or "")
-            direction = str(order_by.get("direction") or "").upper()
-            if field not in {*value_fields, *output_aliases} or direction not in {"ASC", "DESC"}:
-                raise AnalysisQueryError("INVALID_PLAN", "目标完成排序字段或方向不受支持。")
-        value_order = f"{_quote_column(field)} {direction}"
-        if field in value_fields:
-            sql = (f"SELECT ranked.*,COUNT(*) OVER () AS rank_population_count, "
-                   f"SUM(CASE WHEN {_quote_column(field)} IS NULL THEN 1 ELSE 0 END) OVER () AS rank_unknown_value_count, "
-                   f"RANK() OVER (ORDER BY ({_quote_column(field)} IS NULL) ASC,{value_order}) AS query_rank, "
-                   f"COUNT(*) OVER (PARTITION BY {_quote_column(field)}) AS rank_tie_count FROM ({sql}) AS ranked")
-            ranking_plan = {"field": field, "direction": direction.lower()}
-        if field in {"metric_value", "completion_rate"}:
-            sql += f" ORDER BY ({_quote_column(field)} IS NULL) ASC, {_quote_column(field)} {direction}"
+    final_params = [*target_params, *actual_params, *scope_params]
+    if not request.get("_currency_scope_probe"):
+        order_by = request.get("order_by")
+        if not output_aliases:
+            if order_by is not None:
+                raise AnalysisQueryError("INVALID_PLAN", "无分组目标完成指标不接受 order_by。")
+        elif order_by is None and time_bucket == "month":
+            sql += " ORDER BY " + chr(96) + "period" + chr(96) + " ASC"
         else:
+            field = "completion_rate"
+            direction = "DESC"
+            if order_by is not None:
+                if not isinstance(order_by, dict):
+                    raise AnalysisQueryError("INVALID_PLAN", "目标完成排序定义无效。")
+                field = str(order_by.get("field") or "")
+                direction = str(order_by.get("direction") or "").upper()
+                if field not in {*value_fields, *output_aliases} or direction not in {"ASC", "DESC"}:
+                    raise AnalysisQueryError("INVALID_PLAN", "目标完成排序字段或方向不受支持。")
+            value_order = f"{_quote_column(field)} {direction}"
+            if field in value_fields:
+                sql = (f"SELECT ranked.*,COUNT(*) OVER () AS rank_population_count, "
+                       f"SUM(CASE WHEN {_quote_column(field)} IS NULL THEN 1 ELSE 0 END) OVER () AS rank_unknown_value_count, "
+                       f"RANK() OVER (ORDER BY ({_quote_column(field)} IS NULL) ASC,{value_order}) AS query_rank, "
+                       f"COUNT(*) OVER (PARTITION BY {_quote_column(field)}) AS rank_tie_count FROM ({sql}) AS ranked")
+                ranking_plan = {"field": field, "direction": direction.lower()}
             sql += f" ORDER BY ({_quote_column(field)} IS NULL) ASC, {_quote_column(field)} {direction}"
-    sql += " LIMIT %s"
+        sql += " LIMIT %s"
+        final_params.append(limit + 1)
 
     warnings = [str(metric.get("answer_note"))] if metric.get("answer_note") else []
-    return sql, [*target_params, *actual_params, limit + 1], {
+    return sql, final_params, {
         "metric": request.get("metric"),
         "dataset": None,
-        "source_datasets": [str(target_table), *[table for table in actual_tables if table != target_table]],
+        "source_datasets": [
+            str(target_table),
+            *[table for table in actual_tables if table != target_table],
+            *[
+                table
+                for table in scope_tables
+                if table not in {str(target_table), *actual_tables}
+            ],
+        ],
+        "scope_source_datasets": scope_tables,
         "time_range": applied_time,
         "filters": request_filters,
         "warnings": warnings,

@@ -1038,8 +1038,10 @@ def _model_semantic_projection(
         if handler is not None and 'order_by' in handler.forbidden_parameters:
             item['ordering'] = {'fields': [], 'directions': []}
         if definition.get("query_kind") == "target_completion":
-            item["period_summary_fields"] = ["target_amount_rmb", "actual_amount_rmb", "gap_amount_rmb"]
-            item["ordering"] = {"fields": ["completion_rate", "target_amount_rmb", "actual_amount_rmb", "gap_amount_rmb"], "directions": ["asc", "desc"], "default": {"field": "completion_rate", "direction": "desc"}, "rank_scope": "queried_population_if_all_ranking_values_known", "complete_target_gap_requires_full_partition": True}
+            amount_fields = [field for field in capability_contract.target_completion_fact_units(definition)
+                             if field not in {"metric_value", "completion_rate"}]
+            item["period_summary_fields"] = amount_fields
+            item["ordering"] = {"fields": ["completion_rate", *amount_fields], "directions": ["asc", "desc"], "default": {"field": "completion_rate", "direction": "desc"}, "rank_scope": "queried_population_if_all_ranking_values_known", "complete_target_gap_requires_full_partition": True}
         if required_time_bucket is not None:
             item["required_time_bucket"] = required_time_bucket
         if change_decomposition_dimensions:

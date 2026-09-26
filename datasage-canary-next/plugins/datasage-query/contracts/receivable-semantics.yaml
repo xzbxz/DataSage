@@ -1,4 +1,4 @@
-version: datasage-mini-receivable-semantics/v10
+version: datasage-mini-receivable-semantics/v11
 domain: receivable
 contract_role: plugin_physical_execution
 
@@ -30,6 +30,7 @@ currency_basis_pairs:
   - {rmb: aging_over_240_amount, original: aging_over_240_amount_original}
   - {rmb: aging_over_300_amount, original: aging_over_300_amount_original}
   - {rmb: uncredited_positive_debt_amount, original: uncredited_positive_debt_amount_original}
+  - {rmb: formal_receivable_turnover_days, original: formal_receivable_turnover_days_original}
 
 tables:
   - vk_dwd.sale_bill_goods_detail_dwd
@@ -1153,7 +1154,7 @@ metrics:
     delivery_required_filters:
       bill_status: {op: eq, value: 6}
       is_inner_cus: {op: eq, value: n}
-    allowed_dimensions: [customer, salesperson, department, organization]
+    allowed_dimensions: [customer, salesperson, department, organization, currency]
     dimension_mappings:
       customer:
         debt_key: customer_id
@@ -1189,7 +1190,106 @@ metrics:
         debt_outputs:
           - {column: org_name, alias: org_name}
         delivery_outputs: []
+      currency:
+        debt_key: currency_no
+        delivery_key: currency_no
+        debt_filter: currency_no
+        delivery_filter: currency_no
+        debt_outputs:
+          - {column: currency_no, alias: currency_no}
+        delivery_outputs: []
     answer_note: *answer_note_formal_receivable_turnover_days
+
+  formal_receivable_turnover_days_original:
+    disclosures:
+      - id: currency.original.no-cross-currency
+        mode: required_always
+        text: "原币正式应收周转天数必须限定单一币种或按币种分组；不同币种不得直接合计。"
+      - id: receivable.formal-receivable-turnover-original.scope
+        mode: required_always
+        text: "原币正式应收周转天数按完整自然月期间计算，须覆盖连续 N+1 个月末净欠款快照；缺失月末记录不缩短期间，也不自动补零；欠款快照和同期毛出库按交易币种对齐，币种缺失不跨币种补配。"
+      - id: receivable.formal-receivable-turnover-original.external-customer.scope
+        mode: required_always
+        text: "原币正式应收周转天数的月末净欠款和毛出库均固定排除内部客户。"
+      - id: receivable.formal-receivable-turnover-original.formula
+        mode: required_always
+        text: "原币正式应收周转天数按平均月末净欠款除以同币种同期毛出库金额，再乘期间自然日数计算；毛出库分母必须为正。"
+      - id: receivable.formal_receivable_turnover_days_original.legacy-note
+        mode: contract_only
+        text: &answer_note_formal_receivable_turnover_days_original "原币正式应收周转天数按交易币种分别计量，不跨币种合计；公式只使用同期毛出库。"
+    label: 正式应收周转天数（原币）
+    business_definition: 按同一交易币种对齐的净经营欠款与同期毛出库计算正式应收周转天数；需要期初至期末连续 N+1 个月末快照，不跨币种合计。
+    answer_contract:
+      - "原币有效数值与组成项以查询返回的状态为准；缺少任一侧币种、快照或正毛出库分母时不形成完整指标。"
+      - "平均净欠款可以为负；负值表示净负余额的折合规模，不代表提前付款天数。"
+    unit: 自然日
+    query_kind: formal_dso
+    max_group_dimensions: 2
+    debt_table: vk_dw.customer_debt_bymonth_dw
+    debt_time_field: bill_date
+    debt_measure: debt_amount
+    delivery_table: vk_dwd.sale_bill_goods_detail_dwd
+    delivery_time_field: delivery_time
+    delivery_measure: delivery_amount
+    time_policy: last_12_completed_months
+    currency_policy: *original_currency_policy
+    debt_required_filters:
+      is_inner_cus: {op: eq, value: n}
+    delivery_required_filters:
+      bill_status: {op: eq, value: 6}
+      is_inner_cus: {op: eq, value: n}
+    allowed_dimensions: [customer, salesperson, department, organization, currency]
+    dimension_mappings:
+      customer:
+        debt_key: customer_id
+        delivery_key: customer_id
+        debt_filter: customer_name
+        delivery_filter: customer_name
+        debt_outputs:
+          - {column: customer_id, alias: customer_id}
+          - {column: customer_name, alias: customer_name}
+        delivery_outputs: []
+      salesperson:
+        debt_key: sales_id
+        delivery_key: sales_id
+        debt_filter: sales_name
+        delivery_filter: sales_name
+        debt_outputs:
+          - {column: sales_id, alias: sales_id}
+          - {column: sales_name, alias: sales_name}
+        delivery_outputs: []
+      department:
+        debt_key: customer_dept
+        delivery_key: customer_dept
+        debt_filter: customer_dept
+        delivery_filter: customer_dept
+        debt_outputs:
+          - {column: customer_dept, alias: customer_dept}
+        delivery_outputs: []
+      organization:
+        debt_key: org_name
+        delivery_key: org_name
+        debt_filter: org_name
+        delivery_filter: org_name
+        debt_outputs:
+          - {column: org_name, alias: org_name}
+        delivery_outputs: []
+      currency:
+        debt_key: currency_no
+        delivery_key: currency_no
+        debt_filter: currency_no
+        delivery_filter: currency_no
+        debt_outputs:
+          - {column: currency_no, alias: currency_no}
+        delivery_outputs: []
+    result_fact_units:
+      average_net_debt_original: 原币金额（按币种分别计量）
+      delivery_amount_original: 原币金额（按币种分别计量）
+      metric_value: 自然日
+      period_natural_days: 自然日
+      snapshot_month_count: 月末快照数
+      effective_month_count: 有效出库月份数
+    answer_note: *answer_note_formal_receivable_turnover_days_original
 
   positive_debt_amount_original:
     disclosures:

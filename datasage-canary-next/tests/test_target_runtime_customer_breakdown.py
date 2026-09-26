@@ -82,6 +82,8 @@ class TargetRuntimeCustomerBreakdownTests(unittest.TestCase):
                 "vk_dwd.receive_target_split_dwd",
                 "vk_dwd.receive_bill_split_dwd",
                 "vk_dwd.receive_return_bill_split_dwd",
+                "vk_dwd.receive_bill_detail_dwd",
+                "vk_dwd.receive_return_bill_detail_dwd",
             ],
         }
         for metric, source_datasets in expected_sources.items():
@@ -100,7 +102,7 @@ class TargetRuntimeCustomerBreakdownTests(unittest.TestCase):
                 )
 
     def test_allocated_net_inherits_canonical_path_dimensions_before_preflight(self):
-        expected_dimensions = {"salesperson", "department", "organization", "customer"}
+        expected_dimensions = {"salesperson", "department", "organization", "customer", "currency"}
         for metric in ("allocated_net_delivery_amount", "allocated_net_receipt_amount"):
             with self.subTest(metric=metric):
                 metric_definition = self.semantics["metrics"][metric]
