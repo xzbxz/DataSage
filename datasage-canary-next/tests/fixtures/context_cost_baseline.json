@@ -5,9 +5,9 @@
     "skill_context": {
       "files": {
         "references/answer-boundary.md": {
-          "characters": 24761,
-          "bytes": 24809,
-          "lines": 407
+          "characters": 26263,
+          "bytes": 26311,
+          "lines": 431
         },
         "references/cross-domain-analysis.md": {
           "characters": 6897,
@@ -25,9 +25,9 @@
           "lines": 49
         },
         "references/inventory-analysis.md": {
-          "characters": 8062,
-          "bytes": 8066,
-          "lines": 145
+          "characters": 9093,
+          "bytes": 9097,
+          "lines": 162
         },
         "references/pattern-matching-analysis.md": {
           "characters": 6742,
@@ -40,9 +40,9 @@
           "lines": 107
         },
         "references/query-rules.md": {
-          "characters": 18652,
-          "bytes": 18694,
-          "lines": 318
+          "characters": 21673,
+          "bytes": 21715,
+          "lines": 369
         },
         "references/receipt-analysis.md": {
           "characters": 6563,
@@ -50,14 +50,14 @@
           "lines": 120
         },
         "references/receivable-analysis.md": {
-          "characters": 8404,
-          "bytes": 8430,
-          "lines": 149
+          "characters": 9453,
+          "bytes": 9479,
+          "lines": 167
         },
         "references/target-analysis.md": {
-          "characters": 7894,
-          "bytes": 7894,
-          "lines": 145
+          "characters": 8997,
+          "bytes": 8997,
+          "lines": 164
         },
         "SKILL.md": {
           "characters": 5857,
@@ -66,8 +66,8 @@
         }
       },
       "file_count": 12,
-      "total_bytes": 112139,
-      "total_characters": 111949
+      "total_bytes": 119845,
+      "total_characters": 119655
     },
     "tool_surface": {
       "provided_tool_names": [

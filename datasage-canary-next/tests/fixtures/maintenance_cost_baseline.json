@@ -3,8 +3,8 @@
   "policy": "Measured counts only, written by tests/maintenance_cost.py. An orphan candidate is a file with no inbound mention and no owner: that is evidence of low visibility, never a verdict that the file is useless, and no evidence may be invented to justify a removal. Nothing in the retention list may be deleted to reduce maintenance量 - 回执、审计与保留产物不因维护量被删除；未用不等于无用。Every disposition needs an owner before anything moves.",
   "surface": {
     "plugin_modules": {
-      "files": 85,
-      "lines": 44606,
+      "files": 87,
+      "lines": 46229,
       "names": [
         "__init__.py",
         "acceptance_delivery.py",
@@ -21,6 +21,8 @@
         "db_executor.py",
         "db_runtime.py",
         "db_security.py",
+        "detail_evidence.py",
+        "detail_pages.py",
         "entities.py",
         "entitlements.py",
         "evidence.py",
@@ -97,7 +99,7 @@
     },
     "contract_yaml": {
       "files": 12,
-      "lines": 11570,
+      "lines": 11615,
       "names": [
         "datasets.yaml",
         "delivery-semantics.yaml",
@@ -134,8 +136,8 @@
       "note": "measured from the reviewed commit"
     },
     "tests": {
-      "files": 170,
-      "lines": 49980,
+      "files": 174,
+      "lines": 50823,
       "names": [
         "test_acceptance_delivery.py",
         "test_analysis_calculation_integration.py",
@@ -172,6 +174,9 @@
         "test_delivery_l3_runtime.py",
         "test_delivery_l3_semantics.py",
         "test_delivery_review.py",
+        "test_detail_api_schema.py",
+        "test_detail_evidence.py",
+        "test_detail_pages.py",
         "test_domain_diagnostic_paths.py",
         "test_dso_original_currency.py",
         "test_execution_budget_isolation.py",
@@ -216,6 +221,7 @@
         "test_phase1_ar_v2_execution_independent.py",
         "test_phase1_inventory_v3_execution_independent.py",
         "test_phase1_target_execution_independent.py",
+        "test_phase2_aggregation_pagination_execution_independent.py",
         "test_pool_contribution_presentation.py",
         "test_price_continuity.py",
         "test_price_reference.py",
@@ -352,7 +358,7 @@
     },
     "scripts": {
       "files": 16,
-      "lines": 1135,
+      "lines": 1141,
       "names": [
         "datasage_legacy_fabric.py",
         "datasage_legacy_idk.py",
@@ -417,7 +423,7 @@
     },
     "skill_files_datasage": {
       "files": 12,
-      "lines": 1963,
+      "lines": 2092,
       "names": [
         "SKILL.md",
         "answer-boundary.md",
