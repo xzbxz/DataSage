@@ -5,14 +5,14 @@
     "skill_context": {
       "files": {
         "references/answer-boundary.md": {
-          "characters": 21560,
-          "bytes": 21572,
-          "lines": 356
+          "characters": 24761,
+          "bytes": 24809,
+          "lines": 407
         },
         "references/cross-domain-analysis.md": {
-          "characters": 6173,
-          "bytes": 6177,
-          "lines": 110
+          "characters": 6897,
+          "bytes": 6901,
+          "lines": 121
         },
         "references/delivery-analysis.md": {
           "characters": 9273,
@@ -25,9 +25,9 @@
           "lines": 49
         },
         "references/inventory-analysis.md": {
-          "characters": 6427,
-          "bytes": 6427,
-          "lines": 118
+          "characters": 8062,
+          "bytes": 8066,
+          "lines": 145
         },
         "references/pattern-matching-analysis.md": {
           "characters": 6742,
@@ -40,9 +40,9 @@
           "lines": 107
         },
         "references/query-rules.md": {
-          "characters": 12594,
-          "bytes": 12602,
-          "lines": 220
+          "characters": 18652,
+          "bytes": 18694,
+          "lines": 318
         },
         "references/receipt-analysis.md": {
           "characters": 6563,
@@ -50,24 +50,24 @@
           "lines": 120
         },
         "references/receivable-analysis.md": {
-          "characters": 6214,
-          "bytes": 6214,
-          "lines": 114
+          "characters": 8404,
+          "bytes": 8430,
+          "lines": 149
         },
         "references/target-analysis.md": {
-          "characters": 6907,
-          "bytes": 6907,
-          "lines": 128
+          "characters": 7894,
+          "bytes": 7894,
+          "lines": 145
         },
         "SKILL.md": {
-          "characters": 5951,
-          "bytes": 5953,
-          "lines": 120
+          "characters": 5857,
+          "bytes": 5891,
+          "lines": 125
         }
       },
       "file_count": 12,
-      "total_bytes": 97306,
-      "total_characters": 97248
+      "total_bytes": 112139,
+      "total_characters": 111949
     },
     "tool_surface": {
       "provided_tool_names": [
