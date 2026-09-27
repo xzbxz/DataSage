@@ -26,7 +26,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from .analytical_queries import AnalysisQueryError, build_analytical_metric_query, validate_frozen_pool_rows
 from .query_errors import QueryFailure
-from . import currency_basis
+from . import analysis_evidence, currency_basis, fact_calculations
 from .query_sql import (
     _INTERNAL_MATCH_COUNT,
     _approved_column,
@@ -1392,6 +1392,7 @@ def _validate_pre_entity_metric_plan(
 def _evidence_rows_and_state(
     rows: Sequence[Mapping[str, Any]], truncated: bool
 ) -> tuple[list[dict[str, Any]], str]:
+    rows = [row for row in rows if row.get("analysis_match_state") != "coverage_only"]
     public_rows = [
         {
             str(key): value
@@ -1411,6 +1412,8 @@ def _evidence_rows_and_state(
         except (TypeError, ValueError, OverflowError) as exc:
             raise QueryFailure("CONTRACT_UNAVAILABLE", "查询证据覆盖计数无效。") from exc
         if matched == 0:
+            if any(row.get("analysis_match_state") == "unknown" for row in rows):
+                return public_rows, "incomplete"
             # Target-completion aggregates deliberately retain one structural
             # row when both sides have no matching facts.  Keep that row so
             # target_data_state/period_state can tell the model "missing" or
@@ -1425,6 +1428,13 @@ def _evidence_rows_and_state(
             ):
                 return public_rows, "undefined"
             return [], "empty"
+    if any(
+        row.get("analysis_match_state") == "unknown"
+        or int(row.get("analysis_unknown_count") or 0) > 0
+        or str(row.get("analysis_net_state") or "").startswith("unknown")
+        for row in rows
+    ):
+        return public_rows, "incomplete"
     if any(row.get("source_scope_state") in {"source_range_incomplete", "source_scope_unverifiable"}
            for row in rows):
         return public_rows, "incomplete"
@@ -1660,8 +1670,9 @@ def _business_metric_ref(request: Mapping[str, Any]) -> str | None:
     metric = request.get("metric")
     if not isinstance(domain, str) or not isinstance(metric, str):
         return None
+    variant = "\0registered_analysis" if "analysis" in request else ""
     return "metric_" + hashlib.sha256(
-        f"{domain}\0{metric}".encode("utf-8")
+        f"{domain}\0{metric}{variant}".encode("utf-8")
     ).hexdigest()[:16]
 
 
@@ -1671,6 +1682,10 @@ def _business_metric_ref(request: Mapping[str, Any]) -> str | None:
 from .public_fields import PUBLIC_FACT_FIELDS as _PUBLIC_FACT_FIELDS
 
 _PUBLIC_STATE_FIELDS = {
+    "analysis_match_state",
+    "analysis_net_state",
+    "analysis_temporal_state",
+    "analysis_alignment_state",
     "net_flow_state",
     "pool_movement_state",
     "metric_data_state",
@@ -2474,9 +2489,8 @@ def _claim_ledger(
         elif not currency_binding_missing:
             currency_value = (
                 "CNY"
-                if not fact_units and (
-                    any(field.endswith("_rmb") for field in facts)
-                    or metric_unit in {"人民币元", "元"}
+                if metric_unit in {"人民币元", "元"} or (
+                    not fact_units and any(field.endswith("_rmb") for field in facts)
                 )
                 else None
             )
@@ -4872,6 +4886,9 @@ def _strict_subset_filter_dimensions(
 def _calculation_operand(
     request_id: str,
     result_by_id: Mapping[str, Mapping[str, Any]],
+    *,
+    field: str | None = None,
+    select_fact: bool = False,
 ) -> dict[str, Any]:
     result = result_by_id.get(request_id)
     if not isinstance(result, Mapping) or result.get("status") != "success":
@@ -4909,6 +4926,16 @@ def _calculation_operand(
             "计算引用的查询证据未通过模型边界完整性校验。",
         )
     claim = projected_claims[0]
+    if select_fact or field not in (None, "metric_value") or isinstance(result.get("analysis_context"), Mapping):
+        try:
+            return fact_calculations.resolve_fact_operand(
+                request_id=request_id,
+                result=result,
+                claim=claim,
+                field=field,
+            ).as_mapping()
+        except fact_calculations.FactCalculationError as exc:
+            raise QueryFailure(exc.code, exc.message) from exc
     dimensions = claim.get("dimensions")
     scope_entities = claim.get("scope_entities")
     period = claim.get("period")
@@ -5011,12 +5038,26 @@ def _build_governed_calculations(
     derived: list[dict[str, Any]] = []
     for calculation in calculations:
         try:
+            selected_facts = any(
+                calculation.get(name, "metric_value") != "metric_value"
+                for name in ("left_field", "right_field")
+            )
             left = _calculation_operand(
-                calculation["left_request_id"], result_by_id
+                calculation["left_request_id"], result_by_id,
+                field=calculation.get("left_field"), select_fact=selected_facts,
             )
             right = _calculation_operand(
-                calculation["right_request_id"], result_by_id
+                calculation["right_request_id"], result_by_id,
+                field=calculation.get("right_field"), select_fact=selected_facts,
             )
+            fact_compatibility = None
+            if selected_facts:
+                try:
+                    fact_compatibility = fact_calculations.fields_are_compatible(
+                        calculation["operation"], left, right
+                    )
+                except fact_calculations.FactCalculationError as exc:
+                    raise QueryFailure(exc.code, exc.message) from exc
             if (left.get("currency") != right.get("currency")
                     or left.get("currency_state") == "unknown" or right.get("currency_state") == "unknown"
                     or ("原币" in left["unit"] and not left.get("currency"))):
@@ -5047,6 +5088,18 @@ def _build_governed_calculations(
                 "status": "not_assessable",
                 "reason_codes": ["PERIOD_COMPARABILITY_NOT_ASSESSABLE"],
             }
+            if (
+                selected_facts
+                and left["request_id"] == right["request_id"]
+                and left["claim_id"] == right["claim_id"]
+                and same_period
+            ):
+                # This proves arithmetic within one returned observation,
+                # not a comparison of two separately observed periods.
+                period_compatibility = {
+                    "status": "compatible",
+                    "reason_codes": [],
+                }
             if operation in {"difference", "ratio"}:
                 if not (same_metric_basis and same_filter_scope):
                     raise QueryFailure(
@@ -5093,6 +5146,10 @@ def _build_governed_calculations(
                     "same_unit": True,
                     "scalar_untruncated_operands": True,
                 }
+            if fact_compatibility is not None:
+                scope_compatibility["fact_fields"] = fact_compatibility
+                scope_compatibility["single_claim_operands"] = True
+                scope_compatibility["scalar_untruncated_operands"] = not bool(left["group_dimensions"])
             if operation == "difference":
                 value = left["value"] - right["value"]
                 output_unit = left["unit"]
@@ -5131,6 +5188,12 @@ def _build_governed_calculations(
                         "metric_basis_fingerprint"
                     ],
                     "filter_fingerprint": operand["filter_fingerprint"],
+                    **({
+                        "field": operand["field"],
+                        "field_unit": operand["field_unit"],
+                        "group_dimensions": operand["group_dimensions"],
+                        "group_fingerprint": operand["group_fingerprint"],
+                    } if selected_facts else {}),
                 }
                 for operand in (left, right)
             ]
@@ -5211,6 +5274,20 @@ def _validate_request_plan_without_entities(
         request = currency_basis.prepare_request(request, semantics)
         request = _validate_delivery_metric_scope(request, semantics)
         request = _validate_metric_contract(request, semantics)
+        if "analysis" in request:
+            try:
+                request["analysis"] = capability_contract.validate_metric_analysis(
+                    request["analysis"],
+                    semantics.get("metrics", {}).get(request.get("metric")),
+                    metric_code=request.get("metric"),
+                    domain=request.get("domain"),
+                )
+            except capability_contract.CapabilityContractError as exc:
+                raise QueryFailure(
+                    exc.code,
+                    exc.message,
+                    path=f"{request_path}.analysis" if request_path else "analysis",
+                ) from exc
         _validate_pre_entity_metric_plan(
             request,
             datasets,
@@ -5465,6 +5542,8 @@ def _run_one(
             limit,
             observed_on=period_observed_on,
         )
+        if "analysis" in request:
+            semantics = analysis_evidence.with_disclosures(request, semantics, scope)
         private_time_range = scope.get("time_range")
         applied_time_range = _public_time_range(private_time_range)
         current_snapshot_evidence = (
@@ -5586,6 +5665,13 @@ def _run_one(
         metric_ref = _business_metric_ref(request)
         metric_label = _business_metric_label(scope, semantics)
         metric_context = _business_metric_context(scope, semantics, datasets)
+        if "analysis" in request:
+            metric_label = f"{metric_label}（受控分析）"
+            metric_context = {
+                **metric_context,
+                "business_metric_label": metric_label,
+                "business_metric_definition": "在本指标登记的来源和母集中，按本次已公开的行级及分组后条件形成分析切片；具体条件、期间、单位和未知限制见本次分析证据。该切片不改变未筛选的正式指标定义。",
+            }
         dimension_request = _effective_dimension_request(request, scope, semantics)
         dimension_labels = _business_dimension_labels(dimension_request, semantics)
         dimension_bindings = _business_dimension_bindings(dimension_request, scope, semantics)
@@ -5606,6 +5692,32 @@ def _run_one(
             if metric_definition.get("query_kind") == "target_completion"
             else None
         )
+        if "analysis" in request:
+            analysis_operation = (scope.get("analysis") or {}).get("operation")
+            count_unit = "源行" if analysis_operation == "inventory_flow" else "客户组" if analysis_operation in {"current_debt", "open_receivable"} else "分组"
+            result_fact_units = {
+                **(result_fact_units if isinstance(result_fact_units, Mapping) else {}),
+                **{field: count_unit for field in (
+                    "analysis_population_count", "analysis_match_count",
+                    "analysis_unknown_count", "analysis_excluded_count",
+                )},
+                **{field: "条" for field in (
+                    "analysis_scope_row_count", "analysis_match_rows", "analysis_unknown_rows",
+                    "analysis_excluded_rows", "analysis_amount_unknown_count",
+                    "analysis_overdue_unknown_count", "analysis_overdue_known_count",
+                    "analysis_missing_quantity_rows", "analysis_missing_roll_rows",
+                    "analysis_return_rows",
+                    "observed_row_match_count", "observed_any_match_count", "open_row_count",
+                    "debt_row_count", "debt_unknown_count",
+                )},
+                **{field: "卷" for field in (
+                    "analysis_gross_rolls", "analysis_known_gross_rolls",
+                    "analysis_net_rolls", "analysis_unattributed_return_rolls",
+                )},
+                **{field: metric_context.get("business_metric_unit") for field in (
+                    "analysis_gross_quantity", "analysis_known_gross_quantity", "analysis_net_quantity",
+                )},
+            }
         if isinstance(currency_scope, Mapping):
             result_fact_units = {
                 **(result_fact_units if isinstance(result_fact_units, Mapping) else {}),
@@ -5614,6 +5726,7 @@ def _run_one(
                 "unclassified_source_amount_max": "原币金额上界（币种未知，不可合计）",
                 "unclassified_source_row_count": "币种缺失源记录数",
             }
+        public_rows = analysis_evidence.selected_rows(scope, public_rows)
         _validate_required_time_bucket_rows(metric_definition, public_rows)
         domain_dimensions = semantics.get("dimensions")
         if not isinstance(domain_dimensions, Mapping) or any(
@@ -5631,6 +5744,21 @@ def _run_one(
             scope,
             metric_definition,
             datasets,
+        )
+        public_analysis_context = analysis_evidence.public_context(
+            request, scope, rows,
+            period=applied_time_range,
+            scope_fingerprint=scope_fingerprint,
+            projection_fingerprint=projection_fingerprint,
+            source_filters=[
+                {"label": definition["label"], "values": [
+                    _safe_display_value(value) for value in
+                    (values if isinstance(values, list) else [values])
+                ]}
+                for code, values in (request.get("metric_filters") or {}).items()
+                for definition in [_effective_dimensions(semantics, request.get("metric")).get(code, {})]
+                if (definition.get("value_contract") or {}).get("kind") == "source_exact"
+            ],
         )
         semantic_request_fingerprint = _semantic_request_fingerprint(
             request,
@@ -5730,6 +5858,8 @@ def _run_one(
         }
         if currency_scope is not None:
             result["currency_scope"] = copy.deepcopy(currency_scope)
+        if public_analysis_context is not None:
+            result["analysis_context"] = public_analysis_context
         if isinstance(snapshot_group_marker, str) and snapshot_group_marker:
             result["_snapshot_group_marker"] = snapshot_group_marker
         _check_call_deadline(deadline_at)

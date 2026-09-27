@@ -24,6 +24,33 @@ _FILTER_OPERATORS = {
     "lte": "<=",
 }
 _INTERNAL_MATCH_COUNT = "__matched_row_count"
+_ANALYSIS_OPERATORS = {
+    "eq": "=",
+    "gt": ">",
+    "gte": ">=",
+    "lt": "<",
+    "lte": "<=",
+}
+
+
+def _analysis_filter_clause(
+    value_sql: str, operator: str, value: Any, params: list[Any]
+) -> str:
+    """Bind one finite analysis comparison to an approved SQL expression.
+
+    ``value_sql`` is assembled only from contract-approved identifiers by the
+    caller.  Operators are selected from a closed map; values always remain
+    DB-API parameters.  This helper is shared by analytical builders that need
+    to add a post-aggregate predicate without opening a SQL expression DSL.
+    """
+
+    sql_operator = _ANALYSIS_OPERATORS.get(operator)
+    if sql_operator is None:
+        raise QueryFailure("INVALID_PLAN", "分析比较符不受支持。")
+    if not isinstance(value_sql, str) or not value_sql.strip():
+        raise QueryFailure("INVALID_PLAN", "分析比较表达式无效。")
+    params.append(value)
+    return f"({value_sql} {sql_operator} CAST(%s AS DECIMAL(38,12)))"
 
 
 def _quote_identifier(value: str) -> str:

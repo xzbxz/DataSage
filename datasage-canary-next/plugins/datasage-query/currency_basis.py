@@ -81,6 +81,61 @@ def _original_scope(request: dict[str, Any]) -> dict[str, Any]:
     return request
 
 
+def _analysis_basis_validations(
+    request: Mapping[str, Any],
+    semantics: Mapping[str, Any],
+    counterparts: Mapping[str, str],
+) -> dict[str, dict[str, Any]]:
+    """Validate analysis against each possible counterpart before auto probe.
+
+    Auto selection starts with one counterpart only for scope discovery.  The
+    private probe must not carry analysis predicates, but the eventual basis
+    must still be checked against its own metric registration.  Keep both
+    outcomes in the private plan so a single-currency result can select an
+    original-only registration while a mixed scope can select RMB (or fail
+    precisely if that selected registration is absent).
+    """
+
+    raw_analysis = request.get("analysis")
+    if raw_analysis is None:
+        return {}
+    from . import capability_contract
+
+    metrics = semantics.get("metrics", {})
+    outcomes: dict[str, dict[str, Any]] = {}
+    for basis, metric_code in counterparts.items():
+        metric = metrics.get(metric_code) if isinstance(metrics, Mapping) else None
+        try:
+            normalized = capability_contract.validate_metric_analysis(
+                raw_analysis,
+                metric,
+                metric_code=metric_code,
+                domain=request.get("domain"),
+            )
+        except capability_contract.CapabilityContractError as exc:
+            outcomes[basis] = {
+                "error": {
+                    "code": exc.code,
+                    "message": exc.message,
+                    "path": getattr(exc, "path", None),
+                }
+            }
+        else:
+            outcomes[basis] = {"normalized": normalized}
+    return outcomes
+
+
+def _raise_analysis_basis_error(outcome: Mapping[str, Any] | None) -> None:
+    error = outcome.get("error") if isinstance(outcome, Mapping) else None
+    if not isinstance(error, Mapping):
+        return
+    raise QueryFailure(
+        str(error.get("code") or "ANALYSIS_UNSUPPORTED"),
+        str(error.get("message") or "该币种口径未登记请求中的分析能力。"),
+        path=str(error.get("path") or "analysis"),
+    )
+
+
 def prepare_request(request: Mapping[str, Any], semantics: Mapping[str, Any]) -> dict[str, Any]:
     result = dict(request)
     if "currency_basis" not in result:
@@ -98,6 +153,21 @@ def prepare_request(request: Mapping[str, Any], semantics: Mapping[str, Any]) ->
         raise QueryFailure("CURRENCY_BASIS_UNAVAILABLE", "该指标不接受金额币种选择。")
     if requested not in info["supported"]:
         raise QueryFailure("CURRENCY_BASIS_UNAVAILABLE", info.get("limitation", "该币种口径没有批准来源。"))
+    if (
+        requested == "auto"
+        and str(result.get("metric"))
+        in {"open_receivable_amount", "open_receivable_amount_original"}
+        and isinstance(result.get("analysis"), Mapping)
+        and result["analysis"].get("row_filters")
+    ):
+        # Unlike current_debt, an open-receivable row predicate changes the
+        # amount parent population.  A probe that silently drops it could
+        # choose a currency from a larger scope than the formal query.
+        raise QueryFailure(
+            "ANALYSIS_UNSUPPORTED_COMBINATION",
+            "应收 row analysis 暂不支持 auto 币种探测；请明确选择人民币或原币口径。",
+            path="analysis.row_filters",
+        )
     refs = info["counterparts"]
     probe = requested == "auto" and set(refs) == {"rmb", "original"}
     selected = ("rmb" if "rmb" in refs else "original") if requested == "auto" else requested
@@ -109,6 +179,33 @@ def prepare_request(request: Mapping[str, Any], semantics: Mapping[str, Any]) ->
     order = result.get("order_by")
     if isinstance(order, Mapping) and order.get("field") == plan["requested_metric"]:
         result["order_by"] = {**order, "field": "metric_value"}
+    if "analysis" in result:
+        analysis_validations = _analysis_basis_validations(result, semantics, refs)
+        plan["analysis_validations"] = analysis_validations
+        if requested == "auto" and probe:
+            # Keep the initial contract-valid counterpart for preflight. If only
+            # the original counterpart registers this analysis, use it for the
+            # private probe; the probe itself still removes analysis below.
+            rmb_state = analysis_validations.get("rmb")
+            original_state = analysis_validations.get("original")
+            if (
+                isinstance(rmb_state, Mapping)
+                and "error" in rmb_state
+                and isinstance(original_state, Mapping)
+                and "normalized" in original_state
+            ):
+                selected = "original"
+                result["metric"] = refs[selected]
+                plan.update(resolved_basis=selected)
+            elif isinstance(rmb_state, Mapping) and "error" in rmb_state:
+                # Both sides may fail for the same unsupported field. Surface the
+                # initial counterpart's precise contract error before SQL.
+                _raise_analysis_basis_error(rmb_state)
+        if not probe or requested != "auto":
+            _raise_analysis_basis_error(analysis_validations.get(selected))
+            normalized = analysis_validations.get(selected, {}).get("normalized")
+            if normalized is not None:
+                result["analysis"] = normalized
     result["_currency_basis_plan"] = plan
     if selected == "original" and not probe:
         _original_scope(result)
@@ -120,7 +217,8 @@ def build_probe(request, datasets, semantics, builder, *, observed_on=None):
     probe = dict(request)
     for key in ("currency_basis", "_currency_basis_plan", "order_by", "period_summary",
                 "complete_change_decomposition", "decomposition_of_request_id",
-                "complete_target_gap_decomposition", "_target_gap_of_request_id"):
+                "complete_target_gap_decomposition", "_target_gap_of_request_id",
+                "analysis"):
         probe.pop(key, None)
     probe.update(metric=plan["counterparts"]["original"], dimensions=["currency"],
                  _currency_scope_probe=True)
@@ -178,6 +276,9 @@ def resolve_probe(request, rows, truncated):
     result = deepcopy(dict(request))
     plan = result["_currency_basis_plan"]
     selected = "original" if n <= 1 else "rmb"
+    validations = plan.get("analysis_validations")
+    selected_state = validations.get(selected) if isinstance(validations, Mapping) else None
+    _raise_analysis_basis_error(selected_state)
     if n == 1:
         value = row.get("single_currency")
         if not request_contract.valid_string(value, request_contract.CURRENCY_TOKEN):
@@ -189,6 +290,9 @@ def resolve_probe(request, rows, truncated):
     elif n == 0:
         _original_scope(result)
     result["metric"] = plan["counterparts"][selected]
+    normalized = selected_state.get("normalized") if isinstance(selected_state, Mapping) else None
+    if normalized is not None:
+        result["analysis"] = normalized
     plan.update(resolved_basis=selected, requires_probe=False, currency_count=n,
                 reason="empty_scope" if n == 0 else "single_currency_scope" if n == 1 else "cross_currency_scope")
     return result

@@ -16,6 +16,12 @@ from .analytical_queries import (
     AnalysisQueryError,
     build_analytical_metric_query,
 )
+from .analysis_queries import (
+    AnalysisPlanError,
+    build_current_debt_analysis_query,
+    build_open_receivable_analysis_query,
+    validate_analysis_request,
+)
 from .capability_contract import (
     AvailabilityContractError,
     CapabilityContractError,
@@ -1499,6 +1505,50 @@ def _build_metric_query(
     metric = metrics[metric_code]
     if not isinstance(metric, dict):
         raise QueryFailure("CONTRACT_UNAVAILABLE", "指标定义格式无效。")
+    analysis_plan = None
+    if request.get("analysis") is not None:
+        try:
+            analysis_plan = validate_analysis_request(request, metric, semantics)
+        except AnalysisPlanError as exc:
+            raise QueryFailure(exc.code, exc.message, path=exc.path) from exc
+        # Comparison, period summaries, decomposition and ranking all carry
+        # their own population evidence.  Until those operations are rebuilt
+        # after analysis filtering, fail closed instead of silently attaching
+        # the old evidence to a narrower population.
+        unsupported_with_analysis = {
+            "comparison",
+            "period_summary",
+            "decomposition_of_request_id",
+            "complete_change_decomposition",
+            "complete_target_gap_decomposition",
+            "time_bucket",
+        }
+        if any(request.get(field) is not None for field in unsupported_with_analysis):
+            raise QueryFailure(
+                "ANALYSIS_UNSUPPORTED_COMBINATION",
+                "analysis 暂不支持比较、期间合计、分解、时间分组或显式排序。",
+                path="analysis",
+            )
+        if analysis_plan is not None and analysis_plan.operation in {"open_receivable", "current_debt"}:
+            _validate_governed_request_time_range(request)
+            if request.get("time_range") is not None:
+                raise QueryFailure(
+                    "ANALYSIS_UNSUPPORTED_COMBINATION",
+                    "当前应收联合分析只支持登记的当前快照时点。",
+                    path="time_range",
+                )
+            _ensure_metric_available(metric)
+            _ensure_metric_tree_available(metric_code, semantics)
+            try:
+                builder = (
+                    build_current_debt_analysis_query
+                    if analysis_plan.operation == "current_debt"
+                    else build_open_receivable_analysis_query
+                )
+                sql, params, scope = builder(request, metric, datasets_contract, semantics, limit, observed_on=observed_on)
+            except AnalysisPlanError as exc:
+                raise QueryFailure(exc.code, exc.message, path=exc.path) from exc
+            return sql, params, scope
     handler = analytical_handlers.get_handler(metric.get("query_kind"))
     if (request.get("baseline_week") is not None or request.get("movement_state") is not None) and not (handler and handler.baseline_parameters):
         raise QueryFailure("INVALID_PLAN", "该指标不接受基线周或变化状态参数。")

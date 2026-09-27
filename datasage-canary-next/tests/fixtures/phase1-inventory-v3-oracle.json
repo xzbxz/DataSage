@@ -1,0 +1,123 @@
+{
+  "schema_version": "phase1-inventory-v3-independent.v1",
+  "status": "frozen-errata-before-v3-execution",
+  "purpose": "修正 HCM 独立主例的业务基线冲突；保留 v1 错误历史，不回改 acceptance-oracles.json。",
+  "errata": {
+    "v1_preserved": true,
+    "v1_sha256_file": "acceptance-oracles.sha256",
+    "conflict": "v1 mixed H1..H8 facts combined price_to_ddp_ratio=0.40 with legacy high-net 437 and scope net 451, which is incompatible with the approved strict high KPI >75% and makes a gross/return aggregate inconsistent.",
+    "correction": "v3 base contains only the two rows needed for the approved main example: high gross 450 at 80%, low gross 14 at 50%, and 13 qualified returns. Boundary/missing/zero fixtures are extensions and are not included in the 451/437 base assertions.",
+    "golden_policy": "golden values below are hand-authored from the user-confirmed business baseline; implementation output cannot redefine them"
+  },
+  "frozen_basis": {
+    "candidate_baseline_commit": "f0c39fcf78b07d62f8780938652bcf409e88a13b",
+    "cohort": "HCM",
+    "period_start": "2026-09-01",
+    "period_end_exclusive": "2026-10-01",
+    "snapshot_id": "hcm-v3-main-cohort-A",
+    "currency": "CNY",
+    "unit": "roll",
+    "group_by": "product",
+    "legacy_high_policy": {"operator": "gt", "threshold": "0.75", "meaning": "deal_price / DDP"},
+    "analysis_policy": {"operator": "lte", "threshold": "0.50", "meaning": "historical deal_price / DDP"},
+    "return_scope": "all qualified returns in the same HCM cohort/time; legacy high-net subtracts all qualified returns",
+    "model_execution": "not_run",
+    "real_data_execution": "not_run"
+  },
+  "public_requests": {
+    "legacy": {
+      "domain": "inventory",
+      "metric": "registered_slow_pool_baseline_net_outbound",
+      "baseline_week": "2026-W37",
+      "time_range": {"start": "2026-09-01", "end": "2026-10-01"},
+      "dimensions": ["product", "unit"],
+      "analysis": null
+    },
+    "analysis": {
+      "domain": "inventory",
+      "metric": "registered_slow_pool_baseline_net_outbound",
+      "baseline_week": "2026-W37",
+      "time_range": {"start": "2026-09-01", "end": "2026-10-01"},
+      "dimensions": ["product", "unit"],
+      "analysis": {"row_filters": [{"field": "price_to_ddp_ratio", "op": "lte", "value": "0.5"}], "group_filters": []},
+      "limit": 1
+    }
+  },
+  "base_fixture": {
+    "outbound_rows": [
+      {"row_id": "V3-HIGH", "product": "P-HIGH", "goods_id": "1", "goods_sku_id": "101", "deal_price": "80", "ddp_price": "100", "price_to_ddp_ratio": "0.80", "gross_rolls": "450", "event_at": "2026-09-09T12:00:00", "unit": "m", "department": "HCM"},
+      {"row_id": "V3-LOW", "product": "P-LOW", "goods_id": "2", "goods_sku_id": "102", "deal_price": "50", "ddp_price": "100", "price_to_ddp_ratio": "0.50", "gross_rolls": "14", "event_at": "2026-09-09T12:00:00", "unit": "m", "department": "HCM"}
+    ],
+    "return_rows": [
+      {"return_id": "V3-R13", "source_product": "P-LOW", "goods_id": "2", "goods_sku_id": "102", "return_rolls": "13", "event_at": "2026-09-10T12:00:00", "unit": "m", "department": "HCM", "qualified": true, "price_band_attribution": "unknown"}
+    ],
+    "legacy_expected": {
+      "ordinary_gross_rolls": "464",
+      "qualified_return_rolls": "13",
+      "ordinary_net_rolls": "451",
+      "high_gross_rolls": "450",
+      "high_net_rolls": "437",
+      "high_policy_strict_gt_75": true,
+      "scope_source_rows": 2,
+      "scope_period": ["2026-09-01", "2026-10-01"],
+      "scope_cohort": "HCM"
+    },
+    "analysis_expected": {
+      "known_ratio_matches": ["V3-LOW"],
+      "known_ratio_exclusions": ["V3-HIGH"],
+      "selected_product": "P-LOW",
+      "selected_gross_rolls": "14",
+      "selected_net_rolls": null,
+      "selected_net_state": "unknown_return_price_band_attribution",
+      "return_rolls": null,
+      "unknown_reason": "return source is known to product/source group but has no historical price-band attribution",
+      "same_source_scope": true,
+      "same_period": true,
+      "same_currency": true,
+      "same_unit": true
+    }
+  },
+  "extension_fixtures": {
+    "threshold_and_price_validity": {
+      "rows": [
+        {"id": "E-75", "deal_price": "75", "ddp_price": "100", "ratio": "0.75", "gross_rolls": "10", "expected_high": false, "expected_analysis_lte_50": false},
+        {"id": "E-7501", "deal_price": "75.01", "ddp_price": "100", "ratio": "0.7501", "gross_rolls": "20", "expected_high": true, "expected_analysis_lte_50": false},
+        {"id": "E-DDP0", "deal_price": "5", "ddp_price": "0", "ratio": null, "gross_rolls": "5", "expected_ratio_state": "unknown_invalid_ddp"},
+        {"id": "E-DDPNULL", "deal_price": "5", "ddp_price": null, "ratio": null, "gross_rolls": "3", "expected_ratio_state": "unknown_missing_ddp"},
+        {"id": "E-DDPNEG", "deal_price": "5", "ddp_price": "-100", "ratio": null, "gross_rolls": "2", "expected_ratio_state": "unknown_invalid_ddp"},
+        {"id": "E-RETURN0", "deal_price": "50", "ddp_price": "100", "ratio": "0.50", "gross_rolls": "8", "return_rolls": "0", "expected_net_rolls": "8", "expected_net_state": "known"}
+      ],
+      "purpose": "strict boundary, invalid DDP, NULL, negative DDP, and zero-return semantics; none may change base 451/437"
+    },
+    "leaveout_threshold": {
+      "legacy_facts_held_constant": {"ordinary_net_rolls": "451", "high_net_rolls": "437", "qualified_return_rolls": "13"},
+      "base_low_row": {"gross_rolls": "14", "ratio": "0.50", "analysis_lte_50_gross_rolls": "14"},
+      "mutated_low_row": {"gross_rolls": "14", "ratio": "0.60", "analysis_lte_50_gross_rolls": "0"},
+      "purpose": "catches lte versus lt without changing the old KPI"
+    },
+    "negative_signed_flow": {
+      "outbound_rolls": "0",
+      "return_rolls": "2",
+      "expected_net_rolls": "-2",
+      "expected_high_net_rolls": "-2",
+      "purpose": "preserve signed algebra and do not clamp negative net to zero"
+    }
+  },
+  "mutation_cases": [
+    {"id": "V3-M01-high-ratio", "mutation": "change V3-HIGH deal/DDP from 0.80 to 0.40", "must_fail": true, "reason": "high policy and base facts no longer align"},
+    {"id": "V3-M02-return-add", "mutation": "add 13 returns to 450", "must_fail": true, "expected_wrong": "463", "expected": "437"},
+    {"id": "V3-M03-return-price-fill", "mutation": "fill P-LOW net as 14 despite unknown price-band attribution", "must_fail": true},
+    {"id": "V3-M04-lte-boundary", "mutation": "replace analysis lte 0.50 with lt 0.50", "must_fail": true},
+    {"id": "V3-M05-high-boundary", "mutation": "replace legacy strict gt 0.75 with gte 0.75", "must_fail": true, "caught_by": "E-75"},
+    {"id": "V3-M06-invalid-ddp-zero", "mutation": "coerce DDP=0 ratio to zero/selected", "must_fail": true, "caught_by": "E-DDP0"},
+    {"id": "V3-M07-zero-return", "mutation": "treat zero returns as missing", "must_fail": true, "caught_by": "E-RETURN0"},
+    {"id": "V3-M08-mixed-extension", "mutation": "mix extension rows into base 451/437 aggregate", "must_fail": true}
+  ],
+  "acceptance_contract": {
+    "catalog": {"metric": "registered_slow_pool_baseline_net_outbound", "required_analysis_field": "price_to_ddp_ratio", "stage": "row", "unit": "ratio"},
+    "required_scope_evidence": ["cohort", "absolute_period", "currency", "unit", "analysis field/stage", "return attribution state"],
+    "filter_order": "row filter before product grouping display sort/limit; unknown ratio rows remain auditable",
+    "legacy_compatibility": "analysis absent preserves ordinary/high fixed KPI values and source scope",
+    "model_status": "not_run"
+  }
+}

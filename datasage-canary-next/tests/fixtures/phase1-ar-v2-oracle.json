@@ -1,0 +1,169 @@
+{
+  "schema_version": "phase1-ar-v2-independent.v1",
+  "status": "frozen-after-user-decisions-before-v2-execution",
+  "purpose": "应收 v2 的独立金额来源与严格时点对齐验收；保留 v1 oracle，不把 open_receivable_amount 或逾期项目合计偷换成客户净欠款。",
+  "frozen_basis": {
+    "amount_source": "current_debt_amount",
+    "amount_meaning": "latest monthly customer signed net-debt snapshot, including positive, zero, and negative values",
+    "amount_unit": "CNY yuan",
+    "parent_customer_set": "customers present in the latest current_debt_amount snapshot; current-open-only customers are not added",
+    "overdue_source": "current open receivable item observation using overdue_days > 30",
+    "time_policy": "same business as-of time is required for the joint predicate",
+    "alignment_rule": "latest monthly debt snapshot and current open-item observation have no authoritative same-asof bridge; same SQL/read clock is not proof of same business time",
+    "strict_joint_rule": "if debt amount is inside range or unknown and the two as-of times are not authoritatively aligned, joint result is unknown; an observed current late=false cannot prove the monthly snapshot late=false",
+    "outside_rule": "known debt amount outside 10000..50000 inclusive is excluded even when current late=true",
+    "v1_preserved": "acceptance-oracles.json and acceptance-oracles.sha256 remain unchanged",
+    "model_execution": "not_run",
+    "real_data_execution": "not_run"
+  },
+  "public_request": {
+    "domain": "receivable",
+    "metric": "current_debt_amount",
+    "dimensions": ["customer"],
+    "analysis": {
+      "row_filters": [{"field": "overdue_days", "op": "gt", "value": "30"}],
+      "group_filters": [
+        {"field": "metric_value", "op": "gte", "value": "10000"},
+        {"field": "metric_value", "op": "lte", "value": "50000"},
+        {"field": "any_overdue_days", "op": "gt", "value": "30"}
+      ]
+    },
+    "order_by": {"field": "metric_value", "direction": "desc"},
+    "limit": 20
+  },
+  "asof": {
+    "debt_snapshot_period": "2026-08",
+    "debt_snapshot_asof": "2026-08-31",
+    "open_observation_asof": "2026-09-02",
+    "same_sql_read_clock": "2026-09-02",
+    "authoritative_alignment": false,
+    "expected_joint_alignment_state": "unknown"
+  },
+  "source_facts": {
+    "debt_snapshot_rows": [
+      {"customer": "C-LOW-BOUND", "bill_date": "2026-08", "debt_amount_rmb": "10000", "gross_receivable_rmb": "10000", "prepayment_rmb": "0", "writeoff_rmb": "0", "snapshot_asof": "2026-08-31"},
+      {"customer": "C-MID", "bill_date": "2026-07", "debt_amount_rmb": "60000", "gross_receivable_rmb": "60000", "prepayment_rmb": "0", "writeoff_rmb": "0", "snapshot_asof": "2026-07-31"},
+      {"customer": "C-MID", "bill_date": "2026-08", "debt_amount_rmb": "30000", "gross_receivable_rmb": "30000", "prepayment_rmb": "0", "writeoff_rmb": "0", "snapshot_asof": "2026-08-31"},
+      {"customer": "C-HIGH-BOUND", "bill_date": "2026-08", "debt_amount_rmb": "50000", "gross_receivable_rmb": "50000", "prepayment_rmb": "0", "writeoff_rmb": "0", "snapshot_asof": "2026-08-31"},
+      {"customer": "C-OUTSIDE-LOW", "bill_date": "2026-08", "debt_amount_rmb": "9999.99", "gross_receivable_rmb": "9999.99", "prepayment_rmb": "0", "writeoff_rmb": "0", "snapshot_asof": "2026-08-31"},
+      {"customer": "C-OUTSIDE-HIGH", "bill_date": "2026-08", "debt_amount_rmb": "50000.01", "gross_receivable_rmb": "50000.01", "prepayment_rmb": "0", "writeoff_rmb": "0", "snapshot_asof": "2026-08-31"},
+      {"customer": "C-IN-NO-LATE", "bill_date": "2026-08", "debt_amount_rmb": "20000", "gross_receivable_rmb": "20000", "prepayment_rmb": "0", "writeoff_rmb": "0", "snapshot_asof": "2026-08-31"},
+      {"customer": "C-DEBT-MISSING", "bill_date": "2026-08", "debt_amount_rmb": null, "gross_receivable_rmb": null, "prepayment_rmb": null, "writeoff_rmb": null, "snapshot_asof": "2026-08-31"},
+      {"customer": "C-NO-OPEN", "bill_date": "2026-08", "debt_amount_rmb": "18000", "gross_receivable_rmb": "18000", "prepayment_rmb": "0", "writeoff_rmb": "0", "snapshot_asof": "2026-08-31"},
+      {"customer": "C-PREPAY-OFFSET", "bill_date": "2026-08", "debt_amount_rmb": "10000", "gross_receivable_rmb": "60000", "prepayment_rmb": "40000", "writeoff_rmb": "10000", "snapshot_asof": "2026-08-31", "counterexample": "open_item_sum_differs_from_signed_net_debt"},
+      {"customer": "C-OFFSET-OUTSIDE", "bill_date": "2026-08", "debt_amount_rmb": "5000", "gross_receivable_rmb": "30000", "prepayment_rmb": "0", "writeoff_rmb": "25000", "snapshot_asof": "2026-08-31", "counterexample": "open_item_sum_would_be_inside_but_net_debt_is_outside"},
+      {"customer": "C-NEGATIVE", "bill_date": "2026-08", "debt_amount_rmb": "-1000", "gross_receivable_rmb": "0", "prepayment_rmb": "1000", "writeoff_rmb": "0", "snapshot_asof": "2026-08-31"},
+      {"customer": "C-ZERO", "bill_date": "2026-08", "debt_amount_rmb": "0", "gross_receivable_rmb": "0", "prepayment_rmb": "0", "writeoff_rmb": "0", "snapshot_asof": "2026-08-31"}
+    ],
+    "current_open_items": [
+      {"item_id": "L1", "customer": "C-LOW-BOUND", "open_amount_rmb": "10000", "overdue_days": "31", "credit_term_state": "known", "observation_asof": "2026-09-02"},
+      {"item_id": "M1", "customer": "C-MID", "open_amount_rmb": "30000", "overdue_days": "45", "credit_term_state": "known", "observation_asof": "2026-09-02"},
+      {"item_id": "H1", "customer": "C-HIGH-BOUND", "open_amount_rmb": "50000", "overdue_days": "31", "credit_term_state": "known", "observation_asof": "2026-09-02"},
+      {"item_id": "OL1", "customer": "C-OUTSIDE-LOW", "open_amount_rmb": "9999.99", "overdue_days": "60", "credit_term_state": "known", "observation_asof": "2026-09-02"},
+      {"item_id": "OH1", "customer": "C-OUTSIDE-HIGH", "open_amount_rmb": "50000.01", "overdue_days": "60", "credit_term_state": "known", "observation_asof": "2026-09-02"},
+      {"item_id": "N1", "customer": "C-IN-NO-LATE", "open_amount_rmb": "20000", "overdue_days": "30", "credit_term_state": "known", "observation_asof": "2026-09-02"},
+      {"item_id": "DM1", "customer": "C-DEBT-MISSING", "open_amount_rmb": "12000", "overdue_days": "40", "credit_term_state": "known", "observation_asof": "2026-09-02"},
+      {"item_id": "P1", "customer": "C-PREPAY-OFFSET", "open_amount_rmb": "60000", "overdue_days": "31", "credit_term_state": "known", "observation_asof": "2026-09-02"},
+      {"item_id": "O1", "customer": "C-OFFSET-OUTSIDE", "open_amount_rmb": "30000", "overdue_days": "31", "credit_term_state": "known", "observation_asof": "2026-09-02"},
+      {"item_id": "NEG1", "customer": "C-NEGATIVE", "open_amount_rmb": "1000", "overdue_days": "31", "credit_term_state": "known", "observation_asof": "2026-09-02"},
+      {"item_id": "ZERO1", "customer": "C-ZERO", "open_amount_rmb": "1000", "overdue_days": "31", "credit_term_state": "known", "observation_asof": "2026-09-02"},
+      {"item_id": "ONLY1", "customer": "C-CURRENT-ONLY", "open_amount_rmb": "20000", "overdue_days": "60", "credit_term_state": "known", "observation_asof": "2026-09-02"}
+    ]
+  },
+  "hand_calculation": {
+    "latest_snapshot_customer_set": ["C-LOW-BOUND", "C-MID", "C-HIGH-BOUND", "C-OUTSIDE-LOW", "C-OUTSIDE-HIGH", "C-IN-NO-LATE", "C-DEBT-MISSING", "C-NO-OPEN", "C-PREPAY-OFFSET", "C-OFFSET-OUTSIDE", "C-NEGATIVE", "C-ZERO"],
+    "current_only_not_parent": ["C-CURRENT-ONLY"],
+    "current_debt_amount_classification": {
+      "C-LOW-BOUND": "inside",
+      "C-MID": "inside",
+      "C-HIGH-BOUND": "inside",
+      "C-OUTSIDE-LOW": "outside",
+      "C-OUTSIDE-HIGH": "outside",
+      "C-IN-NO-LATE": "inside",
+      "C-DEBT-MISSING": "unknown",
+      "C-NO-OPEN": "inside",
+      "C-PREPAY-OFFSET": "inside",
+      "C-OFFSET-OUTSIDE": "outside",
+      "C-NEGATIVE": "outside",
+      "C-ZERO": "outside"
+    },
+    "current_late_observation": {
+      "C-LOW-BOUND": true,
+      "C-MID": true,
+      "C-HIGH-BOUND": true,
+      "C-OUTSIDE-LOW": true,
+      "C-OUTSIDE-HIGH": true,
+      "C-IN-NO-LATE": false,
+      "C-DEBT-MISSING": true,
+      "C-NO-OPEN": "unknown",
+      "C-PREPAY-OFFSET": true,
+      "C-OFFSET-OUTSIDE": true,
+      "C-NEGATIVE": true,
+      "C-ZERO": true
+    },
+    "strict_same_asof_joint": {
+      "alignment_state": "unknown",
+      "matches": [],
+      "unknown": ["C-LOW-BOUND", "C-MID", "C-HIGH-BOUND", "C-IN-NO-LATE", "C-DEBT-MISSING", "C-NO-OPEN", "C-PREPAY-OFFSET"],
+      "excluded": ["C-OUTSIDE-LOW", "C-OUTSIDE-HIGH", "C-OFFSET-OUTSIDE", "C-NEGATIVE", "C-ZERO"],
+      "parent_population_count": 12,
+      "match_count": 0,
+      "unknown_count": 7,
+      "excluded_count": 5
+    },
+    "aligned_hypothetical_branch": {
+      "alignment_state": "known",
+      "matches": ["C-HIGH-BOUND", "C-MID", "C-LOW-BOUND", "C-PREPAY-OFFSET"],
+      "unknown": ["C-DEBT-MISSING", "C-NO-OPEN"],
+      "excluded": ["C-OUTSIDE-LOW", "C-OUTSIDE-HIGH", "C-IN-NO-LATE", "C-OFFSET-OUTSIDE", "C-NEGATIVE", "C-ZERO"],
+      "note": "This branch is a counterfactual oracle only; no current source fact proves this alignment. It must not be selected by implementation inference."
+    },
+    "counterexamples": {
+      "C-PREPAY-OFFSET": {"net_debt_rmb": "10000", "open_item_sum_rmb": "60000", "prepayment_rmb": "40000", "writeoff_rmb": "10000", "joint_state": "unknown"},
+      "C-OFFSET-OUTSIDE": {"net_debt_rmb": "5000", "open_item_sum_rmb": "30000", "writeoff_rmb": "25000", "expected": "outside_exclude"},
+      "C-IN-NO-LATE": {"net_debt_rmb": "20000", "current_late": false, "time_misaligned": true, "expected": "unknown_not_false"}
+    },
+    "required_evidence": {
+      "debt_asof": "2026-08-31",
+      "overdue_asof": "2026-09-02",
+      "joint_alignment": "unknown",
+      "source_set": "parent net-debt customer snapshot plus current-open observation; no current-only expansion",
+      "amount_field": "current_debt_amount",
+      "overdue_field": "overdue_days",
+      "unknown_reason": "no authoritative same-business-time alignment proof"
+    }
+  },
+  "mutations": [
+    {"id": "ARV2-M01-open-only-substitution", "mutation": "replace current_debt_amount with open_item_sum", "must_fail": true, "caught_by": ["C-PREPAY-OFFSET", "C-OFFSET-OUTSIDE"]},
+    {"id": "ARV2-M02-current-only-expansion", "mutation": "add C-CURRENT-ONLY from overdue source to parent customer set", "must_fail": true, "caught_by": ["C-CURRENT-ONLY"]},
+    {"id": "ARV2-M03-time-align-by-read-clock", "mutation": "treat same SQL/CURDATE read as same business as-of", "must_fail": true, "caught_by": ["C-LOW-BOUND", "C-IN-NO-LATE", "C-PREPAY-OFFSET"]},
+    {"id": "ARV2-M04-current-false-to-joint-false", "mutation": "set C-IN-NO-LATE joint predicate false despite misaligned as-of", "must_fail": true, "caught_by": ["C-IN-NO-LATE"]},
+    {"id": "ARV2-M05-missing-debt-zero", "mutation": "coerce C-DEBT-MISSING debt to zero/outside", "must_fail": true, "caught_by": ["C-DEBT-MISSING"]},
+    {"id": "ARV2-M06-inclusive-boundaries", "mutation": "use gt 10000 or lt 50000", "must_fail": true, "caught_by": ["C-LOW-BOUND", "C-HIGH-BOUND"]},
+    {"id": "ARV2-M07-late-boundary", "mutation": "use gte 30 for overdue existence", "must_fail": true, "caught_by": ["C-IN-NO-LATE"]},
+    {"id": "ARV2-M08-old-month", "mutation": "use 2026-07 debt row instead of latest 2026-08 snapshot", "must_fail": true, "caught_by": ["C-MID"]}
+  ],
+  "model_rubric": {
+    "execution_status": "not_run",
+    "path_policy": "open_multi_path",
+    "axes": {
+      "amount_source_and_parent_set": {"max": 5, "full_credit": "uses current_debt_amount latest snapshot and does not add current-only overdue customers"},
+      "strict_time_alignment": {"max": 5, "full_credit": "reports debt_asof and overdue_asof separately and joint unknown without authoritative bridge"},
+      "boundary_and_numeric": {"max": 4, "full_credit": "inside includes 10000/50000, outside excludes, negatives/zero do not qualify"},
+      "unknown_and_evidence": {"max": 4, "full_credit": "inside/unknown amount with misaligned time stays unknown; current late=false never proves joint false"},
+      "source_difference": {"max": 3, "full_credit": "explains prepayment/writeoff counterexamples and does not substitute open-item sum"},
+      "reasonable_progress": {"max": 4, "full_credit": "shows current overdue observation as a separate bounded fact, states limitation, and proposes alignment evidence/next check"}
+    },
+    "total_max": 25,
+    "suggested_pass": ">=21 with no critical violation",
+    "critical_violations": [
+      "uses open receivable item sum as current net debt",
+      "adds current-only customers to the net-debt parent set",
+      "claims same SQL/read clock proves same business as-of",
+      "turns current late=false into joint false while time is unknown",
+      "reports inside amount as a known match despite unknown alignment",
+      "drops unknown debt or missing open observation",
+      "hides prepayment/writeoff difference or claims SQL proves model understanding"
+    ]
+  }
+}

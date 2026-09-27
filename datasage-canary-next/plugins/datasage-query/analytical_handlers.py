@@ -24,6 +24,7 @@ class QueryHandler:
     time_projection: str | None = None
     time_description: str | None = None
     consistent_snapshot: bool = False
+    allow_analysis_order: bool = False
 
     def resolve(self, attribute):
         """Load only statically registered code; never accept names from requests."""
@@ -35,6 +36,8 @@ class QueryHandler:
     def validate_parameters(self, request):
         from .analytical_queries import AnalysisQueryError
         for field in self.forbidden_parameters:
+            if field == 'order_by' and request.get('analysis') is not None and self.allow_analysis_order:
+                continue
             if request.get(field) is not None:
                 raise AnalysisQueryError(
                     dict(self.parameter_error_codes).get(field, self.error_code), self.parameter_message,
@@ -44,12 +47,12 @@ class QueryHandler:
 
 _HANDLERS = MappingProxyType({
     'idk_unpriced': QueryHandler(
-        forbidden_parameters=('time_range','calendar_month','time_bucket','baseline_week','comparison','order_by','movement_state','inventory_scope'),
+        forbidden_parameters=('time_range','calendar_month','time_bucket','baseline_week','comparison','order_by','movement_state','inventory_scope','analysis'),
         parameter_message='IDK未定价查询为当前源池观察；不接受历史回填、周基线、比较或排序。',
         module='idk_query',builder='build_idk_query',public_fields='FACT_FIELDS',
     ),
     'slow_customer_history': QueryHandler(
-        forbidden_parameters=('time_range', 'calendar_month', 'time_bucket', 'comparison', 'order_by', 'movement_state', 'inventory_scope'),
+        forbidden_parameters=('time_range', 'calendar_month', 'time_bucket', 'comparison', 'order_by', 'movement_state', 'inventory_scope','analysis'),
         baseline_parameters=True,
         error_code='HISTORY_PARAMETER_UNSUPPORTED',
         parameter_error_codes=(('time_range', 'HISTORY_FIXED_WINDOW'), ('calendar_month', 'HISTORY_FIXED_WINDOW')),
@@ -61,16 +64,21 @@ _HANDLERS = MappingProxyType({
         consistent_snapshot=True,
     ),
     'monthly_slow_pool': QueryHandler(
+        # Keep the ordinary metric capability closed to explicit ordering;
+        # finite analysis metadata is a separate capability surface and must
+        # not erase this legacy catalog fact.
         forbidden_parameters=('baseline_week', 'comparison', 'time_bucket', 'order_by'),
+        allow_analysis_order=True,
         parameter_message='独立月报使用完整日历月和月初池，不接受周基线、通用比较或排序。',
     ),
     'frozen_pool_net_outbound': QueryHandler(
         forbidden_parameters=('comparison', 'time_bucket', 'movement_state', 'order_by'),
+        allow_analysis_order=True,
         baseline_parameters=True,
         parameter_message='基线产品范围净出库按稳定键排序，不接受状态筛选、时间分组或通用比较。',
     ),
     'frozen_pool_comparison': QueryHandler(
-        forbidden_parameters=('time_range', 'calendar_month', 'comparison', 'time_bucket', 'order_by'),
+        forbidden_parameters=('time_range', 'calendar_month', 'comparison', 'time_bucket', 'order_by','analysis'),
         baseline_parameters=True,
         parameter_message='仅比较已有冻结时点与本次读取，按稳定键排序，不用当前池回填历史期末。',
     ),

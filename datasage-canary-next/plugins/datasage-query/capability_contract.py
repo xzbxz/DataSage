@@ -16,7 +16,7 @@ import math
 import re
 from typing import Any
 
-from . import analytical_handlers, request_contract
+from . import analysis_contract, analytical_handlers, request_contract
 
 
 DOMAIN_SOURCES: dict[str, dict[str, str]] = {
@@ -907,6 +907,16 @@ def validate_metric_execution_contract(metric: Mapping[str, Any]) -> None:
         raise CapabilityContractError(
             "CONTRACT_UNAVAILABLE", "指标执行合同格式无效。"
         )
+    # Analysis metadata is a capability fact.  Validate its public shape at
+    # contract load so malformed registrations cannot be silently ignored by
+    # either catalog or execution.
+    try:
+        analysis_contract.validate_analysis_fields(
+            metric.get("analysis_fields"),
+            supported_combinations=metric.get("analysis_supported_combinations"),
+        )
+    except analysis_contract.AnalysisContractError as exc:
+        raise CapabilityContractError(exc.code, exc.message) from exc
     if "availability" in metric:
         _execution_availability(metric)
     if metric.get("query_kind") != "target_completion":
@@ -922,6 +932,37 @@ def validate_metric_execution_contract(metric: Mapping[str, Any]) -> None:
         )
     for path_code, path in paths.items():
         _validate_target_completion_path(path_code, path)
+
+
+def metric_analysis_fields(metric: Mapping[str, Any]) -> dict[str, dict[str, dict[str, Any]]]:
+    """Return the validated public analysis registry for one metric."""
+
+    try:
+        return analysis_contract.validate_analysis_fields(
+            metric.get("analysis_fields") if isinstance(metric, Mapping) else None
+        )
+    except analysis_contract.AnalysisContractError as exc:
+        raise CapabilityContractError(exc.code, exc.message) from exc
+
+
+def validate_metric_analysis(
+    raw_analysis: Any,
+    metric: Mapping[str, Any] | None,
+    *,
+    metric_code: str | None = None,
+    domain: str | None = None,
+) -> dict[str, Any]:
+    """Validate request predicates against a metric's registered facts."""
+
+    try:
+        return analysis_contract.validate_analysis_for_metric(
+            raw_analysis,
+            metric,
+            metric_code=metric_code,
+            domain=domain,
+        )
+    except analysis_contract.AnalysisContractError as exc:
+        raise CapabilityContractError(exc.code, exc.message) from exc
 
 
 def query_request_schema_conditions() -> list[dict]:

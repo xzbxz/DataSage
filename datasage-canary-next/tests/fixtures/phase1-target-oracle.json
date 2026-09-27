@@ -1,0 +1,79 @@
+{
+  "schema_version": "phase1-target-independent.v1",
+  "status": "copied-from-frozen-v1",
+  "execution_status": "not_run",
+  "provenance": {
+    "source_file": "acceptance-oracles.json",
+    "source_sha256": "26de378bb3ec07f9ae66e52ea5acb37e9983fda7a96508355636d5930e97cc0a",
+    "scenario_sha256": "cebc89a0dc2842a963968c573a8c1975298a23681b77a2a8ed9c786d52823f8e",
+    "source_section": "scenarios.target_department_completion",
+    "copy_rule": "scenario copied byte-for-byte at the JSON-value level; no facts, expected values, scope, or request fields are changed",
+    "v1_sha_sidecar": "acceptance-oracles.sha256"
+  },
+  "scenario": {
+    "id": "TARGET-01",
+    "intent": "complete department groups, then select completion_rate <80%, retaining incomplete/unknown departments and reconciling target, actual, gap, and ownership",
+    "scope": {
+      "source_snapshot_id": "target-current-2026-09-A",
+      "period_start": "2026-09-01",
+      "period_end_exclusive": "2026-10-01",
+      "currency": "CNY",
+      "unit": "yuan",
+      "group_by": "department"
+    },
+    "request": {
+      "row_filters": [],
+      "group_filters": [
+        {"field": "completion_rate", "op": "lt", "value": "0.8"}
+      ],
+      "order_by": {"field": "gap_amount_rmb", "direction": "desc"},
+      "limit": 2
+    },
+    "source_facts": [
+      {"row_id": "TA1", "department": "D-A", "target_rmb": "500", "actual_rmb": "400", "complete": true},
+      {"row_id": "TA2", "department": "D-A", "target_rmb": "500", "actual_rmb": "399", "complete": true},
+      {"row_id": "TB1", "department": "D-B-EXACT-80", "target_rmb": "1000", "actual_rmb": "800", "complete": true},
+      {"row_id": "TC1", "department": "D-C-ZERO", "target_rmb": "100", "actual_rmb": "0", "complete": true},
+      {"row_id": "TD1", "department": "D-D-MISSING-ACTUAL", "target_rmb": "1000", "actual_rmb": null, "complete": false},
+      {"row_id": "TE1", "department": "D-E-MISSING-TARGET", "target_rmb": null, "actual_rmb": "100", "complete": false},
+      {"row_id": "TF1", "department": "D-F-INCOMPLETE", "target_rmb": "200", "actual_rmb": "100", "complete": true},
+      {"row_id": "TF2", "department": "D-F-INCOMPLETE", "target_rmb": null, "actual_rmb": "50", "complete": false},
+      {"row_id": "TG1", "department": "D-G-ABOVE", "target_rmb": "100", "actual_rmb": "120", "complete": true},
+      {"row_id": "TH1", "department": "D-H-LARGE-GAP", "target_rmb": "5000", "actual_rmb": "4500", "complete": true},
+      {"row_id": "TI1", "department": "D-I-LOW", "target_rmb": "1000", "actual_rmb": "700", "complete": true}
+    ],
+    "hand_calculation": {
+      "department_groups": [
+        {"department": "D-A", "target_rmb": "1000", "actual_rmb": "799", "gap_rmb": "201", "completion_rate": "0.799", "state": "known", "expected_under_80": true},
+        {"department": "D-B-EXACT-80", "target_rmb": "1000", "actual_rmb": "800", "gap_rmb": "200", "completion_rate": "0.8", "state": "known", "expected_under_80": false},
+        {"department": "D-C-ZERO", "target_rmb": "100", "actual_rmb": "0", "gap_rmb": "100", "completion_rate": "0", "state": "known", "expected_under_80": true},
+        {"department": "D-D-MISSING-ACTUAL", "target_rmb": "1000", "actual_rmb": null, "gap_rmb": null, "completion_rate": null, "state": "unknown_missing_actual", "expected_under_80": "unknown"},
+        {"department": "D-E-MISSING-TARGET", "target_rmb": null, "actual_rmb": "100", "gap_rmb": null, "completion_rate": null, "state": "unknown_missing_target", "expected_under_80": "unknown"},
+        {"department": "D-F-INCOMPLETE", "target_rmb": null, "actual_rmb": null, "gap_rmb": null, "completion_rate": null, "state": "unknown_incomplete_coverage", "expected_under_80": "unknown"},
+        {"department": "D-G-ABOVE", "target_rmb": "100", "actual_rmb": "120", "gap_rmb": "-20", "completion_rate": "1.2", "state": "known", "expected_under_80": false},
+        {"department": "D-H-LARGE-GAP", "target_rmb": "5000", "actual_rmb": "4500", "gap_rmb": "500", "completion_rate": "0.9", "state": "known", "expected_under_80": false},
+        {"department": "D-I-LOW", "target_rmb": "1000", "actual_rmb": "700", "gap_rmb": "300", "completion_rate": "0.7", "state": "known", "expected_under_80": true}
+      ],
+      "full_group_count": 9,
+      "known_group_count": 6,
+      "unknown_group_count": 3,
+      "under_80_known_groups": ["D-I-LOW", "D-A", "D-C-ZERO"],
+      "unknown_groups_retained": ["D-D-MISSING-ACTUAL", "D-E-MISSING-TARGET", "D-F-INCOMPLETE"],
+      "known_exclusions": ["D-B-EXACT-80", "D-G-ABOVE", "D-H-LARGE-GAP"],
+      "display_limit_2_after_filter_and_sort": ["D-I-LOW", "D-A"],
+      "reconciliation": {
+        "D-A": {"target_rmb": "1000", "actual_rmb": "799", "gap_rmb": "201", "completion_rate": "0.799"},
+        "D-I-LOW": {"target_rmb": "1000", "actual_rmb": "700", "gap_rmb": "300", "completion_rate": "0.7"},
+        "D-C-ZERO": {"target_rmb": "100", "actual_rmb": "0", "gap_rmb": "100", "completion_rate": "0"}
+      },
+      "boundary_assertions": {
+        "0.8_exactly_excluded": true,
+        "negative_or_zero_values_not_clamped": true,
+        "unknown_not_zero": true,
+        "incomplete_not_silent_drop": true,
+        "filter_before_limit": true,
+        "same_period_and_department_population": true
+      }
+    }
+  }
+}

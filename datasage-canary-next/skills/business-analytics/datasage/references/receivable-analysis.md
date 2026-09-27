@@ -59,6 +59,39 @@ Formal DSO uses average month-end net debt divided by same-period gross
 delivery, multiplied by natural days, in one compatible currency basis.
 Keep all N+1 snapshots and the gross denominator; do not substitute net delivery.
 
+## Current net-debt plus overdue qualification
+
+The confirmed default for “欠款1–5万元且逾期超过30天” uses two registered
+facts: customer-group `current_debt_amount` in RMB yuan from 10,000 through
+50,000 inclusive on its latest monthly net-debt snapshot, and at least one
+current open item whose registered `overdue_days` is greater than 30. Apply the
+row condition to open items first, then the customer group condition to the
+net-debt fact. `any_overdue_days` is a group existence fact, not the maximum age
+and not an overdue amount. `open_receivable_amount`, current net debt and the
+overdue-item ledger remain distinct contract sources; never infer the net-debt
+balance by summing open items.
+
+Use `analysis.row_filters` for `overdue_days` and `analysis.group_filters` for
+the registered net-debt group fact (`metric_value` bound to
+`current_debt_amount`) and existence fact (`any_overdue_days`) when the catalog
+exposes that combination. Resolve RMB yuan, the latest snapshot month, the
+current overdue observation date, internal-customer population, organization
+and credit-day join before group filtering; a group threshold must not choose a
+currency or reverse the row scope. A known amount outside the range can be
+excluded. If either fact or combination is not registered, report interface
+unsupported rather than substituting an overdue subtotal, open-item sum or
+per-bill amount.
+
+The two facts may be read in one SQL/read snapshot, but that does not prove
+their business as-of dates match. Require explicit authoritative alignment
+evidence. If the latest monthly net-debt snapshot and current item observation
+cannot be aligned, report each observation with its own date and keep joint
+membership unknown, including when current `overdue_days` is false. Missing
+amount, credit days, credit join, item coverage or snapshot freshness is
+data-missing/unknown, not zero overdue. The finite user range needs no new KPI
+approval; only a changed source family or comparison meaning needs focused
+clarification.
+
 ## Boundaries
 
 - Receivables, receipts, cash balance, liquidity, and risk decisions are
@@ -79,10 +112,11 @@ Keep all N+1 snapshots and the gross denominator; do not substitute net delivery
   same period); the aging profile shifted (e.g. `aging_91_120_amount` rising
   against `aging_0_30_amount`); master or organization attribution changed;
   currency or unit scope changed.
-- **Discriminating evidence**: the same-scope aging bands, the matched
-  `open_receivable_amount` / `positive_debt_amount` snapshot with its bill date,
-  and the receipt side in a compatible period. Absolute proximity does not
-  establish equal risk.
+- **Discriminating evidence**: the same-scope aging bands, the registered
+  `current_debt_amount` latest-month snapshot with its business date, the
+  current overdue-item observation and its credit/date key, and the receipt
+  side in a compatible period. A same read timestamp does not align different
+  business as-of dates; absolute proximity does not establish equal risk.
 - **Materiality**: ageing buckets need the credit policy or a compatible target.
   Where credit days or policy are missing, the answer is unable-to-determine, not
   "no overdue".
@@ -98,12 +132,13 @@ Keep all N+1 snapshots and the gross denominator; do not substitute net delivery
 
 ## Review prompts
 
-Open question: when positive debt and aging-over-90 are reviewed together,
-which selected/latest `bill_date` should be shown for those snapshot facts?
-Report determined overdue separately as a current query-date result with its
-credit join and coverage; disclose the matched customer/organization/currency
-key and any returned policy freshness such as `updated_at`, without assuming
-an unexposed policy-version field or one common snapshot month.
+Open question: when `current_debt_amount` is reviewed with current overdue
+items, which authoritative business as-of key aligns the latest monthly
+snapshot with the item observation? Report each date and source separately;
+joint membership stays unknown without that proof, even when current overdue is
+false. Disclose the matched customer/organization/currency key and any returned
+policy freshness such as `updated_at`, without assuming an unexposed
+policy-version field or one common snapshot month.
 
 Boundary question: do not infer cash from occurrence, treat missing credit as
 not overdue, reinterpret negative debt as an error, or aggregate

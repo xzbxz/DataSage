@@ -67,6 +67,12 @@ candidate evidence list, not a requirement to query every domain.
 - Keep recommendations conditional, with assumptions and verification; do not
   execute allocations, credit changes, customer treatment, or target changes.
 
+When a branch carries an `analysis` condition, bind its row/group stage,
+period, cohort, unit, currency, population and ledger before combining branches.
+A group filter cannot choose the other branch's currency or mother set. Retain
+unknown and incomplete branches and do not call a local interface limitation a
+source-data absence.
+
 ## Diagnostic path
 
 - **Goal**: judge an operating question that genuinely spans domains (outbound and
@@ -81,9 +87,10 @@ candidate evidence list, not a requirement to query every domain.
   `net_receipt_amount` (not cash); current inventory against same-period
   `delivery_quantity`; `delivery_target_completion` against its own target ledger.
   Keys, windows and units must match before any relation is stated.
-- **Materiality**: a cross-domain reading needs an owner benchmark; without one,
-  keep the finding descriptive. Structural contribution requires a complete
-  compatible reconciliation and never establishes a cause.
+- **Materiality**: an evaluative, health, or prioritisation verdict needs an
+  owner benchmark; without one, keep the finding descriptive or diagnostic.
+  Structural contribution requires a complete compatible reconciliation and
+  never establishes a cause.
 - **Candidate actions** (advice only): name the specific checks that would confirm
   or drop each hypothesis, and hand any resource, credit or customer decision to
   the accountable owner.
@@ -104,6 +111,10 @@ falling receipt, higher overdue, and lower recorded profit form one causal chain
 return separate observations or a clearly labeled hypothesis with the next
 discriminating evidence.
 
-Owner confirmation remains needed for cross-domain department mappings,
-population symmetry, ledger comparability, and the business purpose of any
-combined summary.
+Owner confirmation is needed only when a department mapping, population,
+ledger, or business meaning is genuinely missing or conflicting and could
+change the conclusion. A registered compatible mapping and a purpose already
+made clear by the current user are enough to report parallel facts or a
+descriptive/diagnostic comparison; crossing domains alone adds no approval
+step. A new economic relationship, health verdict, or high-impact action still
+needs the applicable benchmark and accountable human approver.

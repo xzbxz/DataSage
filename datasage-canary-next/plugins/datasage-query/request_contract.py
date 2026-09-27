@@ -49,7 +49,7 @@ DIMENSION_CODE = StringContract(1, 80)
 CURRENCY_TOKEN = StringContract(1, 80)
 
 QUERY_ENVELOPE_FIELDS = frozenset({"requests", "calculations"})
-CALCULATION_FIELDS = frozenset(
+CALCULATION_REQUIRED_FIELDS = frozenset(
     {
         "calculation_id",
         "operation",
@@ -57,6 +57,11 @@ CALCULATION_FIELDS = frozenset(
         "right_request_id",
     }
 )
+CALCULATION_OPTIONAL_FIELDS = frozenset({"left_field", "right_field"})
+# Preserve the historical meaning of CALCULATION_FIELDS (the four required
+# fields) while exposing the expanded allowed set separately.
+CALCULATION_FIELDS = CALCULATION_REQUIRED_FIELDS
+CALCULATION_ALLOWED_FIELDS = CALCULATION_REQUIRED_FIELDS | CALCULATION_OPTIONAL_FIELDS
 CALCULATION_OPERATIONS = ("difference", "ratio", "share")
 
 
@@ -81,7 +86,7 @@ class RequestContractError(ValueError):
 class ValidatedQueryEnvelope:
     requests: tuple[dict[str, Any], ...]
     request_ids: tuple[str, ...]
-    calculations: tuple[dict[str, str], ...]
+    calculations: tuple[dict[str, Any], ...]
 
 
 def valid_string(value: Any, contract: StringContract) -> bool:
@@ -105,7 +110,7 @@ def validate_calculations(
     request_ids: tuple[str, ...],
     *,
     supplied: bool,
-) -> tuple[dict[str, str], ...]:
+) -> tuple[dict[str, Any], ...]:
     if not supplied:
         return ()
     if (
@@ -120,13 +125,13 @@ def validate_calculations(
 
     known_request_ids = set(request_ids)
     calculation_ids: set[str] = set()
-    normalized: list[dict[str, str]] = []
+    normalized: list[dict[str, Any]] = []
     for index, raw in enumerate(raw_calculations):
         calculation_path = f"calculations[{index}]"
-        if not isinstance(raw, Mapping) or set(raw) != CALCULATION_FIELDS:
+        if not isinstance(raw, Mapping) or not CALCULATION_REQUIRED_FIELDS <= set(raw) or set(raw) - CALCULATION_ALLOWED_FIELDS:
             supplied_fields = set(raw) if isinstance(raw, Mapping) else set()
-            unexpected = sorted(supplied_fields - CALCULATION_FIELDS)
-            missing = sorted(CALCULATION_FIELDS - supplied_fields)
+            unexpected = sorted(supplied_fields - CALCULATION_ALLOWED_FIELDS)
+            missing = sorted(CALCULATION_REQUIRED_FIELDS - supplied_fields)
             field_path = (
                 f"{calculation_path}.{unexpected[0]}"
                 if unexpected
@@ -145,7 +150,7 @@ def validate_calculations(
                     else "Use a calculation object with the four documented fields."
                 ),
             )
-        calculation = {key: raw.get(key) for key in CALCULATION_FIELDS}
+        calculation = {key: raw.get(key) for key in CALCULATION_ALLOWED_FIELDS if key in raw}
         identifier_fields = (
             "calculation_id",
             "left_request_id",
@@ -194,15 +199,27 @@ def validate_calculations(
                 path=f"{calculation_path}.{invalid_reference}",
                 hint="Reference a request_id present in the top-level requests array.",
             )
+        for field in ("left_field", "right_field"):
+            if field in calculation and not valid_string(
+                calculation[field], DIMENSION_CODE
+            ):
+                raise RequestContractError(
+                    "calculation operand field must be a non-blank governed fact alias.",
+                    path=f"{calculation_path}.{field}",
+                    hint="Use a public fact alias from the selected metric catalog.",
+                )
         calculation_ids.add(calculation_id)
-        normalized.append(
-            {
-                "calculation_id": calculation_id,
-                "operation": str(operation),
-                "left_request_id": str(calculation["left_request_id"]),
-                "right_request_id": str(calculation["right_request_id"]),
-            }
-        )
+        normalized_calculation: dict[str, Any] = {
+            "calculation_id": calculation_id,
+            "operation": str(operation),
+            "left_request_id": str(calculation["left_request_id"]),
+            "right_request_id": str(calculation["right_request_id"]),
+            # The default preserves existing calculations while making the
+            # selected public fact explicit to the calculation owner.
+            "left_field": str(calculation.get("left_field", "metric_value")),
+            "right_field": str(calculation.get("right_field", "metric_value")),
+        }
+        normalized.append(normalized_calculation)
     return tuple(normalized)
 
 

@@ -14,7 +14,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Any, Mapping, Sequence
 
-from . import evidence
+from . import analysis_evidence, evidence, fact_calculations
 from .evidence import _decimal_close, _finite_decimal
 from .query_errors import QueryFailure
 
@@ -99,6 +99,7 @@ _MODEL_WIRE_RESULT_FIELDS = (
     "has_more",
     "applied_time_range",
     "currency_scope",
+    "analysis_context",
     "error",
 )
 
@@ -191,6 +192,10 @@ _MODEL_WIRE_CALCULATION_OPERAND_FIELDS = (
     "metric_basis_fingerprint",
     "filter_fingerprint",
     "claim_seal",
+    "field",
+    "field_unit",
+    "group_dimensions",
+    "group_fingerprint",
 )
 
 _MODEL_WIRE_CALCULATION_ERROR_FIELDS = (
@@ -212,6 +217,8 @@ _MODEL_WIRE_SCOPE_COMPATIBILITY_FIELDS = (
     "subset_dimensions",
     "same_unit",
     "scalar_untruncated_operands",
+    "single_claim_operands",
+    "fact_fields",
 )
 
 def _disclosure_is_valid_for_result(
@@ -1003,6 +1010,18 @@ def _model_wire_calculation_projection(
                     for key in _MODEL_WIRE_SCOPE_COMPATIBILITY_FIELDS
                     if key in value
                 }
+                fact_fields = value.get("fact_fields")
+                if isinstance(fact_fields, Mapping):
+                    projected[field]["fact_fields"] = {
+                        key: copy.deepcopy(fact_fields[key])
+                        for key in (
+                            "left_field", "right_field", "same_group_identity",
+                            "same_group_dimensions", "same_fact_unit_family",
+                            "fact_grain", "share_policy",
+                        ) if key in fact_fields
+                    }
+                else:
+                    projected[field].pop("fact_fields", None)
             continue
         if field == "period_compatibility":
             if isinstance(value, Mapping):
@@ -1033,6 +1052,7 @@ def _model_wire_calculations(
     """Expose calculations only while every sealed source claim remains visible."""
 
     visible_claims: dict[tuple[str, str], Mapping[str, Any]] = {}
+    visible_results: dict[str, Mapping[str, Any]] = {}
     for result in public_results:
         request_id = result.get("request_id")
         claims = result.get("claim_ledger")
@@ -1051,6 +1071,7 @@ def _model_wire_calculations(
             claim_id = claim.get("claim_id")
             if isinstance(claim_id, str):
                 visible_claims[(request_id, claim_id)] = claim
+                visible_results[request_id] = result
 
     projected: list[dict[str, Any]] = []
     for calculation in calculations:
@@ -1100,14 +1121,31 @@ def _model_wire_calculations(
                 or not isinstance(facts, Mapping)
                 or operand.get("claim_seal") != claim.get("claim_seal")
                 or operand.get("metric_ref") != claim.get("metric_ref")
-                or operand.get("value") != facts.get("metric_value")
-                or operand.get("unit") != claim.get("unit")
                 or operand.get("period") != claim.get("period")
                 or operand.get("scope_entities") != claim.get("scope_entities")
                 or operand.get("scope_fingerprint")
                 != claim.get("scope_fingerprint")
                 or operand.get("projection_fingerprint")
                 != claim.get("projection_fingerprint")
+            ):
+                valid = False
+                break
+            if "field" in operand:
+                if not all(key in operand for key in (
+                    "value", "unit", "field_unit", "group_dimensions", "group_fingerprint",
+                )) or not isinstance(operand.get("group_fingerprint"), str):
+                    valid = False
+                    break
+                try:
+                    fact_calculations.validate_visible_fact(
+                        operand, claim, visible_results[request_id],
+                    )
+                except fact_calculations.FactCalculationError:
+                    valid = False
+                    break
+            elif (
+                operand.get("value") != facts.get("metric_value")
+                or operand.get("unit") != claim.get("unit")
             ):
                 valid = False
                 break
@@ -1248,6 +1286,13 @@ def _model_wire_result(
         if field in result
     }
     _filter_model_wire_evidence(projected)
+    if "analysis_context" in projected:
+        if projected.get("status") != "success":
+            projected.pop("analysis_context", None)
+        elif not analysis_evidence.context_is_valid(projected["analysis_context"], projected):
+            projected.pop("analysis_context", None)
+            projected["claim_ledger"] = []
+            _mark_model_wire_evidence_integrity_failure(projected)
     _fail_closed_period_comparison_model_wire(projected)
     _fail_closed_formal_dso_model_wire(projected)
     _fail_closed_target_gap_model_wire(

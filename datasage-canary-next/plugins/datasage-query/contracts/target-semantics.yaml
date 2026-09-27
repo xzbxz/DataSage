@@ -189,6 +189,21 @@ metrics:
     max_group_dimensions: 2
     time_policy: current_month
     allowed_attribution_modes: [transaction_detail, salesperson_allocation]
+    analysis_fields:
+      row: {}
+      group:
+        completion_rate:
+          label: 完成率
+          stage: group
+          unit: 比例
+          currency: null
+          source_scope: target_actual_complete_groups
+          unknown_policy: retain_unknown
+          operation: value
+    analysis_supported_combinations:
+      - row_fields: []
+        group_fields: [completion_rate]
+        stages: [group]
     answer_note: *answer_note_delivery_target_completion
     paths:
       salesperson_allocation:
@@ -276,6 +291,21 @@ metrics:
     max_group_dimensions: 2
     time_policy: current_month
     allowed_attribution_modes: [transaction_detail, salesperson_allocation]
+    analysis_fields:
+      row: {}
+      group:
+        completion_rate:
+          label: 完成率
+          stage: group
+          unit: 比例
+          currency: null
+          source_scope: target_actual_complete_groups
+          unknown_policy: retain_unknown
+          operation: value
+    analysis_supported_combinations:
+      - row_fields: []
+        group_fields: [completion_rate]
+        stages: [group]
     answer_note: *answer_note_receipt_target_completion
     result_fact_units:
       metric_value: 比例
@@ -715,6 +745,21 @@ metrics:
       原币金额按交易币种分别计量；不得跨币种相加。
     unit_policy: 目标、实际与缺口为原币金额（按交易币种分别计量）；完成率为比例（可为负，可超过1，不做截断）。
     unit: 比例
+    analysis_fields:
+      row: {}
+      group:
+        completion_rate:
+          label: 完成率
+          stage: group
+          unit: 比例
+          currency: null
+          source_scope: target_actual_complete_groups
+          unknown_policy: retain_unknown
+          operation: value
+    analysis_supported_combinations:
+      - row_fields: []
+        group_fields: [completion_rate]
+        stages: [group]
     query_kind: target_completion
     max_group_dimensions: 2
     time_policy: current_month
@@ -1086,6 +1131,21 @@ metrics:
       原币金额按交易币种分别计量；不得跨币种相加。
     unit_policy: 目标、实际与缺口为原币金额（按交易币种分别计量）；完成率为比例（可为负，可超过1，不做截断）。
     unit: 比例
+    analysis_fields:
+      row: {}
+      group:
+        completion_rate:
+          label: 完成率
+          stage: group
+          unit: 比例
+          currency: null
+          source_scope: target_actual_complete_groups
+          unknown_policy: retain_unknown
+          operation: value
+    analysis_supported_combinations:
+      - row_fields: []
+        group_fields: [completion_rate]
+        stages: [group]
     query_kind: target_completion
     max_group_dimensions: 2
     time_policy: current_month

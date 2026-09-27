@@ -9,7 +9,7 @@ import re
 from datetime import datetime
 from typing import Any, Mapping
 
-from . import capability_contract, contract_store, request_contract
+from . import analysis_contract, capability_contract, contract_store, request_contract
 from .capability_contract import (
     CapabilityContractError,
     MATCHED_ELAPSED_COVERAGE,
@@ -39,6 +39,7 @@ _METRIC_REQUEST_FIELDS = _COMMON_REQUEST_FIELDS | {
     "baseline_week",
     "movement_state",
     "metric",
+    "analysis",
     "dimensions",
     "metric_filters",
     "time_bucket",
@@ -156,6 +157,23 @@ def _validate_request(
         validate_request_field_contract(request)
     except CapabilityContractError as exc:
         raise QueryFailure(exc.code, exc.message) from exc
+    if "analysis" in request:
+        try:
+            request["analysis"] = analysis_contract.normalize_analysis(
+                request.get("analysis")
+            )
+        except analysis_contract.AnalysisContractError as exc:
+            path = exc.path
+            if path is not None and request_path is not None:
+                # normalize_analysis paths are rooted at ``analysis`` so the
+                # public error remains attributable to its batch branch.
+                path = f"{request_path}.{path}"
+            raise QueryFailure(
+                exc.code,
+                exc.message,
+                path=path or field_path("analysis"),
+                hint=exc.hint,
+            ) from exc
     if not request_contract.valid_string(
         request.get("metric"), request_contract.METRIC_CODE
     ):

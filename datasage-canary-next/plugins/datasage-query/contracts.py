@@ -14,7 +14,7 @@ from .capability_contract import (
     SNAPSHOT_MONTHS_BEFORE_COMPARISON,
     assert_capability_boundary,
 )
-from . import analytical_handlers, capability_contract, contract_store, public_fields, currency_basis
+from . import analysis_contract, analytical_handlers, capability_contract, contract_store, public_fields, currency_basis
 from .query_errors import QueryFailure
 from .scorecard import performance_scorecard_manifest
 
@@ -782,6 +782,12 @@ def _pending_capability_projection(
     )
     if answer_boundary_summary:
         result["answer_boundary_summary"] = answer_boundary_summary
+    analysis_capability = analysis_contract.analysis_capability_projection(
+        definition.get("analysis_fields"),
+        definition.get("analysis_supported_combinations"),
+    )
+    if analysis_capability is not None:
+        result["analysis_fields"] = analysis_capability
     return result
 
 
@@ -1027,6 +1033,12 @@ def _model_semantic_projection(
             "comparison_kinds": comparison_kinds,
             "supports_generic_comparison": bool(comparison_kinds),
         }
+        analysis_capability = analysis_contract.analysis_capability_projection(
+            definition.get("analysis_fields"),
+            definition.get("analysis_supported_combinations"),
+        )
+        if analysis_capability is not None:
+            item["analysis_fields"] = analysis_capability
         try:
             grouping=capability_contract.metric_grouping(definition)
         except capability_contract.CapabilityContractError as exc:
@@ -1345,6 +1357,7 @@ def _catalog_summary(domain: str, planner: Mapping[str, Any]) -> dict[str, Any]:
                 "grouping",
                 "delivery_scope_policy",
                 "scope_flags",
+                "analysis_fields",
             )
             if raw.get(key) is not None
         }
@@ -1422,6 +1435,7 @@ def _catalog_expert_index(domain: str, planner: Mapping[str, Any]) -> dict[str, 
                 "target_gap_decomposition",
                 "delivery_scope_policy",
                 "scope_flags",
+                "analysis_fields",
             )
             if raw.get(key) is not None
         }

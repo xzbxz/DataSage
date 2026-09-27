@@ -398,6 +398,38 @@ metrics:
     time_policy: current_snapshot
     required_filters: {bill_status: {op: ne, value: A}, detail_unsettled_amount: {op: gt, value: 0}}
     allowed_dimensions: *occurrence_dimensions
+    analysis_fields:
+      row:
+        overdue_days:
+          label: 逾期天数
+          stage: row
+          unit: 自然日
+          currency: null
+          source_scope: current_open_receivable_detail
+          unknown_policy: retain_unknown
+          operation: filter_before_group
+      group:
+        metric_value:
+          label: 未结应收客户总额
+          stage: group
+          unit: 人民币元
+          currency: RMB
+          source_scope: customer_open_receivable_total
+          unknown_policy: retain_unknown
+          operation: value
+        any_overdue_days:
+          label: 存在逾期满足条件的未结项
+          stage: group
+          unit: 自然日
+          currency: null
+          source_scope: current_open_receivable_detail
+          unknown_policy: retain_unknown
+          operation: exists
+    analysis_supported_combinations:
+      - row_fields: [overdue_days]
+        group_fields: [metric_value, any_overdue_days]
+        stages: [row, group]
+        source_scope: same_current_open_receivable_snapshot
     answer_note: *answer_note_open_receivable_amount
   open_receivable_amount_original:
     disclosures:
@@ -417,6 +449,38 @@ metrics:
     time_policy: current_snapshot
     required_filters: {bill_status: {op: ne, value: A}, detail_unsettled_amount: {op: gt, value: 0}}
     allowed_dimensions: *occurrence_dimensions
+    analysis_fields:
+      row:
+        overdue_days:
+          label: 逾期天数
+          stage: row
+          unit: 自然日
+          currency: null
+          source_scope: current_open_receivable_detail
+          unknown_policy: retain_unknown
+          operation: exists
+      group:
+        metric_value:
+          label: 未结应收客户总额
+          stage: group
+          unit: 原币金额（按币种分别计量）
+          currency: original
+          source_scope: customer_open_receivable_total
+          unknown_policy: retain_unknown
+          operation: value
+        any_overdue_days:
+          label: 存在逾期满足条件的未结项
+          stage: group
+          unit: 自然日
+          currency: null
+          source_scope: current_open_receivable_detail
+          unknown_policy: retain_unknown
+          operation: exists
+    analysis_supported_combinations:
+      - row_fields: [overdue_days]
+        group_fields: [metric_value, any_overdue_days]
+        stages: [row, group]
+        source_scope: same_current_open_receivable_snapshot
     answer_note: *answer_note_open_receivable_amount_original
   open_receivable_bill_count:
     disclosures: []
@@ -485,6 +549,38 @@ metrics:
     time_policy: latest_snapshot
     required_filters: {}
     allowed_dimensions: *snapshot_dimensions
+    analysis_fields:
+      row:
+        overdue_days:
+          label: 逾期天数
+          stage: row
+          unit: 自然日
+          currency: null
+          source_scope: current_open_receivable_observation
+          unknown_policy: retain_unknown
+          operation: exists
+      group:
+        metric_value:
+          label: 客户净欠款
+          stage: group
+          unit: 人民币元
+          currency: RMB
+          source_scope: latest_monthly_customer_debt_snapshot
+          unknown_policy: retain_unknown
+          operation: value
+        any_overdue_days:
+          label: 存在逾期满足条件的未结项
+          stage: group
+          unit: 自然日
+          currency: null
+          source_scope: current_open_receivable_observation
+          unknown_policy: retain_unknown
+          operation: exists
+    analysis_supported_combinations:
+      - row_fields: [overdue_days]
+        group_fields: [metric_value, any_overdue_days]
+        stages: [row, group]
+        source_scope: monthly_debt_parent_current_open_observation
     answer_note: *answer_note_current_debt_amount
   current_debt_amount_original:
     disclosures:

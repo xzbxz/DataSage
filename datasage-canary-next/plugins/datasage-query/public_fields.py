@@ -268,5 +268,19 @@ PUBLIC_FACT_FIELDS.update({'scope_high_missing_price_rows','scope_high_missing_r
 
 PUBLIC_FACT_FIELDS.update({'high_net_quantity','high_known_net_quantity','high_gross_quantity','high_known_gross_quantity','high_missing_quantity_rows','unit_high_net_quantity','unit_high_known_net_quantity','unit_high_known_gross_quantity','unit_high_missing_quantity_rows'})
 
+PUBLIC_FACT_FIELDS.update({
+    "analysis_population_count", "analysis_match_count", "analysis_unknown_count",
+    "analysis_excluded_count", "analysis_scope_row_count", "analysis_match_rows",
+    "analysis_unknown_rows", "analysis_excluded_rows", "analysis_amount_unknown_count",
+    "analysis_overdue_unknown_count", "analysis_overdue_known_count",
+    "analysis_gross_rolls", "analysis_known_gross_rolls", "analysis_net_rolls",
+    "analysis_unattributed_return_rolls", "analysis_gross_quantity",
+    "analysis_known_gross_quantity", "analysis_net_quantity",
+    "analysis_missing_quantity_rows", "analysis_missing_roll_rows",
+    "analysis_return_rows",
+    "observed_row_match_count", "observed_any_match_count", "open_row_count",
+    "debt_row_count", "debt_unknown_count",
+})
+
 # Published read-only: this is a shared review boundary, not per-call state.
 PUBLIC_FACT_FIELDS = frozenset(PUBLIC_FACT_FIELDS)

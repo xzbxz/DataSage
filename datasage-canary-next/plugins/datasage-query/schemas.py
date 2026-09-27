@@ -17,7 +17,7 @@ from .capability_contract import (
     YEAR_OVER_YEAR_COMPARISON,
     query_request_schema_conditions,
 )
-from . import capability_contract, request_contract
+from . import analysis_contract, capability_contract, request_contract
 
 DOMAINS = list(SUPPORTED_DOMAINS)
 
@@ -41,6 +41,72 @@ _TARGET_GAP_METRICS = [
     "delivery_target_completion",
     "receipt_target_completion",
 ]
+
+# ``analysis`` values intentionally have a narrower contract than ordinary
+# metric_filters: only finite decimal numbers or bounded decimal strings are
+# accepted.  Runtime validation additionally rejects non-finite Python float
+# values because JSON Schema has no portable NaN/Infinity vocabulary.
+_ANALYSIS_VALUE = {
+    "oneOf": [
+        {"type": "number"},
+        {
+            "type": "string",
+            "maxLength": analysis_contract.ANALYSIS_DECIMAL_MAX_LENGTH,
+            "pattern": r"^[+-]?(?:(?:\d{1,26}(?:\.\d{0,12})?)|(?:\.\d{1,12}))$",
+        },
+    ],
+}
+_ANALYSIS_FILTER = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "field": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": analysis_contract.ANALYSIS_FIELD_MAX_LENGTH,
+            "pattern": r"^[A-Za-z_][A-Za-z0-9_]{0,79}$",
+        },
+        "op": {"type": "string", "enum": list(analysis_contract.ANALYSIS_OPERATORS)},
+        "value": _ANALYSIS_VALUE,
+    },
+    "required": ["field", "op", "value"],
+}
+ANALYSIS = {
+    "type": "object",
+    "additionalProperties": False,
+    "minProperties": 1,
+    "properties": {
+        "row_filters": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": analysis_contract.ANALYSIS_MAX_ROW_FILTERS,
+            "items": _ANALYSIS_FILTER,
+        },
+        "group_filters": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": analysis_contract.ANALYSIS_MAX_GROUP_FILTERS,
+            "items": _ANALYSIS_FILTER,
+        },
+    },
+    "anyOf": [
+        {
+            "required": ["row_filters"],
+            "properties": {"row_filters": {"minItems": 1}},
+        },
+        {
+            "required": ["group_filters"],
+            "properties": {"group_filters": {"minItems": 1}},
+        },
+    ],
+    "description": (
+        "Optional finite analysis filters. Each stage accepts zero to six conditions, while the "
+        "analysis object as a whole needs at least one condition. row_filters are applied to registered source rows; "
+        "group_filters are applied after complete governed grouping and before ordering/limit. "
+        "Conditions combine with AND. Unknown facts remain visible with evidence; the caller "
+        "cannot opt into treating unknown as false. Fields and units come from the selected metric catalog."
+    ),
+}
 
 REQUEST = {
     "type": "object",
@@ -85,6 +151,7 @@ REQUEST = {
                 "Required registered metric code. Availability, qualifiers and supported operations are validated against the current metric contract. Delivery amount, quantity and count have a default net basis; registered gross metrics require a compatible delivery_scope. This field accepts no physical dataset or SQL formula."
             ),
         },
+        "analysis": ANALYSIS,
         "currency_basis": {
             "type": "string",
             "enum": ["auto", "rmb", "original"],
@@ -472,6 +539,14 @@ CALCULATION = {
         "right_request_id": {
             **request_contract.REQUEST_ID.schema(),
         },
+        "left_field": {
+            **request_contract.DIMENSION_CODE.schema(),
+            "description": "Optional registered public fact alias; defaults to metric_value.",
+        },
+        "right_field": {
+            **request_contract.DIMENSION_CODE.schema(),
+            "description": "Optional registered public fact alias; defaults to metric_value.",
+        },
     },
     "required": [
         "calculation_id",
@@ -484,7 +559,7 @@ CALCULATION = {
 DATASAGE_QUERY = {
     "name": "datasage_query",
     "description": (
-        "Execute one to ten read-only registered metric requests. Runtime validates metric availability, capabilities, filters, periods and entity identities before database access. The input accepts no SQL, physical tables, columns, joins or free-form formulas. Query execution revalidates entity identities; absent, ambiguous or role-incompatible bindings fail closed. Returned values, applied scope, typed states, Top-N metadata, limitations, reconciliation and governed calculations are evidence for analysis. answer_scope_line and disclosures describe the actual returned scopes and material limitations; disclosures are validated and deduplicated internally. An unavailable operation does not invalidate independent successful evidence or the surrounding conversation."
+        "Execute one to ten read-only registered metric requests. Runtime validates metric availability, capabilities, filters, periods, finite analysis predicates and entity identities before database access. The input accepts no SQL, physical tables, columns, joins or free-form formulas. Query execution revalidates entity identities; absent, ambiguous or role-incompatible bindings fail closed. Returned values, applied scope, typed states, Top-N metadata, limitations, reconciliation and governed calculations are evidence for analysis. answer_scope_line and disclosures describe the actual returned scopes and material limitations; disclosures are validated and deduplicated internally. An unavailable operation does not invalidate independent successful evidence or the surrounding conversation."
         + _REPLY_LANGUAGE_GUIDANCE
     ),
     "parameters": {
@@ -511,8 +586,9 @@ DATASAGE_QUERY = {
                 "items": CALCULATION,
                 "description": (
                     "Optional governed difference, ratio, or share operations. Each operand must reference a "
-                    "successful scalar request_id from this batch. Results are derived observations, never "
-                    "registered KPIs, structural contributions, or causal evidence."
+                    "successful scalar request_id from this batch. left_field and right_field may select only "
+                    "registered public fact aliases and default to metric_value. Results are derived observations, "
+                    "never registered KPIs, structural contributions, or causal evidence."
                 ),
             },
         },

@@ -231,6 +231,57 @@ cannot repair an earlier unsupported assertion.
 - For a partial batch, retain successful evidence and name every requested
   result that did not complete.
 
+## Analysis conditions and inherited scope
+
+An `analysis` condition is part of the returned scope, not a display-only
+filter. Disclose the registered field, operator and value, its row/group stage,
+actual period or snapshot, metric, entity/cohort or mother set, population,
+unit, currency, ledger, completeness, and truncation. Row conditions narrow
+source facts; group conditions run after complete grouping and before sorting or
+limiting. Preserve matching, unknown and excluded counts (or equivalent
+auditable evidence), and retain unknown groups. A rejected condition is an
+interface limitation; missing values are data limitations; neither is false.
+
+Follow-ups inherit the same resolved metric, entity, cohort, absolute period,
+unit, currency, population, ledger and typed status unless the current speaker
+explicitly changes one axis. A new read has a new observation time. Do not
+silently replace a current pool with a month-start cohort, a flow with a
+snapshot, a transaction ledger with an allocation ledger, or historical
+transaction price with a current promotion price. In group chat, inherit
+language and transient scope only from the authenticated current speaker.
+
+The inventory high-discount KPI remains strictly `>75%` and deducts all
+qualified returns under its existing contract. A new `price_to_ddp_ratio <=
+0.5` slice uses its own registered historical transaction-price row facts and
+does not reverse-filter the old net result. If a qualified return cannot be
+attributed, its price-slice net amount is unknown; never default to gross or to
+gross minus all returns. A complete no-return scope may calculate a net value
+only when the contract says so.
+
+For the confirmed receivable qualification, report registered
+`current_debt_amount` customer net debt from its latest monthly snapshot in RMB
+10,000–50,000 inclusive together with existence of a current open item with
+`overdue_days >30`, applying the item test before the customer-group test. Do
+not derive the balance by summing `open_receivable_amount`, or substitute an
+overdue-only subtotal or per-bill amount. Require authoritative same-business-
+as-of evidence before claiming that the two conditions jointly pass or fail.
+If the monthly snapshot and current item observation are not demonstrably
+aligned, report their dates and keep joint membership unknown, even when the
+current overdue test is false; a known amount outside the range may exclude.
+Missing credit, amount or coverage is unknown, not no overdue. For target groups,
+`completion_rate <0.8` excludes
+exactly 0.8 after full grouping; unknown target, actual or coverage remains an
+unknown group and never becomes zero.
+
+Classify local limits as data missing (数据缺失), interface unsupported (接口不支持),
+business meaning unresolved (口径未定), or channel limitation (渠道限制).
+Preserve valid independent facts and state
+which branch stopped. A finite user threshold does not require a new KPI or
+owner approval; focused confirmation is for a genuinely unresolved meaning
+that could change the conclusion. Registered calculations may use only sealed
+compatible public facts and cannot create arbitrary cross-unit, cross-currency,
+cross-population or causal relationships.
+
 ## Minimal content by answer type
 
 The four request kinds share one evidence base and differ only in what the answer must

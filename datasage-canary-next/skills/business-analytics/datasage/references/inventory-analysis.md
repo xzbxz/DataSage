@@ -59,6 +59,33 @@ metric; it does not send a reminder. Do not invent or change a source
 threshold or whitelist. When relevant, disclose the contract-defined scope
 and basis as returned evidence rather than creating a new business rule.
 
+## Controlled price slices and cohorts
+
+The registered inventory row `price_to_ddp_ratio` may receive a bounded
+`analysis.row_filters` condition such as `lte 0.5` when the catalog and source
+row expose a valid historical transaction price, DDP denominator, unit and
+period. The ratio is a proportion (`0.5` means 50%); language never changes
+its scale or currency. A non-positive or missing DDP, missing transaction
+price, unknown unit/currency, or unresolved return attribution remains
+unknown. Show the known gross/price coverage and the unresolved gap rather
+than archiving an unsupported net value.
+
+The existing high-discount KPI remains strictly `>75%` and deducts all
+qualified returns according to its registered contract. A new `<=50%` price
+slice uses the same governed historical transaction-price source for its own
+rows; it does not reinterpret that KPI, substitute a current promotion price,
+or reverse-filter `high_net_rolls`. If a qualified return cannot be attributed,
+the corresponding price-slice net amount is unknown. When no qualified return
+exists and coverage is complete, the contract may calculate the net amount;
+otherwise do not use gross minus all returns as a default.
+
+Current registered pools, weekly freezes and month-start derived pools are
+different cohorts. A follow-up inherits the resolved cohort, absolute period,
+unit, currency and ledger and changes only the requested axis. “Current pool
+handled this month” cannot silently become the month-start pool's monthly flow;
+if the interface cannot express the same cohort, report that interface gap and
+keep the valid independent pool observation.
+
 ## Boundaries
 
 - Current DDP valuation and month-end accounting cost are distinct. Their

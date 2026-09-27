@@ -73,6 +73,23 @@ Complete target-gap decomposition remains registered for the RMB transaction
 ledger metrics. Use explicit RMB for that operation; an original-currency
 observation does not authorize an unregistered decomposition.
 
+## Completion-rate group filters
+
+The registered target group fact `completion_rate` may receive a bounded
+`analysis.group_filters` comparison after complete department grouping and
+evidence construction, before sorting or limiting. For the first batch,
+`lt 0.8` means below 80%; exactly `0.8` is excluded. Keep groups whose target,
+actual, period or coverage is unknown as typed unknown groups with matching,
+unknown and excluded counts; never treat missing completion as 0 or silently
+drop the group and claim that all departments were assessed. The filter does
+not change the target/actual population, period, unit, currency or ledger.
+
+Analysis conditions and any registered calculation remain part of the returned
+scope. Report the actual target month, observation time, department mapping,
+ledger, target/actual/gap fields, completeness and truncation beside the
+filtered result. A new period, cohort, unit, currency or allocation mode is a
+new request axis and must be explicit.
+
 ## Boundaries
 
 - Completion, gap, ranking, or a same-metric customer breakdown describes the
