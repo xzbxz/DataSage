@@ -25,8 +25,8 @@
           "lines": 49
         },
         "references/inventory-analysis.md": {
-          "characters": 9093,
-          "bytes": 9097,
+          "characters": 9111,
+          "bytes": 9115,
           "lines": 162
         },
         "references/pattern-matching-analysis.md": {
@@ -66,8 +66,8 @@
         }
       },
       "file_count": 12,
-      "total_bytes": 119845,
-      "total_characters": 119655
+      "total_bytes": 119863,
+      "total_characters": 119673
     },
     "tool_surface": {
       "provided_tool_names": [
