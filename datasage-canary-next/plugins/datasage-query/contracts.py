@@ -785,6 +785,7 @@ def _pending_capability_projection(
     analysis_capability = analysis_contract.analysis_capability_projection(
         definition.get("analysis_fields"),
         definition.get("analysis_supported_combinations"),
+        metric_code=str(metric_code),
     )
     if analysis_capability is not None:
         result["analysis_fields"] = analysis_capability
@@ -1036,6 +1037,7 @@ def _model_semantic_projection(
         analysis_capability = analysis_contract.analysis_capability_projection(
             definition.get("analysis_fields"),
             definition.get("analysis_supported_combinations"),
+            metric_code=code,
         )
         if analysis_capability is not None:
             item["analysis_fields"] = analysis_capability

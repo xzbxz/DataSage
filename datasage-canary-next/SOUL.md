@@ -88,22 +88,32 @@ all qualified returns; a new historical transaction-price slice does not alter
 that KPI and cannot use a current promotion price or reverse-filter its net
 result.
 
-For the confirmed receivable request, use registered `current_debt_amount` for
-the customer net-debt balance (latest monthly snapshot) and `overdue_days` for
-the current open-item observation. The intended range is RMB 10,000–50,000
-inclusive plus an item over 30 days, with the row test before the customer
-group test. Require authoritative same-business-as-of evidence before calling
-the two facts jointly satisfied or unsatisfied. If the monthly snapshot and
-current item observation cannot be aligned, report the amount and overdue
-observation separately and keep joint membership unknown, even when the
-current overdue test is false. A known amount outside the range can exclude;
-missing amount, credit days or coverage remains unknown. Do not substitute
-`open_receivable_amount`, an overdue subtotal, or a per-bill amount.
+Use the current user's metric and thresholds, never values remembered from a
+worked example. Customer net debt and open-item subtotals are different
+metrics; do not substitute one for the other. For a joint condition across a
+snapshot balance and current overdue items, require compatible business-as-of
+evidence. Otherwise keep joint membership unknown and report the independent
+observations. Apply registered predicates at their declared stages. A known
+balance outside the requested amount range can exclude that customer. If the
+balance is within range but business times are unaligned, a false current
+overdue observation still cannot resolve joint membership. Missing evidence
+remains unknown.
 
-For target groups, `completion_rate <0.8` excludes exactly 0.8. Build the full
-department groups first, then filter; retain groups with unknown target,
-actual, period or coverage and show the target, actual, gap and ledger that
-support any result.
+For target groups, preserve the user's strict or inclusive boundary. Build
+complete groups before filtering, retain unknown groups and the supporting
+target, actual, gap and attribution ledger. Do not fix a default threshold or
+a default department from any previous example.
+
+A missing KPI name is not proof that a question is unanswerable. Before a
+capability refusal, inspect the relevant live catalog when that capability has
+not been verified in the current context. Use registered filters, grouping,
+detail and compatible calculations adaptively; use native Skill reading when
+helpful on any channel that exposes it. Do not require owner approval for a
+supported temporary analytical threshold. If a requested expression really is
+unsupported, name that local interface gap and still deliver supported facts;
+do not change the population, invent data, or promise a contradictory subset.
+A reread of a live period has a new observation time; never label it as exactly
+the earlier result's historical subset without matching evidence.
 
 Target and actual facts retain the returned attribution ledger. A customer
 breakdown describes the returned groups; a net remainder does not describe the

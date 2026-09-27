@@ -3266,6 +3266,13 @@ def _frozen_pool_net_outbound_query(request, metric, datasets_contract, semantic
     if by_sales:
         total_fields+=','+roll_total_fields('sr','sales_')+',sr.high_missing_price_rows AS sales_high_missing_price_rows,sr.high_missing_roll_rows AS sales_high_missing_roll_rows,sr.gross_missing_roll_rows+sr.return_missing_roll_rows AS sales_missing_roll_rows,(SELECT COUNT(*) FROM sales_roll_totals) AS population_sales_groups'
         label_join+=' LEFT JOIN sales_roll_totals sr ON sr.sales_id <=> g.sales_id'
+    # Keep the unsliced KPI projection byte-for-byte equivalent. A selected
+    # price population owns its completeness; excluded rows are not missing
+    # selected facts and the legacy high-price KPI is not its quality gate.
+    selected_complete = f"{high_complete} AND {complete_rolls} AND {complete}"
+    selected_missing_count = "COALESCE(g.gross_missing_quantity_rows+g.return_missing_quantity_rows,0)+outbound_unknown_rows+returns_unknown_rows"
+    selected_known_count = "COALESCE(g.gross_flow_rows+g.return_flow_rows,0)"
+    group_projection = "g.*"
     analysis_select = ""
     analysis_empty_complete = "FALSE"
     selected_metric_value = net
@@ -3289,6 +3296,26 @@ def _frozen_pool_net_outbound_query(request, metric, datasets_contract, semantic
             f"outbound_unknown_rows=0 AND "
             f"g.analysis_unknown_rows=0 AND g.analysis_missing_quantity_rows=0 AND "
             f"{cohort_ok}"
+        )
+        selected_complete = (
+            f"({analysis_empty_complete}) OR ({analysis_roll_complete} AND "
+            f"{analysis_quantity_complete} AND returns_unknown_rows=0 AND g.analysis_return_rows=0)"
+        )
+        selected_missing_count = (
+            "COALESCE(g.analysis_missing_quantity_rows,0)+COALESCE(g.analysis_unknown_rows,0)"
+            "+outbound_unknown_rows+returns_unknown_rows+COALESCE(g.analysis_return_rows,0)"
+        )
+        selected_known_count = "COALESCE(g.analysis_match_rows,0)"
+        # g.* would publish raw aggregate analysis_gross_* before the guarded
+        # aliases below. Dict cursors keep the first unqualified name, leaking
+        # a known subtotal as a complete fact when price/measure data is unknown.
+        group_columns = grouping + [
+            "goods_name", "goods_name_variant_count", "goods_name_missing_rows",
+            "baseline_scope_groups", "grouped_key_count", "matched_product_groups",
+        ] + sums
+        group_projection = ','.join(
+            'g.' + name + ' AS ' + name for name in group_columns
+            if name not in {'analysis_gross_rolls', 'analysis_gross_quantity'}
         )
         analysis_net = (
             f"CASE WHEN {analysis_roll_complete} AND returns_unknown_rows=0 AND g.analysis_return_rows=0 "
@@ -3349,7 +3376,7 @@ def _frozen_pool_net_outbound_query(request, metric, datasets_contract, semantic
         )
     else:
         flow_order_sql = ' ORDER BY ' + ','.join('g.' + k for k in grouping)
-    sql = 'WITH '+',\n'.join(ctes)+f" SELECT {total_fields},CASE WHEN {high_complete} AND {complete_rolls} AND {complete} THEN 'complete' ELSE 'incomplete' END AS metric_data_state,CASE WHEN {high_complete} THEN g.high_known_gross_rolls-g.return_known_rolls ELSE NULL END AS high_net_rolls,g.high_known_gross_rolls-g.return_known_rolls AS high_known_net_rolls,CASE WHEN {high_gross_complete} THEN g.high_known_gross_rolls ELSE NULL END AS high_gross_rolls,g.*{label_fields},m.*,clock.*,ot.*,rt.*,population.*,{unit_fields},(SELECT COUNT(*) FROM keys_b kb WHERE kb.unit=g.unit) AS unit_baseline_scope_groups,(SELECT COUNT(*) FROM grouped gg WHERE gg.unit=g.unit) AS unit_display_groups{reference_fields},{selected_metric_value} AS metric_value,{selected_known_subset} AS known_subset_value,{selected_net_rolls} AS net_rolls,{selected_known_net_rolls} AS known_net_rolls,{selected_gross_quantity} AS gross_quantity,{selected_return_quantity} AS return_quantity,{selected_gross_rolls} AS gross_rolls,{selected_return_rolls} AS return_rolls,CASE WHEN {unit_complete} THEN u.gross_known_quantity-u.return_known_quantity ELSE NULL END AS unit_net_quantity,u.gross_known_quantity-u.return_known_quantity AS unit_known_net_quantity,{selected_net_flow_state} AS net_flow_state{analysis_select},COALESCE(g.grouped_key_count,0) AS __matched_row_count,COALESCE(g.gross_missing_quantity_rows+g.return_missing_quantity_rows,0)+outbound_unknown_rows+returns_unknown_rows AS missing_value_count,COALESCE(g.gross_flow_rows+g.return_flow_rows,0) AS known_value_count FROM meta m CROSS JOIN clock CROSS JOIN outbound_totals ot CROSS JOIN returns_totals rt CROSS JOIN population CROSS JOIN scope_roll_totals st LEFT JOIN {group_relation} g ON TRUE LEFT JOIN unit_totals u ON u.unit=g.unit"+label_join+analysis_display_where+flow_order_sql+' LIMIT %s'
+    sql = 'WITH '+',\n'.join(ctes)+f" SELECT {total_fields},CASE WHEN {selected_complete} THEN 'complete' ELSE 'incomplete' END AS metric_data_state,CASE WHEN {high_complete} THEN g.high_known_gross_rolls-g.return_known_rolls ELSE NULL END AS high_net_rolls,g.high_known_gross_rolls-g.return_known_rolls AS high_known_net_rolls,CASE WHEN {high_gross_complete} THEN g.high_known_gross_rolls ELSE NULL END AS high_gross_rolls,{group_projection}{label_fields},m.*,clock.*,ot.*,rt.*,population.*,{unit_fields},(SELECT COUNT(*) FROM keys_b kb WHERE kb.unit=g.unit) AS unit_baseline_scope_groups,(SELECT COUNT(*) FROM grouped gg WHERE gg.unit=g.unit) AS unit_display_groups{reference_fields},{selected_metric_value} AS metric_value,{selected_known_subset} AS known_subset_value,{selected_net_rolls} AS net_rolls,{selected_known_net_rolls} AS known_net_rolls,{selected_gross_quantity} AS gross_quantity,{selected_return_quantity} AS return_quantity,{selected_gross_rolls} AS gross_rolls,{selected_return_rolls} AS return_rolls,CASE WHEN {unit_complete} THEN u.gross_known_quantity-u.return_known_quantity ELSE NULL END AS unit_net_quantity,u.gross_known_quantity-u.return_known_quantity AS unit_known_net_quantity,{selected_net_flow_state} AS net_flow_state{analysis_select},COALESCE(g.grouped_key_count,0) AS __matched_row_count,{selected_missing_count} AS missing_value_count,{selected_known_count} AS known_value_count FROM meta m CROSS JOIN clock CROSS JOIN outbound_totals ot CROSS JOIN returns_totals rt CROSS JOIN population CROSS JOIN scope_roll_totals st LEFT JOIN {group_relation} g ON TRUE LEFT JOIN unit_totals u ON u.unit=g.unit"+label_join+analysis_display_where+flow_order_sql+' LIMIT %s'
     params.append(limit+1)
     outputs = grouping + (['goods_name'] if 'goods_id' in grouping else []) + (['sales_name'] if by_sales else [])
     if window is not None:

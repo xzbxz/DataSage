@@ -698,9 +698,20 @@ def validate_analysis_for_metric(
     return validated
 
 
+def required_analysis_currency_basis(metric_code: str | None) -> str | None:
+    """Shared discovery/execution restriction, not a currency conversion rule."""
+    if metric_code in {
+        "open_receivable_amount", "open_receivable_amount_original",
+        "current_debt_amount", "current_debt_amount_original",
+    }:
+        return "rmb"
+    return None
+
+
 def analysis_capability_projection(
     raw: Any,
     supported_combinations: Any = None,
+    *, metric_code: str | None = None,
 ) -> dict[str, Any] | None:
     """Publish registry facts plus fixed execution semantics in catalog/wire."""
 
@@ -730,6 +741,16 @@ def analysis_capability_projection(
     )
     if combinations:
         result["supported_combinations"] = combinations
+    basis = required_analysis_currency_basis(metric_code)
+    if basis is not None:
+        original = bool(metric_code and metric_code.endswith("_original"))
+        result["execution_requirements"] = {
+            "currency_basis": basis,
+            "exact_metric_analysis_supported": not original,
+            "effective_metric": metric_code.removesuffix("_original") if original else metric_code,
+            "original_currency_analysis": False,
+            "note": "Current receivable analysis requires the governed RMB metric; do not silently convert an explicit original-currency question. Normal unsliced original-currency metrics remain available.",
+        }
     return result
 
 

@@ -26,8 +26,7 @@ metadata:
 
 # DataSage Skill
 
-Use the smallest sufficient governed evidence and choose the route adaptively;
-this Skill is not a mandatory call sequence.
+Choose the smallest sufficient governed evidence; no mandatory call sequence.
 
 ## When to Use
 
@@ -42,18 +41,14 @@ this Skill is not a mandatory call sequence.
 
 ## Governed analysis
 
-An optional metric `analysis` object carries finite comparisons. `row_filters`
-apply to registered row facts; `group_filters` apply after a complete group is
-built and before sorting or limiting. Each list has at most 6 items and the
-object at most 8. Operators are only `eq`, `gt`, `gte`, `lt`, and `lte`; values
-are JSON numbers or bounded decimal strings, never booleans, NaN/Inf, SQL,
-columns, functions, unknown fields, or overlong text. The catalog registers
-the field, stage, unit, currency, period and population. First fields are
-inventory row `price_to_ddp_ratio`, receivable row `overdue_days`, receivable
-customer groups `metric_value` and `any_overdue_days`, and target group
-`completion_rate`. Unsupported combinations are interface limits, not data
-absence; if source semantics cannot support one, report it before substituting
-its field or population.
+Optional `analysis.row_filters` select registered row facts; `group_filters`
+select complete groups before ranking/limits. Each stage allows 6 predicates,
+8 total, using only eq/gt/gte/lt/lte and finite numeric values. The live catalog
+owns fields, stages, units, currencies, periods, populations and combinations;
+SQL, arbitrary fields/functions and nonnumeric values are not accepted.
+Registered examples include inventory `price_to_ddp_ratio`, receivable
+`overdue_days`/`metric_value`/`any_overdue_days`, and target `completion_rate`.
+Unsupported combinations are interface limits, not proof of missing data.
 
 Analysis is bound to metric, entity/cohort, absolute period or snapshot, unit,
 currency, population, ledger, completeness and typed states. Follow-ups inherit
@@ -74,8 +69,7 @@ of that net result and never uses a current promotion price.
 Conversation history, not persistent memory, carries transient analysis. Do not
 save query or empty results, temporary or candidate entity mappings, single-turn
 scope or operating status. Propose memory only for a stable cross-session
-preference or user-confirmed durable fact; user correction wins. No arbitrary
-formula or new session store is introduced.
+preference or user-confirmed durable fact; user correction wins. No arbitrary formula or separate session store.
 
 ## Currency basis
 
@@ -85,18 +79,23 @@ combined currencies. Omission keeps the exact metric; never invent FX.
 
 ## Reply language
 
-Follow SOUL's current-user language rule for prose, tables, clarifications and
-errors. Translate Chinese tool explanations faithfully; preserve facts, units,
-currency, scope and exact entity tokens. Language does not select currency.
+Use the current user's language per SOUL. Translate explanations, not facts,
+units, currency, scope or entity tokens; language never selects currency.
 
 ## How to Run
 
 On restricted WeCom, references are never a query prerequisite. On a
-skill-enabled CLI or maintenance surface, optionally use
-`skill_view(name="datasage", file_path="references/<file>.md")` for a relevant
-ref; if unavailable,
-continue with SOUL, public schemas and returned evidence. Never use arbitrary
-file or code execution to bypass the available Skill tools.
+skill-enabled CLI or maintenance surface **and on WeCom with native reading**,
+read relevant methods when useful. Example for the declared host:
+`skill_view(name="datasage", file_path="references/<file>.md")`.
+Use the live tool schema if parameters differ. Without reading, continue with
+SOUL, public schemas and evidence; never bypass tools with file/code execution.
+
+A threshold or regrouping is not necessarily a new KPI. Before refusing, check
+the exact live metric's analysis, dimensions, details and calculations unless
+already verified in context; compose the smallest sufficient supported result.
+Unknown return attribution does not erase complete gross evidence. No fixed
+call sequence is required; query-rules owns examples, not a second planner.
 
 ## Channel capability
 

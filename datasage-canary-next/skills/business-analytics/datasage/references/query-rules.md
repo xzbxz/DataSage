@@ -182,10 +182,22 @@ does not duplicate its formulas, thresholds, pool filters or return policies.
 An ordinary metric request may include an optional `analysis` object. It is a
 finite contract extension, not an expression language:
 
+Each example below is a fragment for its named metric, not a universal field
+combination. Complete the normal request with the inherited scope and period.
+
+Inventory `registered_slow_monthly_net_outbound`, with `dimensions: ["unit"]`:
 ```json
-{"row_filters":[{"field":"price_to_ddp_ratio","op":"lte","value":"0.5"}],
- "group_filters":[{"field":"metric_value","op":"gte","value":"10000"}]}
+{"analysis":{"row_filters":[{"field":"price_to_ddp_ratio","op":"lte","value":"0.5"}]}}
 ```
+
+RMB `open_receivable_amount`, with `dimensions: ["customer"]`:
+```json
+{"analysis":{"row_filters":[{"field":"overdue_days","op":"gt","value":"45"}],
+ "group_filters":[{"field":"metric_value","op":"gte","value":"12000"}]}}
+```
+The second amount is the grouped selected open-item subtotal, not net debt.
+Numbers are examples only; substitute the user's actual values. Do not combine
+inventory price fields and receivable amount fields in one metric request.
 
 - `row_filters` narrow registered source facts. `group_filters` run after the
   complete group and its evidence are built, before ordering or `limit`.
@@ -203,7 +215,7 @@ finite contract extension, not an expression language:
   `any_overdue_days`, and target groups `completion_rate`. `metric_filters`
   keeps its existing entity exact-value/IN meaning. Formal KPI definitions do
   not change when `analysis` is absent.
-- In the receivable combination, `metric_value` is the registered customer
+- In a customer net-debt combination, `metric_value` is the registered customer
   `current_debt_amount` net-debt fact on its latest monthly snapshot, while
   `overdue_days`/`any_overdue_days` describe current open-item evidence. A
   single read timestamp, SQL transaction or same month label is not business
@@ -366,3 +378,32 @@ and disclosure of typed result states; it is available on demand on
 skill-enabled surfaces. Query failures remain scoped to the
 operation; the answer policy defines how valid independent evidence and
 ordinary conversation continue.
+
+
+## Adaptive capability discovery and partial answers
+
+A permanent KPI definition and a user's temporary analytical condition are
+separate. Discover the exact metric's current capabilities before refusing a
+new condition when they have not already been observed. A recognized metric
+alone is not enough: check the requested field, stage, currency, grouping and
+combination. If a one-call combination is unavailable, separate supported
+observations may still answer part of the question; only combine their numbers
+through compatible registered operations. Do not infer an unqueried tail from
+a limited page or promise an unsupported field in aggregate detail.
+
+For the same-speaker follow-up “其中5折以下”, preserve the selected pool/month,
+department and price baseline. State whether the boundary is inclusive. If DDP
+is inherited, use the historical price/DDP row predicate, not current promotion
+prices. Do not fetch >75% transactions to find <=50% transactions: with positive
+DDP those sets are disjoint. Do not subtract two net KPIs to infer an arbitrary
+lower price band. When the source has no price-band return attribution, return
+complete gross rolls when available and keep the requested sliced net unknown;
+never silently relabel gross as the previous net measure. Unknown prices require
+known-subset and coverage disclosure, not a zero or a complete subtotal.
+
+A live monthly query recomputes its observation cutoff. A new result cannot be
+called an exact subset of an earlier reading solely because the month and
+filters match. Refresh compatible observations or disclose the newer time;
+strict historical-as-of reproduction remains unavailable without such evidence.
+Only a permanent definition change, unresolved decision-relevant semantics, or
+a protected write requires the respective approval—not each new safe threshold.

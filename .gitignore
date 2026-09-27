@@ -448,3 +448,8 @@ datasage-canary-next/docs/workflow-runtime-acceptance.md
 !datasage-canary-next/tests/test_detail_evidence.py
 !datasage-canary-next/tests/test_detail_api_schema.py
 !datasage-canary-next/tests/test_phase2_aggregation_pagination_execution_independent.py
+
+# Owned free-analysis audit additions, never runtime state.
+!datasage-canary-next/tests/test_free_analysis_independent.py
+!datasage-canary-next/tests/fixtures/free_analysis_review_cases.json
+!datasage-canary-next/docs/free-analysis-review-20260927.md

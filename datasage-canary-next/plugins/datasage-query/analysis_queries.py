@@ -273,7 +273,8 @@ def validate_analysis_request(
     if family == "inventory_flow" and group_filters:
         raise AnalysisPlanError("ANALYSIS_UNSUPPORTED_COMBINATION", "库存价格切片暂不支持分组后筛选。", path="analysis.group_filters")
     if family in {"open_receivable", "current_debt"}:
-        if request.get("currency_basis") == "original" or str(request.get("metric", "")).endswith("_original"):
+        required_basis = analysis_contract.required_analysis_currency_basis(str(request.get("metric", "")))
+        if required_basis == "rmb" and (request.get("currency_basis") == "original" or str(request.get("metric", "")).endswith("_original")):
             raise AnalysisPlanError("ANALYSIS_UNSUPPORTED_COMBINATION", "应收联合分析当前只支持人民币口径。", path="analysis")
         if request.get("dimensions") not in (None, ["customer"]):
             raise AnalysisPlanError("ANALYSIS_UNSUPPORTED_COMBINATION", "应收联合分析必须按客户分组。", path="dimensions")

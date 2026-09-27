@@ -4,6 +4,11 @@
   "measured": {
     "skill_context": {
       "files": {
+        "SKILL.md": {
+          "characters": 5925,
+          "bytes": 5959,
+          "lines": 124
+        },
         "references/answer-boundary.md": {
           "characters": 26263,
           "bytes": 26311,
@@ -40,9 +45,9 @@
           "lines": 107
         },
         "references/query-rules.md": {
-          "characters": 21673,
-          "bytes": 21715,
-          "lines": 369
+          "characters": 24148,
+          "bytes": 24206,
+          "lines": 410
         },
         "references/receipt-analysis.md": {
           "characters": 6563,
@@ -58,16 +63,11 @@
           "characters": 8997,
           "bytes": 8997,
           "lines": 164
-        },
-        "SKILL.md": {
-          "characters": 5857,
-          "bytes": 5891,
-          "lines": 125
         }
       },
       "file_count": 12,
-      "total_bytes": 119863,
-      "total_characters": 119673
+      "total_bytes": 122422,
+      "total_characters": 122216
     },
     "tool_surface": {
       "provided_tool_names": [
