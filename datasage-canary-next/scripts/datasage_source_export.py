@@ -122,6 +122,7 @@ _ROOT_FILES = (
     "tests/test_metric_readiness_register.py",
     "tests/test_domain_diagnostic_paths.py",
     "tests/test_answer_presentation.py",
+    "tests/test_multilingual_response.py",
     "tests/test_session_isolation.py",
     "tests/test_prompt_injection_boundary.py",
     "tests/test_execution_budget_isolation.py",
@@ -493,6 +494,7 @@ _TEST_FIXTURES = _paths(
     "tests/fixtures",
     (
         "business_acceptance_cases.json",
+        "multilingual_acceptance_cases.json",
         "business_replay_contract.json",
         "external_verification_register.json",
         "host_compaction_ordering.json",

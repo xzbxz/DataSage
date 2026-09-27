@@ -47,6 +47,12 @@ Auto selects original when supported for a single-currency scope and governed RM
 currencies. Omission keeps the exact metric. Follow live catalog counterparts,
 returned units and limitations; never invent FX. Details are in query-rules.
 
+## Reply language
+
+Follow SOUL's current-user language rule for prose, tables, clarifications and
+errors. Translate Chinese tool explanations faithfully; preserve facts, units,
+currency, scope and exact entity tokens. Language does not select currency.
+
 ## How to Run
 
 On restricted WeCom, references are never a query prerequisite. When the
@@ -77,13 +83,10 @@ instead of describing a deliverable the channel cannot produce. Details:
   interpretation of comparisons, targets, calculations, and typed result states.
 - [`datasage.delivery-analysis/v1`](references/delivery-analysis.md) is optional
   supplemental guidance for L3 delivery, not a fixed planner recipe or WeCom query prerequisite.
-- The following candidate method references are also optional and are loaded
-  only when the question materially uses their domain: [`datasage.receipt-analysis/v1`](references/receipt-analysis.md), [`datasage.target-analysis/v1`](references/target-analysis.md), [`datasage.inventory-analysis/v1`](references/inventory-analysis.md), [`datasage.pattern-matching-analysis/v1`](references/pattern-matching-analysis.md), [`datasage.profit-analysis/v1`](references/profit-analysis.md), [`datasage.receivable-analysis/v1`](references/receivable-analysis.md), and [`datasage.cross-domain-analysis/v1`](references/cross-domain-analysis.md) for intentional multi-domain questions.
-- These candidate references organize contract-backed evidence selection and
-  answer boundaries. They do not add a planner, require a fixed metric set, or
-  replace the live catalog/schema/results. No channel must load one before
-  every query; if a reference is unavailable, proceed with public tool
-  schemas, returned evidence, and the existing SOUL rules.
+- Optional domain methods: [`datasage.receipt-analysis/v1`](references/receipt-analysis.md), [`datasage.target-analysis/v1`](references/target-analysis.md), [`datasage.inventory-analysis/v1`](references/inventory-analysis.md), [`datasage.pattern-matching-analysis/v1`](references/pattern-matching-analysis.md), [`datasage.profit-analysis/v1`](references/profit-analysis.md), [`datasage.receivable-analysis/v1`](references/receivable-analysis.md), and [`datasage.cross-domain-analysis/v1`](references/cross-domain-analysis.md).
+- Read a method only when relevant. References guide evidence selection and
+  answer boundaries; they add no planner or fixed metric set and never replace
+  live contracts. If unavailable, continue with schemas, evidence and SOUL.
 
 ## Tool facts
 
