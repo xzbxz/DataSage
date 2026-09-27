@@ -990,6 +990,56 @@ def build_current_debt_analysis_query(
     return sql, params, scope
 
 
+def detail_collection_sql(
+    sql: str, request: Mapping[str, Any], metric: Mapping[str, Any], scope: Mapping[str, Any]
+) -> str:
+    """Add same-statement totals over the bounded complete group collection.
+
+    The caller rejects a truncated collection. Consequently the inner governed
+    cap cannot be mistaken for a full population. These private window facts
+    independently check Python's full/page arithmetic; they are not new KPIs.
+    """
+    contract = metric.get("detail_contract") or {}
+    identifier = contract.get("id")
+    allowed = {
+        "inventory_product_groups": {"gross_rolls", "net_rolls", "return_rolls"},
+        "receivable_customer_groups": {"metric_value"},
+        "target_department_groups": {"target_amount_rmb", "actual_amount_rmb", "gap_amount_rmb"},
+    }.get(identifier)
+    fields = contract.get("summable_fields")
+    if allowed is None or not isinstance(fields, (list, tuple)) or not fields or any(
+        not isinstance(field, str) or field not in allowed for field in fields
+    ) or len(fields) != len(set(fields)):
+        raise AnalysisPlanError("DETAIL_CONTRACT_INVALID", "聚合明细的可加事实未登记。")
+    present = "COALESCE(d.`__matched_row_count`,0)>0"
+    membership_required = identifier != "inventory_product_groups"
+    matched = present + (" AND d.`analysis_match_state`='match'" if membership_required else "")
+    unknown_member = present + " AND (d.`analysis_match_state` IS NULL OR d.`analysis_match_state`<>'match')" if membership_required else "1=0"
+    selections = [
+        "d.*",
+        f"SUM(CASE WHEN {present} THEN 1 ELSE 0 END) OVER () AS `__detail_group_count`",
+        f"SUM(CASE WHEN {unknown_member} THEN 1 ELSE 0 END) OVER () AS `__detail_member_unknown_count`",
+    ]
+    for field in fields:
+        value = _qualified("d", field)
+        selections.extend([
+            f"SUM(CASE WHEN {matched} AND {value} IS NOT NULL THEN {value} ELSE 0 END) OVER () AS `__detail_known_{field}`",
+            f"SUM(CASE WHEN {present} AND ({value} IS NULL OR ({unknown_member})) THEN 1 ELSE 0 END) OVER () AS `__detail_unknown_{field}`",
+        ])
+    order = request.get("order_by") or {}
+    if not isinstance(order, Mapping):
+        raise AnalysisPlanError("DETAIL_ORDER_INVALID", "聚合明细排序无效。")
+    field = order.get("field", "completion_rate" if identifier == "target_department_groups" else "metric_value")
+    direction = str(order.get("direction", "desc")).upper()
+    dimensions = scope.get("dimension_outputs") or []
+    if field not in {*allowed, "metric_value", "completion_rate", *dimensions} or direction not in {"ASC", "DESC"}:
+        raise AnalysisPlanError("DETAIL_ORDER_INVALID", "聚合明细排序未登记。")
+    value = _qualified("d", field)
+    ordering = [f"({value} IS NULL) ASC", f"{value} {direction}"]
+    ordering.extend(_qualified("d", name) + " ASC" for name in dimensions if name != field)
+    return "SELECT " + ", ".join(selections) + " FROM (" + sql + ") AS d ORDER BY " + ", ".join(ordering)
+
+
 __all__ = [
     "ANALYSIS_PROTOCOL_VERSION",
     "ANALYSIS_DECIMAL_CAST",
@@ -1001,6 +1051,7 @@ __all__ = [
     "MAX_ANALYSIS_FILTERS",
     "MAX_ANALYSIS_FILTERS_PER_STAGE",
     "analysis_scope",
+    "detail_collection_sql",
     "analysis_order_clause",
     "build_open_receivable_analysis_query",
     "build_current_debt_analysis_query",

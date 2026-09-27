@@ -581,6 +581,15 @@ metrics:
         group_fields: [metric_value, any_overdue_days]
         stages: [row, group]
         source_scope: monthly_debt_parent_current_open_observation
+    detail_contract:
+      id: receivable_customer_groups
+      requires_analysis: true
+      required_dimensions: [customer]
+      summable_fields: [metric_value]
+      default_page_size: 25
+      max_page_size: 50
+      max_pages: 20
+      max_collection: 500
     answer_note: *answer_note_current_debt_amount
   current_debt_amount_original:
     disclosures:

@@ -1278,6 +1278,15 @@ metrics:
         group_fields: []
         stages: [row]
         preserves: [baseline_cohort, period, high_price_kpi]
+    detail_contract:
+      id: inventory_product_groups
+      requires_analysis: true
+      required_dimensions: [product, unit]
+      summable_fields: [gross_rolls, net_rolls, return_rolls]
+      default_page_size: 25
+      max_page_size: 50
+      max_pages: 20
+      max_collection: 500
     high_price_policy: &slow_achievement_high_price_policy {kind: slow_achievement, factor: 0.75, operator: gt}
     label: 登记滞销池·周基线净出库与高折战果
     business_definition: 度量现存周冻结池业务键范围内的已记录出退货净流量，分别返回净数量、普通净出库卷数和高折净出库卷数；数量和卷数分别计量，不是两端库存状态之差。母集为现存完整冻结业务键集合，默认统计记录冻结时点至本次读取的已记录物理出库和有效退货；显式指定一个基线周后，也可查询冻结之后的日期区间或月份，未完成期间仅截至读取时点；默认按库存单位汇总，可附加产品、规格、仓库部门及流水销售归属。不代表冻结旧批次实际去化。
@@ -1701,6 +1710,15 @@ metrics:
         group_fields: []
         stages: [row]
         preserves: [monthly_cohort, period, high_price_kpi]
+    detail_contract:
+      id: inventory_product_groups
+      requires_analysis: true
+      required_dimensions: [product, unit]
+      summable_fields: [gross_rolls, net_rolls, return_rolls]
+      default_page_size: 25
+      max_page_size: 50
+      max_pages: 20
+      max_collection: 500
     high_price_policy: *slow_achievement_high_price_policy
     label: 滞销独立月报·普通与高折净出库战果
     business_definition: 度量月初池业务键范围内所选自然月已记录的出退货净流量，分别返回净数量、普通净出库卷数和高折净出库卷数；这不是两端库存状态之差，New不纳入月初池战果。月初母集取上月物理快照，按旧范围四键汇总后数量大于10；当月期末取当前ODS源行门槛，历史期末取目标月物理快照，两端同步排除同次当前库存单位白名单组合。流水按双方实际时间和自身销售归属计算。

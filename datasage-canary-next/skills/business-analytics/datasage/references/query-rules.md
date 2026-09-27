@@ -231,6 +231,57 @@ finite contract extension, not an expression language:
   analysis with `comparison`, `period_summary`, `time_bucket` or a decomposition;
   those combinations remain accurately rejected. Full rank proof is Phase2.
 
+## Registered aggregate detail and pages (Phase2)
+
+Phase2 detail is a registered aggregate projection, never a dataset browser or
+raw-row export. A metric may expose a closed `detail_contract` with an id,
+version (`registered-detail/v1`), grain, required dimensions, public fields,
+allowed analysis fields, additive fields, stable aggregate-group identity,
+default/max page size and collection cap. The request adds only:
+
+```json
+{"detail":{"id":"registered_business_detail","limit":25,
+            "cursor":"opaque-continuation-token"}}
+```
+
+`detail.id` must match the metric, attribution mode, dimensions and validated
+`analysis` of the main request. Detail has no private filters, table/column/SQL
+expression, source row key, invoice/document id or arbitrary field list; it
+inherits the main request's scope and analysis. A changed analysis, period,
+entity, currency basis, ledger, ordering or page size starts at page one.
+
+The effective collection cap is `min(existing_environment_cap, 100)` and the
+detail page is at most 50 rows (also subject to that cap); page count and
+`has_more` are bounded. Fetch `collection_cap + 1` aggregate groups before
+slicing. If the complete registered collection exceeds the cap, return typed
+`DETAIL_SCOPE_TOO_LARGE` and require a narrower governed scope. Never hash or
+reconcile a partial prefix. Group matching/unknown/excluded counts and all
+coverage are formed before ordering and page slicing.
+
+Every detail claim retains the existing request id, metric reference, evidence
+scope, period/snapshot, unit, currency, ledger, claim seal and projection
+fingerprints. The detail envelope discloses contract/id/grain, resolved scope
+and analysis fingerprints, ordering, returned count, `has_more`, coverage,
+reconciliation state and `cursor_consistency`. Rows remain aggregate public
+claims; no raw row or private tie key reaches the model wire or cursor.
+
+The cursor is stateless and opaque. Its canonical payload contains only the
+version, page index, exact page size, stable resolved-scope hash and digest of
+the complete ordered public collection. It is not a permission credential and
+does not use a session table, `state.db`, server cursor cache, source-row key or
+new secret. Every continuation reruns ordinary entity preflight, authorization
+and the complete aggregate read. A changed scope hash or full public-result
+digest returns `CURSOR_STALE` with no page rows; equal values return a
+`revalidated_current_observation`, never an old-snapshot claim. Read timestamps,
+claim seals and latency stay out of the public-result digest.
+
+The summary total and a page are separate evidence. A first page cannot prove
+full membership, absence, a complete tie set, or a full-population sum. Do not
+sum page rows when unknown membership or incomplete coverage remains; reconcile
+only when the full collection receipt proves the same population, units,
+currency and complete states. A page ending inside a tie carries a tie-boundary
+state rather than claiming all ties were returned.
+
 ## Registered secondary facts and calculations
 
 `calculations` may optionally name `left_field` and `right_field`; when omitted,

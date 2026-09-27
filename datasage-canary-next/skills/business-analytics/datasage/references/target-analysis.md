@@ -90,6 +90,25 @@ ledger, target/actual/gap fields, completeness and truncation beside the
 filtered result. A new period, cohort, unit, currency or allocation mode is a
 new request axis and must be explicit.
 
+## Phase2 department aggregate detail and ranking
+
+The first target detail registration is the transaction-detail ledger of
+`delivery_target_completion` grouped by `department`. Each complete department
+aggregate may expose only the registered department value,
+`target_amount_rmb`, `actual_amount_rmb`, `gap_amount_rmb`, `completion_rate`,
+period/source states and coverage. It exposes no target-table id, goods-detail
+id, transaction column or arbitrary row.
+
+Complete grouping and the `<0.8` group filter precede ordering and page slicing;
+exactly 0.8 stays excluded and unknown departments stay visible. Registered
+ranking evidence may carry `query_rank`, `rank_tie_count`,
+`rank_population_count`, `rank_unknown_value_count`, selected field/direction
+and a tie-boundary marker when a page ends inside a tie. A deterministic
+secondary department value may make the query order total, but a page is not a
+complete tie set and a cursor is a revalidated current observation. Keep target,
+actual, gap, period, unit, currency, ledger and reconciliation bound to the
+same complete department population.
+
 ## Boundaries
 
 - Completion, gap, ranking, or a same-metric customer breakdown describes the

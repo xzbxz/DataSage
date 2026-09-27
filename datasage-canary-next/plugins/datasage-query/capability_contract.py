@@ -16,7 +16,7 @@ import math
 import re
 from typing import Any
 
-from . import analysis_contract, analytical_handlers, request_contract
+from . import analysis_contract, analytical_handlers, detail_pages, request_contract
 
 
 DOMAIN_SOURCES: dict[str, dict[str, str]] = {
@@ -917,6 +917,11 @@ def validate_metric_execution_contract(metric: Mapping[str, Any]) -> None:
         )
     except analysis_contract.AnalysisContractError as exc:
         raise CapabilityContractError(exc.code, exc.message) from exc
+    if "detail_contract" in metric:
+        try:
+            detail_pages.validate_detail_contract(metric.get("detail_contract"))
+        except detail_pages.DetailPagesError as exc:
+            raise CapabilityContractError(exc.code, exc.message) from exc
     if "availability" in metric:
         _execution_availability(metric)
     if metric.get("query_kind") != "target_completion":
@@ -962,6 +967,46 @@ def validate_metric_analysis(
             domain=domain,
         )
     except analysis_contract.AnalysisContractError as exc:
+        raise CapabilityContractError(exc.code, exc.message) from exc
+
+
+def metric_detail_contract(
+    metric: Mapping[str, Any],
+    *,
+    request: Mapping[str, Any] | None = None,
+    metric_code: str | None = None,
+) -> dict[str, Any] | None:
+    """Validate and bind one registered detail projection before entity I/O."""
+
+    if not isinstance(metric, Mapping) or metric.get("detail_contract") is None:
+        return None
+    try:
+        contract = detail_pages.validate_detail_contract(
+            metric.get("detail_contract")
+        )
+        if request is None:
+            return contract
+        bound = detail_pages.validate_metric_detail(request, metric)
+        return (bound.get("contract") if isinstance(bound, Mapping) else None) or contract
+    except detail_pages.DetailPagesError as exc:
+        raise CapabilityContractError(exc.code, exc.message) from exc
+
+
+def validate_metric_detail_request(
+    request: Mapping[str, Any],
+    metric: Mapping[str, Any] | None,
+    *,
+    metric_code: str | None = None,
+) -> dict[str, Any]:
+    """Return the normalized request after metric-owned detail binding."""
+
+    try:
+        return detail_pages.validate_metric_detail(
+            request,
+            metric,
+            metric_code=metric_code,
+        )
+    except detail_pages.DetailPagesError as exc:
         raise CapabilityContractError(exc.code, exc.message) from exc
 
 

@@ -26,7 +26,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from .analytical_queries import AnalysisQueryError, build_analytical_metric_query, validate_frozen_pool_rows
 from .query_errors import QueryFailure
-from . import analysis_evidence, currency_basis, fact_calculations
+from . import analysis_evidence, analysis_queries, currency_basis, detail_evidence, detail_pages, entitlements, fact_calculations
 from .query_sql import (
     _INTERNAL_MATCH_COUNT,
     _approved_column,
@@ -1397,7 +1397,7 @@ def _evidence_rows_and_state(
         {
             str(key): value
             for key, value in row.items()
-            if key not in _INTERNAL_RESULT_FIELDS and not str(key).startswith("__distribution_")
+            if key not in _INTERNAL_RESULT_FIELDS and not str(key).startswith(("__distribution_", "__detail_"))
         }
         for row in rows
     ]
@@ -5288,6 +5288,7 @@ def _validate_request_plan_without_entities(
                     exc.message,
                     path=f"{request_path}.analysis" if request_path else "analysis",
                 ) from exc
+        _validate_detail_request(request, semantics)
         _validate_pre_entity_metric_plan(
             request,
             datasets,
@@ -5297,6 +5298,20 @@ def _validate_request_plan_without_entities(
     except QueryFailure as exc:
         raise _at_stage(exc, "input_validation")
     return request, datasets, semantics
+
+
+def _validate_detail_request(request: dict[str, Any], semantics: Mapping[str, Any]) -> dict[str, Any] | None:
+    if "detail" not in request:
+        return None
+    try:
+        binding = capability_contract.validate_metric_detail_request(
+            request, semantics.get("metrics", {}).get(request.get("metric")),
+            metric_code=request.get("metric"),
+        )
+    except capability_contract.CapabilityContractError as exc:
+        raise QueryFailure(exc.code, exc.message, path="detail") from exc
+    request["detail"] = binding["detail"]
+    return binding["contract"]
 
 
 def _validate_query_dispatch(
@@ -5533,6 +5548,7 @@ def _run_one(
             request = _validate_metric_contract(request, semantics)
             request = _validate_metric_filter_value_contracts(request, semantics)
         semantics = currency_basis.with_disclosure(request, semantics)
+        detail_contract = _validate_detail_request(request, semantics)
         current_stage = "query_planning"
         limit = _metric_query_limit(request)
         sql, params, scope = _build_metric_query(
@@ -5544,6 +5560,13 @@ def _run_one(
         )
         if "analysis" in request:
             semantics = analysis_evidence.with_disclosures(request, semantics, scope)
+        if detail_contract is not None:
+            try:
+                sql = analysis_queries.detail_collection_sql(
+                    sql, request, semantics["metrics"][request["metric"]], scope,
+                )
+            except analysis_queries.AnalysisPlanError as exc:
+                raise QueryFailure(exc.code, exc.message) from exc
         private_time_range = scope.get("time_range")
         applied_time_range = _public_time_range(private_time_range)
         current_snapshot_evidence = (
@@ -5582,6 +5605,8 @@ def _run_one(
             [*preflight_source_evidence_refs, business_source_evidence_ref]
         )
         business_sql_confirmed_count += 1
+        if detail_contract is not None and truncated:
+            raise QueryFailure("DETAIL_SCOPE_TOO_LARGE", "聚合结果超过当前完整集合上限，请缩小范围后分页。")
         proof_plan = scope.get("embedded_complete_partition_proof")
         if truncated and isinstance(proof_plan, Mapping):
             try:
@@ -5784,6 +5809,34 @@ def _run_one(
             fact_units=result_fact_units,
             currency_scope=currency_scope,
         )
+        public_detail = None
+        if detail_contract is not None:
+            try:
+                public_detail = detail_evidence.build_detail(
+                    claims=claim_ledger, raw_rows=rows, detail=request["detail"],
+                    contract=detail_contract, collection_cap=limit,
+                    collection_truncated=truncated,
+                    binding={
+                        "sql": sql, "params": params,
+                        "metric_contract": metric_definition,
+                        "source": source_evidence_ref,
+                        "principal": (audit_context or {}).get("principal_ref") or entitlements._principal_ref(),
+                        "period": detail_evidence.stable_period(applied_time_range),
+                    },
+                    period=applied_time_range,
+                    scope_fingerprint=scope_fingerprint,
+                    projection_fingerprint=projection_fingerprint,
+                )
+            except detail_pages.DetailPagesError as exc:
+                raise QueryFailure(exc.code, exc.message, path="detail") from exc
+            start, end = public_detail["start_index"], public_detail["end_index_exclusive"]
+            public_rows = public_rows[start:end]
+            claim_ledger = claim_ledger[start:end]
+            truncated = public_detail["full_count"] != public_detail["returned_count"]
+            for claim in claim_ledger:
+                claim["source_truncated"] = truncated
+            if truncated:
+                data_state = "truncated"
         disclosure_ledger, disclosure_ledger_seal = _disclosure_ledger(
             request=request,
             metric_ref=metric_ref,
@@ -5860,6 +5913,11 @@ def _run_one(
             result["currency_scope"] = copy.deepcopy(currency_scope)
         if public_analysis_context is not None:
             result["analysis_context"] = public_analysis_context
+        if public_detail is not None:
+            result["detail"] = public_detail
+            result["has_more"] = public_detail["has_more"]
+            result["requested_limit"] = public_detail["requested_page_size"]
+            result["effective_limit"] = public_detail["effective_page_size"]
         if isinstance(snapshot_group_marker, str) and snapshot_group_marker:
             result["_snapshot_group_marker"] = snapshot_group_marker
         _check_call_deadline(deadline_at)
@@ -6039,6 +6097,7 @@ def _datasage_query_with_slot(args: dict[str, Any], **_kwargs: Any) -> str:
         audit_context = {
             "session_ref": _audit_ref(_kwargs.get("session_id")),
             "task_ref": _audit_ref(_kwargs.get("task_id")),
+            "principal_ref": entitlements._principal_ref(),
         }
         resolution_cache: dict[tuple[str, str], Any] = {}
         max_unique_lookups = _bounded_int(

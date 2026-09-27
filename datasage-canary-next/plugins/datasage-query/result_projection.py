@@ -14,7 +14,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Any, Mapping, Sequence
 
-from . import analysis_evidence, evidence, fact_calculations
+from . import analysis_evidence, detail_evidence, evidence, fact_calculations
 from .evidence import _decimal_close, _finite_decimal
 from .query_errors import QueryFailure
 
@@ -100,6 +100,7 @@ _MODEL_WIRE_RESULT_FIELDS = (
     "applied_time_range",
     "currency_scope",
     "analysis_context",
+    "detail",
     "error",
 )
 
@@ -1286,6 +1287,13 @@ def _model_wire_result(
         if field in result
     }
     _filter_model_wire_evidence(projected)
+    if "detail" in projected:
+        if projected.get("status") != "success":
+            projected.pop("detail", None)
+        elif not detail_evidence.metadata_is_valid(projected["detail"], projected):
+            projected.pop("detail", None)
+            projected["claim_ledger"] = []
+            _mark_model_wire_evidence_integrity_failure(projected)
     if "analysis_context" in projected:
         if projected.get("status") != "success":
             projected.pop("analysis_context", None)

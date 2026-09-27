@@ -47,6 +47,7 @@ _CATALOG_METRIC_FIELDS = (
     "delivery_scope_policy",
     "scope_flags",
     "analysis_fields",
+    "detail_contract",
     "answer_boundary_summary",
     "result_fields",
     "status",
@@ -388,6 +389,7 @@ def compact_query_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "applied_time_range",
                 "currency_scope",
                 "analysis_context",
+                "detail",
                 "error",
             )
             if key in result

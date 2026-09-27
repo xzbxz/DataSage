@@ -86,6 +86,23 @@ handled this month” cannot silently become the month-start pool's monthly flow
 if the interface cannot express the same cohort, report that interface gap and
 keep the valid independent pool observation.
 
+## Phase2 product aggregate detail
+
+The registered inventory detail grain is a `product` aggregate under the exact
+frozen-pool/monthly net-outbound metric, including its required unit and currency
+scope. It may expose only the public product display value, unit, currency,
+`gross_rolls`, `return_rolls`, `net_rolls`, `high_net_rolls` and their typed
+coverage. It is not an outbound/return document list and contains no deal price,
+DDP, ratio, promotion price, barcode, business number or source key.
+
+Outbound and return aggregates remain independent. If the selected price cohort
+has unknown return attribution, the product slice net stays unknown while known
+gross/return facts and coverage counts remain visible. The detail inherits the
+main request's validated analysis, cohort, period, unit, currency and ledger;
+it has no private filters. Collection cap, page ordering, cursor revalidation,
+and full-collection reconciliation follow `datasage.query-rules/v1`; a page
+never authorizes a full-population sum or absence claim.
+
 ## Boundaries
 
 - Current DDP valuation and month-end accounting cost are distinct. Their

@@ -17,7 +17,7 @@ from .capability_contract import (
     YEAR_OVER_YEAR_COMPARISON,
     query_request_schema_conditions,
 )
-from . import analysis_contract, capability_contract, request_contract
+from . import analysis_contract, capability_contract, detail_pages, request_contract
 
 DOMAINS = list(SUPPORTED_DOMAINS)
 
@@ -108,6 +108,34 @@ ANALYSIS = {
     ),
 }
 
+DETAIL = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "id": {
+            "type": "string",
+            "enum": list(detail_pages.DETAIL_IDS),
+        },
+        "limit": {
+            "type": "integer",
+            "minimum": detail_pages.DETAIL_LIMIT_MIN,
+            "maximum": detail_pages.DETAIL_LIMIT_MAX,
+            "default": detail_pages.DETAIL_LIMIT_DEFAULT,
+        },
+        "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": detail_pages.DETAIL_CURSOR_MAX_LENGTH,
+            "pattern": r"^[A-Za-z0-9_-]+$",
+        },
+    },
+    "required": ["id"],
+    "description": (
+        "Optional registered aggregate detail page. It inherits the parent metric, dimensions "
+        "and analysis predicates. The cursor is opaque and cannot widen scope or page size."
+    ),
+}
+
 REQUEST = {
     "type": "object",
     "additionalProperties": False,
@@ -152,6 +180,7 @@ REQUEST = {
             ),
         },
         "analysis": ANALYSIS,
+        "detail": DETAIL,
         "currency_basis": {
             "type": "string",
             "enum": ["auto", "rmb", "original"],
@@ -399,6 +428,24 @@ REQUEST = {
         "metric",
     ],
     "allOf": [
+        {
+            "if": {"required": ["detail"]},
+            "then": {
+                "required": ["analysis"],
+                "properties": {"mode": {"const": "metric"}},
+                "not": {
+                    "anyOf": [
+                        {"required": ["limit"]},
+                        {"required": ["comparison"]},
+                        {"required": ["time_bucket"]},
+                        {"required": ["decomposition_of_request_id"]},
+                        {"required": ["complete_change_decomposition"]},
+                        {"required": ["complete_target_gap_decomposition"]},
+                        {"required": ["_target_gap_of_request_id"]},
+                    ]
+                },
+            },
+        },
         {
             "not": {
                 "required": ["time_range", "calendar_month"],

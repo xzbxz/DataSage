@@ -442,3 +442,9 @@ datasage-canary-next/docs/workflow-runtime-acceptance.md
 !datasage-canary-next/tests/test_currency_output_consistency.py
 
 !datasage-canary-next/tests/test_currency_metric_pairs.py
+!datasage-canary-next/plugins/datasage-query/detail_pages.py
+!datasage-canary-next/plugins/datasage-query/detail_evidence.py
+!datasage-canary-next/tests/test_detail_pages.py
+!datasage-canary-next/tests/test_detail_evidence.py
+!datasage-canary-next/tests/test_detail_api_schema.py
+!datasage-canary-next/tests/test_phase2_aggregation_pagination_execution_independent.py

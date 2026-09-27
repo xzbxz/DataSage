@@ -218,7 +218,7 @@ def build_probe(request, datasets, semantics, builder, *, observed_on=None):
     for key in ("currency_basis", "_currency_basis_plan", "order_by", "period_summary",
                 "complete_change_decomposition", "decomposition_of_request_id",
                 "complete_target_gap_decomposition", "_target_gap_of_request_id",
-                "analysis"):
+                "analysis", "detail"):
         probe.pop(key, None)
     probe.update(metric=plan["counterparts"]["original"], dimensions=["currency"],
                  _currency_scope_probe=True)

@@ -55,12 +55,12 @@ class AnalysisSliceContractTests(unittest.TestCase):
         self.assertIn("high_qualifies", source)
         self.assertIn("0.75", (PLUGIN / "contracts" / "inventory-semantics.yaml").read_text(encoding="utf-8"))
 
-    def test_target_slice_counts_before_filter_and_drops_rank_evidence(self):
+    def test_target_slice_retains_coverage_and_rebuilds_ranking(self):
         source = (PLUGIN / "analytical_queries.py").read_text(encoding="utf-8")
         self.assertIn("analysis_counted", source)
         self.assertIn("analysis_population_count", source)
         self.assertIn("analysis_unknown_count", source)
-        self.assertIn('scope["ranking_plan"] = None', source)
+        self.assertIn('rank_population_count', source)
         self.assertIn("analysis_match_state` IN ('match','unknown')", source)
 
     def test_receivable_slice_uses_same_open_detail_and_exists_quantifier(self):
@@ -286,6 +286,12 @@ class AnalysisSliceContractTests(unittest.TestCase):
         self.assertEqual({"A", "D", "E"}, {row["customer_dept"] for row in rows if row["analysis_match_state"] == "match"})
         self.assertEqual(1, rows[0]["analysis_unknown_count"])
         self.assertEqual(2, rows[0]["analysis_excluded_count"])
+        self.assertEqual(4, rows[0]["rank_population_count"])
+        self.assertEqual(1, rows[0]["rank_unknown_value_count"])
+        tied = [row for row in rows if row["customer_dept"] in {"D", "E"}]
+        self.assertEqual([1, 1], [row["query_rank"] for row in tied])
+        self.assertEqual([2, 2], [row["rank_tie_count"] for row in tied])
+        self.assertEqual({"field": "completion_rate", "direction": "desc"}, scope["ranking_plan"])
         self.assertEqual("target_actual_groups", scope["analysis_count_grain"])
 
         empty_request = {

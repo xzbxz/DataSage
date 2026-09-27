@@ -92,6 +92,24 @@ data-missing/unknown, not zero overdue. The finite user range needs no new KPI
 approval; only a changed source family or comparison meaning needs focused
 clarification.
 
+## Phase2 customer net-debt detail
+
+The registered receivable detail grain is the customer aggregate of
+`current_debt_amount` on its latest available monthly signed net-debt snapshot.
+It exposes only the customer display value, currency, snapshot month, amount and
+typed state. It contains no invoice number, open-item row, credit-policy input,
+or physical key. Current open receivable and overdue observations remain
+independent metrics; they are not a Phase2 detail grain and cannot become a
+customer match list for the joint net-debt/overdue predicate.
+
+A customer page inherits the main metric, validated analysis, period/snapshot,
+unit, currency and ledger. A full page/collection may reconcile only when its
+coverage proves the same complete customer population. Unknown membership is
+not summed, and cursor continuation is a revalidated current observation rather
+than the old monthly snapshot. Keep `joint_scope_state=joint_unknown` when the
+net-debt snapshot and current overdue evidence lack authoritative same-business-
+as-of alignment.
+
 ## Boundaries
 
 - Receivables, receipts, cash balance, liquidity, and risk decisions are

@@ -9,7 +9,7 @@ import re
 from datetime import datetime
 from typing import Any, Mapping
 
-from . import analysis_contract, capability_contract, contract_store, request_contract
+from . import analysis_contract, capability_contract, contract_store, detail_pages, request_contract
 from .capability_contract import (
     CapabilityContractError,
     MATCHED_ELAPSED_COVERAGE,
@@ -40,6 +40,7 @@ _METRIC_REQUEST_FIELDS = _COMMON_REQUEST_FIELDS | {
     "movement_state",
     "metric",
     "analysis",
+    "detail",
     "dimensions",
     "metric_filters",
     "time_bucket",
@@ -173,6 +174,19 @@ def _validate_request(
                 exc.message,
                 path=path or field_path("analysis"),
                 hint=exc.hint,
+            ) from exc
+    if "detail" in request:
+        try:
+            request = detail_pages.validate_request_detail_shape(request)
+        except detail_pages.DetailPagesError as exc:
+            path = exc.path
+            if path is not None and request_path is not None:
+                path = f"{request_path}.{path}"
+            raise QueryFailure(
+                exc.code,
+                exc.message,
+                path=path or field_path("detail"),
+                hint=getattr(exc, "hint", None),
             ) from exc
     if not request_contract.valid_string(
         request.get("metric"), request_contract.METRIC_CODE

@@ -2576,6 +2576,22 @@ def _target_completion_query(
             + ", `analysis_match_state`, `analysis_population_count`, `analysis_match_count`, `analysis_unknown_count`, `analysis_excluded_count` FROM analysis_coverage) AS analysis_display"
             + stable_order
         )
+        if not request.get("_currency_scope_probe") and order_field in value_fields:
+            rank_field = str(order_field)
+            stable_ties = [str(value) for value in output_aliases]
+            tie_sql = ", ".join(f"{_quote_column(value)} ASC" for value in stable_ties if value != rank_field)
+            rank_window_order = f"({_quote_column(rank_field)} IS NULL) ASC, {_quote_column(rank_field)} {order_direction}"
+            rank_outer_order = rank_window_order + ((", " + tie_sql) if tie_sql else "")
+            sql = (
+                "SELECT detail_ranked.* FROM (SELECT detail_filtered.*, "
+                f"CASE WHEN COALESCE(`__matched_row_count`,0)>0 THEN RANK() OVER (ORDER BY {rank_window_order}) ELSE NULL END AS query_rank, "
+                f"SUM(CASE WHEN COALESCE(`__matched_row_count`,0)>0 THEN 1 ELSE 0 END) OVER () AS rank_population_count, "
+                f"SUM(CASE WHEN COALESCE(`__matched_row_count`,0)>0 AND ({_quote_column(rank_field)} IS NULL OR `analysis_match_state`='unknown') THEN 1 ELSE 0 END) OVER () AS rank_unknown_value_count, "
+                f"CASE WHEN COALESCE(`__matched_row_count`,0)>0 THEN SUM(CASE WHEN COALESCE(`__matched_row_count`,0)>0 THEN 1 ELSE 0 END) OVER (PARTITION BY {_quote_column(rank_field)}) ELSE NULL END AS rank_tie_count "
+                f"FROM ({sql}) AS detail_filtered) AS detail_ranked "
+                f"ORDER BY {rank_outer_order}"
+            )
+            ranking_plan = {"field": rank_field, "direction": order_direction.lower()}
         if not request.get("_currency_scope_probe"):
             sql += " LIMIT %s"
             final_params.append(limit + 1)
@@ -2638,7 +2654,6 @@ def _target_completion_query(
             "excluded": "analysis_excluded_count",
         }
         scope["analysis_count_grain"] = "target_actual_groups"
-        scope["ranking_plan"] = None
     return sql, final_params, scope
 
 

@@ -282,6 +282,30 @@ that could change the conclusion. Registered calculations may use only sealed
 compatible public facts and cannot create arbitrary cross-unit, cross-currency,
 cross-population or causal relationships.
 
+## Registered aggregate detail and page answers
+
+Phase2 detail rows are registered aggregate-group claims bound to the same metric,
+analysis, period/snapshot, population, unit, currency and ledger as the summary.
+Disclose the detail contract/id, grain, ordering, returned count, effective page
+size, `has_more`, collection-cap state, coverage, reconciliation and
+`cursor_consistency`. A page is a bounded presentation slice; it does not prove
+full membership, absence, a complete tie set or a full-population sum.
+
+The effective collection cap is `min(existing_environment_cap, 100)` and the
+page size is at most 50. The complete registered aggregate collection is formed
+before filtering counts, ordering, digest and page slicing. An over-cap scope is
+`DETAIL_SCOPE_TOO_LARGE`; a malformed or changed continuation is `CURSOR_STALE`
+with no rows. A valid continuation is a new `revalidated_current_observation`,
+never the prior snapshot. The cursor is stateless and re-runs entity preflight,
+authorization and the complete aggregate read; it contains no private id, source
+row key, credential, session or permission grant.
+
+Reconcile detail rows to a summary total only when the full collection receipt
+proves the same population, complete states, compatible units/currency and the
+same aggregate field. Unknown membership, partial coverage and independent
+cross-source observations remain unknown; do not sum visible pages or call a
+customer/open-item page a satisfied joint net-debt/overdue filter.
+
 ## Minimal content by answer type
 
 The four request kinds share one evidence base and differ only in what the answer must
