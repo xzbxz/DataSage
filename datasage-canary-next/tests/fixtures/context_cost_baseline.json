@@ -4,11 +4,6 @@
   "measured": {
     "skill_context": {
       "files": {
-        "SKILL.md": {
-          "characters": 5925,
-          "bytes": 5959,
-          "lines": 124
-        },
         "references/answer-boundary.md": {
           "characters": 26263,
           "bytes": 26311,
@@ -63,6 +58,11 @@
           "characters": 8997,
           "bytes": 8997,
           "lines": 164
+        },
+        "SKILL.md": {
+          "characters": 5925,
+          "bytes": 5959,
+          "lines": 124
         }
       },
       "file_count": 12,

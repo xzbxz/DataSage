@@ -470,7 +470,7 @@
     },
     "history": {
       "window_commits": 40,
-      "code_files_per_commit_median": 8,
+      "code_files_per_commit_median": 9,
       "code_commits": 40,
       "doc_files_per_commit_median": 5,
       "doc_commits": 40,
