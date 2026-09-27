@@ -5,9 +5,9 @@
     "skill_context": {
       "files": {
         "references/answer-boundary.md": {
-          "characters": 20466,
-          "bytes": 20478,
-          "lines": 342
+          "characters": 21560,
+          "bytes": 21572,
+          "lines": 356
         },
         "references/cross-domain-analysis.md": {
           "characters": 6173,
@@ -60,14 +60,14 @@
           "lines": 128
         },
         "SKILL.md": {
-          "characters": 5971,
-          "bytes": 5973,
-          "lines": 117
+          "characters": 5951,
+          "bytes": 5953,
+          "lines": 120
         }
       },
       "file_count": 12,
-      "total_bytes": 96232,
-      "total_characters": 96174
+      "total_bytes": 97306,
+      "total_characters": 97248
     },
     "tool_surface": {
       "provided_tool_names": [
