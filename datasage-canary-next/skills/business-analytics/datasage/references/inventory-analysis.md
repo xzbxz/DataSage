@@ -100,7 +100,7 @@ has unknown return attribution, the product slice net stays unknown while known
 gross/return facts and coverage counts remain visible. The detail inherits the
 main request's validated analysis, cohort, period, unit, currency and ledger;
 it has no private filters. Collection cap, page ordering, cursor revalidation,
-and full-collection reconciliation follow `datasage.query-rules/v1`; a page
+and full-collection reconciliation follow [`datasage.query-rules/v1`](query-rules.md); a page
 never authorizes a full-population sum or absence claim.
 
 ## Boundaries
